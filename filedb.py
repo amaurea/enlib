@@ -15,12 +15,12 @@ class Filedb:
 		be returned regardless of matching to allow for files that are
 		shared for all ids.
 		
-		The special class __ids__ specifies a regular expression to apply
+		The special class id specifies a regular expression to apply
 		to another class in order to recover ids. This allows Filedb to
 		not only passively supply paths in response to ids, but also to
 		supply a list of ids to begin with (though no validation is done
 		to ensure that files exist for all those ids). The format for
-		this rule is: __ids__: [name] [regex]. The specified class must
+		this rule is: id: [name] [regex]. The specified class must
 		already have been mentioned in the file.
 		"""
 		self.classes = {}
@@ -30,7 +30,7 @@ class Filedb:
 			for line in file:
 				toks = shlex.split(line)
 				name, globs = toks[0][:-1], toks[1:]
-				if name == "__ids__":
+				if name == "id":
 					other = globs[0]
 					regex = [re.compile(g) for g in globs[1:]]
 					for fn in self.classes[other]:
@@ -51,4 +51,5 @@ class Filedb:
 		for c in self.classes:
 			files = self.classes[c]
 			res[c] = next((f for f in files if id in f), files[0] if len(files) == 1 else None)
+		res.id = id
 		return res
