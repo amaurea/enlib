@@ -80,8 +80,11 @@ class Filedb:
 			files = self.files[c]
 			for fileset in files:
 				match = next((f for f in fileset if id in f), fileset[0] if len(fileset) == 1 else None)
-				if match != None: break
-			res[c] = match
+				if match != None:
+					res[c] = match
+					break
+			else:
+				res[c] = None
 		res.id = id
 		return res
 
