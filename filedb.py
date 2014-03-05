@@ -31,9 +31,9 @@ class Filedb:
 		if file != None:
 			try:
 				with open(file,"r") as fileobj:
-					self.load(fileobj)
-			except TypeError:
-				load(self, file)
+					self.load(fileobj.read())
+			except AttributeError:
+				self.load(file.read())
 		else:
 			self.load(data)
 	def load(self, data):
@@ -41,7 +41,10 @@ class Filedb:
 		self.rules   = {}
 		self.ids     = []
 		for line in data.splitlines():
-			toks = shlex.split(line)
+			# Shlex split is 100 times slower than string split, and is only
+			# needed if our line contains quotes
+			toks = shlex.split(line) if "'" in line or '"' in line or '\\' in line else line.split()
+			#toks = shlex.split(line)
 			name, globs = toks[0][:-1], toks[1:]
 			if name == "id":
 				other = globs[0]
