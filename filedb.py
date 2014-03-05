@@ -4,9 +4,9 @@ an object containing the paths to all the files corresponding to that "id".
 For example, for the actpol data set, querying with "1376512459.1376536951.ar1"
 would respond with an object giving the location of the TOD, cuts, gains, etc.
 for that id."""
-import glob, shlex, re, bunch, itertools
+import glob, shlex, pipes, re, bunch, itertools
 class Filedb:
-	def __init__(self, desc_file):
+	def __init__(self, file=None, data=None):
 		"""Initializes the database based on a simple file with lines with
 		format name: glob-path [glob-path] [: glob-path ...], which can be quoted.
 		For each name specified this way, there will be an entry in the
@@ -28,27 +28,47 @@ class Filedb:
 		this rule is: ids: [name] [regex]. The specified class must
 		already have been mentioned in the file.
 		"""
+		if file != None:
+			try:
+				with open(file,"r") as fileobj:
+					self.load(fileobj)
+			except TypeError:
+				load(self, file)
+		else:
+			self.load(data)
+	def load(self, data):
 		self.files   = {}
 		self.rules   = {}
 		self.ids     = []
-		with open(desc_file,"r") as file:
-			for line in file:
-				toks = shlex.split(line)
-				name, globs = toks[0][:-1], toks[1:]
-				if name == "id":
-					other = globs[0]
-					regex = [re.compile(g) for g in globs[1:]]
-					for fn in self.files[other][0]:
-						for r in regex:
-							m = r.search(fn)
-							if m:
-								self.ids.append(m.group(1))
-								break
-				else:
-					groups = itertools.groupby(toks, lambda x: x == ":")
-					files  = [[fn for tok in group for fn in glob.glob(tok)] for k, group in groups if not k]
-					self.files[name] = files
-					self.rules[name] = globs
+		for line in data.splitlines():
+			toks = shlex.split(line)
+			name, globs = toks[0][:-1], toks[1:]
+			if name == "id":
+				other = globs[0]
+				regex = [re.compile(g) for g in globs[1:]]
+				self.idrule = globs
+				for fn in self.files[other][0]:
+					for r in regex:
+						m = r.search(fn)
+						if m:
+							self.ids.append(m.group(1))
+							break
+			else:
+				groups = [list(group) for k, group in itertools.groupby(globs, lambda x: x == ":") if not k]
+				files  = [[fn for tok in group for fn in cheap_glob(tok)] for group in groups]
+				self.files[name] = files
+				self.rules[name] = groups
+	def dump(self, expand=False):
+		lines = []
+		if expand:
+			for name in self.files:
+				lines.append("%s: %s" % (name, " : ".join([" ".join([pipes.quote(r) for r in group]) for group in self.files[name]])))
+		else:
+			for name in self.rules:
+				lines.append("%s: %s" % (name, " : ".join([" ".join([pipes.quote(r) for r in group]) for group in self.rules[name]])))
+		lines.append('id: %s' % (" ".join([pipes.quote(r) for r in self.idrule])))
+		return "\n".join(lines)
+
 	def __getitem__(self, id):
 		"""Returns a bunch describing all the paths corresponding to id. None is returned
 		for entries with no matches. A filename is considered to match if it contains id
@@ -64,3 +84,6 @@ class Filedb:
 					break
 		res.id = id
 		return res
+
+def cheap_glob(fname):
+	return glob.glob(fname) if re.search("[][*?]", fname) else [fname]
