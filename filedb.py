@@ -44,7 +44,6 @@ class Filedb:
 			# Shlex split is 100 times slower than string split, and is only
 			# needed if our line contains quotes
 			toks = shlex.split(line) if "'" in line or '"' in line or '\\' in line else line.split()
-			#toks = shlex.split(line)
 			name, globs = toks[0][:-1], toks[1:]
 			if name == "id":
 				other = globs[0]
