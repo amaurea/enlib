@@ -20,12 +20,12 @@ class Filedb:
 		a default can be specified as
 			foo: foofiles/*.txt : foodefault.txt
 		
-		The special class ids specifies a regular expression to apply
+		The special class id specifies a regular expression to apply
 		to another class in order to recover ids. This allows Filedb to
 		not only passively supply paths in response to ids, but also to
 		supply a list of ids to begin with (though no validation is done
 		to ensure that files exist for all those ids). The format for
-		this rule is: ids: [name] [regex]. The specified class must
+		this rule is: id: [name] [regex]. The specified class must
 		already have been mentioned in the file.
 		"""
 		if file != None:
