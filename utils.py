@@ -33,7 +33,7 @@ def split_slice(sel, ndims):
 		elif len(a) + len(b) == n:
 			return a + b
 		else:
-			raise ValueError("Too many indices in ndim=%d array: "%n + str(a+b))
+			raise IndexError("Too many indices in ndim=%d array: "%n + str(a+b))
 	return [combine(L,R,n) for L,R,n in zip(resL,resR,ndims)]
 
 def split_slice_simple(sel, ndims):
@@ -46,3 +46,13 @@ def split_slice_simple(sel, ndims):
 		r += sel[subs[i]:subs[i+1]]
 	return [tuple(v) for v in res]
 
+def expand_slice(sel, n):
+	"""Expands defaults and negatives in a slice to their implied values.
+	After this, all entries of the slice are guaranteed to be present in their final form.
+	Note, doing this twice may result in odd results, so don't send the result of this
+	into functions that expect an unexpanded slice."""
+	step = sel.step or 1
+	def cycle(i,n): return min(i,n) if i >= 0 else n+i
+	if step == 0: raise ValueError("slice step cannot be zero")
+	if step > 0: return slice(cycle(sel.start or 0,n),cycle(sel.stop or n,n),step)
+	else: return slice(cycle(sel.start or n-1, n), cycle(sel.stop,n) if sel.stop else -1, step)
