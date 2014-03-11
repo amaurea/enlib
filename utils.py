@@ -14,6 +14,15 @@ def listsplit(seq, elem):
 	ranges = zip([0]+[i+1 for i in inds],inds+[len(seq)])
 	return [seq[a:b] for a,b in ranges]
 
+def common_inds(arrs):
+	"""Given a list of arrays, returns the indices into each of them of
+	their common elements. For example
+	  common_inds([[1,2,3,4,5],[2,4,6,8]]) -> [[1,3],[0,1]]"""
+	inter = arrs[0]
+	for arr in arrs[1:]:
+		inter = np.lib.arraysetops.intersect1d(inter,arr)
+	return [np.where(np.in1d(arr,inter))[0] for arr in arrs]
+
 def split_slice(sel, ndims):
 	"""Splits a numpy-compatible slice "sel" into sub-slices sub[:], such that
 	a[sel] = s[sub[0]][:,sub[1]][:,:,sub[2]][...], This is useful when
