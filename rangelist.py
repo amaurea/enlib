@@ -43,15 +43,15 @@ class Multirange:
 	and the contained Rangelist objects indices."""
 	def __init__(self, rangelists, copy=True):
 		# Todo: Handle (neach, flat) inputs
-		try:
+		if isinstance(rangelists, Multirange):
 			if copy: rangelists = rangelists.copy()
-			self.rangelists = rangelists.rangelists
-		except AttributeError:
+			self.data = rangelists.data
+		else:
 			if copy: rangelists = np.array(rangelists)
-			self.rangelists = np.asarray(rangelists)
+			self.data = np.asarray(rangelists)
 	def __getitem__(self, sel):
-		sel1, sel2 = split_slice(sel, [self.rangelists.ndim,1])
-		res = self.rangelists[sel1]
+		sel1, sel2 = split_slice(sel, [self.data.ndim,1])
+		res = self.data[sel1]
 		if isinstance(res, Rangelist): return res
 		res = res.copy()
 		rflat = res.reshape(res.size)
@@ -62,15 +62,15 @@ class Multirange:
 		return Multirange(res, copy=False)
 	def sum(self, flat=True):
 		getsum = np.vectorize(lambda x: x.sum(), 'i')
-		res = getsum(self.rangelists)
+		res = getsum(self.data)
 		return np.sum(res) if flat else res
-	def copy(self): return Multirange(self.rangelists, copy=True)
-	def __repr__(self): return "Multirange("+str(self.rangelists)+")"
+	def copy(self): return Multirange(self.data, copy=True)
+	def __repr__(self): return "Multirange("+str(self.data)+")"
 	def __str__(self): return repr(self)
 	def flatten(self):
-		getlens = np.vectorize(lambda x: len(x), 'i')
-		neach   = getlens(self.rangelists)
-		flat    = np.concatenate([r.ranges for r in self.rangelists.reshape(self.rangelists.size)])
+		getlens = np.vectorize(lambda x: len(x.ranges), 'i')
+		neach   = getlens(self.data)
+		flat    = np.concatenate([r.ranges for r in self.data.reshape(self.data.size)])
 		return neach, flat
 
 def slice_helper(ranges, sel):

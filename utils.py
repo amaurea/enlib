@@ -28,8 +28,10 @@ def split_slice(sel, ndims):
 	a[sel] = s[sub[0]][:,sub[1]][:,:,sub[2]][...], This is useful when
 	implementing arrays with heterogeneous indices."""
 	if not isinstance(sel,tuple): sel = (sel,)
-	# It's easy if we don't have ellipsis
-	if Ellipsis not in sel: return split_slice_simple(sel, ndims)
+	# It's easy if we don't have ellipsis.
+	# What the heck? "in" operator is apparently broken for lists that
+	# contain numpy arrays.
+	if Ellipsis not in [type(i) for i in sel]: return split_slice_simple(sel, ndims)
 	# Otherwise, fill in indices from the left and right...
 	left, right = listsplit(sel, Ellipsis)
 	resL = split_slice_simple(left,  ndims)
