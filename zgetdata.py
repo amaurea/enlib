@@ -41,3 +41,10 @@ class dirfile:
 		self.close()
 	def __getattr__(self, item):
 		return getattr(self.dfile, item)
+	def __dir__(self):
+		# Apparently I can't get at the default dir, and __dict__ does not
+		# list all members. So do this manually
+		mine = ['__doc__', '__enter__', '__exit__', '__getattr__', '__init__', '__dir__',
+				'__module__', 'close', 'dfile', 'tmpdir']
+		mset = set(mine)
+		return mine + [c for c in dir(self.dfile) if c not in mset]

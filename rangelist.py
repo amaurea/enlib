@@ -2,7 +2,7 @@
 providing both a mask-like (numpy bool array) and list of from:to interface.
 It also provides a convenience class for handling multiple of these range lists."""
 import numpy as np
-from enlib.utils import expand_slice, split_slice
+from enlib.slice import expand_slice, split_slice
 
 class Rangelist:
 	def __init__(self, ranges, n, copy=True):
