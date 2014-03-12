@@ -77,7 +77,7 @@ class Multirange:
 		return np.sum(res) if flat else res
 	def copy(self): return Multirange(self.data, copy=True)
 	def invert(self):
-		return Multirange(np.vectorize(lambda x: x.invert(),'i')(self.data))
+		return Multirange(np.vectorize(lambda x: x.invert(),'O')(self.data))
 	def __repr__(self): return "Multirange("+str(self.data)+")"
 	def __str__(self): return repr(self)
 	def flatten(self):

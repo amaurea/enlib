@@ -34,6 +34,14 @@ def unwrap(a, period=2*np.pi):
 	res[1:] -= np.cumsum(np.round((res[1:]-res[:-1])/period))*period
 	return res
 
+def cumsplit(sizes, capacities):
+	"""Given a set of sizes (of files for example) and a set of capacities
+	(of disks for example), returns the index of the sizes for which
+	each new capacity becomes necessary, assuming sizes can be split
+	across boundaries.
+	For example cumsplit([1,1,2,0,1,3,1],[3,2,5]) -> [2,5]"""
+	return np.searchsorted(np.cumsum(sizes),np.cumsum(capacities),side="right")
+
 def mask2range(mask):
 	"""Convert a binary mask [True,True,False,True,...] into
 	a set of ranges [:,{start,stop}]."""

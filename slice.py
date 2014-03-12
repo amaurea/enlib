@@ -1,4 +1,6 @@
 """This module is intended to make it easier to implement slicing."""
+import numpy as np
+from enlib.utils import cumsplit
 
 def expand_slice(sel, n):
 	"""Expands defaults and negatives in a slice to their implied values.
