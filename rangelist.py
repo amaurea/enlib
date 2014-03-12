@@ -3,12 +3,18 @@ providing both a mask-like (numpy bool array) and list of from:to interface.
 It also provides a convenience class for handling multiple of these range lists."""
 import numpy as np
 from enlib.slice import expand_slice, split_slice
+from enlib.utils import mask2range
 
 class Rangelist:
-	def __init__(self, ranges, n, copy=True):
+	def __init__(self, ranges, n=None, copy=True):
+		ranges      = np.asarray(ranges)
 		if copy: ranges = np.array(ranges)
-		self.n      = n
-		self.ranges = np.asarray(ranges)
+		if ranges.ndim == 1:
+			self.n      = ranges.size
+			self.ranges = mask2range(ranges)
+		else:
+			self.n      = int(n)
+			self.ranges = ranges
 	def __getitem__(self, sel):
 		"""This function operates on the rangelist as if it were a dense numpy array.
 		It returns either a sliced Rangelist or a bool."""
@@ -35,6 +41,11 @@ class Rangelist:
 	def __repr__(self): return "Rangelist("+str(self.ranges)+",n="+repr(self.n)+")"
 	def __str__(self): return repr(self)
 	def copy(self): return Rangelist(self.ranges, self.n, copy=True)
+	def invert(self):
+		pad = np.vstack([[[0,0]],self.ranges,[[self.n,self.n]]])
+		res = np.array([pad[:-1,1],pad[1:,0]]).T
+		res = np.delete(res, np.where(res[:,1]==res[:,0]),0)
+		return Rangelist(res, self.n)
 
 class Multirange:
 	"""Multirange makes it easier to work with large numbers of rangelists.
@@ -65,6 +76,8 @@ class Multirange:
 		res = getsum(self.data)
 		return np.sum(res) if flat else res
 	def copy(self): return Multirange(self.data, copy=True)
+	def invert(self):
+		return Multirange(np.vectorize(lambda x: x.invert(),'i')(self.data))
 	def __repr__(self): return "Multirange("+str(self.data)+")"
 	def __str__(self): return repr(self)
 	def flatten(self):

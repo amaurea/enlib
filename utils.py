@@ -33,3 +33,22 @@ def unwrap(a, period=2*np.pi):
 	res = np.array(a)
 	res[1:] -= np.cumsum(np.round((res[1:]-res[:-1])/period))*period
 	return res
+
+def mask2range(mask):
+	"""Convert a binary mask [True,True,False,True,...] into
+	a set of ranges [:,{start,stop}]."""
+	# We consider the outside of the array to be False
+	mask  = np.concatenate([[False],mask,[False]]).astype(np.int8)
+	# Find where we enter and exit ranges with true mask
+	dmask = mask[1:]-mask[:-1]
+	start = np.where(dmask>0)[0]
+	stop  = np.where(dmask<0)[0]
+	return np.array([start,stop]).T
+
+def repeat_filler(d, n):
+	"""Form an array n elements long by repeatedly concatenating
+	d and d[::-1]."""
+	d = np.concatenate([d,d[::-1]])
+	nmul = (n+d.size-1)/d.size
+	dtot = np.concatenate([d]*nmul)
+	return dtot[:n]
