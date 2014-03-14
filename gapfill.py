@@ -1,24 +1,27 @@
 """This module provides functions for filling gaps in an array based on ranges or masks."""
 import numpy as np
-from enlib.rangelist import Rangelist
+from enlib.utils import repeat_filler
+from enlib.rangelist import Rangelist, Multirange, multify
 
-def gapfill_linear(arr, ranges):
+@multify
+def gapfill_linear(arr, ranges, inplace=False):
 	"""Returns arr with the ranges given by ranges, which can be [:,{from,to}] or
 	a Rangelist, filled using linear interpolation."""
 	ranges = Rangelist(ranges, len(arr), copy=False)
-	res = arr.copy()
+	if not inplace: arr = np.array(arr)
 	for r1,r2 in ranges.ranges:
 		if r1 == 0 and r2 == len(ranges):
-			res[r1:r2] = 0
+			arr[r1:r2] = 0
 		elif r1 == 0:
-			res[r1:r2] = res[r2]
+			arr[r1:r2] = arr[r2]
 		elif r2 == len(ranges):
-			res[r1:r2] = res[r1-1]
+			arr[r1:r2] = arr[r1-1]
 		else:
-			res[r1-1:r2] = np.linspace(res[r1],res[r2],r2-r1,endoint=False)
-	return res
+			arr[r1-1:r2] = np.linspace(arr[r1-1],arr[r2],r2-r1+1,endpoint=False)
+	return arr
 
-def gapfill_copy(arr, ranges, overlap=10):
+@multify
+def gapfill_copy(arr, ranges, overlap=10, inplace=False):
 	"""Returns arr with the ranges given by ranges, which can be [:,{from,to}] or
 	a Rangelist, filled using resloped copies of parts of the uncut data. This
 	results in less bias in the noise properties of the resulting stream than
@@ -26,6 +29,7 @@ def gapfill_copy(arr, ranges, overlap=10):
 	realization. The overlap parameter specifies the number of samples to use
 	on each side when computing the slope and offset. Smaller values produce a noisier
 	estimate of these values, larger values degrade resolution."""
+	if not inplace: arr = np.array(arr)
 	ranges = Rangelist(ranges, len(arr), copy=False)
 	uncut  = ranges.invert()
 	longest_uncut = np.argmax(uncut.ranges[:,1]-uncut.ranges[:,0])
@@ -35,7 +39,7 @@ def gapfill_copy(arr, ranges, overlap=10):
 		# Reslope so that we match the overlap regions. For edge cases,
 		# use the other side.
 		left  = np.mean(arr[max(0,r1-overlap):r1]) if r1 > 0 else None
-		right = np.mean(arr[r2:min(len(arr),r2+overlap)]) if r2 < len(tod) else left
+		right = np.mean(arr[r2:min(len(arr),r2+overlap)]) if r2 < len(arr) else left
 		if left == None:
 			left = right
 		uleft = np.mean(filler[:overlap])

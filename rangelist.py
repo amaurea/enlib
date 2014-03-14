@@ -7,14 +7,18 @@ from enlib.utils import mask2range
 
 class Rangelist:
 	def __init__(self, ranges, n=None, copy=True):
-		ranges      = np.asarray(ranges)
-		if copy: ranges = np.array(ranges)
-		if ranges.ndim == 1:
-			self.n      = ranges.size
-			self.ranges = mask2range(ranges)
+		if isinstance(ranges, Rangelist):
+			if copy: ranges = ranges.copy()
+			self.n, self.ranges =  ranges.n, ranges.ranges
 		else:
-			self.n      = int(n)
-			self.ranges = ranges
+			ranges      = np.asarray(ranges)
+			if copy: ranges = np.array(ranges)
+			if ranges.ndim == 1:
+				self.n      = ranges.size
+				self.ranges = mask2range(ranges)
+			else:
+				self.n      = int(n)
+				self.ranges = ranges
 	def __getitem__(self, sel):
 		"""This function operates on the rangelist as if it were a dense numpy array.
 		It returns either a sliced Rangelist or a bool."""
@@ -109,3 +113,31 @@ def slice_helper(ranges, sel):
 	# Prune empty ranges
 	res = res[res[:,1]-res[:,0]>0]
 	return res
+
+def multify(f):
+	"""Takes any function that operates on a 1d array and a Rangelist
+	and returns a function that will do the same operation on a n+1 D
+	array and an N-dimensional Multirange. The inplace argument of hte
+	resulting function determines whether to modify the array argument
+	or not."""
+	def multif(arr, multi, inplace=False, *args, **kwargs):
+		if isinstance(multi, Multirange):
+			mflat  = multi.data.reshape(multi.data.size)
+			aflat  = arr.reshape(np.prod(arr.shape[:-1]),arr.shape[-1])
+			kwargs["inplace"] = inplace
+			if inplace:
+				for i in range(len(aflat)):
+					f(aflat[i], mflat[i], *args, **kwargs)
+				return arr
+			else:
+				# Determine the shape of the output
+				res0 = f(aflat[0].copy(), mflat[0], *args, **kwargs)
+				oaflat = np.empty((aflat.shape[0],)+res0.shape)
+				oaflat[0] = res0
+				for i in range(1,len(aflat)):
+					oaflat[i] = f(aflat[i], mflat[i], *args, **kwargs)
+				return oaflat.reshape(arr.shape[:-1]+res0.shape)
+		else:
+			return f(arr, multi, *args, **kwargs)
+	multif.__doc__ = "Multified version of function with docstring:\n" + f.__doc__
+	return multif

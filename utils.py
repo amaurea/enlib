@@ -23,7 +23,19 @@ def common_inds(arrs):
 		inter = np.lib.arraysetops.intersect1d(inter,arr)
 	return [np.where(np.in1d(arr,inter))[0] for arr in arrs]
 
-def unwrap(a, period=2*np.pi):
+def dict_apply_listfun(dict, function):
+	"""Applies a function that transforms one list to another
+	with the same number of elements to the values in a dictionary,
+	returning a new dictionary with the same keys as the input
+	dictionary, but the values given by the results of the function
+	acting on the input dictionary's values. I.e.
+	if f(x) = x[::-1], then dict_apply_listfun({"a":1,"b":2},f) = {"a":2,"b":1}."""
+	keys = dict.keys()
+	vals = [dict[key] for key in keys]
+	res  = function(vals)
+	return {key: res[i] for i, key in enumerate(keys)}
+
+def unwind(a, period=2*np.pi):
 	"""Given a list of angles or other cyclic coordinates
 	where a and a+period have the same physical meaning,
 	make a continuous by removing any sudden jumps due to
@@ -31,7 +43,7 @@ def unwrap(a, period=2*np.pi):
 	become [0.07,0.02,-0.03,-0.08] with the default period
 	of 2*pi."""
 	res = np.array(a)
-	res[1:] -= np.cumsum(np.round((res[1:]-res[:-1])/period))*period
+	res[...,1:] -= np.cumsum(np.round((res[...,1:]-res[...,:-1])/period),-1)*period
 	return res
 
 def cumsplit(sizes, capacities):
