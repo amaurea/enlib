@@ -72,3 +72,11 @@ def repeat_filler(d, n):
 	nmul = (n+d.size-1)/d.size
 	dtot = np.concatenate([d]*nmul)
 	return dtot[:n]
+
+def ctime2mjd(ctime):
+	"""Converts from unix time to modified julian date."""
+	return ctime/86400 + 40587.0
+
+def mjd2ctime(mjd):
+	"""Converts from modified julian date to unix time"""
+	return (mjd-40587.0)*86400

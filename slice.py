@@ -46,3 +46,9 @@ def split_slice_simple(sel, ndims):
 	for i, r in enumerate(res):
 		r += sel[subs[i]:subs[i+1]]
 	return [tuple(v) for v in res]
+
+def parse_slice(desc):
+	class Foo:
+		def __getitem__(self, p): return p
+	foo = Foo()
+	return eval("foo"+desc)
