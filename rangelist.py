@@ -50,6 +50,10 @@ class Rangelist:
 		res = np.array([pad[:-1,1],pad[1:,0]]).T
 		res = np.delete(res, np.where(res[:,1]==res[:,0]),0)
 		return Rangelist(res, self.n)
+	def to_mask(self):
+		res = np.zeros(self.n,dtype=bool)
+		for r1,r2 in self.ranges: res[r1:r2] = True
+		return res
 
 class Multirange:
 	"""Multirange makes it easier to work with large numbers of rangelists.
@@ -89,6 +93,12 @@ class Multirange:
 		neach   = getlens(self.data)
 		flat    = np.concatenate([r.ranges for r in self.data.reshape(self.data.size)])
 		return neach, flat
+	def to_mask(self):
+		dflat = self.data.reshape(self.data.size)
+		res   = np.zeros([dflat.size, dflat[0].n],dtype=bool)
+		for i, d in enumerate(dflat):
+			res[i] = d.to_mask()
+		return res.reshape(self.data.shape+(-1,))
 
 def slice_helper(ranges, sel):
 	"""Helper function for rangelist slicing. Gets an expanded slice with positive
