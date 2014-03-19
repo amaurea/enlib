@@ -77,6 +77,7 @@ def redft00(a, b=None, nthread=0, normalize=False):
 	itmp[...,:n] = a[...,:n]
 	itmp[...,n:] = a[...,-2:0:-1]
 	otmp = rfft(itmp, axes=[-1], nthread=nthread)
+	del itmp
 	b[...] = otmp[...,:n].real
 	if normalize: b /= 2*(n-1)
 	return b

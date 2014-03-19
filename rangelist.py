@@ -131,10 +131,10 @@ def multify(f):
 	resulting function determines whether to modify the array argument
 	or not."""
 	def multif(arr, multi, inplace=False, *args, **kwargs):
+		kwargs["inplace"] = inplace
 		if isinstance(multi, Multirange):
 			mflat  = multi.data.reshape(multi.data.size)
 			aflat  = arr.reshape(np.prod(arr.shape[:-1]),arr.shape[-1])
-			kwargs["inplace"] = inplace
 			if inplace:
 				for i in range(len(aflat)):
 					f(aflat[i], mflat[i], *args, **kwargs)

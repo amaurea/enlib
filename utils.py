@@ -83,6 +83,17 @@ def repeat_filler(d, n):
 	dtot = np.concatenate([d]*nmul)
 	return dtot[:n]
 
+def deslope(d, w=1, inplace=False):
+	"""Remove a slope and mean from d, matching up the beginning
+	and end of d. The w parameter controls the number of samples
+	from each end of d that is used to determine the value to
+	match up."""
+	if not inplace: d = np.array(d)
+	dflat = d.reshape(np.prod(d.shape[:-1]),d.shape[-1])
+	for di in dflat:
+		di -= np.arange(di.size)*(np.mean(di[-w:])-np.mean(di[:w]))/di.size+np.mean(di[:w])
+	return d
+
 def ctime2mjd(ctime):
 	"""Converts from unix time to modified julian date."""
 	return ctime/86400 + 40587.0
@@ -90,3 +101,8 @@ def ctime2mjd(ctime):
 def mjd2ctime(mjd):
 	"""Converts from modified julian date to unix time"""
 	return (mjd-40587.0)*86400
+
+def medmean(x, frac=0.5):
+	x = np.sort(x)
+	i = int(x.size*frac)/2
+	return np.mean(x[i:-i])
