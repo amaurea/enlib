@@ -160,6 +160,22 @@ def sky2pix(wcs, coords, safe=True):
 			pix[i] = enlib.utils.unwind(pix[i], np.abs(360./wcs.wcs.cdelt[i]))
 	return pix[::-1].reshape(coords.shape)
 
+def project(map, shape, wcs, order=3):
+	"""Project the map into a new map given by the specified
+	shape and wcs, interpolating as necessary. Handles nan
+	regions in the map by masking them before interpolating.
+	This uses local interpolation, and will lose information
+	when downgrading compared to averaging down."""
+	map  = map.copy()
+	pix  = map.sky2pix(posmap(shape, wcs))
+	mask = ~np.isfinite(map)
+	map[mask] = 0
+	pmap = enlib.utils.interpol(map, pix, order=order)
+	if np.sum(mask) > 0:
+		pmask = np.abs(enlib.utils.interpol(1.0-mask, pix, order=min(1,order)))<1e-3
+		pmap[pmask] = np.nan
+	return ndmap(pmap, wcs)
+
 ############
 # File I/O #
 ############

@@ -1,4 +1,4 @@
-import numpy as np
+import numpy as np, scipy.ndimage
 
 def lines(file_or_fname):
 	"""Iterates over lines in a file, which can be specified
@@ -107,3 +107,67 @@ def medmean(x, frac=0.5):
 	x = np.sort(x)
 	i = int(x.size*frac)/2
 	return np.mean(x[i:-i])
+
+def moveaxis(a, o, n):
+	if o < 0: o = o+a.ndim
+	if n < 0: n = n+a.ndim
+	if n <= o: return np.rollaxis(a, o, n)
+	else: return np.rollaxis(a, o, n+1)
+
+def moveaxes(a, old, new):
+	"""Move the axes listed in old to the positions given
+	by new. This is like repeated calls to numpy rollaxis
+	while taking into account the effect of previous rolls.
+
+	This version is slow but simple and safe. It moves
+	all axes to be moved to the end, and then moves them
+	one by one to the target location."""
+	# The final moves will happen in left-to-right order.
+	# Hence, the first moves must be in the reverse of
+	# this order.
+	n = len(old)
+	old   = np.asarray(old)
+	order = np.argsort(new)
+	rold  = old[order[::-1]]
+	for i in range(n):
+		a = moveaxis(a, rold[i], -1)
+		# This may have moved some of the olds we're going to
+		# move next, so update these
+		for j in range(i+1,n):
+			if rold[j] > rold[i]: rold[j] -= 1
+	# Then do the final moves
+	for i in range(n):
+		a = moveaxis(a, -1, new[order[i]])
+	return a
+def partial_flatten(a, axes=[-1], pos=0):
+	"""Flatten all dimensions of a except those mentioned
+	in axes, and put the flattened one at the given position.
+	The result is always at least 2d.
+
+	Example: if a.shape is [1,2,3,4],
+	then partial_flatten(a,[-1],0).shape is [6,4]."""
+	a = moveaxes(a, axes, range(len(axes)))
+	a = np.reshape(a, list(a.shape[:len(axes)])+[np.prod(a.shape[len(axes):])])
+	return moveaxis(a, -1, pos)
+
+def partial_expand(a, shape, axes=[-1], pos=0):
+	"""Undo a partial flatten. Shape is the shape of the
+	original array before flattening, and axes and pos should be
+	the same as those passed to the flatten operation."""
+	a = moveaxis(a, pos, -1)
+	axes = np.array(axes)%len(shape)
+	rest = list(np.delete(shape, axes))
+	a = np.reshape(a, list(a.shape[:len(axes)])+rest)
+	return moveaxes(a, range(len(axes)), axes)
+
+def interpol(a, inds, order=3, mode="nearest"):
+	"""Given an array a[{x},{y}] and a list of
+	float indices into a, inds[len(y),{z}],
+	returns interpolated values at these positions
+	as [{x},{z}]."""
+	npre = a.ndim - inds.shape[0]
+	res = np.empty(a.shape[:npre]+inds.shape[1:])
+	fa, fr = partial_flatten(a, range(npre,a.ndim)), partial_flatten(res, range(npre, res.ndim))
+	for i in range(fa.shape[0]):
+		fr[i] = scipy.ndimage.map_coordinates(fa[i], inds, order=order, mode=mode)
+	return res
