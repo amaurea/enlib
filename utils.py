@@ -45,7 +45,7 @@ def unwind(a, period=2*np.pi):
 	become [0.07,0.02,-0.03,-0.08] with the default period
 	of 2*pi."""
 	res = np.array(a)
-	res[...,0] = rewind(res[...,0])
+	res[...,0] = rewind(res[...,0],ref=0,period=period)
 	res[...,1:] -= np.cumsum(np.round((res[...,1:]-res[...,:-1])/period),-1)*period
 	return res
 

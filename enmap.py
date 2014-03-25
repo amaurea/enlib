@@ -29,6 +29,9 @@ class ndmap(np.ndarray):
 		return ndmap(arr, self.wcs)
 	def copy(self):
 		return ndmap(np.array(self), self.wcs)
+	def sky2pix(self, coords, safe=True): return sky2pix(self.wcs, coords, safe)
+	def pix2sky(self, pix,    safe=True): return pix2sky(self.wcs, pix,    safe)
+	def box(self): return box(self.shape, self.wcs)
 	def posmap(self): return posmap(self.shape, self.wcs)
 	def freqmap(self): return freqmap(self.shape, self.wcs)
 	def lmap(self): return lmap(self.shape, self.wcs)
@@ -92,11 +95,11 @@ class ndmap(np.ndarray):
 		else:
 			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1])],dtype=int)
 		return ibox
-	def __getattr__(self, name):
-		if name == "box":
-			pix    = np.array([[0,0],self.shape[-2:]]).T-0.5
-			coords = self.wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
-			return enlib.utils.unwind(np.array(coords).T*np.pi/180)
+
+def box(shape, wcs):
+	pix    = np.array([[0,0],shape[-2:]]).T-0.5
+	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
+	return enlib.utils.unwind(np.array(coords).T*np.pi/180)
 
 def enmap(arr, wcs=None, dtype=None, copy=True):
 	"""Construct an ndmap from data.
@@ -154,7 +157,7 @@ def sky2pix(wcs, coords, safe=True):
 	pix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))+0.5
 	if safe:
 		for i in range(len(pix)):
-			pix[i] = enlib.utils.unwind(pix[i], 360./wcs.wcs.cdelt[i])
+			pix[i] = enlib.utils.unwind(pix[i], np.abs(360./wcs.wcs.cdelt[i]))
 	return pix[::-1].reshape(coords.shape)
 
 ############
