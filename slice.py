@@ -1,6 +1,6 @@
 """This module is intended to make it easier to implement slicing."""
 import numpy as np
-from enlib.utils import cumsplit
+from enlib.utils import cumsplit, listsplit
 
 def expand_slice(sel, n):
 	"""Expands defaults and negatives in a slice to their implied values.
@@ -16,26 +16,20 @@ def expand_slice(sel, n):
 def split_slice(sel, ndims):
 	"""Splits a numpy-compatible slice "sel" into sub-slices sub[:], such that
 	a[sel] = s[sub[0]][:,sub[1]][:,:,sub[2]][...], This is useful when
-	implementing arrays with heterogeneous indices."""
+	implementing arrays with heterogeneous indices. Ndims indicates the number of
+	indices to allocate to each split, starting from the left. Also expands all
+	ellipsis."""
 	if not isinstance(sel,tuple): sel = (sel,)
-	# It's easy if we don't have ellipsis.
+	# We know the total number of dimensions involved, so we can expand ellipis
 	# What the heck? "in" operator is apparently broken for lists that
 	# contain numpy arrays.
-	if Ellipsis not in [type(i) for i in sel]: return split_slice_simple(sel, ndims)
-	# Otherwise, fill in indices from the left and right...
-	left, right = listsplit(sel, Ellipsis)
-	resL = split_slice_simple(left,  ndims)
-	resR = [v[::-1] for v in split_slice_simple(right[::-1], ndims[::-1])[::-1]]
-	# and combine them.
-	def combine(a, b, n):
-		if len(b) == 0: return a
-		if len(a) + len(b) < n:
-			return a + (Ellipsis,) + b
-		elif len(a) + len(b) == n:
-			return a + b
-		else:
-			raise IndexError("Too many indices in ndim=%d array: "%n + str(a+b))
-	return [combine(L,R,n) for L,R,n in zip(resL,resR,ndims)]
+	parts = listsplit(sel, Ellipsis)
+	if len(parts) > 1:
+		# Only the rightmost ellipsis has any effect
+		left, right = sum(parts[:-1],()), parts[-1]
+		nfree = sum(ndims) - sum([i is not None for i in (left+right)])
+		sel = left + tuple([slice(None) for i in range(nfree)]) + right
+	return split_slice_simple(sel, ndims)
 
 def split_slice_simple(sel, ndims):
 	"""Helper function for split_slice. Splits a slice
