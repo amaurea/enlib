@@ -168,12 +168,7 @@ def project(map, shape, wcs, order=3):
 	when downgrading compared to averaging down."""
 	map  = map.copy()
 	pix  = map.sky2pix(posmap(shape, wcs))
-	mask = ~np.isfinite(map)
-	map[mask] = 0
 	pmap = enlib.utils.interpol(map, pix, order=order)
-	if np.sum(mask) > 0:
-		pmask = np.abs(enlib.utils.interpol(1.0-mask, pix, order=min(1,order)))<1e-3
-		pmap[pmask] = np.nan
 	return ndmap(pmap, wcs)
 
 ############
