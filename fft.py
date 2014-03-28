@@ -13,11 +13,15 @@ def fft(tod, ft=None, nthread=0, axes=[-1]):
 	from the size and type of tod and ft. The optional nthread argument specifies
 	the number of theads to use in the fft. The default (0) uses the value specified
 	by the OMP_NUM_THREAD environment varible if that is specified, or the total
-	number of cores on the computer otherwise."""
+	number of cores on the computer otherwise. If ft is left out, a complex
+	transform is assumed."""
 	tod = asfcarray(tod)
 	if tod.size == 0: return
 	nt = nthread or nthread_fft
-	if ft is None: ft = np.empty(tod.shape, tod.dtype)
+	if ft is None:
+		otype = np.result_type(tod.dtype,0j)
+		ft  = np.empty(tod.shape, otype)
+		tod = tod.astype(otype, copy=False)
 	plan = pyfftw.FFTW(tod, ft, flags=['FFTW_ESTIMATE'], threads=nt, axes=axes)
 	plan()
 	return ft

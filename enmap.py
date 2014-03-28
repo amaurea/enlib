@@ -1,10 +1,32 @@
-import numpy as np, scipy.ndimage, warnings, enlib.wcs, enlib.slice, astropy.io.fits, h5py
+import numpy as np, scipy.ndimage, warnings, enlib.wcs, enlib.slice, enlib.fft, astropy.io.fits
+try:
+	import h5py
+except ImportError:
+	pass
+try:
+	# Ensure that our numpy has stacked array support
+	np.linalg.cholesky(np.array([1]).reshape(1,1,1))
+	def svd_pow(a,e):
+		U, s, Vh = np.linalg.svd(a)
+		seU = s[:,None,:]**e*U
+		return np.einsum("xij,xjk->xik",seU,Vh)
+except np.linalg.LinAlgError:
+	try:
+		from linmulti import svd_pow
+	except ImportError:
+		# This fallback is quite slow, even though the loop only has 10000 or so iterations
+		def svd_pow(a, e):
+			res = np.zeros(a.shape)
+			for i in range(res.shape[0]):
+				if not np.all(a[i]==0):
+					U, s, Vh = np.linalg.svd(a[i])
+					res[i] = (s**e*U).dot(Vh)
+			return res
 
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
 # itself uses column-major ordering. So an array which is (ncomp,ny,nx)
 # will be (nx,ny,ncomp) in the file. This means that the axes in the ndmap
 # will be in the opposite order of those in the wcs object.
-
 class ndmap(np.ndarray):
 	"""Implements (stacks of) flat, rectangular, 2-dimensional maps as a dense
 	numpy array with a fits WCS. The axes have the reverse ordering as in the
@@ -33,9 +55,9 @@ class ndmap(np.ndarray):
 	def pix2sky(self, pix,    safe=True): return pix2sky(self.wcs, pix,    safe)
 	def box(self): return box(self.shape, self.wcs)
 	def posmap(self): return posmap(self.shape, self.wcs)
-	def freqmap(self): return freqmap(self.shape, self.wcs)
 	def lmap(self): return lmap(self.shape, self.wcs)
 	def area(self): return area(self.shape, self.wcs)
+	def extent(self): return extent(self.shape, self.wcs)
 	def project(self, shape, wcs, order=3): return project(self, shape, wcs, order)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
@@ -53,14 +75,7 @@ class ndmap(np.ndarray):
 			return np.asarray(self)[sel]
 		# Otherwise we will return a full ndmap, including a
 		# (possibly) sliced wcs.
-		wcs = self.wcs.deepcopy()
-		if len(sel2) > 0:
-			# The wcs object has the indices in reverse order
-			for i,s in enumerate(sel2[::-1]):
-				s = enlib.slice.expand_slice(s, self.shape[::-1][-2+i])
-				wcs.wcs.crpix[i] -= s.start
-				wcs.wcs.crpix[i] /= s.step
-				wcs.wcs.cdelt[i] *= s.step
+		_, wcs = slice_wcs(self.shape, self.wcs, sel2)
 		return ndmap(np.ndarray.__getitem__(self, sel), wcs)
 	def __getslice__(self, a, b=None, c=None): return self[slice(a,b,c)]
 	def submap(self, box, inclusive=False):
@@ -95,6 +110,18 @@ class ndmap(np.ndarray):
 		else:
 			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1])],dtype=int)
 		return ibox
+
+def slice_wcs(shape, wcs, sel):
+	wcs = wcs.deepcopy()
+	oshape = np.array(shape)
+	# The wcs object has the indices in reverse order
+	for i,s in enumerate(sel[::-1]):
+		s = enlib.slice.expand_slice(s, shape[::-1][-2+i])
+		wcs.wcs.crpix[i] -= s.start
+		wcs.wcs.crpix[i] /= s.step
+		wcs.wcs.cdelt[i] *= s.step
+		oshape[::-1][-2+i] = (oshape[::-1][-2+i]+s.step-1)/s.step
+	return tuple(oshape), wcs
 
 def box(shape, wcs):
 	pix    = np.array([[0,0],shape[-2:]]).T-0.5
@@ -170,6 +197,179 @@ def project(map, shape, wcs, order=3):
 	pix  = map.sky2pix(posmap(shape, wcs))
 	pmap = enlib.utils.interpol(map, pix, order=order)
 	return ndmap(pmap, wcs)
+
+def rand_map(shape, wcs, cov):
+	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
+	the provided power spectrum."""
+	return harm2map(rand_gauss_iso_harm(shape, wcs, cov))
+
+def rand_gauss(shape, wcs):
+	"""Generate a map with random gaussian noise in pixel space."""
+	return ndmap(np.random.standard_normal(shape), wcs)
+
+def rand_gauss_harm(shape, wcs):
+	"""Mostly equivalent to np.fft.fft2(np.random.standard_normal(shape)),
+	but avoids the fft by generating the numbers directly in frequency
+	domain. Does not enforce the symmetry requried for a real map. If box is
+	passed, the result will be an enmap."""
+	return ndmap(np.random.standard_normal(shape)+1j*np.random.standard_normal(shape),wcs)
+
+def rand_gauss_iso_harm(shape, wcs, cov):
+	"""Generates an isotropic random map with component covariance
+	cov in harmonic space, where cov is a (comp,comp,l) array."""
+	data = map_mul(spec2flat(shape, wcs, cov, 0.5), rand_gauss_harm(shape, wcs))
+	return ndmap(data, wcs)
+
+# Approximations to physical box size and area are needed
+# for transforming to l-space. We can do this by dividing
+# our map into a set of rectangles and computing the
+# coordinates of their corners. The rectangles are assumed
+# to be small, so cos(dec) is constant across them, letting
+# us rescale RA by cos(dec) inside each. We also assume each
+# rectangle to be .. a rectangle (:D), so area is given by
+# two side lengths.
+# The total length in each direction could be computed by
+# 1. Average of top and bottom length
+# 2. Mean of all row lengths
+# 3. Area-weighted mean of row lengths
+# 4. Some sort of compromise that makes length*height = area.
+# To construct the coarser system, slicing won't do, as it
+# shaves off some of our area. Instead, we must modify
+# cdelt to match our new pixels: cdelt /= nnew/nold
+def extent(shape, wcs, nsub=0x10):
+	"""Returns an estimate of the "physical" extent of the
+	patch given by shape and wcs as [height,width] in
+	radians. That is, if the patch were on a sphere with
+	radius 1 m, then this function returns approximately how many meters
+	tall and width the patch is."""
+	wcs = wcs.deepcopy()
+	step = np.asfarray(shape[-2:])/nsub
+	wcs.wcs.cdelt *= step
+	wcs.wcs.crpix /= step
+	# Get position of all the corners, including the far ones
+	pos = posmap([nsub+1,nsub+1], wcs)
+	# Apply az scaling
+	scale = np.zeros([2,nsub,nsub])
+	scale[0] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
+	scale[1] = 1
+	ly = np.sum(((pos[:,1:,:-1]-pos[:,:-1,:-1])*scale)**2,0)**0.5
+	lx = np.sum(((pos[:,:-1,1:]-pos[:,:-1,:-1])*scale)**2,0)**0.5
+	areas = ly*lx
+	# Compute approximate overall lengths
+	Ay, Ax = np.sum(areas,0), np.sum(areas,1)
+	Ly = np.sum(np.sum(ly,0)*Ay)/np.sum(Ay)
+	Lx = np.sum(np.sum(lx,1)*Ax)/np.sum(Ax)
+	return np.array([Ly,Lx])
+
+def area(shape, wcs, nsub=0x10):
+	"""Returns the area of a patch with the given shape
+	and wcs, in steradians."""
+	return np.prod(extent(shape, wcs, nsub))
+
+def lmap(shape, wcs):
+	"""Return a map of all the wavenumbers in the fourier transform
+	of a map with the given shape and wcs."""
+	step = extent(shape, wcs)/shape[-2:]
+	data = np.empty([2]+list(shape[-2:]))
+	data[0] = np.fft.fftfreq(shape[-2], step[0])[:,None]
+	data[1] = np.fft.fftfreq(shape[-1], step[1])[None,:]
+	return ndmap(data, wcs)*2*np.pi
+
+def lrmap(shape, wcs):
+	"""Return a map of all the wavenumbers in the fourier transform
+	of a map with the given shape and wcs."""
+	return lmap(shape, wcs)[...,:shape[-1]/2+1]
+
+def fft(emap, omap=None, nthread=0, normalize=True):
+	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
+	res = samewcs(enlib.fft.fft(emap,omap,axes=[-2,-1],nthread=nthread), emap)
+	if normalize: res /= np.prod(emap.shape[-2:])**0.5
+	return res
+def ifft(emap, omap=None, nthread=0, normalize=True):
+	"""Performs the 2d iFFT of the complex enmap given, and returns a pixel-space enmap."""
+	res = samewcs(enlib.fft.ifft(emap,omap,axes=[-2,-1],nthread=nthread, normalize=False), emap)
+	if normalize: res /= np.prod(emap.shape[-2:])**0.5
+	return res
+
+# These are shortcuts for transforming from T,Q,U real-space maps to
+# T,E,B hamonic maps. They are not the most efficient way of doing this.
+# It would be better to precompute the rotation matrix and buffers, and
+# use real transforms.
+def map2harm(emap, nthread=0):
+	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
+	rot = queb_rotmat(emap.lmap())
+	res = samewcs(fft(emap,nthread=nthread), emap)
+	res[-2:] = map_mul(rot, res[-2:])
+	return res
+def harm2map(emap, nthread=0, normalize=True):
+	rot = queb_rotmat(emap.lmap(), inverse=True)
+	res = emap.copy()
+	res[-2:] = map_mul(rot, res[-2:])
+	return samewcs(ifft(res,nthread=nthread), emap).real
+
+def queb_rotmat(lmap, inverse=False):
+	a    = 2*np.arctan2(lmap[0], lmap[1])
+	c, s = np.cos(a), np.sin(a)
+	if inverse: s = -s
+	return samewcs(np.array([[c,-s],[s,c]]),lmap)
+
+def map_mul(mat, vec):
+	"""Elementwise matrix multiplication mat*vec. Result will have
+	the same shape as vec. Multiplication happens along the first indices."""
+	oshape= vec.shape
+	if len(oshape) == 2: oshape = (1,)+oshape
+	tvec = np.reshape(vec, oshape)
+	# It is a bit clunky to get einsum to handle arbitrary numbers of dimensions.
+	vpre  = "".join([chr(ord('a')+i) for i in range(len(oshape)-3)])
+	mpre  = vpre[vec.ndim-mat.ndim:]
+	data  = np.reshape(np.einsum("%sxyzw,%syzw->%sxzw" % (mpre,vpre,vpre), mat, tvec), vec.shape)
+	return samewcs(data, mat, vec)
+
+def samewcs(arr, *args):
+	"""Returns arr with the same wcs information as the first enmap among args.
+	If no mathces are found, arr is returned as is."""
+	for m in args:
+		try: return ndmap(arr, m.wcs)
+		except AttributeError: pass
+	return arr
+
+def spec2flat(shape, wcs, cov, exp=1.0):
+	"""Given a (ncomp,ncomp,l) power spectrum, expand it to harmonic map space,
+	returning (ncomp,ncomp,y,x). This involves a rescaling which converts from
+	power in terms of multipoles, to power in terms of 2d frequency.
+	The optional exp argument controls the exponent of the rescaling factor.
+	To use this with the inverse power spectrum, pass exp=-1, for example.
+	If apply_exp is True, the power spectrum will be taken to the exp'th
+	power. Otherwise, it is assumed that this has already been done, and
+	the exp argument only controls the normalization of the result.
+
+	It is irritating that this function needs to know what kind of matrix
+	it is expanding, but I can't see a way to avoid it. Changing the
+	units of harmonic space is not sufficient, as the following demonstrates:
+	  m = harm2map(map_mul(spec2flat(s, b, multi_pow(ps, 0.5), 0.5), map2harm(rand_gauss(s,b))))
+	The map m is independent of the units of harmonic space, and will be wrong unless
+	the spectrum is properly scaled. Since this scaling depends on the shape of
+	the map, this is the appropriate place to do so, ugly as it is."""
+	oshape= shape
+	if len(oshape) == 2: oshape = (1,)+oshape
+	ls  = np.sum(lmap(oshape, wcs)**2,0)**0.5
+	cov = cov * np.prod(shape[-2:])/area(shape,wcs)
+	if exp != 1.0: cov = multi_pow(cov, exp)
+	cov   = cov[:oshape[-3],:oshape[-3]]
+	return ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape)),wcs)
+
+def spec2flat2(shape, wcs, cov):
+	oshape= shape
+	if len(oshape) == 2: oshape = (1,)+oshape
+	ls    = np.sum(lmap(oshape, wcs)**2,0)**0.5
+	cov   = cov[:oshape[-3],:oshape[-3]]
+	return ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape)),wcs)
+
+def multi_pow(mat, exp, axes=[0,1]):
+	"""Raise each sub-matrix of mat (ncomp,ncomp,...) to
+	the given exponent in eigen-space."""
+	res = enlib.utils.partial_expand(svd_pow(enlib.utils.partial_flatten(mat, axes, 0), exp), mat.shape, axes, 0)
+	return samewcs(res, mat)
 
 ############
 # File I/O #
