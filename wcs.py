@@ -13,7 +13,7 @@ def car(shape, box):
 	direciton given by shape=[nra,ndec]. Box indicates
 	the edge of pixels, not centers, so all pixels will
 	be wholly inside the box."""
-	box = np.asarray(box)*rad2deg
+	box = np.asfarray(box)*rad2deg
 	w = WCS(naxis=2)
 	# Reference point must be on equator to
 	# get an unrotated plate carree.
@@ -39,7 +39,7 @@ def cea(shape, box):
 	the edge of pixels, not centers, so all pixels will
 	be wholly inside the box. The center of the box will be
 	conformal."""
-	box = np.asarray(box)
+	box = np.asfarray(box)
 	lam = np.cos(np.mean(box[:,1]))**2
 	xybox = np.array([box[:,0],np.sin(box[:,1])/lam]).T*rad2deg
 	w = WCS(naxis=2)
@@ -51,7 +51,47 @@ def cea(shape, box):
 	w.wcs.ctype = ["RA---CEA", "DEC--CEA"]
 	return w
 
-systems = {"car": car, "cea": cea }
+def zea(shape, box):
+	"""Setups up an oblate Lambert's azimuthal equal area
+	system with bounds box=[[ra0,dec0],[ra1,dec1]] and pixels
+	in each direciton given by shape=[nra,ndec]. Box indicates
+	the edge of pixels, not centers, so all pixels will be
+	wholly inside the box."""
+	return autobox(shape, box, "ZEA")
+
+def air(shape, box):
+	"""Setups up an Airy system with bounds
+	box=[[ra0,dec0],[ra1,dec1]] and pixels in each direciton
+	given by shape=[nra,ndec]. Box indicates the edge of pixels,
+	not centers, so all pixels will be wholly inside the box."""
+	return autobox(shape, box, "AIR")
+
+def autobox(shape, box, name):
+	"""Sets up a wcs with the given bounding box
+	for an image of the given shape for the named
+	coordinate system, provided no fancy options are
+	needed. crval will be in the center of the box,
+	so this function produces oblique projections."""
+	box = np.asfarray(box)
+	w = WCS(naxis=2)
+	w.wcs.ctype = ["RA---"+name, "DEC--"+name]
+	# Set up temporary pixel coordinates.
+	w.wcs.cdelt = np.array([1.,1.])
+	w.wcs.crval = np.mean(box,0)[::-1]*rad2deg
+	w.wcs.crpix = np.array([0.,0.])
+	corners = w.wcs_world2pix(box[:,::-1]*rad2deg,0)+0.5
+	# Shift crpix to make the corner the pixel origin
+	w.wcs.crpix -= corners[0]
+	# Scale cdelt so that the number of pixels inside
+	# is correct
+	w.wcs.crpix -= 0.5
+	scale = shape[::-1][:2]/(corners[1]-corners[0])
+	w.wcs.cdelt /= scale
+	w.wcs.crpix *= scale
+	w.wcs.crpix += 0.5
+	return w
+
+systems = {"car": car, "cea": cea, "air": airy, "zea": zea }
 
 def from_bounds(shape, box, system="cea"):
 	"""Construct a WCS object based with bounds
