@@ -64,17 +64,29 @@ def air(shape, box):
 	box=[[ra0,dec0],[ra1,dec1]] and pixels in each direciton
 	given by shape=[nra,ndec]. Box indicates the edge of pixels,
 	not centers, so all pixels will be wholly inside the box."""
-	return autobox(shape, box, "AIR")
+	# Compute approximate ratius of box
+	mdec, mra = np.mean(box,0)
+	w = angdist(mra,box[0,0],mra,box[1,0])
+	d = angdist(box[0,1],box[0,0],box[1,1],box[1,0])
+	rad = (w+d)/4 * 180/np.pi
+	print rad
+	w = WCS(naxis=2)
+	w.wcs.ctype = ["RA---AIR","DEC--AIR"]
+	w.wcs.set_pv([(2,1,90-rad)])
+	return autobox(shape, box, w)
 
-def autobox(shape, box, name):
+def autobox(shape, box, name_or_wcs):
 	"""Sets up a wcs with the given bounding box
 	for an image of the given shape for the named
 	coordinate system, provided no fancy options are
 	needed. crval will be in the center of the box,
 	so this function produces oblique projections."""
 	box = np.asfarray(box)
-	w = WCS(naxis=2)
-	w.wcs.ctype = ["RA---"+name, "DEC--"+name]
+	if isinstance(name_or_wcs, basestring):
+		w = WCS(naxis=2)
+		w.wcs.ctype = ["RA---"+name_or_wcs, "DEC--"+name_or_wcs]
+	else:
+		w = name_or_wcs
 	# Set up temporary pixel coordinates.
 	w.wcs.cdelt = np.array([1.,1.])
 	w.wcs.crval = np.mean(box,0)[::-1]*rad2deg
@@ -91,7 +103,7 @@ def autobox(shape, box, name):
 	w.wcs.crpix += 0.5
 	return w
 
-systems = {"car": car, "cea": cea, "air": airy, "zea": zea }
+systems = {"car": car, "cea": cea, "air": air, "zea": zea }
 
 def from_bounds(shape, box, system="cea"):
 	"""Construct a WCS object based with bounds
@@ -110,3 +122,5 @@ def describe(wcs):
 	n    = wcs.naxis
 	return ("%s:{cdelt:["+",".join(["%.3g"]*n)+"],crval:["+",".join(["%.3g"]*n)+"],crpix:["+",".join(["%.3g"]*n)+"]}") % ((sys,) + tuple(wcs.wcs.cdelt) + tuple(wcs.wcs.crval) + tuple(wcs.wcs.crpix))
 
+def angdist(lon1,lat1,lon2,lat2):
+	return np.arccos(np.cos(lat1)*np.cos(lat2)*(np.cos(lon1)*np.cos(lon2)+np.sin(lon1)*np.sin(lon2))+np.sin(lat1)*np.sin(lat2))
