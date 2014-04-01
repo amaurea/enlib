@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage
+import numpy as np, scipy.ndimage, os, errno
 
 def lines(file_or_fname):
 	"""Iterates over lines in a file, which can be specified

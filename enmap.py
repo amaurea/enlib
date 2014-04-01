@@ -54,7 +54,7 @@ class ndmap(np.ndarray):
 	def sky2pix(self, coords, safe=True): return sky2pix(self.wcs, coords, safe)
 	def pix2sky(self, pix,    safe=True): return pix2sky(self.wcs, pix,    safe)
 	def box(self): return box(self.shape, self.wcs)
-	def posmap(self): return posmap(self.shape, self.wcs)
+	def posmap(self, center=False): return posmap(self.shape, self.wcs, center=center)
 	def lmap(self): return lmap(self.shape, self.wcs)
 	def area(self): return area(self.shape, self.wcs)
 	def extent(self): return extent(self.shape, self.wcs)
@@ -157,13 +157,14 @@ def zeros(shape, wcs, dtype=None):
 def empty(shape, wcs, dtype=None):
 	return enmap(np.empty(shape), wcs, dtype=dtype)
 
-def posmap(shape, wcs, safe=True):
+def posmap(shape, wcs, safe=True, center=False):
 	"""Return an enmap where each entry is the coordinate of that entry,
 	such that posmap(shape,wcs)[{0,1},j,k] is the {y,x}-coordinate of
 	pixel (j,k) in the map. Results are returned in radians, and
 	if safe is true (default), then sharp coordinate edges will be
 	avoided."""
 	pix    = np.mgrid[:shape[-2],:shape[-1]]
+	if center: pix += 0.5
 	return ndmap(pix2sky(wcs, pix, safe), wcs)
 
 def pix2sky(wcs, pix, safe=True):
@@ -185,7 +186,8 @@ def sky2pix(wcs, coords, safe=True):
 	pix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))+0.5
 	if safe:
 		for i in range(len(pix)):
-			pix[i] = enlib.utils.unwind(pix[i], np.abs(360./wcs.wcs.cdelt[i]))
+			n = np.abs(360./wcs.wcs.cdelt[i])
+			pix[i] = enlib.utils.rewind(pix[i], n/2, n)
 	return pix[::-1].reshape(coords.shape)
 
 def project(map, shape, wcs, order=3, mode="nearest"):
