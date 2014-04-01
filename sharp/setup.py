@@ -10,6 +10,7 @@ setup(
 			name="sharp",
 			sources=["sharp.pyx"],
 			libraries=["sharp","c_utils","fftpack"],
+			include_dirs=["."],
 			extra_link_args = ["-fopenmp"],
 			)
 		]
