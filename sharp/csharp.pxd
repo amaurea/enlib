@@ -1,0 +1,32 @@
+from libc.stddef cimport ptrdiff_t
+cdef extern from "csharp.h":
+	ctypedef struct sharp_geom_info:
+		pass
+	ctypedef struct sharp_alm_info:
+		pass
+	int SHARP_YtW=0
+	int SHARP_MAP2ALM=SHARP_YtW
+	int SHARP_Y=1
+	int SHARP_ALM2MAP=SHARP_Y
+	int SHARP_Yt=2
+	int SHARP_WY=3
+	int SHARP_ALM2MAP_DERIV1=4
+	int SHARP_DP              = 1<<4
+	int SHARP_ADD             = 1<<5
+	int SHARP_REAL_HARMONICS  = 1<<6
+	int SHARP_NO_FFT          = 1<<7
+	int SHARP_USE_WEIGHTS     = 1<<20
+	int SHARP_NO_OPENMP       = 1<<21
+	int SHARP_NVMAX           = (1<<4)-1
+	void sharp_make_geom_info (int nrings, int *nph, ptrdiff_t *ofs,
+		int *stride, double *phi0, double *theta,
+		double *wgt, sharp_geom_info **geom_info)
+	void sharp_destroy_geom_info (sharp_geom_info *info)
+	void sharp_make_alm_info (int lmax, int mmax, int stride,
+		ptrdiff_t *mstart, sharp_alm_info **alm_info)
+	void sharp_make_triangular_alm_info (int lmax, int mmax, int stride,
+		sharp_alm_info **alm_info)
+	void sharp_destroy_alm_info (sharp_alm_info *info)
+	void sharp_execute (int type, int spin, void *alm, void *map,
+		sharp_geom_info *geom_info, sharp_alm_info *alm_info, int ntrans,
+		int flags, double *time, unsigned long long *opcnt)
