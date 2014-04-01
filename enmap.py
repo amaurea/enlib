@@ -58,7 +58,7 @@ class ndmap(np.ndarray):
 	def lmap(self): return lmap(self.shape, self.wcs)
 	def area(self): return area(self.shape, self.wcs)
 	def extent(self): return extent(self.shape, self.wcs)
-	def project(self, shape, wcs, order=3): return project(self, shape, wcs, order)
+	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
@@ -188,7 +188,7 @@ def sky2pix(wcs, coords, safe=True):
 			pix[i] = enlib.utils.unwind(pix[i], np.abs(360./wcs.wcs.cdelt[i]))
 	return pix[::-1].reshape(coords.shape)
 
-def project(map, shape, wcs, order=3):
+def project(map, shape, wcs, order=3, mode="nearest"):
 	"""Project the map into a new map given by the specified
 	shape and wcs, interpolating as necessary. Handles nan
 	regions in the map by masking them before interpolating.
@@ -196,7 +196,7 @@ def project(map, shape, wcs, order=3):
 	when downgrading compared to averaging down."""
 	map  = map.copy()
 	pix  = map.sky2pix(posmap(shape, wcs))
-	pmap = enlib.utils.interpol(map, pix, order=order)
+	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode)
 	return ndmap(pmap, wcs)
 
 def rand_map(shape, wcs, cov):
@@ -260,7 +260,7 @@ def extent(shape, wcs, nsub=0x10):
 	Ay, Ax = np.sum(areas,0), np.sum(areas,1)
 	Ly = np.sum(np.sum(ly,0)*Ay)/np.sum(Ay)
 	Lx = np.sum(np.sum(lx,1)*Ax)/np.sum(Ax)
-	return np.array([Ly,Lx])
+	return np.array([Lx,Ly])
 
 def area(shape, wcs, nsub=0x10):
 	"""Returns the area of a patch with the given shape

@@ -178,3 +178,10 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True):
 			mask[i] = scipy.ndimage.map_coordinates(mask[i], inds, order=0, mode=mode)
 		fa[mask] = np.nan
 	return res
+
+def mkdir(path):
+	try:
+		os.makedirs(path)
+	except OSError as exception:
+		if exception.errno != errno.EEXIST:
+			raise

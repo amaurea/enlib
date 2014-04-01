@@ -1,5 +1,6 @@
 """This module defines shortcuts for generating WCS instances and working
-with them."""
+with them. The bounding boxes and shapes used in this module all use
+the same ordering as WCS, i.e. column major."""
 import numpy as np
 from astropy.wcs import WCS
 from enlib import slice
@@ -65,11 +66,11 @@ def air(shape, box):
 	given by shape=[nra,ndec]. Box indicates the edge of pixels,
 	not centers, so all pixels will be wholly inside the box."""
 	# Compute approximate ratius of box
-	mdec, mra = np.mean(box,0)
-	w = angdist(mra,box[0,0],mra,box[1,0])
-	d = angdist(box[0,1],box[0,0],box[1,1],box[1,0])
-	rad = (w+d)/4 * 180/np.pi
-	print rad
+	mra, mdec = np.mean(box,0)
+	w = angdist(mra,box[0,1],mra,box[1,1])
+	h = angdist(box[0,0],mdec,box[1,0],mdec)
+	#d = angdist(box[0,0],box[0,1],box[1,0],box[1,1])
+	rad = (w+h)/4 * 180/np.pi
 	w = WCS(naxis=2)
 	w.wcs.ctype = ["RA---AIR","DEC--AIR"]
 	w.wcs.set_pv([(2,1,90-rad)])
@@ -89,15 +90,15 @@ def autobox(shape, box, name_or_wcs):
 		w = name_or_wcs
 	# Set up temporary pixel coordinates.
 	w.wcs.cdelt = np.array([1.,1.])
-	w.wcs.crval = np.mean(box,0)[::-1]*rad2deg
+	w.wcs.crval = np.mean(box,0)*rad2deg
 	w.wcs.crpix = np.array([0.,0.])
-	corners = w.wcs_world2pix(box[:,::-1]*rad2deg,0)+0.5
+	corners = w.wcs_world2pix(box*rad2deg,0)+0.5
 	# Shift crpix to make the corner the pixel origin
 	w.wcs.crpix -= corners[0]
 	# Scale cdelt so that the number of pixels inside
 	# is correct
 	w.wcs.crpix -= 0.5
-	scale = shape[::-1][:2]/(corners[1]-corners[0])
+	scale = shape[:2]/(corners[1]-corners[0])
 	w.wcs.cdelt /= scale
 	w.wcs.crpix *= scale
 	w.wcs.crpix += 0.5
