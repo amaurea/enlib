@@ -3,10 +3,27 @@ cimport numpy as np
 cimport csharp
 
 cdef class map_info:
+	"""This class is a thin wrapper for the sharp geom_info struct, which represents
+	the pixelization used in spherical harmonics transforms. It can represent an
+	abritrary number of constant-latitude rings at arbitrary latitudes. Each ring
+	has an arbitrary number of equidistant points in latitude, with an abritrary
+	offset in latitude."""
 	cdef csharp.sharp_geom_info * geom
-	cdef public int nrow
-	cdef public int npix
+	cdef readonly int nrow
+	cdef readonly int npix
+	cdef readonly np.ndarray theta
+	cdef readonly np.ndarray nphi
+	cdef readonly np.ndarray phi0
+	cdef readonly np.ndarray offsets
+	cdef readonly np.ndarray stride
+	cdef readonly np.ndarray weight
 	def __cinit__(self, theta, nphi=0, phi0=0, offsets=None, stride=None, weight=None):
+		"""Construct a new sharp map geometry consiting of N rings in co-latitude, at
+		co-latitudes theta[N], with the rings having nphi[N] points each, with the
+		first point at longitude phi0[N]. Each ring has pixel stride stride[N], and
+		the pixel index of the first pixel in each ring is offsets[N]. For map2alm
+		transforms, weight[N] specifies the integral weights for each row. These
+		are complicated and depend on the pixel layout."""
 		theta = np.asarray(theta, dtype=np.float64)
 		assert(theta.ndim == 1, "theta must be one-dimensional!")
 		ntheta = len(theta)
@@ -26,26 +43,47 @@ cdef class map_info:
 		if weight  is None:
 			weight  = np.zeros(ntheta,dtype=np.float64)+1
 		self.geom = make_geometry_helper(ntheta, nphi, offsets, stride, phi0, theta, weight)
-		self.nrow = ntheta
+		# Store publicly accessible view of the internal geometry. This
+		# is kept by going out of sync via readonly and writable=False
 		self.npix = np.sum(nphi)
+		self.nrow = len(nphi)
+		for v in [theta,nphi,phi0,offsets,stride,weight]: v.flags.writeable = False
+		self.theta, self.nphi, self.phi0, self.offsets, self.stride, self.weight = theta, nphi, phi0, offsets, stride, weight
 	def __dealloc__(self):
 		csharp.sharp_destroy_geom_info(self.geom)
 
 cdef class alm_info:
 	cdef csharp.sharp_alm_info * info
-	cdef public int lmax
-	cdef public int mmax
-	cdef public int nelem
-	def __cinit__(self, lmax, mmax=None, stride=1, mstart=None):
+	cdef readonly int lmax
+	cdef readonly int mmax
+	cdef readonly int stride
+	cdef readonly int nelem
+	cdef readonly np.ndarray mstart
+	def __cinit__(self, lmax, mmax=None, stride=1, layout="triangular"):
+		"""Constructs a new sharp spherical harmonic coefficient layout information
+		for the given lmax and mmax. The layout defaults to triangular, but
+		can be changed by explicitly specifying layout, either as a string
+		naming layout (triangular or rectangular), or as an array containing the
+		index of the first l for each m. Once constructed, an alm_info is immutable.
+		The layouts are all m-major, with all the ls for each m consecutive."""
 		if mmax is None: mmax = lmax
-		if mstart is None:
-			self.info = make_triangular_alm_helper(lmax, mmax, stride)
-			self.nelem = (lmax+1)*(lmax+2)/2 - (lmax-mmax)*(lmax-mmax+1)/2
+		if isinstance(layout,basestring):
+			if layout == "triangular" or layout == "tri":
+				m = np.arange(mmax+1)
+				mstart = np.concatenate([[0],np.cumsum(lmax+1-np.arange(mmax))])*stride
+			elif layout == "rectangular" or layout == "rect":
+				mstart = np.arange(mmax+1)*(lmax+1)*stride
+			else:
+				raise ValueError("unkonwn layout: %s" % layout)
 		else:
-			self.info  = make_alm_helper(lmax,mmax,stride, mstart)
-			self.nelem = np.max(mstart)+lmax+1
+			mstart = layout
+		self.info  = make_alm_helper(lmax,mmax,stride,mstart)
 		self.lmax  = lmax
 		self.mmax  = mmax
+		self.stride= stride
+		self.nelem = np.max(mstart + ((lmax+1)-np.arange(mmax+1))*stride)
+		self.mstart= mstart
+		self.mstart.flags.writeable = False
 	def __dealloc__(self):
 		csharp.sharp_destroy_alm_info(self.info)
 
@@ -53,8 +91,19 @@ cdef class sht:
 	cdef public map_info minfo
 	cdef public alm_info ainfo
 	def __cinit__(self, minfo, ainfo):
+		"""Construct a sharp Spherical Harmonics Transform (SHT) object, which
+		transforms between maps with pixellication given by the map_info "minfo"
+		and spherical harmonic coefficents given by alm_info "ainfo"."""
 		self.minfo, self.ainfo = minfo, ainfo
-	cpdef alm2map(self, alm, map=None, spin=0):
+	def alm2map(self, alm, map=None, spin=0):
+		"""Transform the given spherical harmonic coefficients "alm" into
+		a map space. If a map is specified as the "map" argument, output
+		will be written there. Otherwise, a new map will be constructed
+		and returned. "alm" has dimensions [ntrans,nspin,nalm], or
+		[nspin,nalm] or [nalm] where ntrans is the number of independent
+		transforms to perform in parallel, nspin is the number of spin
+		components per transform (1 or 2), and nalm is the number of coefficients
+		per alm."""
 		alm = np.asarray(alm)
 		ntrans, nspin = dim_helper(alm, "alm")
 		# Create a compatible output map
@@ -65,7 +114,13 @@ cdef class sht:
 			assert(alm.shape[:-1]==map.shape[:-1], "all but last index of map and alm must agree")
 		execute(csharp.SHARP_ALM2MAP, self.ainfo, alm, self.minfo, map, spin=spin)
 		return map
-	cpdef map2alm(self, map, alm=None, spin=0):
+	def map2alm(self, map, alm=None, spin=0):
+		"""Transform the given map "map" into a harmonic space. If "alm" is specified,
+		output will be written there. Otherwise, a new alm will be constructed
+		and returned. "map" has dimensions [ntrans,nspin,npix], or
+		[nspin,npix] or [npix] where ntrans is the number of independent
+		transforms to perform in parallel, nspin is the number of spin
+		components per transform (1 or 2), and npix is the number of pixels per map."""
 		map = np.asarray(map, dtype=np.float64)
 		ntrans, nspin = dim_helper(map, "map")
 		# Create a compatible output map

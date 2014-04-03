@@ -71,7 +71,7 @@ class ndmap(np.ndarray):
 		# axes are lost, then degrade to a normal numpy array,
 		# since this class assumes that the two last axes are
 		# wcs axes.
-		if any([type(s) is int for s in sel2]):
+		if any([type(s) is not slice for s in sel2]):
 			return np.asarray(self)[sel]
 		# Otherwise we will return a full ndmap, including a
 		# (possibly) sliced wcs.
@@ -300,15 +300,17 @@ def ifft(emap, omap=None, nthread=0, normalize=True):
 # use real transforms.
 def map2harm(emap, nthread=0):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
-	rot = queb_rotmat(emap.lmap())
-	res = samewcs(fft(emap,nthread=nthread), emap)
-	res[-2:] = map_mul(rot, res[-2:])
-	return res
+	emap = samewcs(fft(emap,nthread=nthread), emap)
+	if emap.ndim > 2 and emap.shape[-3] > 1:
+		rot = queb_rotmat(emap.lmap())
+		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
+	return emap
 def harm2map(emap, nthread=0, normalize=True):
-	rot = queb_rotmat(emap.lmap(), inverse=True)
-	res = emap.copy()
-	res[-2:] = map_mul(rot, res[-2:])
-	return samewcs(ifft(res,nthread=nthread), emap).real
+	if emap.ndim > 2 and emap.shape[-3] > 1:
+		rot = queb_rotmat(emap.lmap(), inverse=True)
+		emap = emap.copy()
+		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
+	return samewcs(ifft(emap,nthread=nthread), emap).real
 
 def queb_rotmat(lmap, inverse=False):
 	a    = 2*np.arctan2(lmap[0], lmap[1])
@@ -361,18 +363,21 @@ def spec2flat(shape, wcs, cov, exp=1.0):
 	cov   = cov[:oshape[-3],:oshape[-3]]
 	return ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape)),wcs)
 
-def spec2flat2(shape, wcs, cov):
-	oshape= shape
-	if len(oshape) == 2: oshape = (1,)+oshape
-	ls    = np.sum(lmap(oshape, wcs)**2,0)**0.5
-	cov   = cov[:oshape[-3],:oshape[-3]]
-	return ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape)),wcs)
-
 def multi_pow(mat, exp, axes=[0,1]):
 	"""Raise each sub-matrix of mat (ncomp,ncomp,...) to
 	the given exponent in eigen-space."""
 	res = enlib.utils.partial_expand(svd_pow(enlib.utils.partial_flatten(mat, axes, 0), exp), mat.shape, axes, 0)
 	return samewcs(res, mat)
+
+def downgrade(emap, factor):
+	"""Returns enmap "emap" downgraded by the given integer factor
+	(may be a list for each direction, or just a number) by averaging
+	inside pixels."""
+	factor = np.asarray(factor,dtype=int)
+	if factor.ndim == 0: factor = np.array([factor,factor],dtype=int)
+	tshape = emap.shape[-2:]/factor*factor
+	res = np.mean(np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),-1),-2)
+	return ndmap(res, emap[...,::factor[0],::factor[1]].wcs)
 
 ############
 # File I/O #

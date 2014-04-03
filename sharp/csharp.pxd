@@ -1,9 +1,18 @@
 from libc.stddef cimport ptrdiff_t
 cdef extern from "csharp.h":
+	ctypedef struct sharp_ringinfo:
+		double theta, phi0, weight, cth, sth
+		ptrdiff_t ofs
+		int nph, stride
+	ctypedef struct sharp_ringpair:
+		sharp_ringinfo r1, r2
 	ctypedef struct sharp_geom_info:
-		pass
+		sharp_ringpair * pair
+		int npairs, nphmax
 	ctypedef struct sharp_alm_info:
-		pass
+		int lmax, nm, *mval, flags
+		ptrdiff_t *mvstart, stride
+
 	int SHARP_YtW=0
 	int SHARP_MAP2ALM=SHARP_YtW
 	int SHARP_Y=1
