@@ -41,3 +41,16 @@ cdef extern from "csharp.h":
 	void sharp_execute (int type, int spin, void *alm, void *map,
 		sharp_geom_info *geom_info, sharp_alm_info *alm_info, int ntrans,
 		int flags, double *time, unsigned long long *opcnt)
+
+	void sharp_make_weighted_healpix_geom_info (int nside, int stride,
+		double *weight, sharp_geom_info **geom_info)
+	void sharp_make_gauss_geom_info (int nrings, int nphi, double phi0,
+		int stride_lon, int stride_lat, sharp_geom_info **geom_info)
+	void sharp_make_fejer1_geom_info (int nrings, int nphi, double phi0,
+		int stride_lon, int stride_lat, sharp_geom_info **geom_info)
+	void sharp_make_cc_geom_info (int nrings, int ppring, double phi0,
+		int stride_lon, int stride_lat, sharp_geom_info **geom_info)
+	void sharp_make_fejer2_geom_info (int nrings, int ppring, double phi0,
+		int stride_lon, int stride_lat, sharp_geom_info **geom_info)
+	void sharp_make_mw_geom_info (int nrings, int ppring, double phi0,
+		int stride_lon, int stride_lat, sharp_geom_info **geom_info)
