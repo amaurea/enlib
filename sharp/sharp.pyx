@@ -84,6 +84,56 @@ cdef class alm_info:
 		self.nelem = np.max(mstart + ((lmax+1)-np.arange(mmax+1))*stride)
 		self.mstart= mstart
 		self.mstart.flags.writeable = False
+	def lm2ind(self, np.ndarray[int,ndim=1] l,np.ndarray[int,ndim=1] m):
+		return self.mstart[m]+l*self.stride
+	def transpose_alm(self, alm, out=None):
+		"""In order to accomodate l-major ordering, which is not directoy
+		supported by sharp, this function efficiently transposes Alm into
+		Aml. If the out argument is specified, the transposed result will
+		be written there. In order to perform an in-place transpose, call
+		this function with the same array as "alm" and "out". If the out
+		argument is not specified, then a new array will be constructed
+		and returned."""
+		if out is None: out = alm.copy()
+		if out.dtype == np.complex128:
+			self.transpose_alm_dp(out)
+		else:
+			self.transpose_alm_sp(out)
+		return out
+	cdef transpose_alm_dp(self,np.ndarray[np.complex128_t,ndim=1] alm):
+		cdef int l=0
+		cdef int m=0
+		cdef int i
+		cdef int j
+		cdef np.complex128_t v
+		cdef np.ndarray[int,ndim=1] mstart = self.mstart
+		for i in range(alm.size):
+			m += 1
+			if m > self.mmax or m > l:
+				l += 1
+				m = 0
+			j = mstart[m]+l*self.stride
+			if j > i:
+				v = alm[i]
+				alm[i] = alm[j]
+				alm[j] = v
+	cdef transpose_alm_sp(self,np.ndarray[np.complex64_t,ndim=1] alm):
+		cdef int l=0
+		cdef int m=0
+		cdef int i
+		cdef int j
+		cdef np.complex64_t v
+		cdef np.ndarray[int,ndim=1] mstart = self.mstart
+		for i in range(alm.size):
+			m += 1
+			if m > self.mmax or m > l:
+				l += 1
+				m = 0
+			j = mstart[m]+l*self.stride
+			if j > i:
+				v = alm[i]
+				alm[i] = alm[j]
+				alm[j] = v
 	def __dealloc__(self):
 		csharp.sharp_destroy_alm_info(self.info)
 
