@@ -1,6 +1,7 @@
 import numpy as np
 cimport numpy as np
 cimport csharp
+from libc.math cimport atan2
 
 cdef class map_info:
 	"""This class is a thin wrapper for the sharp geom_info struct, which represents
@@ -51,6 +52,35 @@ cdef class map_info:
 		self.theta, self.nphi, self.phi0, self.offsets, self.stride, self.weight = theta, nphi, phi0, offsets, stride, weight
 	def __dealloc__(self):
 		csharp.sharp_destroy_geom_info(self.geom)
+
+cdef map_info_from_geom(csharp.sharp_geom_info * geom):
+	"""Constructs a map_info from a gemoetry pointer."""
+	cdef int pair
+	cdef int ring = 0
+	cdef int npairs = geom.npairs
+	cdef np.ndarray[np.float64_t,ndim=1] theta   = np.empty(npairs,dtype=np.float64)
+	cdef np.ndarray[np.float64_t,ndim=1] phi0    = np.empty(npairs,dtype=np.float64)
+	cdef np.ndarray[np.float64_t,ndim=1] weight  = np.empty(npairs,dtype=np.float64)
+	cdef np.ndarray[np.int32_t,ndim=1]   nphi    = np.empty(npairs,dtype=np.int32)
+	cdef np.ndarray[np.int32_t,ndim=1]   stride  = np.empty(npairs,dtype=np.int32)
+	cdef np.ndarray[np.int64_t,ndim=1]   offsets = np.empty(npairs,dtype=np.int64)
+	cdef csharp.sharp_ringinfo * info
+	cdef np.uintp_t infop
+	cdef np.ndarray[np.uintp_t,ndim=1] tmp = np.empty(2,dtype=np.uintp)
+	for pair in range(npairs):
+		tmp[0] = <np.uintp_t>&geom.pair[pair].r1
+		tmp[1] = <np.uintp_t>&geom.pair[pair].r2
+		for infop in tmp:
+			info = <csharp.sharp_ringinfo*> infop
+			if info.nph >= 0:
+				theta[ring]  = atan2(info.sth,info.cth)
+				phi0[ring]   = info.phi0
+				weight[ring] = info.weight
+				nphi[ring]   = info.nph
+				stride[ring] = info.stride
+				offsets[ring]= info.ofs
+				ring += 1
+	return map_info(theta[:ring],nphi[:ring],phi0[:ring],offsets[:ring],stride[:ring],weight[:ring])
 
 cdef class alm_info:
 	cdef csharp.sharp_alm_info * info
