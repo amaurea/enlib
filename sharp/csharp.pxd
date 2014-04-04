@@ -10,8 +10,10 @@ cdef extern from "csharp.h":
 		sharp_ringpair * pair
 		int npairs, nphmax
 	ctypedef struct sharp_alm_info:
-		int lmax, nm, *mval, flags
-		ptrdiff_t *mvstart, stride
+		int lmax, nm, flags
+		int *mval
+		ptrdiff_t *mvstart
+		ptrdiff_t stride
 
 	int SHARP_YtW=0
 	int SHARP_MAP2ALM=SHARP_YtW
