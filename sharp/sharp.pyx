@@ -1,7 +1,9 @@
+import cython
 import numpy as np
 cimport numpy as np
 cimport csharp
 from libc.math cimport atan2
+from cython.parallel import prange, parallel
 
 cdef class map_info:
 	"""This class is a thin wrapper for the sharp geom_info struct, which represents
@@ -115,7 +117,7 @@ cdef class alm_info:
 		self.mstart= mstart
 		self.mstart.flags.writeable = False
 	def lm2ind(self, np.ndarray[int,ndim=1] l,np.ndarray[int,ndim=1] m):
-		return self.mstart[m]+l*self.stride
+		return self.mstart[m]+(l-m)*self.stride
 	def transpose_alm(self, alm, out=None):
 		"""In order to accomodate l-major ordering, which is not directoy
 		supported by sharp, this function efficiently transposes Alm into
@@ -125,45 +127,93 @@ cdef class alm_info:
 		argument is not specified, then a new array will be constructed
 		and returned."""
 		if out is None: out = alm.copy()
+		o2d = out.reshape(-1,out.shape[-1])
 		if out.dtype == np.complex128:
-			self.transpose_alm_dp(out)
+			self.transpose_alm_dp(o2d)
 		else:
-			self.transpose_alm_sp(out)
+			self.transpose_alm_sp(o2d)
 		return out
-	cdef transpose_alm_dp(self,np.ndarray[np.complex128_t,ndim=1] alm):
-		cdef int l=0
-		cdef int m=0
-		cdef int i
-		cdef int j
+	@cython.boundscheck(False)
+	@cython.wraparound(False)
+	cdef transpose_alm_dp(self,np.ndarray[np.complex128_t,ndim=2] alm):
+		cdef int l, m, i, j, comp
 		cdef np.complex128_t v
-		cdef np.ndarray[int,ndim=1] mstart = self.mstart
-		for i in range(alm.size):
-			m += 1
-			if m > self.mmax or m > l:
-				l += 1
-				m = 0
-			j = mstart[m]+l*self.stride
-			if j > i:
-				v = alm[i]
-				alm[i] = alm[j]
-				alm[j] = v
-	cdef transpose_alm_sp(self,np.ndarray[np.complex64_t,ndim=1] alm):
-		cdef int l=0
-		cdef int m=0
-		cdef int i
-		cdef int j
+		cdef np.ndarray[np.int64_t,ndim=1] mstart = self.mstart
+		for comp in prange(alm.shape[0],nogil=True):
+			l,m = 0,0
+			for i in range(alm.shape[1]):
+				j = mstart[m]+(l-m)*self.stride
+				if j > i:
+					v = alm[comp,i]
+					alm[comp,i] = alm[comp,j]
+					alm[comp,j] = v
+				m = m+1
+				if m > self.mmax or m > l:
+					l = l+1
+					m = 0
+	@cython.boundscheck(False)
+	@cython.wraparound(False)
+	cdef transpose_alm_sp(self,np.ndarray[np.complex64_t,ndim=2] alm):
+		cdef int l, m, i, j, comp
 		cdef np.complex64_t v
-		cdef np.ndarray[int,ndim=1] mstart = self.mstart
-		for i in range(alm.size):
-			m += 1
-			if m > self.mmax or m > l:
-				l += 1
-				m = 0
-			j = mstart[m]+l*self.stride
-			if j > i:
-				v = alm[i]
-				alm[i] = alm[j]
-				alm[j] = v
+		cdef np.ndarray[np.int64_t,ndim=1] mstart = self.mstart
+		for comp in prange(alm.shape[0],nogil=True):
+			l,m = 0,0
+			for i in range(alm.shape[1]):
+				j = mstart[m]+(l-m)*self.stride
+				if j > i:
+					v = alm[comp,i]
+					alm[comp,i] = alm[comp,j]
+					alm[comp,j] = v
+				m = m+1
+				if m > self.mmax or m > l:
+					l = l+1
+					m = 0
+	def lmul(self, alm, lmat, out=None):
+		"""Computes res[a,lm] = lmat[a,b,l]*alm[b,lm], where lm is the position of the
+		element with (l,m) in the alm array, as defined by this class."""
+		if out is None: out = alm.copy()
+		if alm.dtype == np.complex128:
+			self.lmul_dp(out, lmat)
+		else:
+			self.lmul_sp(out, lmat)
+		return out
+	@cython.boundscheck(False)
+	@cython.wraparound(False)
+	cdef lmul_dp(self,np.ndarray[np.complex128_t,ndim=2] alm, np.ndarray[np.float64_t,ndim=3] lmat):
+		cdef int l, m, lm, c1, c2, ncomp
+		cdef np.ndarray[np.complex128_t,ndim=1] v
+		cdef np.ndarray[np.int64_t,ndim=1] mstart = self.mstart
+		l,m=0,0
+		ncomp = alm.shape[0]
+		v = np.empty(ncomp,dtype=np.complex128)
+		for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
+			for l in range(m, self.lmax+1):
+				lm = mstart[m]+(l-m)*self.stride
+				for c1 in range(ncomp):
+					v[c1] = alm[c1,lm]
+				for c1 in range(ncomp):
+					alm[c1,lm] = 0
+					for c2 in range(ncomp):
+						alm[c1,lm] = alm[c1,lm] + lmat[c1,c2,l]*v[c2]
+	@cython.boundscheck(False)
+	@cython.wraparound(False)
+	cdef lmul_sp(self,np.ndarray[np.complex64_t,ndim=2] alm, np.ndarray[np.float32_t,ndim=3] lmat):
+		cdef int l, m, lm, c1, c2, ncomp
+		cdef np.ndarray[np.complex64_t,ndim=1] v
+		cdef np.ndarray[np.int64_t,ndim=1] mstart = self.mstart
+		l,m=0,0
+		ncomp = alm.shape[0]
+		v = np.empty(ncomp,dtype=np.complex64)
+		for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
+			for l in range(m, self.lmax+1):
+				lm = mstart[m]+(l-m)*self.stride
+				for c1 in range(ncomp):
+					v[c1] = alm[c1,lm]
+				for c1 in range(ncomp):
+					alm[c1,lm] = 0
+					for c2 in range(ncomp):
+						alm[c1,lm] += lmat[c1,c2,l]*v[c2]
 	def __dealloc__(self):
 		csharp.sharp_destroy_alm_info(self.info)
 
