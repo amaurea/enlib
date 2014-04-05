@@ -102,7 +102,9 @@ cdef class alm_info:
 		if isinstance(layout,basestring):
 			if layout == "triangular" or layout == "tri":
 				m = np.arange(mmax+1)
-				mstart = np.concatenate([[0],np.cumsum(lmax+1-np.arange(mmax))])*stride
+				#mstart = stride*(m*(2*lmax+1-m)/2)
+				mstart = stride*(m*(2*lmax+3-m)/2)
+				#mstart = np.concatenate([[0],np.cumsum(lmax+1-np.arange(mmax))])*stride
 			elif layout == "rectangular" or layout == "rect":
 				mstart = np.arange(mmax+1)*(lmax+1)*stride
 			else:
