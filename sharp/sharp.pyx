@@ -55,18 +55,90 @@ cdef class map_info:
 	def __dealloc__(self):
 		csharp.sharp_destroy_geom_info(self.geom)
 
+def map_info_healpix(int nside, int stride=1, weights=None):
+	"""Construct a new sharp map geometry for the HEALPix pixelization in the RING
+	scheme, with the given nside parameter (which does not need to be a power of
+	2 in this case). The optional weights array specifies quadrature weights
+	*relative* to the default weights, so you will get sensible results even without
+	specifying weights."""
+	nring = 4*nside-1
+	if weights is None: weights = np.zeros(nring)+1
+	assert(len(weights) < nring, "incorrect length of weights array. need 4*nside-1")
+	cdef np.ndarray[np.float64_t,ndim=1] w = weights
+	cdef csharp.sharp_geom_info * geom
+	csharp.sharp_make_weighted_healpix_geom_info (nside, stride, &w[0], &geom)
+	return map_info_from_geom(geom)
+
+def map_info_gauss_legendre(int nrings, nphi=None, double phi0=0, stride_lon=None, stride_lat=None):
+	"""Construct a new sharp map geometry with Gauss-Legendre pixelization. Optimal
+	weights are computed automatically. The pixels are laid out in nrings rings of
+	constant colatitude, each with nphi pixels equally spaced in longitude, with the
+	first pixel in each ring at longitude phi0."""
+	cdef int inphi = 2*nrings if nphi is None else nphi
+	cdef int slon  = 1 if stride_lon is None else stride_lon
+	cdef int slat  = inphi*slon if stride_lat is None else stride_lat
+	cdef csharp.sharp_geom_info * geom
+	csharp.sharp_make_gauss_geom_info(nrings, inphi, phi0, slon, slat, &geom)
+	return map_info_from_geom(geom)
+
+def map_info_clenshaw_curtis(int nrings, nphi=None, double phi0=0, stride_lon=None, stride_lat=None):
+	"""Construct a new sharp map geometry with Cylindrical Equi-rectangular pixelization
+	with nrings iso-colatitude rings with nphi pixels each, such that the first and last
+	rings have colatitude 0 and pi respectively. This corresponds to Clenshaw-Curtis
+	quadrature."""
+	cdef int inphi = 2*nrings if nphi is None else nphi
+	cdef int slon  = 1 if stride_lon is None else stride_lon
+	cdef int slat  = inphi*slon if stride_lat is None else stride_lat
+	cdef csharp.sharp_geom_info * geom
+	csharp.sharp_make_cc_geom_info(nrings, inphi, phi0, slon, slat, &geom)
+	return map_info_from_geom(geom)
+
+def map_info_fejer1(int nrings, nphi=None, double phi0=0, stride_lon=None, stride_lat=None):
+	"""Construct a new sharp map geometry with Cylindrical Equi-rectangular pixelization
+	with nrings iso-colatitude rings with nphi pixels each, such that the first and last
+	rings have colatitude 0.5*pi/nrings and pi-0.5*pi/nrings respectively.
+	This corresponds to Frejer's first quadrature."""
+	cdef int inphi = 2*nrings if nphi is None else nphi
+	cdef int slon  = 1 if stride_lon is None else stride_lon
+	cdef int slat  = inphi*slon if stride_lat is None else stride_lat
+	cdef csharp.sharp_geom_info * geom
+	csharp.sharp_make_fejer1_geom_info(nrings, inphi, phi0, slon, slat, &geom)
+	return map_info_from_geom(geom)
+
+def map_info_fejer2(int nrings, nphi=None, double phi0=0, stride_lon=None, stride_lat=None):
+	"""Construct a new sharp map geometry with Cylindrical Equi-rectangular pixelization
+	with nrings iso-colatitude rings with nphi pixels each, such that the first and last
+	rings have colatitude pi/(2*nrings-1) and pi respectively.
+	This corresponds to Frejer's second quadrature.
+	This function does *NOT* define any quadrature weights!"""
+	cdef int inphi = 2*nrings if nphi is None else nphi
+	cdef int slon  = 1 if stride_lon is None else stride_lon
+	cdef int slat  = inphi*slon if stride_lat is None else stride_lat
+	cdef csharp.sharp_geom_info * geom
+	csharp.sharp_make_fejer2_geom_info(nrings, inphi, phi0, slon, slat, &geom)
+	return map_info_from_geom(geom)
+
+def map_info_mw(int nrings, nphi=None, double phi0=0, stride_lon=None, stride_lat=None):
+	cdef int inphi = 2*nrings if nphi is None else nphi
+	cdef int slon  = 1 if stride_lon is None else stride_lon
+	cdef int slat  = inphi*slon if stride_lat is None else stride_lat
+	cdef csharp.sharp_geom_info * geom
+	csharp.sharp_make_mw_geom_info(nrings, inphi, phi0, slon, slat, &geom)
+	return map_info_from_geom(geom)
+
 cdef map_info_from_geom(csharp.sharp_geom_info * geom):
 	"""Constructs a map_info from a gemoetry pointer."""
 	cdef int pair
 	cdef int ring = 0
 	cdef int npairs = geom.npairs
-	cdef np.ndarray[np.float64_t,ndim=1] theta   = np.empty(npairs,dtype=np.float64)
-	cdef np.ndarray[np.float64_t,ndim=1] phi0    = np.empty(npairs,dtype=np.float64)
-	cdef np.ndarray[np.float64_t,ndim=1] weight  = np.empty(npairs,dtype=np.float64)
-	cdef np.ndarray[np.int32_t,ndim=1]   nphi    = np.empty(npairs,dtype=np.int32)
-	cdef np.ndarray[np.int32_t,ndim=1]   stride  = np.empty(npairs,dtype=np.int32)
-	cdef np.ndarray[np.int64_t,ndim=1]   offsets = np.empty(npairs,dtype=np.int64)
+	cdef np.ndarray[np.float64_t,ndim=1] theta   = np.empty(2*npairs,dtype=np.float64)
+	cdef np.ndarray[np.float64_t,ndim=1] phi0    = np.empty(2*npairs,dtype=np.float64)
+	cdef np.ndarray[np.float64_t,ndim=1] weight  = np.empty(2*npairs,dtype=np.float64)
+	cdef np.ndarray[np.int32_t,ndim=1]   nphi    = np.empty(2*npairs,dtype=np.int32)
+	cdef np.ndarray[np.int32_t,ndim=1]   stride  = np.empty(2*npairs,dtype=np.int32)
+	cdef np.ndarray[np.int64_t,ndim=1]   offsets = np.empty(2*npairs,dtype=np.int64)
 	cdef csharp.sharp_ringinfo * info
+	# This should have been as simple as for info in (geom.pair[pair].r1,geom.pair[pair].r2)
 	cdef np.uintp_t infop
 	cdef np.ndarray[np.uintp_t,ndim=1] tmp = np.empty(2,dtype=np.uintp)
 	for pair in range(npairs):
@@ -82,7 +154,8 @@ cdef map_info_from_geom(csharp.sharp_geom_info * geom):
 				stride[ring] = info.stride
 				offsets[ring]= info.ofs
 				ring += 1
-	return map_info(theta[:ring],nphi[:ring],phi0[:ring],offsets[:ring],stride[:ring],weight[:ring])
+	cdef np.ndarray[np.int_t,ndim=1] order = np.argsort(offsets[:ring])
+	return map_info(theta[order],nphi[order],phi0[order],offsets[order],stride[order],weight[order])
 
 cdef class alm_info:
 	cdef csharp.sharp_alm_info * info
