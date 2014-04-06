@@ -175,9 +175,7 @@ cdef class alm_info:
 		if isinstance(layout,basestring):
 			if layout == "triangular" or layout == "tri":
 				m = np.arange(mmax+1)
-				#mstart = stride*(m*(2*lmax+1-m)/2)
-				mstart = stride*(m*(2*lmax+3-m)/2)
-				#mstart = np.concatenate([[0],np.cumsum(lmax+1-np.arange(mmax))])*stride
+				mstart = stride*(m*(2*lmax+1-m)/2)
 			elif layout == "rectangular" or layout == "rect":
 				mstart = np.arange(mmax+1)*(lmax+1)*stride
 			else:
@@ -188,11 +186,11 @@ cdef class alm_info:
 		self.lmax  = lmax
 		self.mmax  = mmax
 		self.stride= stride
-		self.nelem = np.max(mstart + ((lmax+1)-np.arange(mmax+1))*stride)
+		self.nelem = np.max(mstart + (lmax+1)*stride)
 		self.mstart= mstart
 		self.mstart.flags.writeable = False
 	def lm2ind(self, np.ndarray[int,ndim=1] l,np.ndarray[int,ndim=1] m):
-		return self.mstart[m]+(l-m)*self.stride
+		return self.mstart[m]+l*self.stride
 	def transpose_alm(self, alm, out=None):
 		"""In order to accomodate l-major ordering, which is not directoy
 		supported by sharp, this function efficiently transposes Alm into
@@ -217,7 +215,7 @@ cdef class alm_info:
 		for comp in prange(alm.shape[0],nogil=True):
 			l,m = 0,0
 			for i in range(alm.shape[1]):
-				j = mstart[m]+(l-m)*self.stride
+				j = mstart[m]+l*self.stride
 				if j > i:
 					v = alm[comp,i]
 					alm[comp,i] = alm[comp,j]
@@ -235,7 +233,7 @@ cdef class alm_info:
 		for comp in prange(alm.shape[0],nogil=True):
 			l,m = 0,0
 			for i in range(alm.shape[1]):
-				j = mstart[m]+(l-m)*self.stride
+				j = mstart[m]+l*self.stride
 				if j > i:
 					v = alm[comp,i]
 					alm[comp,i] = alm[comp,j]
@@ -264,7 +262,7 @@ cdef class alm_info:
 		v = np.empty(ncomp,dtype=np.complex128)
 		for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
 			for l in range(m, self.lmax+1):
-				lm = mstart[m]+(l-m)*self.stride
+				lm = mstart[m]+l*self.stride
 				for c1 in range(ncomp):
 					v[c1] = alm[c1,lm]
 				for c1 in range(ncomp):
@@ -282,7 +280,7 @@ cdef class alm_info:
 		v = np.empty(ncomp,dtype=np.complex64)
 		for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
 			for l in range(m, self.lmax+1):
-				lm = mstart[m]+(l-m)*self.stride
+				lm = mstart[m]+l*self.stride
 				for c1 in range(ncomp):
 					v[c1] = alm[c1,lm]
 				for c1 in range(ncomp):
