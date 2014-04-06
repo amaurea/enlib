@@ -379,6 +379,26 @@ def downgrade(emap, factor):
 	res = np.mean(np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),-1),-2)
 	return ndmap(res, emap[...,::factor[0],::factor[1]].wcs)
 
+def pad(emap, pix, return_slice=False):
+	"""Pad enmap "emap", creating a larger map with zeros filled in on the sides.
+	How much to pad is controlled via pix. If pix is a scalar, it specifies the number
+	of pixels to add on all sides. If it is 1d, it specifies the number of pixels to add
+	at each end for each axis. If it is 2d, the number of pixels to add at each end
+	of an axis can be specified individually."""
+	pix = np.asarray(pix,dtype=int)
+	if pix.ndim == 0:
+		pix = np.array([[pix,pix],[pix,pix]])
+	elif pix.ndim == 1:
+		pix = np.array([pix,pix])
+	# Exdend the wcs in each direction.
+	w = emap.wcs.deepcopy()
+	w.wcs.crpix += pix[0,::-1]
+	# Construct a slice between the new and old map
+	s = (Ellipsis,slice(pix[0,0],emap.shape[-2]-pix[1,0]),slice(pix[0,1],emap.shape[-1]-pix[1,1]))
+	res = zeros(emap.shape[:-2]+tuple([s+sum(p) for s,p in zip(emap.shape[-2:],pix.T)]),dtype=emap.dtype)
+	res[s] = emap
+	return res,s if return_slice else res
+
 ############
 # File I/O #
 ############
