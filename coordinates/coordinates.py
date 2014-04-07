@@ -15,7 +15,7 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 	# Make ourselves case insensitive, and look up the corresponding objects
 	unit = getunit(unit)
 	(from_sys,from_ref), (to_sys,to_ref) = getsys_full(from_sys,unit,time,site), getsys_full(to_sys,unit,time,site)
-	# Handle polarization by calling ourselves twice wtih slightly differing positions
+	# Handle polarization by calling ourselves twice wtih slightly differing positions.
 	if pol is None: pol = len(coords) == 3
 	if pol:
 		coord2 = np.array(coords,dtype=float)
@@ -25,7 +25,12 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 		diff = enlib.utils.rewind(ocoord2-ocoord1, 0, 360/unit.in_units(u.deg))
 		ocoord  = np.empty((3,)+coord2.shape[1:])
 		ocoord[:2] = ocoord1
-		ocoord[2]  = np.arctan2(diff[1],diff[0]) / unit.in_units(u.rad)
+		# The polarization rotation is defined in the tangent plane of the point,
+		# so we must scale the phi coordinate to account for the sphere's curvature.
+		# We assume theta to be measured from the equator for this, i.e. not a
+		# zenith angle.
+		phiscale   = np.cos(ocoord1[1]*unit.in_units(u.rad))
+		ocoord[2]  = np.arctan2(diff[1],diff[0]*phiscale) / unit.in_units(u.rad)
 		if len(coords) >= 3: ocoord[2] += coords[2]
 		return ocoord
 	if from_ref != None: coords = decenter(coords, from_ref, unit)
