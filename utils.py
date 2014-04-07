@@ -12,8 +12,12 @@ def lines(file_or_fname):
 def listsplit(seq, elem):
 	"""Analogue of str.split for lists.
 	listsplit([1,2,3,4,5,6,7],4) -> [[1,2],[3,4,5,6]]."""
-	# Sadly, numpy arrays mess this up. The type check is an incomplete workaround
-	inds = [i for i,v in enumerate(seq) if (type(v) == type(elem) and v == elem)]
+	# Sadly, numpy arrays misbehave, and must be treated specially
+	def iseq(e1, e2):
+		try: return e1 == e2
+		except ValueError:
+			return np.all(e1==e2)
+	inds = [i for i,v in enumerate(seq) if iseq(v,elem)]
 	ranges = zip([0]+[i+1 for i in inds],inds+[len(seq)])
 	return [seq[a:b] for a,b in ranges]
 

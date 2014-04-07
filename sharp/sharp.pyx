@@ -201,6 +201,8 @@ cdef class alm_info:
 		and returned."""
 		if out is None: out = alm.copy()
 		o2d = out.reshape(-1,out.shape[-1])
+		# These are not really in-place at the moment: They still
+		# use a large work array internally.
 		if out.dtype == np.complex128:
 			self.transpose_alm_dp(o2d)
 		else:
@@ -212,36 +214,36 @@ cdef class alm_info:
 		cdef int l, m, i, j, comp
 		cdef np.complex128_t v
 		cdef np.ndarray[np.int64_t,ndim=1] mstart = self.mstart
+		cdef np.ndarray[np.complex128_t,ndim=1] work = np.empty(alm.shape[1],alm.dtype)
 		for comp in prange(alm.shape[0],nogil=True):
 			l,m = 0,0
 			for i in range(alm.shape[1]):
 				j = mstart[m]+l*self.stride
-				if j > i:
-					v = alm[comp,i]
-					alm[comp,i] = alm[comp,j]
-					alm[comp,j] = v
+				work[j] = alm[comp,i]
 				m = m+1
 				if m > self.mmax or m > l:
 					l = l+1
 					m = 0
+			for i in range(alm.shape[1]):
+				alm[comp,i] = work[i]
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
 	cdef transpose_alm_sp(self,np.ndarray[np.complex64_t,ndim=2] alm):
 		cdef int l, m, i, j, comp
 		cdef np.complex64_t v
 		cdef np.ndarray[np.int64_t,ndim=1] mstart = self.mstart
+		cdef np.ndarray[np.complex64_t,ndim=1] work = np.empty(alm.shape[1],alm.dtype)
 		for comp in prange(alm.shape[0],nogil=True):
 			l,m = 0,0
 			for i in range(alm.shape[1]):
 				j = mstart[m]+l*self.stride
-				if j > i:
-					v = alm[comp,i]
-					alm[comp,i] = alm[comp,j]
-					alm[comp,j] = v
+				work[j] = alm[comp,i]
 				m = m+1
 				if m > self.mmax or m > l:
 					l = l+1
 					m = 0
+			for i in range(alm.shape[1]):
+				alm[comp,i] = work[i]
 	def lmul(self, alm, lmat, out=None):
 		"""Computes res[a,lm] = lmat[a,b,l]*alm[b,lm], where lm is the position of the
 		element with (l,m) in the alm array, as defined by this class."""

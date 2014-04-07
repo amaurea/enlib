@@ -3,6 +3,20 @@ full sky."""
 import numpy as np
 from enlib import sharp, enmap, powspec, wcs, utils
 
+def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=2.0):
+	"""Generates a CMB realization with the given power spectrum for an enmap
+	with the specified shape and WCS. This is identical to enlib.rand_map, except
+	that it takes into account the curvature of the full sky. This makes it much
+	slower and more memory-intensive. The map should not cross the poles."""
+	ctype = np.result_type(dtype,0j)
+	if lmax is None: lmax = ps.shape[-1]-1
+	lmax = min(lmax, ps.shape[-1]-1)
+	ainfo = sharp.alm_info(lmax)
+	alm   = rand_alm(ps, ainfo, seed=seed, dtype=ctype)
+	# Now find the pixels to project on
+	pos   = enmap.posmap(shape,wcs)
+	return enmap.ndmap(alm2map(alm, ainfo, pos, oversample=oversample), wcs)
+
 def rand_alm(ps, ainfo, seed=None, dtype=np.complex128):
 	"""This is a replacement for healpy.synalm. It generates the random
 	numbers in l-major order before transposing to m-major order in order
@@ -52,7 +66,7 @@ def alm2map(alm, ainfo, pos, oversample=2.0):
 	step = np.pi/ainfo.lmax/oversample
 	# Set up an intermediate coordinate system for the SHT
 	tbox   = np.array([[decrange[0],-np.pi],[decrange[1],np.pi]])
-	tshape = tuple(np.abs((tbox[1]-tbox[0])/step).astype(int))
+	tshape = tuple(np.ceil(np.abs((tbox[1]-tbox[0])/step)).astype(int))
 	twcs   = wcs.cea(tshape[::-1], tbox[:,::-1])
 	tmap   = enmap.zeros(ashape+tshape, twcs, dtype=dtype)
 	# We need a pixel-flattened version for the SHTs
@@ -73,17 +87,3 @@ def alm2map(alm, ainfo, pos, oversample=2.0):
 	# Project down on our final pixels. This will result in a slight smoothing
 	pix = tmap.sky2pix(pos)
 	return utils.interpol(tmap, pix)
-
-def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None):
-	"""Generates a CMB realization with the given power spectrum for an enmap
-	with the specified shape and WCS. This is identical to enlib.rand_map, except
-	that it takes into account the curvature of the full sky. This makes it much
-	slower and more memory-intensive. The map should not cross the poles."""
-	ctype = np.result_type(dtype,0j)
-	if lmax is None: lmax = ps.shape[-1]-1
-	lmax = min(lmax, ps.shape[-1]-1)
-	ainfo = sharp.alm_info(lmax)
-	alm   = rand_alm(ps, ainfo, seed, dtype=ctype)
-	# Now find the pixels to project on
-	pos   = enmap.posmap(shape,wcs)
-	return enmap.ndmap(alm2map(alm, ainfo, pos), wcs)
