@@ -1,8 +1,9 @@
 """This module provides conversions between astronomical coordinate systems.
 When c is more developed, it might completely replace this
 module. For now, it is used as a part of the implementation."""
-import numpy as np, pyfsla, iers, enlib.utils
+import numpy as np, pyfsla
 import astropy.coordinates as c, astropy.units as u, ephem
+from enlib import iers, utils
 try:
 	from pyslalib import slalib
 except ImportError:
@@ -25,7 +26,7 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 		coord2[0] += 0.1/60/60 / unit.in_units(u.deg)
 		ocoord1 = transform((from_sys,from_ref), (to_sys,to_ref), coords[:2], unit, time, site, pol=False)
 		ocoord2 = transform((from_sys,from_ref), (to_sys,to_ref), coord2[:2], unit, time, site, pol=False)
-		diff = enlib.utils.rewind(ocoord2-ocoord1, 0, 360/unit.in_units(u.deg))
+		diff = utils.rewind(ocoord2-ocoord1, 0, 360/unit.in_units(u.deg))
 		ocoord  = np.empty((3,)+coord2.shape[1:])
 		ocoord[:2] = ocoord1
 		# The polarization rotation is defined in the tangent plane of the point,
