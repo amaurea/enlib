@@ -3,7 +3,10 @@ When c is more developed, it might completely replace this
 module. For now, it is used as a part of the implementation."""
 import numpy as np, pyfsla, iers, enlib.utils
 import astropy.coordinates as c, astropy.units as u, ephem
-from pyslalib import slalib
+try:
+	from pyslalib import slalib
+except ImportError:
+	pass
 
 def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=None):
 	"""Transforms coords[2,N] from system from_sys to system to_sys, where

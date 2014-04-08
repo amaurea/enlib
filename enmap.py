@@ -318,6 +318,13 @@ def queb_rotmat(lmap, inverse=False):
 	if inverse: s = -s
 	return samewcs(np.array([[c,-s],[s,c]]),lmap)
 
+def rotate_pol(emap, angle, comps=[-2,-1]):
+	c, s = np.cos(2*angle), np.sin(2*angle)
+	res = emap.copy()
+	res[...,comps[0],:,:] = c*emap[...,comps[0],:,:] - s*emap[...,comps[1],:,:]
+	res[...,comps[1],:,:] = s*emap[...,comps[0],:,:] + c*emap[...,comps[1],:,:]
+	return res
+
 def map_mul(mat, vec):
 	"""Elementwise matrix multiplication mat*vec. Result will have
 	the same shape as vec. Multiplication happens along the first indices."""

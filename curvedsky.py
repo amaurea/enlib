@@ -85,5 +85,5 @@ def alm2map(alm, ainfo, pos, oversample=2.0):
 		tflat[...,1:,:] = sht.alm2map(alm[...,1:,:], tflat[...,1:,:], spin=2)
 
 	# Project down on our final pixels. This will result in a slight smoothing
-	pix = tmap.sky2pix(pos)
+	pix = tmap.sky2pix(pos[:2])
 	return utils.interpol(tmap, pix)
