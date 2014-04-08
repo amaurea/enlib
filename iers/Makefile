@@ -20,6 +20,6 @@ finals.all:
 	curl -o finals.all http://datacenter.iers.org/eop/-/somos/5Rgv/latest/9
 
 clean: tidy
-	rm -rf libiers.so _iers.so iers.py
+	rm -rf libiers.so _iers.so iers.py *.pyc
 tidy:
 	rm -rf finals.all iers2struct iers_wrap.c build iers.c

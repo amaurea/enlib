@@ -1,4 +1,6 @@
-sharp.so: sharp.pyx csharp.pxd csharp.h
-	python setup.py build_ext --inplace && rm -rf build # sharp.c
+sharp.so: sharp.pyx csharp.pxd csharp.h tidy
+	python setup.py build_ext --inplace
 clean:
-	rm -rf build sharp.c *.so *.pyc
+	rm -rf *.so *.pyc
+tidy:
+	rm -rf build sharp.c
