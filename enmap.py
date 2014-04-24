@@ -416,8 +416,9 @@ def write_map(fname, emap, fmt=None):
 	be either fits or hdf. This can be overriden by
 	passing fmt with either 'fits' or 'hdf' as argument."""
 	if fmt == None:
-		if   fname.endswith(".fits"): fmt = "fits"
-		elif fname.endswith(".hdf"):  fmt = "hdf"
+		if   fname.endswith(".hdf"):  fmt = "hdf"
+		elif fname.endswith(".fits"): fmt = "fits"
+		else: fmt = "fits"
 	if fmt == "fits":
 		write_fits(fname, emap)
 	elif fmt == "hdf":
@@ -432,8 +433,9 @@ def read_map(fname, fmt=None):
 	toks = fname.split(":")
 	fname = toks[0]
 	if fmt == None:
-		if   fname.endswith(".fits"): fmt = "fits"
-		elif fname.endswith(".hdf"):  fmt = "hdf"
+		if   fname.endswith(".hdf"):  fmt = "hdf"
+		elif fname.endswith(".fits"): fmt = "fits"
+		else: fmt = "fits"
 	if fmt == "fits":
 		res = read_fits(fname)
 	elif fmt == "hdf":

@@ -165,7 +165,7 @@ def partial_expand(a, shape, axes=[-1], pos=0):
 	a = np.reshape(a, list(a.shape[:len(axes)])+rest)
 	return moveaxes(a, range(len(axes)), axes)
 
-def interpol(a, inds, order=3, mode="nearest", mask_nan=True):
+def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 	"""Given an array a[{x},{y}] and a list of
 	float indices into a, inds[len(y),{z}],
 	returns interpolated values at these positions
@@ -177,10 +177,11 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True):
 		mask = ~np.isfinite(fa)
 		fa[mask] = 0
 	for i in range(fa.shape[0]):
-		fr[i] = scipy.ndimage.map_coordinates(fa[i], inds, order=order, mode=mode)
+		fr[i] = scipy.ndimage.map_coordinates(fa[i], inds, order=order, mode=mode, cval=cval)
 	if mask_nan and np.sum(mask) > 0:
+		mask = np.empty(fr.shape,dtype=bool)
 		for i in range(mask.shape[0]):
-			mask[i] = scipy.ndimage.map_coordinates(mask[i], inds, order=0, mode=mode)
+			mask[i] = scipy.ndimage.map_coordinates(mask[i], inds, order=0, mode=mode, cval=cval)
 		fa[mask] = np.nan
 	return res
 
