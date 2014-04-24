@@ -73,8 +73,8 @@ def alm2map(alm, ainfo, pos, oversample=2.0):
 	tflat  = tmap.reshape(tmap.shape[:-2]+(-1,))
 
 	# Set up the SHT
-	theta  = np.pi/2 - tmap[...,:,:1].posmap(center=True)[0,:,0]
-	phi0   = tmap[...,:1,:1].posmap(center=True)[1,0,0]
+	theta  = np.pi/2 - tmap[...,:,:1].posmap()[0,:,0]
+	phi0   = tmap[...,:1,:1].posmap()[1,0,0]
 	nphi   = tmap.shape[-1]
 	minfo  = sharp.map_info(theta, nphi, phi0)
 	sht    = sharp.sht(minfo, ainfo)
@@ -85,5 +85,5 @@ def alm2map(alm, ainfo, pos, oversample=2.0):
 		tflat[...,1:,:] = sht.alm2map(alm[...,1:,:], tflat[...,1:,:], spin=2)
 
 	# Project down on our final pixels. This will result in a slight smoothing
-	pix = tmap.sky2pix(pos[:2])
+	pix = tmap.sky2pix(pos[:2], corner=True)
 	return utils.interpol(tmap, pix)

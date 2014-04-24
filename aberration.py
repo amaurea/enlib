@@ -32,7 +32,7 @@ def distortion(pos, dir, beta):
 def aberrate(imap, dir, beta, mode="wrap", order=3, recenter=False):
 	pol = imap.ndim > 2
 	pos = remap(imap.posmap(), dir, beta, pol=pol, recenter=recenter)
-	pix = imap.sky2pix(pos[:2])
+	pix = imap.sky2pix(pos[:2], corner=True) # interpol needs corners
 	omap= en.ndmap(utils.interpol(imap, pix, mode=mode, order=order), imap.wcs)
 	if pol:
 		c,s = np.cos(2*pos[2]), np.sin(2*pos[2])

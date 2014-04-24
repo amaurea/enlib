@@ -51,10 +51,10 @@ class ndmap(np.ndarray):
 		return ndmap(arr, self.wcs)
 	def copy(self):
 		return ndmap(np.array(self), self.wcs)
-	def sky2pix(self, coords, safe=True): return sky2pix(self.wcs, coords, safe)
-	def pix2sky(self, pix,    safe=True): return pix2sky(self.wcs, pix,    safe)
+	def sky2pix(self, coords, safe=True, corner=False): return sky2pix(self.wcs, coords, safe, corner)
+	def pix2sky(self, pix,    safe=True, corner=False): return pix2sky(self.wcs, pix,    safe, corner)
 	def box(self): return box(self.shape, self.wcs)
-	def posmap(self, center=False): return posmap(self.shape, self.wcs, center=center)
+	def posmap(self, corner=False): return posmap(self.shape, self.wcs, corner=corner)
 	def lmap(self): return lmap(self.shape, self.wcs)
 	def area(self): return area(self.shape, self.wcs)
 	def extent(self): return extent(self.shape, self.wcs)
@@ -101,7 +101,9 @@ class ndmap(np.ndarray):
 		coordinates."""
 		box  = np.asarray(box)
 		# Translate the box to pixels. The 0.5 moves us from
-		# pixel-center coordinates to pixel-edge coordinates.
+		# pixel-center coordinates to pixel-edge coordinates,
+		# which we need to distinguish between fully or partially
+		# included pixels
 		bpix = self.wcs.wcs_world2pix(box[:,::-1]*180/np.pi,0)[:,::-1]+0.5
 		# If we are inclusive, find a bounding box, otherwise,
 		# an internal box
@@ -157,33 +159,38 @@ def zeros(shape, wcs, dtype=None):
 def empty(shape, wcs, dtype=None):
 	return enmap(np.empty(shape), wcs, dtype=dtype)
 
-def posmap(shape, wcs, safe=True, center=False):
+def posmap(shape, wcs, safe=True, corner=False):
 	"""Return an enmap where each entry is the coordinate of that entry,
 	such that posmap(shape,wcs)[{0,1},j,k] is the {y,x}-coordinate of
 	pixel (j,k) in the map. Results are returned in radians, and
 	if safe is true (default), then sharp coordinate edges will be
 	avoided."""
 	pix    = np.mgrid[:shape[-2],:shape[-1]]
-	if center: pix += 0.5
-	return ndmap(pix2sky(wcs, pix, safe), wcs)
+	return ndmap(pix2sky(wcs, pix, safe, corner), wcs)
 
-def pix2sky(wcs, pix, safe=True):
+def pix2sky(wcs, pix, safe=True, corner=False):
 	"""Given an array of corner-based pixel coordinates [{y,x},...],
 	return sky coordinates in the same ordering."""
-	pix = np.asarray(pix)-0.5
+	pix = np.asarray(pix)
+	if corner: pix -= 0.5
 	pflat = pix.reshape(pix.shape[0], np.prod(pix.shape[1:]))
 	coords = np.asarray(wcs.wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*np.pi/180
 	coords = coords.reshape(pix.shape)
 	if safe: coords = enlib.utils.unwind(coords)
 	return coords
 
-def sky2pix(wcs, coords, safe=True):
+def sky2pix(wcs, coords, safe=True, corner=False):
 	"""Given an array of coordinates [{ra,dec},...], return
-	pixel coordinates with the same ordering."""
+	pixel coordinates with the same ordering. The corner argument
+	specifies whether pixel coordinates start at pixel corners
+	or pixel centers. This represents a shift of half a pixel.
+	If corner is False, then the integer pixel closest to a position
+	is round(sky2pix(...)). Otherwise, it is floor(sky2pix(...))."""
 	coords = np.asarray(coords)*180/np.pi
 	cflat  = coords.reshape(coords.shape[0], np.prod(coords.shape[1:]))
 	# period of the system
-	pix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))+0.5
+	pix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
+	if corner: pix += 0.5
 	if safe:
 		for i in range(len(pix)):
 			n = np.abs(360./wcs.wcs.cdelt[i])
@@ -197,7 +204,7 @@ def project(map, shape, wcs, order=3, mode="nearest"):
 	This uses local interpolation, and will lose information
 	when downgrading compared to averaging down."""
 	map  = map.copy()
-	pix  = map.sky2pix(posmap(shape, wcs))
+	pix  = map.sky2pix(posmap(shape, wcs), corner=True)
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode)
 	return ndmap(pmap, wcs)
 
@@ -250,7 +257,7 @@ def extent(shape, wcs, nsub=0x10):
 	wcs.wcs.cdelt *= step
 	wcs.wcs.crpix /= step
 	# Get position of all the corners, including the far ones
-	pos = posmap([nsub+1,nsub+1], wcs)
+	pos = posmap([nsub+1,nsub+1], wcs, corner=True)
 	# Apply az scaling
 	scale = np.zeros([2,nsub,nsub])
 	scale[0] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
