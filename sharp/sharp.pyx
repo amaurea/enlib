@@ -336,6 +336,24 @@ cdef class sht:
 			assert(alm.shape[:-1]==map.shape[:-1], "all but last index of map and alm must agree")
 		execute(csharp.SHARP_MAP2ALM, self.ainfo, alm, self.minfo, map, spin=spin)
 		return alm
+	def alm2map_der1(self, alm, map=None):
+		"""Compute derivative maps for the given scalar alms. If "map" is passed,
+		output will be written there. Otherwise a new map will be constructed
+		and returned. "alm" has dimensions [ntrans,nalm] or [nalm], and the map
+		has dimensions [ntrans,2,npix] or [2,npix], where ntrans is the number
+		of transformations to perform in parallel, and npix is the number of pixels
+		in the map."""
+		alm = np.asarray(alm)
+		ntrans = 1 if alm.ndim == 1 else alm.shape[0]
+		if map is None:
+			map = np.empty([ntrans,2,self.minfo.npix],dtype=alm.real.dtype)
+			map = map.reshape(alm.shape[:-1]+map.shape[-2:])
+		else:
+			assert(map.ndim >= 2, "map must be at least 2d")
+			assert(map.shape[-2] == 2, "Second to last dimensino of map must have length 2")
+			assert(alm.shape[:-1]==map.shape[:-2], "alm.shape[:-1] != map.shape[:-2]")
+		execute(csharp.SHARP_ALM2MAP_DERIV1, self.ainfo, alm, self.minfo, map, spin=0)
+		return map
 
 # alm and map have the formats:
 #  [nlm]:           spin=0,    ntrans=1
@@ -359,6 +377,7 @@ def execute(type, alm_info ainfo, alm, map_info minfo, map, spin):
 	assert(isinstance(map, np.ndarray), "map must be a numpy array")
 	cdef int i
 	ntrans, nspin = dim_helper(alm, "alm")
+	ntrans, ncomp = dim_helper(map, "map")
 	assert(spin == 0 and nspin != 1 or spin > 0 and nspin != 2,
 		"Dimension -2 of maps and alms must be 2 for spin transforms and 1 for scalar transforms.")
 	try:
@@ -366,7 +385,7 @@ def execute(type, alm_info ainfo, alm, map_info minfo, map, spin):
 	except KeyError:
 		pass
 	alm3 = alm.reshape(ntrans,nspin,-1)
-	map3 = map.reshape(ntrans,nspin,-1)
+	map3 = map.reshape(ntrans,ncomp,-1)
 	if map.dtype == np.float64:
 		execute_dp(type, spin, ainfo, alm3, minfo, map3)
 	else:
@@ -374,33 +393,31 @@ def execute(type, alm_info ainfo, alm, map_info minfo, map, spin):
 
 cpdef execute_dp(int type, int spin, alm_info ainfo, np.ndarray[np.complex128_t,ndim=3,mode="c"] alm, map_info minfo, np.ndarray[np.float64_t,ndim=3,mode="c"] map):
 	cdef int ntrans = map.shape[0]
-	cdef int nspin  = map.shape[1]
-	cdef n = ntrans*nspin
-	cdef np.ndarray[np.complex128_t,ndim=2,mode="c"] aflat = alm.reshape(n,alm.shape[2])
-	cdef np.ndarray[np.float64_t,ndim=2,mode="c"]    mflat = map.reshape(n,map.shape[2])
-	cdef np.ndarray[np.uintp_t,ndim=1,mode="c"]      aptrs = np.empty(n,dtype=np.uintp)
-	cdef np.ndarray[np.uintp_t,ndim=1,mode="c"]      mptrs = np.empty(n,dtype=np.uintp)
+	cdef int nmap = map.shape[0]*map.shape[1]
+	cdef int nalm = alm.shape[0]*alm.shape[1]
+	cdef np.ndarray[np.complex128_t,ndim=2,mode="c"] aflat = alm.reshape(nalm,alm.shape[2])
+	cdef np.ndarray[np.float64_t,ndim=2,mode="c"]    mflat = map.reshape(nmap,map.shape[2])
+	cdef np.ndarray[np.uintp_t,ndim=1,mode="c"]      aptrs = np.empty(nalm,dtype=np.uintp)
+	cdef np.ndarray[np.uintp_t,ndim=1,mode="c"]      mptrs = np.empty(nmap,dtype=np.uintp)
 	cdef int i
-	for i in range(n):
-		aptrs[i] = <np.uintp_t>&aflat[i,0]
-		mptrs[i] = <np.uintp_t>&mflat[i,0]
+	for i in range(nalm): aptrs[i] = <np.uintp_t>&aflat[i,0]
+	for i in range(nmap): mptrs[i] = <np.uintp_t>&mflat[i,0]
 	execute_helper(type, ainfo, aptrs, minfo, mptrs, spin, ntrans, csharp.SHARP_DP)
 
 cpdef execute_sp(int type, int spin, alm_info ainfo, np.ndarray[np.complex64_t,ndim=3,mode="c"] alm, map_info minfo, np.ndarray[np.float32_t,ndim=3,mode="c"] map):
 	cdef int ntrans = map.shape[0]
-	cdef int nspin  = map.shape[1]
-	cdef n = ntrans*nspin
-	cdef np.ndarray[np.complex64_t,ndim=2,mode="c"]  aflat = alm.reshape(n,alm.shape[2])
-	cdef np.ndarray[np.float32_t,ndim=2,mode="c"]    mflat = map.reshape(n,map.shape[2])
-	cdef np.ndarray[np.uintp_t,ndim=1,mode="c"]      aptrs = np.empty(n,dtype=np.uintp)
-	cdef np.ndarray[np.uintp_t,ndim=1,mode="c"]      mptrs = np.empty(n,dtype=np.uintp)
+	cdef int nmap = map.shape[0]*map.shape[1]
+	cdef int nalm = alm.shape[0]*alm.shape[1]
+	cdef np.ndarray[np.complex64_t,ndim=2,mode="c"]  aflat = alm.reshape(nalm,alm.shape[2])
+	cdef np.ndarray[np.float32_t,ndim=2,mode="c"]    mflat = map.reshape(nmap,map.shape[2])
+	cdef np.ndarray[np.uintp_t,ndim=1,mode="c"]      aptrs = np.empty(nalm,dtype=np.uintp)
+	cdef np.ndarray[np.uintp_t,ndim=1,mode="c"]      mptrs = np.empty(nmap,dtype=np.uintp)
 	cdef int i
-	for i in range(n):
-		aptrs[i] = <np.uintp_t>&aflat[i,0]
-		mptrs[i] = <np.uintp_t>&mflat[i,0]
+	for i in range(nalm): aptrs[i] = <np.uintp_t>&aflat[i,0]
+	for i in range(nmap): mptrs[i] = <np.uintp_t>&mflat[i,0]
 	execute_helper(type, ainfo, aptrs, minfo, mptrs, spin, ntrans, 0)
 
-typemap = { "map2alm": csharp.SHARP_MAP2ALM, "alm2map": csharp.SHARP_ALM2MAP, "alm2map_deriv1": csharp.SHARP_ALM2MAP_DERIV1 }
+typemap = { "map2alm": csharp.SHARP_MAP2ALM, "alm2map": csharp.SHARP_ALM2MAP, "alm2map_der1": csharp.SHARP_ALM2MAP_DERIV1 }
 
 cdef execute_helper(int type,
 		alm_info ainfo, np.ndarray[np.uintp_t,ndim=1] alm,
