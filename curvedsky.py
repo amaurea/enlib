@@ -98,7 +98,7 @@ def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 def map2minfo(m):
 	"""Given an enmap with constant-latitude rows and constant longitude
 	intervals, return a corresponding sharp map_info."""
-	theta  = np.pi/2 - m[...,:,:1].posmap(center=True)[0,:,0]
-	phi0   = m[...,:1,:1].posmap(center=True)[1,0,0]
+	theta  = np.pi/2 - m[...,:,:1].posmap(corner=False)[0,:,0]
+	phi0   = m[...,:1,:1].posmap(corner=False)[1,0,0]
 	nphi   = m.shape[-1]
 	return sharp.map_info(theta, nphi, phi0)

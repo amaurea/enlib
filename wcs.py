@@ -1,6 +1,9 @@
 """This module defines shortcuts for generating WCS instances and working
 with them. The bounding boxes and shapes used in this module all use
-the same ordering as WCS, i.e. column major."""
+the same ordering as WCS, i.e. column major. Coordinates are assigned
+to pixel centers, as WCS does natively, but bounding boxes include the
+whole pixels, not just their centers, which is where the 0.5 stuff
+comes from."""
 import numpy as np
 from astropy.wcs import WCS
 from enlib import slice
