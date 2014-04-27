@@ -98,12 +98,20 @@ def expand_inds(x, y):
 	return res
 
 def scale_spectrum(a, direction):
-	x = np.arange(a.shape[-1])
-	a[...,1:] *= (2*np.pi/x[1:]/(x[1:]+1))**direction
+	a = np.array(a)
+	l = np.arange(a.shape[-1])
+	a[...,1:] *= (2*np.pi/l[1:]/(l[1:]+1))**direction
 	a[...,0] = 0
 	return a
 
-def read_spectrum(fname, inds=True, scale=True, expand=None):
+def scale_lensing_spectrum(a, direction):
+	a = np.array(a)
+	l = np.arange(a.shape[-1])
+	a[...,1:] /= (l[1:]**4*2.726e6**2)**direction
+	a[...,0] = 0
+	return a
+
+def read_spectrum(fname, inds=True, scale=True, expand=None, ncol=None, ncomp=None):
 	"""Read a power spectrum from disk and return a dense
 	array cl[nspec,lmax+1]. Unless scale=False, the spectrum
 	will be multiplied by 2pi/l/(l+1) when being read.
@@ -115,5 +123,18 @@ def read_spectrum(fname, inds=True, scale=True, expand=None):
 	a = np.loadtxt(fname).T
 	if inds: a = expand_inds(np.array(a[0],dtype=int), a[1:])
 	if scale: a = scale_spectrum(a, 1)
-	if expand is not None: a = sym_expand(a, scheme=expand)
+	if ncol: a = a[:ncol]
+	if expand is not None: a = sym_expand(a, scheme=expand, ncomp=ncomp)
 	return a
+
+def read_lensing_spectrum(fname, coloff=0, inds=True, scale=True, expand=None):
+	a = read_spectrum(fname, inds=inds, scale=False)[coloff]
+	if scale: a = scale_lensing_spectrum(a, 1)
+	if expand is not None: a = a[None,None]
+	return a
+
+def read_camb_scalar(fname, inds=True, scale=True, expand=None, ncmb=3):
+	if expand: expand = "diag"
+	ps_cmb  = read_spectrum(fname, inds=inds, scale=scale, expand=expand, ncol=ncmb, ncomp=3)
+	ps_lens = read_lensing_spectrum(fname, inds=inds, scale=scale, expand=expand, coloff=ncmb)
+	return ps_cmb, ps_lens

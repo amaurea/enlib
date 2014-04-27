@@ -406,6 +406,11 @@ def pad(emap, pix, return_slice=False):
 	res[s] = emap
 	return res,s if return_slice else res
 
+def grad(m):
+	"""Returns the gradient of the map m as [2,...]."""
+	print "FIXME: grad not done"
+	return np.reshape(np.real(ifft(fft(m)[None,:,...]*m.lmap()[:,None,...]*1j)),[2]+list(m.shape))
+
 ############
 # File I/O #
 ############

@@ -164,19 +164,22 @@ cdef class alm_info:
 	cdef readonly int stride
 	cdef readonly int nelem
 	cdef readonly np.ndarray mstart
-	def __cinit__(self, lmax, mmax=None, stride=1, layout="triangular"):
+	def __cinit__(self, lmax=None, mmax=None, nalm=None, stride=1, layout="triangular"):
 		"""Constructs a new sharp spherical harmonic coefficient layout information
 		for the given lmax and mmax. The layout defaults to triangular, but
 		can be changed by explicitly specifying layout, either as a string
 		naming layout (triangular or rectangular), or as an array containing the
 		index of the first l for each m. Once constructed, an alm_info is immutable.
 		The layouts are all m-major, with all the ls for each m consecutive."""
-		if mmax is None: mmax = lmax
 		if isinstance(layout,basestring):
 			if layout == "triangular" or layout == "tri":
+				if lmax is None: lmax = nalm2lmax(nalm)
+				if mmax is None: mmax = lmax
 				m = np.arange(mmax+1)
 				mstart = stride*(m*(2*lmax+1-m)/2)
 			elif layout == "rectangular" or layout == "rect":
+				if lmax is None: lmax = int(nalm**0.5)-1
+				if mmax is None: mmax = lmax
 				mstart = np.arange(mmax+1)*(lmax+1)*stride
 			else:
 				raise ValueError("unkonwn layout: %s" % layout)
@@ -187,6 +190,8 @@ cdef class alm_info:
 		self.mmax  = mmax
 		self.stride= stride
 		self.nelem = np.max(mstart + (lmax+1)*stride)
+		if nalm is not None:
+			assert(self.nelem == nalm, "lmax must be explicitly specified when lmax != mmax")
 		self.mstart= mstart
 		self.mstart.flags.writeable = False
 	def lm2ind(self, np.ndarray[int,ndim=1] l,np.ndarray[int,ndim=1] m):
@@ -291,6 +296,9 @@ cdef class alm_info:
 						alm[c1,lm] += lmat[c1,c2,l]*v[c2]
 	def __dealloc__(self):
 		csharp.sharp_destroy_alm_info(self.info)
+
+def nalm2lmax(nalm):
+	return int((-1+(1+8*nalm)**0.5)/2)-1
 
 cdef class sht:
 	cdef public map_info minfo
