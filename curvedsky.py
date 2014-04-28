@@ -22,7 +22,7 @@ def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128):
 	speed."""
 	rtype = np.zeros([0],dtype=dtype).real.dtype
 	ps    = np.asarray(ps)
-	if ainfo is None: ainfo = sharp.alm_info(lmax or ps.shape[-1]-1)
+	if ainfo is None: ainfo = sharp.alm_info(min(lmax,ps.shape[-1]-1) or ps.shape[-1]-1)
 	if ps.ndim == 1:
 		wps = ps[None,None]
 	elif ps.ndim == 2:
