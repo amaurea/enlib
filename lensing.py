@@ -68,7 +68,7 @@ def offset_by_grad(ipos, grad, geodesic=True, pol=None):
 				if iflat.shape[0] > 2:
 					oflat[2,i:i+step] += iflat[2,i:i+step]
 	else:
-		oflat[0] = iflat[0] + gflat[0] # gradient is defined
+		oflat[0] = iflat[0] + gflat[0]
 		oflat[1] = iflat[1] + gflat[1]/np.cos(iflat[0])
 		oflat[:2] = pole_wrap(oflat[:2])
 		if oflat.shape[0] > 2: oflat[2] = 0

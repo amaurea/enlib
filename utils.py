@@ -185,6 +185,23 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 		fa[mask] = np.nan
 	return res
 
+def grid(box, shape, endpoint=True, axis=0):
+	"""Given a bounding box[{from,to},ndim] and shape[ndim] in each
+	direction, returns an array [ndim,shape[0],shape[1],...] array
+	of evenly spaced numbers. If endpoint is True (default), then
+	the end point is included. Otherwise, the last sample is one
+	step away from the end of the box. For one dimension, this is
+	similar to linspace:
+		linspace(0,1,4)     =>  [0.0000, 0.3333, 0.6667, 1.0000]
+		grid([[0],[1]],[4]) => [[0,0000, 0.3333, 0.6667, 1.0000]]
+	"""
+	n    = np.asarray(shape)
+	box  = np.asfarray(box)
+	off  = -1 if endpoint else 0
+	inds = np.rollaxis(np.indices(n),0,len(n)+1) # (d1,d2,d3,...,indim)
+	res  = inds * (box[1]-box[0])/(n+off) + box[0]
+	return np.rollaxis(res, -1, axis)
+
 def mkdir(path):
 	try:
 		os.makedirs(path)
