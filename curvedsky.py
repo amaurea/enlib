@@ -14,6 +14,12 @@ def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=
 	pos   = enmap.posmap(shape,wcs)
 	return enmap.samewcs(alm2map(alm, pos, oversample=oversample, spin=spin), wcs)
 
+def rand_alm_healpy(ps, lmax=None, seed=None, dtype=np.complex128):
+	import healpy
+	if seed is not None: np.random.seed(seed)
+	ps = powspec.sym_compress(ps, scheme="diag")
+	return np.asarray(healpy.synalm(ps, lmax=lmax, new=True))
+
 def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128):
 	"""This is a replacement for healpy.synalm. It generates the random
 	numbers in l-major order before transposing to m-major order in order

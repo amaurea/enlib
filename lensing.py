@@ -13,9 +13,11 @@ def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None
 		if verbose: print "Computing phi map"
 		phi_map = curvedsky.alm2map(phi_alm, obs_pos, oversample=oversample)
 	if verbose: print "Computing grad map"
+	# This gradient uses zenith coordinates, so the y-sign is flipped
 	grad    = curvedsky.alm2map(phi_alm, obs_pos, oversample=oversample, deriv=True)
+	grad[0] = -grad[0]
 	if verbose: print "Computing alpha map"
-	raw_pos = enmap.samewcs(offset_by_grad(obs_pos, -grad, pol=ncomp>1, geodesic=geodesic), obs_pos)
+	raw_pos = enmap.samewcs(offset_by_grad(obs_pos, grad, pol=ncomp>1, geodesic=geodesic), obs_pos)
 	del phi_alm
 	# Then draw a random CMB realization at the raw positions
 	if verbose: print "Generating cmb alms"
@@ -66,7 +68,7 @@ def offset_by_grad(ipos, grad, geodesic=True, pol=None):
 				if iflat.shape[0] > 2:
 					oflat[2,i:i+step] += iflat[2,i:i+step]
 	else:
-		oflat[0] = iflat[0] + gflat[0]
+		oflat[0] = iflat[0] + gflat[0] # gradient is defined
 		oflat[1] = iflat[1] + gflat[1]/np.cos(iflat[0])
 		oflat[:2] = pole_wrap(oflat[:2])
 		if oflat.shape[0] > 2: oflat[2] = 0
