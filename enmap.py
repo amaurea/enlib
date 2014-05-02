@@ -75,7 +75,7 @@ class ndmap(np.ndarray):
 			return np.asarray(self)[sel]
 		# Otherwise we will return a full ndmap, including a
 		# (possibly) sliced wcs.
-		_, wcs = slice_wcs(self.shape, self.wcs, sel2)
+		_, wcs = slice_wcs(self.shape[-2:], self.wcs, sel2)
 		return ndmap(np.ndarray.__getitem__(self, sel), wcs)
 	def __getslice__(self, a, b=None, c=None): return self[slice(a,b,c)]
 	def submap(self, box, inclusive=False):
@@ -374,6 +374,7 @@ def spec2flat(shape, wcs, cov, exp=1.0):
 	ls  = np.sum(lmap(oshape, wcs)**2,0)**0.5
 	cov = cov * np.prod(shape[-2:])/area(shape,wcs)
 	if exp != 1.0: cov = multi_pow(cov, exp)
+	cov[~np.isfinite(cov)] = 0
 	cov   = cov[:oshape[-3],:oshape[-3]]
 	return ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape)),wcs)
 
