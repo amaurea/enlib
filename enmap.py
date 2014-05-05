@@ -117,13 +117,14 @@ def slice_wcs(shape, wcs, sel):
 	wcs = wcs.deepcopy()
 	oshape = np.array(shape)
 	# The wcs object has the indices in reverse order
-	for i,s in enumerate(sel[::-1]):
-		s = enlib.slice.expand_slice(s, shape[::-1][-2+i])
-		wcs.wcs.crpix[i] -= s.start+0.5
-		wcs.wcs.crpix[i] /= s.step
-		wcs.wcs.cdelt[i] *= s.step
-		wcs.wcs.crpix[i] += 0.5
-		oshape[::-1][-2+i] = (oshape[::-1][-2+i]+s.step-1)/s.step
+	for i,s in enumerate(sel):
+		s = enlib.slice.expand_slice(s, shape[i])
+		j = -1-i
+		wcs.wcs.crpix[j] -= s.start+0.5
+		wcs.wcs.crpix[j] /= s.step
+		wcs.wcs.cdelt[j] *= s.step
+		wcs.wcs.crpix[j] += 0.5
+		oshape[i] = (oshape[i]+s.step-1)/s.step
 	return tuple(oshape), wcs
 
 def box(shape, wcs):
