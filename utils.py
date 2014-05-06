@@ -13,10 +13,7 @@ def listsplit(seq, elem):
 	"""Analogue of str.split for lists.
 	listsplit([1,2,3,4,5,6,7],4) -> [[1,2],[3,4,5,6]]."""
 	# Sadly, numpy arrays misbehave, and must be treated specially
-	def iseq(e1, e2):
-		try: return e1 == e2
-		except ValueError:
-			return np.all(e1==e2)
+	def iseq(e1, e2): return np.all(e1==e2)
 	inds = [i for i,v in enumerate(seq) if iseq(v,elem)]
 	ranges = zip([0]+[i+1 for i in inds],inds+[len(seq)])
 	return [seq[a:b] for a,b in ranges]
