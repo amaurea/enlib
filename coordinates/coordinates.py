@@ -15,7 +15,7 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 	"hor", the optional arguments time (in modified julian days) and site (which must
 	contain .lat (rad), .lon (rad), .P (pressure, mBar), .T (temperature, K),
 	.hum (humidity, 0.2 by default), .alt (altitude, m)). Returns an array
-	with the same shape as the input."""
+	with the same shape as the input. The coordinates are in ra,dec-ordering."""
 	# Make ourselves case insensitive, and look up the corresponding objects
 	unit = getunit(unit)
 	(from_sys,from_ref), (to_sys,to_ref) = getsys_full(from_sys,unit,time,site), getsys_full(to_sys,unit,time,site)

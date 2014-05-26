@@ -1,5 +1,9 @@
 import numpy as np, scipy.ndimage, os, errno
 
+degree = np.pi/180
+arcmin = degree/60
+arcsec = arcmin/60
+
 def lines(file_or_fname):
 	"""Iterates over lines in a file, which can be specified
 	either as a filename or as a file object."""
@@ -182,7 +186,7 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 		fa[mask] = np.nan
 	return res
 
-def grid(box, shape, endpoint=True, axis=0):
+def grid(box, shape, endpoint=True, axis=0, flat=False):
 	"""Given a bounding box[{from,to},ndim] and shape[ndim] in each
 	direction, returns an array [ndim,shape[0],shape[1],...] array
 	of evenly spaced numbers. If endpoint is True (default), then
@@ -197,6 +201,7 @@ def grid(box, shape, endpoint=True, axis=0):
 	off  = -1 if endpoint else 0
 	inds = np.rollaxis(np.indices(n),0,len(n)+1) # (d1,d2,d3,...,indim)
 	res  = inds * (box[1]-box[0])/(n+off) + box[0]
+	if flat: res = res.reshape(-1, res.shape[-1])
 	return np.rollaxis(res, -1, axis)
 
 def mkdir(path):

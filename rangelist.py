@@ -62,6 +62,8 @@ class Multirange:
 	and the contained Rangelist objects indices."""
 	def __init__(self, rangelists, copy=True):
 		# Todo: Handle (neach, flat) inputs
+		if rangelists is None:
+			self.data = np.zeros([],dtype=np.object)
 		if isinstance(rangelists, Multirange):
 			if copy: rangelists = rangelists.copy()
 			self.data = rangelists.data
