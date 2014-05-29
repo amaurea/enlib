@@ -104,6 +104,7 @@ def deslope(d, w=1, inplace=False):
 def ctime2mjd(ctime):
 	"""Converts from unix time to modified julian date."""
 	return ctime/86400 + 40587.0
+day2sec = 86400.
 
 def mjd2ctime(mjd):
 	"""Converts from modified julian date to unix time"""
