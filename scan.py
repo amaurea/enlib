@@ -6,7 +6,7 @@ certain linear combination of some variables (usually stokes parameters).
 The actual detector samples are not directly exposed, as they will often
 be too expensive to store. Instead, a get_samples() function is provided,
 which can be overriden in subclasses."""
-import numpy as np
+import numpy as np, enlib.utils
 
 class Scan:
 	"""This defines the minimal interface for a Scan. It will usually be
@@ -34,3 +34,7 @@ class Scan:
 	@property
 	def box(self):
 		return np.array([np.min(self.boresight,0)+np.min(self.offsets,0),np.max(self.boresight,0)+np.max(self.offsets,0)])
+	@property
+	def srate(self):
+		step = self.boresight.shape[0]/100
+		return float(step)/enlib.utils.medmean(self.boresight[::step,0][1:]-self.boresight[::step,0][:-1])
