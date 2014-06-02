@@ -39,6 +39,8 @@ def split_slice_simple(sel, ndims):
 	subs = np.concatenate([[0],cumsplit(notNone, ndims)])
 	for i, r in enumerate(res):
 		r += sel[subs[i]:subs[i+1]]
+	if subs[i+1] < len(sel):
+		raise IndexError("Too many indices")
 	return [tuple(v) for v in res]
 
 def parse_slice(desc):
