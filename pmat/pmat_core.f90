@@ -63,7 +63,7 @@ subroutine pmat_nearest( &
 		!$omp end parallel workshare
 	end if
 
-	!$omp parallel private(di,si,nj,j,ipoint,opoint,pix,id)
+	!$omp parallel private(di,si,nj,j,ipoint,opoint,phase,pix,id)
 	id = omp_get_thread_num()+1
 	!$omp do collapse(2)
 	do di = 1, ndet
@@ -148,7 +148,7 @@ subroutine pmat_linear( &
 		!$omp end parallel workshare
 	end if
 
-	!$omp parallel private(di,si,nj,j,ipoint,opoint,pix,id)
+	!$omp parallel private(di,si,nj,j,ipoint,opoint,phase,pix,fpix,id,py,px)
 	id = omp_get_thread_num()+1
 	!$omp do collapse(2)
 	do di = 1, ndet

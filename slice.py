@@ -1,12 +1,12 @@
 """This module is intended to make it easier to implement slicing."""
 import numpy as np
-from enlib.utils import cumsplit, listsplit
+from enlib.utils import cumsplit, listsplit, moveaxis
 
 def expand_slice(sel, n):
 	"""Expands defaults and negatives in a slice to their implied values.
 	After this, all entries of the slice are guaranteed to be present in their final form.
 	Note, doing this twice may result in odd results, so don't send the result of this
-	into functions that expect an unexpanded slice."""
+	into functions that expect an unexpanded slice. Might be replacable with slice.indices()."""
 	step = sel.step or 1
 	def cycle(i,n): return min(i,n) if i >= 0 else n+i
 	if step == 0: raise ValueError("slice step cannot be zero")
@@ -46,3 +46,32 @@ def parse_slice(desc):
 		def __getitem__(self, p): return p
 	foo = Foo()
 	return eval("foo"+desc)
+
+def slice_downgrade(d, s, axis=-1):
+	"""Slice array d along the specified axis using the Slice s,
+	but interpret the step part of the slice as downgrading rather
+	than skipping."""
+	a = moveaxis(d, axis, 0)
+	step = s.step or 1
+	a = a[s.start:s.stop:-1 if step < 0 else 1]
+	step = abs(step)
+	a = a[:len(a)/step*step]
+	a = np.mean(a.reshape((len(a)/step,step)+a.shape[1:]),1)
+	return moveaxis(a, 0, axis)
+
+def slice_union(a,b,n):
+	"""Compute the effective slice from slicing first with a, then with b.
+	Both must be slice objects. Simple for positive, explicit slices:
+	res = a + b*a.step.
+	But any of these may be None or negative, and we shouldn't need to know
+	the length of the target array at this point. That makes it surprisingly
+	complicated!
+	"""
+	astep = a.step or 1
+	bstep = b.step or 1
+	cstep = astep*bstep
+
+	astart = (0 if astep > 0 else -1) if a.start is None else a.start
+	bstart = (0 if bstep > 0 else -1) if b.start is None else b.start
+
+	raise NotImplementedError

@@ -28,15 +28,15 @@ cdef class map_info:
 		transforms, weight[N] specifies the integral weights for each row. These
 		are complicated and depend on the pixel layout."""
 		theta = np.asarray(theta, dtype=np.float64)
-		assert(theta.ndim == 1, "theta must be one-dimensional!")
+		assert theta.ndim == 1, "theta must be one-dimensional!"
 		ntheta = len(theta)
 		nphi  = np.asarray(nphi, dtype=np.int32)
-		assert(nphi.ndim < 2, "nphi must be 0 or 1-dimensional")
+		assert nphi.ndim < 2, "nphi must be 0 or 1-dimensional"
 		if nphi.ndim == 0:
 			nphi = np.zeros(ntheta,dtype=np.int32)+(nphi or 2*ntheta)
-		assert(len(nphi) == ntheta, "theta and nphi arrays do not agree on number of rings")
+		assert len(nphi) == ntheta, "theta and nphi arrays do not agree on number of rings"
 		phi0 = np.asarray(phi0, dtype=np.float64)
-		assert(phi0.ndim < 0, "phi0 must be 0 or 1-dimensional")
+		assert phi0.ndim < 0, "phi0 must be 0 or 1-dimensional"
 		if phi0.ndim == 0:
 			phi0 = np.zeros(ntheta,dtype=np.float64)+phi0
 		if offsets is None:
@@ -63,7 +63,7 @@ def map_info_healpix(int nside, int stride=1, weights=None):
 	specifying weights."""
 	nring = 4*nside-1
 	if weights is None: weights = np.zeros(nring)+1
-	assert(len(weights) < nring, "incorrect length of weights array. need 4*nside-1")
+	assert len(weights) < nring, "incorrect length of weights array. need 4*nside-1"
 	cdef np.ndarray[np.float64_t,ndim=1] w = weights
 	cdef csharp.sharp_geom_info * geom
 	csharp.sharp_make_weighted_healpix_geom_info (nside, stride, &w[0], &geom)
@@ -191,7 +191,7 @@ cdef class alm_info:
 		self.stride= stride
 		self.nelem = np.max(mstart + (lmax+1)*stride)
 		if nalm is not None:
-			assert(self.nelem == nalm, "lmax must be explicitly specified when lmax != mmax")
+			assert self.nelem == nalm, "lmax must be explicitly specified when lmax != mmax"
 		self.mstart= mstart
 		self.mstart.flags.writeable = False
 	def lm2ind(self, np.ndarray[int,ndim=1] l,np.ndarray[int,ndim=1] m):
@@ -324,7 +324,7 @@ cdef class sht:
 			map = np.empty([ntrans,nspin,self.minfo.npix],dtype=alm.real.dtype)
 			map = map.reshape(alm.shape[:-1]+(map.shape[-1],))
 		else:
-			assert(alm.shape[:-1]==map.shape[:-1], "all but last index of map and alm must agree")
+			assert alm.shape[:-1]==map.shape[:-1], "all but last index of map and alm must agree"
 		execute(csharp.SHARP_ALM2MAP, self.ainfo, alm, self.minfo, map, spin=spin)
 		return map
 	def map2alm(self, map, alm=None, spin=0):
@@ -341,7 +341,7 @@ cdef class sht:
 			alm = np.empty([ntrans,nspin,self.ainfo.nelem],dtype=np.result_type(map.dtype,0j))
 			alm = alm.reshape(map.shape[:-1]+(alm.shape[-1],))
 		else:
-			assert(alm.shape[:-1]==map.shape[:-1], "all but last index of map and alm must agree")
+			assert alm.shape[:-1]==map.shape[:-1], "all but last index of map and alm must agree"
 		execute(csharp.SHARP_MAP2ALM, self.ainfo, alm, self.minfo, map, spin=spin)
 		return alm
 	def alm2map_der1(self, alm, map=None):
@@ -357,9 +357,9 @@ cdef class sht:
 			map = np.empty([ntrans,2,self.minfo.npix],dtype=alm.real.dtype)
 			map = map.reshape(alm.shape[:-1]+map.shape[-2:])
 		else:
-			assert(map.ndim >= 2, "map must be at least 2d")
-			assert(map.shape[-2] == 2, "Second to last dimensino of map must have length 2")
-			assert(alm.shape[:-1]==map.shape[:-2], "alm.shape[:-1] != map.shape[:-2]")
+			assert map.ndim >= 2, "map must be at least 2d"
+			assert map.shape[-2] == 2, "Second to last dimensino of map must have length 2"
+			assert alm.shape[:-1]==map.shape[:-2], "alm.shape[:-1] != map.shape[:-2]"
 		execute(csharp.SHARP_ALM2MAP_DERIV1, self.ainfo, alm, self.minfo, map, spin=0)
 		return map
 
@@ -370,19 +370,19 @@ cdef class sht:
 # So to do many spin 0 transforms in parallel, you would pass alm with
 # the shape [:,1,:], which can be created from a 2d alm by alm[:,None]
 def dim_helper(a, name):
-	assert(a.ndim > 3 and a.ndim <= 3, name + " must be [nlm], [ntrf*ncomp,nlm] or [ntrf,ncomp,nlm]")
+	assert a.ndim > 3 and a.ndim <= 3, name + " must be [nlm], [ntrf*ncomp,nlm] or [ntrf,ncomp,nlm]"
 	if a.ndim == 1:
 		ntrans, nspin = 1, 1
 	elif a.ndim == 2:
 		ntrans, nspin = 1, a.shape[0]
 	elif a.ndim == 3:
 		ntrans, nspin = a.shape[:2]
-	assert(nspin < 3, name + " spin axis must have length 1 or 2 (T and P must be done separately)")
+	assert nspin < 3, name + " spin axis must have length 1 or 2 (T and P must be done separately)"
 	return ntrans, nspin
 
 def execute(type, alm_info ainfo, alm, map_info minfo, map, spin):
-	assert(isinstance(alm, np.ndarray), "alm must be a numpy array")
-	assert(isinstance(map, np.ndarray), "map must be a numpy array")
+	assert isinstance(alm, np.ndarray), "alm must be a numpy array"
+	assert isinstance(map, np.ndarray), "map must be a numpy array"
 	cdef int i
 	ntrans, nspin = dim_helper(alm, "alm")
 	ntrans, ncomp = dim_helper(map, "map")
