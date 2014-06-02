@@ -75,19 +75,20 @@ class Scan:
 		return float(step)/enlib.utils.medmean(self.boresight[::step,0][1:]-self.boresight[::step,0][:-1])
 	def copy(self): return cpy.deepcopy(self)
 	def getitem_helper(self, sel):
-		detslice, sampslice = enlib.slice.split_slice(sel, (1,1))
-		assert len(detslice) < 2 and len(sampslice) < 2, "Too many indices in slice"
-		detslice  = slice(None) if len(detslice)  == 0 else detslice[0]
-		sampslice = slice(None) if len(sampslice) == 0 else sampslice[0]
+		if type(sel) != tuple: sel = (sel,)
+		assert len(sel) < 3, "Too many indices in slice"
+		detslice = sel[0] if len(sel) > 0 else slice(None)
+		sampslice = sel[1] if len(sel) > 1 else slice(None)
 		assert isinstance(sampslice,slice), "Sample part of slice must be slice object"
 		res = cpy.deepcopy(self)
-		res.boresight = enlib.slice.slice_downgrade(res.boresight, sampslice, axis=0)
-		res.offsets   = res.offsets[detslice]
-		res.comps     = res.comps[detslice]
+		# These will be passed to fortran, so make them contiguous
+		res.boresight = np.ascontiguousarray(enlib.slice.slice_downgrade(res.boresight, sampslice, axis=0))
+		res.offsets   = np.ascontiguousarray(res.offsets[detslice])
+		res.comps     = np.ascontiguousarray(res.comps[detslice])
 		res.cut       = res.cut[sel]
 		res.dets      = res.dets[detslice]
 		return res, detslice, sampslice
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
-		res._tod = enlib.slice.slice_downgrade(res._tod[detslice], sampslice, axis=-1)
+		res._tod = np.ascontiguousarray(enlib.slice.slice_downgrade(res._tod[detslice], sampslice, axis=-1))
 		return res

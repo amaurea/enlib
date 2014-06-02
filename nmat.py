@@ -3,6 +3,7 @@ Individual experiments can inherit from this - other functions
 in enlib will work as long as this interface is followed.
 For performance and memory reasons, the noise matrix
 overwrites its input array."""
+import copy
 
 # Dilemma: Most noise matrices will act in fourier space.
 # The fourier version of the array is potentially already
@@ -35,4 +36,22 @@ class NoiseMatrix:
 		of the noise matrix to tod. tod is overwritten, but also
 		returned for convenience."""
 		return tod
-	
+	def getitem_helper(self, sel):
+		"""Expands sel to a detector and sample slice.
+		The detector slice is straightforward. The sample slice
+		may be less so. In fourier space, its effect is a rescaling
+		and truncation, such that find2 = find1 * n2/n1,
+		with find2_max = find1_max * n2/n1 / step, and n2 = stop-start."""
+		if type(sel) != tuple: sel = (sel,)
+		assert len(sel) < 3, "Too many indices in slice"
+		detslice = sel[0] if len(sel) > 0 else slice(None)
+		sampslice = sel[1] if len(sel) > 1 else slice(None)
+		assert isinstance(sampslice,slice), "Sample part of slice must be slice object"
+		res = copy.deepcopy(self)
+		return res, detslice, sampslice
+	def __getitem__(self, sel):
+		"""Restrict noise matrix to a subset of detectors (first index)
+		or a lower sampling rate (second slice). The last one must be
+		a slice object, which must have empty start and stop values,
+		and a positive step value."""
+		return self
