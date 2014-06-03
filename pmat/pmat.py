@@ -14,7 +14,7 @@ class PointingMatrix:
 	def forward(self, tod, m): raise NotImplementedError
 	def backward(self, tod, m): raise NotImplementedError
 
-class MapPmat(PointingMatrix):
+class PmatMap(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation.
 	20 times faster than the slower python+numpy implementation below."""
 	def __init__(self, scan, template, sys="equ", order=0):
@@ -44,7 +44,7 @@ class MapPmat(PointingMatrix):
 	def backward(self, tod, m):
 		self.func(-1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 
-class MapPmatSlow(PointingMatrix):
+class PmatMapSlow(PointingMatrix):
 	"""Reference implementation of the simple nearest neighbor
 	pointing matrix. Very slow - not meant for serious use. It's interesting
 	as an example of how a reasonable python-only implementation would
@@ -71,6 +71,41 @@ class MapPmatSlow(PointingMatrix):
 		for d in range(tod.shape[0]):
 			pix, phase = self.get_pix_phase(d)
 			tod[d] += np.sum(m[:,pix[0],pix[1]]*phase[:m.shape[0]],0)
+
+class PmatCut(PointingMatrix):
+	"""Implementation of cuts-as-extra-degrees-of-freedom for a single
+	scan."""
+	def __init__(self, scan, params="full"):
+		neach, flat = scan.cut.flatten()
+		dets = np.concatenate([np.zeros(n,dtype=int)+i for i,n in enumerate(neach)])
+		par  = np.array(self.parse_params(params))
+		self.cuts = np.zeros([flat.shape[0],5+len(par)],dtype=np.int32)
+		self.cuts[:,0] = dets
+		self.cuts[:,1] = flat[:,0]
+		self.cuts[:,2] = flat[:,1]-flat[:,0]
+		self.cuts[:,5:]= par[None,:]
+		pmat_core.measure_cuts(self.cuts.T)
+		self.cuts[:,3] = utils.cumsum(self.cuts[:,4])
+		# njunk is the number of cut parameters for *this scan*
+		self.njunk  = np.sum(self.cuts[:,4])
+		self.params = params
+		self.scan = scan
+	def forward(self, tod, junk):
+		"""Project from the cut parameter (junk) space for this scan
+		to tod."""
+		pmat_core.pmat_cut( 1, tod.T, junk, self.cuts.T)
+	def backward(self, tod, junk):
+		"""Project from tod to cut parameters (junk) for this scan.
+		This is meant to be called before the map projection, and
+		removes the cut samples from the tod at the same time,
+		replacing them with zeros. That way the map projection can
+		be done without needing to care about the cuts."""
+		pmat_core.pmat_cut(-1, tod.T, junk, self.cuts.T)
+	def parse_params(self,params):
+		toks = params.split(":")
+		kind = toks[0]
+		args = tuple([int(s) for s in toks[1].split(",")]) if len(toks) > 1 else ()
+		return ({"none":0,"full":1,"bin":2,"exp":3}[toks[0]],)+args
 
 class pos2pix:
 	"""Transforms from scan coordintaes to pixel-center coordinates."""

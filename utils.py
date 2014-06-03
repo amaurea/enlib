@@ -205,6 +205,14 @@ def grid(box, shape, endpoint=True, axis=0, flat=False):
 	if flat: res = res.reshape(-1, res.shape[-1])
 	return np.rollaxis(res, -1, axis)
 
+def cumsum(a, endpoint=False):
+	"""As numpy.cumsum for a 1d array a, but starts from 0. If endpoint is True, the result
+	will have one more element than the input, and the last element will be the sum of the
+	array. Otherwise (the default), it will have the same length as the array, and the last
+	element will be the sum of the first n-1 elements."""
+	res = np.concatenate([[0],np.cumsum(a)])
+	return res if endpoint else res[:-1]
+
 def mkdir(path):
 	try:
 		os.makedirs(path)

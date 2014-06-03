@@ -283,4 +283,145 @@ pure function get_phase(comps, det_comps, cossin) result(phase)
 	end do
 end function
 
+
+! Simple cut scheme: a simple array of ({det,lstart,len,gstart,glen,type,params...},ncut)
+! This is very flexible, allowing each cut to be processed independently and with
+! different cut types per cut if needed. The glen part is redundant and could be
+! removed, but makes it easier to interpret the junk array. The disadvantage of this
+! format is that it's quite opaque.
+subroutine pmat_cut(dir, tod, junk, cuts)
+	use omp_lib
+	implicit none
+	! Parameters
+	integer(4), intent(in)    :: dir, cuts(:,:)
+	real(4),    intent(inout) :: tod(:,:), junk(:)
+	integer(4), parameter     :: det=1, lstart=2, llen=3, gstart=4, glen=5, cuttype=6
+	integer(4) :: ci, di, l1, l2, g1, g2
+
+	!$omp parallel do private(l1,l2,g1,g2,di)
+	do ci = 1, size(cuts,2)
+		l1 = cuts(lstart,ci)+1; l2 = l1+cuts(llen,ci)-1
+		g1 = cuts(gstart,ci)+1; g2 = g1+cuts(glen,ci)-1
+		di = cuts(det,ci)+1
+		call pmat_cut_range(dir, tod(l1:l2,di), junk(g1:g2), cuts(cuttype:,ci))
+	end do
+end subroutine
+
+! Measure the number of cut parameters corresponding to each range of cut samples
+subroutine measure_cuts(cuts)
+	implicit none
+	integer(4), intent(inout)  :: cuts(:,:)
+	integer(4), parameter      :: det=1, lstart=2, llen=3, gstart=4, glen=5, cuttype=6
+	integer(4) :: ci
+	real(4) :: foo(1)
+	do ci = 1, size(cuts,2)
+		call pmat_cut_range(0, foo, foo, cuts(cuttype:,ci), cuts(llen,ci), cuts(glen,ci))
+	end do
+end subroutine
+
+! This handles the cut samples in the tod. It implements
+! several different kinds of cut, which allow tradeoffs between
+! memory use, speed and accuracy, given by cuttype. The possibilities
+! are:
+!   1: full cuts
+!   2: binned cuts with bin-size given by cuttype(2)
+!   3: exponential cuts: high-res near edges, low-res in middle
+! cutglob must point at the first position in junk for
+! this cut range. If we didn't parallelize, then cutglob
+! could just be initialized at 1, but when paralellizing over
+! detectors we need to know how long the junk portion for
+! each detector for each scan is. The easiest way to get
+! that is to just run pmat_cut for each cut range once
+! and for all, to establish the inital cutglob values.
+subroutine pmat_cut_range(dir, tod, junk, cuttype, ilen, olen)
+	implicit none
+	integer(4), intent(in)    :: cuttype(:), dir
+	integer(4), intent(in),  optional :: ilen
+	integer(4), intent(out), optional :: olen
+	real(4),    intent(inout) :: junk(:), tod(:)
+	integer(4) :: si, w, bi, si2, si3, n, ol
+	n = size(tod)
+	if(present(ilen)) n = ilen
+	ol = 0
+	select case(cuttype(1))
+	case(0)
+		! Ignore the cut samples. This is usually inconsistent. Use with care.
+		continue
+	case(1)
+		! Full resolution cuts. All cut samples are stored.
+		if(dir < 0) then
+			junk = tod
+		elseif(dir > 0) then
+			tod = junk
+		end if
+		ol = n
+	case(2)
+		! Downgraded cuts. Cut area stored in bins of constant width.
+		w = cuttype(2)
+		do bi = 1, (n-1)/w
+			ol = ol+1
+			if(dir < 0) then
+				junk(ol) = mean(tod((bi-1)*w+1:bi*w))
+			elseif(dir > 0) then
+				tod((bi-1)*w+1:bi*w) = junk(ol)
+			end if
+		end do
+		ol = ol+1
+		if(dir < 0) then
+			junk(ol) = mean(tod((bi-1)*w+1:n))
+		elseif(dir < 0) then
+			tod((bi-1)*w+1:n) = junk(ol)
+		end if
+	case(3)
+		! Exponential cuts. Full resolution near edges, low in the middle,
+		! with bin size doubling with distance to edge.
+		! Left edge
+		w  = 1
+		si = 1
+		do while(si+w < (n+1)/2)
+			ol = ol+1
+			if(dir < 0) then
+				junk(ol) = mean(tod(si:si+w-1))
+			elseif(dir > 0) then
+				tod(si:si+w-1) = junk(ol)
+			end if
+			si            = si+w
+			w             = w*2
+		end do
+		! Right edge
+		w   = 1
+		si2 = 1
+		do while(si2+w < (n+1)/2)
+			ol  = ol+1
+			si3 = n-si2+1
+			if(dir < 0) then
+				junk(ol) = mean(tod(si3-w+1:si3))
+			elseif(dir > 0) then
+				tod(si3-w+1:si3) = junk(ol)
+			end if
+			si2           = si2+w
+			w             = w*2
+		end do
+		ol  = ol+1
+		si3 = n-si2+1
+		! Middle
+		if(dir < 0) then
+			junk(ol)   = mean(tod(si:si3))
+		elseif(dir > 0) then
+			tod(si:si3) = junk(ol)
+		end if
+	end select
+	! These samples have been handled, so remove them so that
+	! the map pmats do not use them again.
+	if(dir < 0 .and. cuttype(1) .ne. 0) tod = 0
+	if(present(olen)) olen = ol
+end subroutine
+
+pure function mean(a)
+	implicit none
+	real(4), intent(in)  :: a(:)
+	real(4)              :: mean
+	mean = sum(a)/size(a)
+end function
+
 end module
