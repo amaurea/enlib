@@ -1,5 +1,5 @@
 """This is a convenience wrapper of pyfftw."""
-import numpy as np, pyfftw, multiprocessing, os
+import numpy as np, pyfftw, multiprocessing, os, enlib.utils
 
 try:
 	nthread_fft = int(os.environ['OMP_NUM_THREAD'])
@@ -97,6 +97,9 @@ def ichebt(a, b=None, nthread=0):
 	a = asfcarray(a).copy()
 	a[1:-1] *= 0.5
 	return redft00(a, b, nthread)
+
+def fft_len(n, factors=[2,3,5,7,11,13]):
+	return enlib.utils.nearest_product(n, factors)
 
 def asfcarray(a):
 	a = np.asarray(a)

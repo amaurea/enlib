@@ -213,6 +213,22 @@ def cumsum(a, endpoint=False):
 	res = np.concatenate([[0],np.cumsum(a)])
 	return res if endpoint else res[:-1]
 
+def nearest_product(n, factors):
+	"""Compute the highest product of positive integer powers of the specified
+	factors that is lower than or equal to n. This is done using a simple,
+	O(n) brute-force algorithm."""
+	a = np.zeros(n+1,dtype=bool)
+	a[1] = True
+	best = 1
+	for i in xrange(n+1):
+		if not a[i]: continue
+		for f in factors:
+			m = i*f
+			if m > n: continue
+			a[m] = True
+			best = m
+	return best
+
 def mkdir(path):
 	try:
 		os.makedirs(path)
