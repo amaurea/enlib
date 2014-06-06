@@ -7,8 +7,12 @@ The reason for allowing the other argument to be modified is to make it easier
 to incrementally project different parts of the signal.
 """
 import numpy as np
-from enlib import enmap, interpol, utils, coordinates
+from enlib import enmap, interpol, utils, coordinates, config
 from pmat_core import pmat_core
+
+config.default("pmat_map_order",      0, "The interpolation order of the map pointing matrix.")
+config.default("pmat_cut_type",  "full", "The cut sample representation used. 'full' uses one degree of freedom for each cut sample. 'bin:N' uses one degree of freedom for every N samples. 'exp' used one degree of freedom for the first sample, then one for the next two, one for the next 4, and so on, giving high resoultion at the edges of each cut range, and low resolution in the middle.")
+config.default("map_eqsys",       "equ", "The coordinate system of the maps. Can be eg. 'hor', 'equ' or 'gal'.")
 
 class PointingMatrix:
 	def forward(self, tod, m): raise NotImplementedError
@@ -17,7 +21,10 @@ class PointingMatrix:
 class PmatMap(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation.
 	20 times faster than the slower python+numpy implementation below."""
-	def __init__(self, scan, template, sys="equ", order=0):
+	def __init__(self, scan, template, sys=None, order=None):
+		sys   = config.get("map_eqsys",      sys)
+		order = config.get("pmat_map_order", order)
+
 		box = np.array(scan.box); box[1] += (box[1]-box[0])*1e-3 # margin to avoid rounding errors
 		ipol = interpol.build(pos2pix(scan,template,sys), interpol.ip_linear, box, [1e-3,1e-3,utils.arcsec,utils.arcsec])
 		self.rbox = ipol.box
@@ -29,7 +36,7 @@ class PmatMap(PointingMatrix):
 		# The disadvantage is that the ordering becomes awkard at higher order.
 		n = self.rbox.shape[1]
 		self.ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
-		self.ys = np.rollaxis(self.ys.reshape(self.ys.shape[:2]+(-1,)),-1).astype(np.float32)
+		self.ys = np.rollaxis(self.ys.reshape(self.ys.shape[:2]+(-1,)),-1).astype(template.dtype)
 		self.comps= np.arange(template.shape[0])
 		self.scan  = scan
 		self.order = order
@@ -49,7 +56,8 @@ class PmatMapSlow(PointingMatrix):
 	pointing matrix. Very slow - not meant for serious use. It's interesting
 	as an example of how a reasonable python-only implementation would
 	perform. Uses trilinear interpolation for coordinates."""
-	def __init__(self, scan, template, sys="equ"):
+	def __init__(self, scan, template, sys=None):
+		sys = config.get("map_eqsys", sys)
 		# Build interpolator between scan coordinates and
 		# template map coordinates.
 		self.ipol = interpol.build(pos2pix(scan,template,sys), interpol.ip_linear, scan.box, [1e-3,1e-3,utils.arcsec,utils.arcsec], order=1)
@@ -75,7 +83,8 @@ class PmatMapSlow(PointingMatrix):
 class PmatCut(PointingMatrix):
 	"""Implementation of cuts-as-extra-degrees-of-freedom for a single
 	scan."""
-	def __init__(self, scan, params="full"):
+	def __init__(self, scan, params=None):
+		params = config.get("pmat_cut_type", params)
 		neach, flat = scan.cut.flatten()
 		dets = np.concatenate([np.zeros(n,dtype=int)+i for i,n in enumerate(neach)])
 		par  = np.array(self.parse_params(params))
