@@ -42,6 +42,9 @@ from mpi4py import MPI
 # This lower layer will be tied to maps etc. while the upper level
 # is a general abstraction. Built from these.
 
+# FIXME: This file should be named map_equation.py, and should represent
+# everything we need about the map-maker equation.
+
 def reduce(a, comm=MPI.COMM_WORLD):
 	res = a.copy()
 	comm.Allreduce(a, res)
