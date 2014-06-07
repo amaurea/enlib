@@ -119,60 +119,6 @@ def makemask(div):
 	return masks
 
 
-class ArrayZip:
-	"""ArrayZip converts between a set of optionally masked array-likes and
-	a plain 1-dimensional array with all the unmasked values concatenated. This
-	is useful for solving equation systems where elements of various arrays
-	enter as degrees of freedom."""
-	def __init__(self, *args):
-		"""ArrayZip(info, info, info, ...), where info is either:
-			1. shape, where shape is a valid array shape as accepted by np.zeros.
-			2. boolean array of the same shape etc. as the one the flatterner will be
-				used with later. This form has the advantage of resulting in an .expand()
-				which uses the correct array subclass. This array also acts as a mask:
-				False elements will be ignored when flattening."""
-		self.masks  = []
-		self.shapes = []
-		self.sizes  = []
-		self.r      = []
-		n = 0
-		for a in args:
-			a = np.atleast_1d(a)
-			if a.dtype == bool:
-				self.masks.append(a)
-				self.shapes.append(a.shape)
-				m = np.sum(a)
-			else:
-				assert a.ndim == 1
-				self.masks.append(None)
-				self.shapes.append(tuple(a))
-				m = np.prod(a)
-			self.r.append([n,n+m])
-			self.sizes.append(m)
-			n += m
-		self.r = np.asarray(self.r)
-		self.n = n
-	def zip(self, *args):
-		"""x = flatterner.flatten(arr1, arr2, ...)."""
-		args = [np.asarray(a) for a in args]
-		res = np.empty(self.n, args[0].dtype)
-		for r, mask, arg in zip(self.r, self.masks, args):
-			targ = res[r[0]:r[1]]
-			targ[...] = arg[mask] if mask is not None else arg
-		return res
-	def unzip(self, x):
-		"""arr1, arr2, ... = flattener.expand(x)"""
-		res = []
-		for r, mask, shape in zip(self.r, self.masks, self.shapes):
-			source = x[r[0]:r[1]]
-			if mask is not None:
-				a = mask.astype(x.dtype)
-				a[mask] = source
-				res.append(a)
-			else:
-				res.append(source.copy().reshape(shape))
-		return tuple(res)
-
 		# And the preconditioner
 		# FIXME: Here we encounter the problem that some preconditioners
 		# require a working A-operator to work. Since I need the preconditioner
