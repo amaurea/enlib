@@ -29,7 +29,8 @@ def common_inds(arrs):
 	inter = arrs[0]
 	for arr in arrs[1:]:
 		inter = np.lib.arraysetops.intersect1d(inter,arr)
-	return [np.where(np.in1d(arr,inter))[0] for arr in arrs]
+	# There should be a faster way of doing this
+	return [np.array([np.where(arr==i)[0][0] for i in inter]) for arr in arrs]
 
 def dict_apply_listfun(dict, function):
 	"""Applies a function that transforms one list to another

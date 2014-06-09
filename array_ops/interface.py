@@ -22,7 +22,6 @@ def gen_wrap2(fun32, fun64):
 
 def gen_wrap1(fun32, fun64):
 	def f(A,axes=[-2,-1]):
-		print axes
 		axes = [i if i >= 0 else A.ndim+i for i in axes]
 		b  = utils.moveaxes(A,axes,[0,1])[0,0].copy()
 		Af = utils.partial_flatten(A,axes)

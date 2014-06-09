@@ -1,21 +1,34 @@
-"""This module represents an abstract interface for linear systems, which
-encapsulates all the information needed to define and solve it, presenting
-a uniform interface that various solution methods can use."""
-import numpy as np
-from enlib import pmat, config
+"""This module represents the map-making equation P'N"Px = P'N"d.
+At this level of abstraction, we still deal mostly with maps and cuts etc.
+directly."""
+import numpy as np, bunch, time
+from enlib import pmat, config, nmat, enmap, array_ops
+from enlib.degrees_of_freedom import DOF
 from mpi4py import MPI
 
-#class LinearSystem:
-#	def A(self): raise NotImplementedError
-#	def M(self): raise NotImplementedError
-#	def b(self): raise NotImplementedError
-#	@parameter
-#	def dot(self, x, y): raise NotImplementedError
-#	def expand(self, x): raise NotImplementedError
-#	def flatten(self, params): raise NotImplementedError
-#	def level(self): return 0
-#	def up(self, x=None): raise NotImplementedError
-#	def down(self): raise NotImplementedError
+class LinearSystem:
+	def A(self): raise NotImplementedError
+	def M(self): raise NotImplementedError
+	def b(self): raise NotImplementedError
+	def dot(self, x, y): raise NotImplementedError
+	def expand(self, x): raise NotImplementedError
+	def flatten(self, params): raise NotImplementedError
+	def level(self): return 0
+	def up(self, x=None): raise NotImplementedError
+	def down(self): raise NotImplementedError
+
+# Abstract interface to the Map-making system.
+class LinearSystemMap(LinearSystem):
+	def __init__(self, scans, area, comm=MPI.COMM_WORLD):
+		self.mapeq  = MapEquation(scans, area, comm=comm)
+		self.precon = PrecondBinned(self.mapeq)
+		self.mask   = self.precon.mask
+		self.dof    = DOF({"shared":self.mask},{"distributed":self.mapeq.njunk})
+		self.b      = self.dof.zip(*self.mapeq.b())
+	def A(self, x):
+		return self.dof.zip(*self.mapeq.A(*self.dof.unzip(x)))
+	def M(self, x):
+		return self.dof.zip(*self.precon.apply(*self.dof.unzip(x)))
 
 # FIXME: How should I get the noise matrix? As an argument?
 # Should it already be measured, or should it be measured internally?
@@ -45,64 +58,73 @@ from mpi4py import MPI
 # FIXME: This file should be named map_equation.py, and should represent
 # everything we need about the map-maker equation.
 
-def reduce(a, comm=MPI.COMM_WORLD):
-	res = a.copy()
-	comm.Allreduce(a, res)
-	return res
-
-class MapSystem:
+class MapEquation:
 	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None):
 		data = []
 		njunk = 0
 		for scan in scans:
 			d = bunch.Bunch()
 			d.scan = scan
-			d.pmap = PmatMap(scan, area, order=pmat_order, sys=eqsys)
-			d.pcut = PmatCut(scan, cut_type)
+			d.pmap = pmat.PmatMap(scan, area, order=pmat_order, sys=eqsys)
+			d.pcut = pmat.PmatCut(scan, cut_type)
 			d.cutrange = [njunk,njunk+d.pcut.njunk]
 			njunk = d.cutrange[1]
-			# For this to work, NmatDetvecs must be available in enlib
-			d.nmat = NmatDetvecs(scan)
+			# This should be configurable
+			d.nmat = nmat.NmatDetvecs(scan.noise)
 			data.append(d)
 		self.area = area.copy()
 		self.njunk = njunk
 		self.dtype = area.dtype
 		self.comm  = comm
+		self.data  = data
 	def b(self):
 		rhs_map  = enmap.zeros(self.area.shape, self.area.wcs, dtype=self.dtype)
 		rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
-		for d in data:
+		for d in self.data:
 			tod = d.scan.get_samples()
+			tod-= np.mean(tod,1)[:,None]
+			tod = tod.astype(self.dtype)
+			d.nmat.apply(tod)
 			d.pmap.backward(tod,rhs_map)
 			d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
 		return reduce(rhs_map, self.comm), rhs_junk
 	def A(self, map, junk, white=False):
+		t1 = time.time()
 		map, junk = map.copy(), junk.copy()
-		for d in data:
+		omap, ojunk = map*0, junk*0
+		t2 = time.time()
+		for d in self.data:
 			tod = np.empty([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
+			t3 = time.time()
 			d.pmap.forward(tod,map)
-			d.pcut.forward(tod,junk)
+			t4 = time.time()
+			d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
+			t5 = time.time()
 			if white:
 				d.nmat.white(tod)
 			else:
 				d.nmat.apply(tod)
-			d.pcut.backward(tod,junk)
-			d.pcut.backward(tod,map)
-		return reduce(map, self.comm), junk
+			t6 = time.time()
+			d.pcut.backward(tod,junk[d.cutrange[0]:d.cutrange[1]])
+			t7 = time.time()
+			d.pmap.backward(tod,omap)
+			t8 = time.time()
+		print "i: %4.1f t: %4.1f mf: %4.1f jf: %4.1f n: %4.1f jb: %4.1f mb: %4.1f" % (t2-t1,t3-t2,t4-t3,t5-t4,t6-t5,t7-t6,t8-t7)
+		return reduce(omap, self.comm), ojunk
 	def white(self, map, junk):
 		return self.A(map, junk, white=True)
 
 class PrecondBinned:
-	def __init__(self, system):
-		ncomp     = system.area.shape[0]
+	def __init__(self, mapeq):
+		ncomp     = mapeq.area.shape[0]
 		# Compute the per pixel approximate inverse covmat
-		div_map   = enmap.zeros((ncomp,ncomp)+system.area.shape[1:],system.area.wcs, system.area.dtype)
-		div_junk  = np.zeros(system.njunk, dtype=system.area.dtype)
+		div_map   = enmap.zeros((ncomp,ncomp)+mapeq.area.shape[1:],mapeq.area.wcs, mapeq.area.dtype)
+		div_junk  = np.zeros(mapeq.njunk, dtype=mapeq.area.dtype)
 		for ci in range(ncomp):
 			div_map[ci,ci] = 1
 			div_junk[...]  = 1
-			div_map[ci], div_junk = system.white(div_map[ci], div_junk)
-		self.div_map, self.div_junk = reduce(div_map, system.comm), div_junk
+			div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
+		self.div_map, self.div_junk = reduce(div_map, mapeq.comm), div_junk
 		# Compute the pixel component masks, and use it to mask out the
 		# corresonding parts of the map preconditioner
 		self.mask = makemask(self.div_map)
@@ -121,12 +143,7 @@ def makemask(div):
 	masks[1:] = pmask[None]
 	return masks
 
-
-		# And the preconditioner
-		# FIXME: Here we encounter the problem that some preconditioners
-		# require a working A-operator to work. Since I need the preconditioner
-		# to define a MapSystem, I need to be able to initialize an A-operator
-		# independently of it to get the prconditioner first.
-
-
-
+def reduce(a, comm=MPI.COMM_WORLD):
+	res = a.copy()
+	comm.Allreduce(a, res)
+	return res

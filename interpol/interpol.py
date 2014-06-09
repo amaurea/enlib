@@ -41,7 +41,6 @@ def build(func, interpolator, box, errlim, maxdepth=None, *args, **kwargs):
 				if np.any(np.isnan(ytrue)):
 					raise ValueError("Function to interpolate returned invalid value")
 				err = np.std((ytrue-yinter).reshape(ytrue.shape[0],-1), 1)
-				print depth, err, ytrue.shape
 				if any(err > errlim):
 					# Not good enough, so accept improvement
 					ip = interpolator(box, ytrue, *args, **kwargs)
