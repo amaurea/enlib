@@ -89,27 +89,19 @@ class MapEquation:
 			d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
 		return reduce(rhs_map, self.comm), rhs_junk
 	def A(self, map, junk, white=False):
-		t1 = time.time()
 		map, junk = map.copy(), junk.copy()
 		omap, ojunk = map*0, junk*0
-		t2 = time.time()
 		for d in self.data:
 			tod = np.empty([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
-			t3 = time.time()
 			d.pmap.forward(tod,map)
-			t4 = time.time()
 			d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
-			t5 = time.time()
 			if white:
 				d.nmat.white(tod)
 			else:
 				d.nmat.apply(tod)
-			t6 = time.time()
-			d.pcut.backward(tod,junk[d.cutrange[0]:d.cutrange[1]])
-			t7 = time.time()
+			d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
 			d.pmap.backward(tod,omap)
-			t8 = time.time()
-		print "i: %4.1f t: %4.1f mf: %4.1f jf: %4.1f n: %4.1f jb: %4.1f mb: %4.1f" % (t2-t1,t3-t2,t4-t3,t5-t4,t6-t5,t7-t6,t8-t7)
+		print np.std(omap), np.std(ojunk)
 		return reduce(omap, self.comm), ojunk
 	def white(self, map, junk):
 		return self.A(map, junk, white=True)

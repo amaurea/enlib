@@ -35,9 +35,9 @@ class CG:
 		self.M   = M
 		self.dot = dot
 		if x0 == None:
-			self.x = np.zeros(b.shape)
+			self.x = b*0
 		else:
-			self.x   = np.copy(x0)
+			self.x   = x0.copy()
 		# Internal work variables
 		n = b.size
 		self.r   = b-self.A(self.x)
