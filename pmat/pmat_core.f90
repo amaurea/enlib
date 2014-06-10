@@ -171,6 +171,7 @@ subroutine pmat_linear( &
 					pix(2,j) = min(size(map,1),max(2,pix(2,j)))
 				end do
 				do j = 1, nj
+					phase(:,j) = phase(:,j) * tod(si+j-1,di)
 					py = pix(2,j); px = pix(1,j)
 					wmap(py-0,px-0,:,id) = wmap(py-0,px-0,:,id) + (1 + fpix(1,j)*fpix(2,j) - fpix(1,j)-fpix(2,j))*phase(:,j)
 					wmap(py-1,px-0,:,id) = wmap(py-1,px-0,:,id) + (fpix(1,j)*(1-fpix(2,j)))*phase(:,j)
