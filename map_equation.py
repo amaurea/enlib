@@ -101,7 +101,6 @@ class MapEquation:
 				d.nmat.apply(tod)
 			d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
 			d.pmap.backward(tod,omap)
-		print np.std(omap), np.std(ojunk)
 		return reduce(omap, self.comm), ojunk
 	def white(self, map, junk):
 		return self.A(map, junk, white=True)

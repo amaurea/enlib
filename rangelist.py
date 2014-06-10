@@ -54,6 +54,7 @@ class Rangelist:
 		res = np.zeros(self.n,dtype=bool)
 		for r1,r2 in self.ranges: res[r1:r2] = True
 		return res
+	def clear(self): self.ranges = self.ranges[0:0]
 
 class Multirange:
 	"""Multirange makes it easier to work with large numbers of rangelists.
@@ -101,6 +102,8 @@ class Multirange:
 		for i, d in enumerate(dflat):
 			res[i] = d.to_mask()
 		return res.reshape(self.data.shape+(-1,))
+	def clear(self):
+		for d in self.data: d.clear()
 
 def slice_helper(ranges, sel):
 	"""Helper function for rangelist slicing. Gets an expanded slice with positive

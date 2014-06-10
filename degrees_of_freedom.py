@@ -82,7 +82,7 @@ class DOF:
 		except that distributed arrays are properly reduced."""
 		res = [0,0]
 		for r, dist in zip(self.r, self.dist):
-			res[dist] += np.sum(x[r[0]:r[1]]*x[r[0]:r[1]])
+			res[dist] += np.sum(x[r[0]:r[1]]*y[r[0]:r[1]])
 		if self.comm is None:
 			return np.sum(res)
 		else:

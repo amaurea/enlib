@@ -93,7 +93,8 @@ class PmatCut(PointingMatrix):
 		self.cuts[:,1] = flat[:,0]
 		self.cuts[:,2] = flat[:,1]-flat[:,0]
 		self.cuts[:,5:]= par[None,:]
-		pmat_core.measure_cuts(self.cuts.T)
+		if self.cuts.size > 0:
+			pmat_core.measure_cuts(self.cuts.T)
 		self.cuts[:,3] = utils.cumsum(self.cuts[:,4])
 		# njunk is the number of cut parameters for *this scan*
 		self.njunk  = np.sum(self.cuts[:,4])
@@ -102,14 +103,16 @@ class PmatCut(PointingMatrix):
 	def forward(self, tod, junk):
 		"""Project from the cut parameter (junk) space for this scan
 		to tod."""
-		pmat_core.pmat_cut( 1, tod.T, junk, self.cuts.T)
+		if self.cuts.size > 0:
+			pmat_core.pmat_cut( 1, tod.T, junk, self.cuts.T)
 	def backward(self, tod, junk):
 		"""Project from tod to cut parameters (junk) for this scan.
 		This is meant to be called before the map projection, and
 		removes the cut samples from the tod at the same time,
 		replacing them with zeros. That way the map projection can
 		be done without needing to care about the cuts."""
-		pmat_core.pmat_cut(-1, tod.T, junk, self.cuts.T)
+		if self.cuts.size > 0:
+			pmat_core.pmat_cut(-1, tod.T, junk, self.cuts.T)
 	def parse_params(self,params):
 		toks = params.split(":")
 		kind = toks[0]
