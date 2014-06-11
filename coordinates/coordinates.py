@@ -36,6 +36,14 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 		phiscale   = np.cos(ocoord1[1]*unit.in_units(u.rad))
 		ocoord[2]  = np.arctan2(diff[1],diff[0]*phiscale) / unit.in_units(u.rad)
 		if len(coords) >= 3: ocoord[2] += coords[2]
+		# We use the HEALPix left-handed polarization convention, so take that
+		# into account
+		ihand = get_handedness(from_sys)
+		ohand = get_handedness(to_sys)
+		if ihand != ohand:
+			ocoord[2] = ocoord[2]-np.pi / unit.in_units(u.rad)
+		if ohand != 'L':
+			ocoord[2] = -ocoord[2]
 		return ocoord
 	if from_ref != None: coords = decenter(coords, from_ref, unit)
 	if from_sys != to_sys:
@@ -146,6 +154,11 @@ def decenter(angs, center, unit="rad"):
 def nohor(sys): return sys if sys != c.AltAz else c.ICRS
 def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,basestring) else sys
 def getunit(u): return str2unit[u.lower()] if isinstance(u,basestring) else u
+def get_handedness(sys):
+	"""Return the handedness of the coordinate system sys, as seen from inside
+	the celestial sphere, in the standard IAU convention."""
+	if sys in [c.AltAz]: return 'R'
+	else: return 'L'
 
 def getsys_full(sys, unit="deg", time=None, site=None):
 	"""Handles our expanded coordinate system syntax: base[:ref[:refsys]].

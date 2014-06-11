@@ -193,9 +193,11 @@ def sky2pix(wcs, coords, safe=True, corner=False):
 	pix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
 	if corner: pix += 0.5
 	if safe:
+		# Avoid angle cuts inside the map. Place the cut at the
+		# opposite side of the sky relative to the zero pixel
 		for i in range(len(pix)):
 			n = np.abs(360./wcs.wcs.cdelt[i])
-			pix[i] = enlib.utils.rewind(pix[i], n/2, n)
+			pix[i] = enlib.utils.rewind(pix[i], 0, n)
 	return pix[::-1].reshape(coords.shape)
 
 def project(map, shape, wcs, order=3, mode="nearest"):

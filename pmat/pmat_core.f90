@@ -268,6 +268,79 @@ function lookup_grad(ipoint, x0, inv_dx, steps, ys) result(opoint)
 	end if
 end function
 
+! This function computes the projection of the polarization degrees
+! of freedom on a TOD sample, such that tod = sum(map*phase)
+! det_comps is the sensitivity of the detector to each degree of
+! freedom in its own coordinate system, while cossin represents
+! cos2psi and sin2psi of the rotation *from* detector coorinates
+! *to* map-space.
+!
+! We can look at this two ways.
+!  1. Rotate the detector sensitivities to map space: sum(map*rot(comps))
+!      oQ = c iQ - s iU
+!      oU = s iQ + c iU
+!  2. Rotate the map to detector coordinates, and then dot them
+!     sum(irot(map)*comps). Here, irot would be the inverse rotation
+!     of the one indicated by cossin. This is equivalent to the one
+!     above because R" = R'.
+!
+! This would result in the implementation
+!  if(comps(i) == 1) phase(i,j) = cossin(1,j)*det_comps(2) - cossin(2,j)*det_comps(3)
+!  if(comps(i) == 2) phase(i,j) = cossin(2,j)*det_comps(2) + cossin(1,j)*det_comps(3)
+!
+! However, we've instead been using what amounts to
+!  oQ = c iQ + s iU
+!  oU = s iQ - c iU
+! This had a sign error in U, which makes sense. But after correcting
+! for that, we get
+!  oQ = c iQ + s iU
+!  oU =-s iQ + c iU
+! That represents the opposite rotation from what one would expect:
+! If the map system in rotated by +45 degrees compared to the detector
+! system (making c=0 and s=1), then a detector with sensitivity (1,0)
+! in its own system would have sensitivity (0,1) in the map system,
+! but with this formula, we get (0,-1).
+!
+! The source of all these sign problems is the handedness of the various
+! coordinate systems. There are *four* coorindate systems involved:
+!  1. The input coordinate system
+!  2. The input polarization system
+!  3. The output coordinate system
+!  4. The output polarization system
+! All of these can be right-handed or left-handed, and can have their
+! axes pointing in various directions. For the polarization coordinate
+! systems, we will use the HEALPix convention, where the local polarization
+! system is always left-handed (as seen from inside the celestial sphere)
+! with x pointing in the theta-direction, i.e. towards the *south*.
+!
+! For normal coordinates, we will still use the IAU convention. It's tempting
+! to use HEALPix here too, as that would make all coordinates be treaded uniformly,
+! but it tends to confuse people, and requires a lot of wrapping of the underlying
+! libraries.
+!
+! When we fix the pol systems to be left-handed, the remaining possiblities are
+!  R->R: psi-phi
+!  L->R: psi-phi+pi
+!  R->L: psi+phi-pi
+!  L->L: psi+phi
+! So basically:
+!  1. If the two axis systems have different handedness, phi -> phi-pi,
+!     because the axis has been moved by pi.
+!  2. If the target axis system has different handedness than the pol systems, phi -> -phi,
+!     becuase this system determines the direction we are measuring phi in, and the sign
+!     changes if this direction is not the same as the polarization angle direction.
+!  3. psi -> psi+phi
+!
+! For our typical case, of Healpix pol (left) and hor (right) -> equ (left), we
+! get psi -> psi+phi-pi. While in our previous implementation, were we used IAU
+! convention (right) for pol angles, we had psi -> psi-(phi-pi), which is
+! consistent with the code. So I think I've understood how this works now.
+!
+! How to handle this in general? I'm willing to hardcode the Healpix convention
+! for polarization angles, but for the rest, we need to detect the handedness of
+! the input and output coordinate systems, not just their relative handedness.
+! This seems like a tall order. Handedness will have to be specified per system.
+
 pure function get_phase(comps, det_comps, cossin) result(phase)
 	implicit none
 	integer(4), intent(in) :: comps(:)
@@ -277,13 +350,12 @@ pure function get_phase(comps, det_comps, cossin) result(phase)
 	do j = 1, size(cossin,2)
 		do i = 1, size(phase,1)
 			if(comps(i) == 0) phase(i,j) = det_comps(1)
-			if(comps(i) == 1) phase(i,j) = det_comps(2)*cossin(1,j) + det_comps(3)*cossin(2,j)
-			if(comps(i) == 2) phase(i,j) =+det_comps(2)*cossin(2,j) - det_comps(3)*cossin(1,j)
+			if(comps(i) == 1) phase(i,j) = cossin(1,j)*det_comps(2) - cossin(2,j)*det_comps(3)
+			if(comps(i) == 2) phase(i,j) = cossin(2,j)*det_comps(2) + cossin(1,j)*det_comps(3)
 			if(comps(i) == 3) phase(i,j) = det_comps(4)
 		end do
 	end do
 end function
-
 
 ! Simple cut scheme: a simple array of ({det,lstart,len,gstart,glen,type,params...},ncut)
 ! This is very flexible, allowing each cut to be processed independently and with
