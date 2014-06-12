@@ -86,7 +86,6 @@ class Scan:
 		res.offsets   = np.ascontiguousarray(res.offsets[detslice])
 		res.comps     = np.ascontiguousarray(res.comps[detslice])
 		res.cut       = res.cut[sel]
-		res.dets      = res.dets[detslice]
 		return res, detslice, sampslice
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)

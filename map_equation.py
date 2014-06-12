@@ -25,10 +25,42 @@ class LinearSystemMap(LinearSystem):
 		self.mask   = self.precon.mask
 		self.dof    = DOF({"shared":self.mask},{"distributed":self.mapeq.njunk})
 		self.b      = self.dof.zip(*self.mapeq.b())
+		self.scans, self.area, self.comm = scans, area, comm
+		# Store a copy of the next level, which
+		# we will use when going up and down in levels.
+		self._upsys = None
 	def A(self, x):
 		return self.dof.zip(*self.mapeq.A(*self.dof.unzip(x)))
 	def M(self, x):
 		return self.dof.zip(*self.precon.apply(*self.dof.unzip(x)))
+	def dot(self, x, y): return self.dof.dot(x,y)
+	@property
+	def upsys(self):
+		if self._upsys is None:
+			# Produce a downgraded equation set, where spatial
+			# and temporal resolution is halved.
+			scans = [scan[:,::2] for scan in self.scans]
+			area  = self.area[:,::2,::2]
+			self._upsys = LinearSystemMap(scans, area, self.comm)
+		return self._upsys
+	def up(self, x):
+		# Downgrade the vector x.
+		hmap, hjunk = self.dof.unzip(x)
+		lmap, ljunk = self.upsys.dof.unzip(np.empty(self.upsys.dof.n,dtype=x.dtype))
+		pmat.PmatMapRebin().forward(hmap,lmap)
+		for hdata, ldata in zip(self.mapeq.data, self.upsys.mapeq.data):
+			rebin = pmat.PmatCutRebin(hdata.pcut, ldata.pcut)
+			rebin.forward(hjunk[hdata.cutrange[0]:hdata.cutrange[1]], ljunk[ldata.cutrange[0]:ldata.cutrange[1]])
+		return self.upsys.dof.zip(lmap,ljunk)
+	def down(self, x):
+		# Upgrade the vector x to the resolution of the current level
+		hmap, hjunk = self.dof.unzip(np.empty(self.dof.n,dtype=x.dtype))
+		lmap, ljunk = self.upsys.dof.unzip(x)
+		pmat.PmatMapRebin().backward(hmap,lmap)
+		for hdata, ldata in zip(self.mapeq.data, self.upsys.mapeq.data):
+			rebin = pmat.PmatCutRebin(hdata.pcut, ldata.pcut)
+			rebin.backward(hjunk[hdata.cutrange[0]:hdata.cutrange[1]], ljunk[ldata.cutrange[0]:ldata.cutrange[1]])
+		return self.dof.zip(hmap,hjunk)
 
 # FIXME: How should I get the noise matrix? As an argument?
 # Should it already be measured, or should it be measured internally?
@@ -54,9 +86,6 @@ class LinearSystemMap(LinearSystem):
 # underlying A(map,junk), M(map), M(junk), etc.
 # This lower layer will be tied to maps etc. while the upper level
 # is a general abstraction. Built from these.
-
-# FIXME: This file should be named map_equation.py, and should represent
-# everything we need about the map-maker equation.
 
 class MapEquation:
 	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None):

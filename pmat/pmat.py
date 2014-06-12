@@ -133,3 +133,19 @@ class pos2pix:
 		opix[2]  = np.cos(2*opos[2])
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)
+
+class PmatMapRebin(PointingMatrix):
+	"""Fortran-accelerated rebinning of maps."""
+	def forward (self, mhigh, mlow):
+		pmat_core.pmat_map_rebin( 1, mhigh.T, mlow.T)
+	def backward(self, mhigh, mlow):
+		pmat_core.pmat_map_rebin(-1, mhigh.T, mlow.T)
+
+class PmatCutRebin(PointingMatrix):
+	"""Fortran-accelerated rebinning of cut data."""
+	def __init__(self, pmat_cut_high, pmat_cut_low):
+		self.cut_high, self.cut_low = pmat_cut_high.cuts, pmat_cut_low.cuts
+	def forward (self, jhigh, jlow):
+		pmat_core.pmat_cut_rebin( 1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
+	def backward(self, jhigh, jlow):
+		pmat_core.pmat_cut_rebin(-1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
