@@ -515,8 +515,8 @@ contains
 				do lx = 0, size(map_low,1)-1
 					n = 0
 					val = 0
-					do hy = ly*step, min((ly+1)*step-1,size(map_high,2))
-						do hx = lx*step, min((lx+1)*step-1,size(map_high,1))
+					do hy = ly*step, min((ly+1)*step,size(map_high,2))-1
+						do hx = lx*step, min((lx+1)*step,size(map_high,1))-1
 							val = val + map_high(hx+1,hy+1,:)
 							n   = n + 1
 						end do
@@ -528,8 +528,8 @@ contains
 			!$omp parallel do collapse(2) private(ly,lx,hy,hx)
 			do ly = 0, size(map_low,2)-1
 				do lx = 0, size(map_low,1)-1
-					do hy = ly*step, min((ly+1)*step-1,size(map_high,2))
-						do hx = lx*step, min((lx+1)*step-1,size(map_high,1))
+					do hy = ly*step, min((ly+1)*step,size(map_high,2))-1
+						do hx = lx*step, min((lx+1)*step,size(map_high,1))-1
 							map_high(hx+1,hy+1,:) = map_low(lx+1,ly+1,:)
 						end do
 					end do
