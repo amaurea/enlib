@@ -48,6 +48,50 @@ def oneoverf_noise(ndet, nsamp, sigma, seed=0, fknee=0.2, alpha=1):
 		sigma = sigma)
 	return noise
 
+def oneoverf_detcorr_noise(ndet, nsamp, sigma, seed=0, fknee=0.2, alpha=1, atm=10):
+	nmode = 1
+	nbin  = 1000
+	bins  = np.arange(nbin+1)*(nsamp/2+1)/nbin
+	bins  = np.ascontiguousarray([bins[:-1],bins[1:]]).T
+	freq  = np.arange(nbin)*1.0/nbin
+	freq += freq[0]/2
+	Nu    = np.zeros([nbin,ndet])+sigma**2*1e-10
+	E     = np.zeros([nbin,nmode])
+	E[:,0]= (freq/fknee)**-alpha * sigma**2
+	V     = np.zeros([nbin,ndet,1])
+	V[:,:,0] = ((2*(np.arange(ndet)%2)-1)*ndet**-0.5)[None,:]
+	res = prepare_params(bins, Nu, E, V)
+	res.seed = seed
+	return res
+
+def prepare_params(bins, Nu, E, V):
+	"""Return a Detvecs params object given measured diagonal noise Nu[nbin,ndet],
+	correlated eigenvalues E[nbin][nmode] and correlated modes V[nbin][ndet,nmode]
+	for the given bins[nbin,2]."""
+	vtmp = np.concatenate([[0],np.cumsum(np.array([len(e) for e in E]))])
+	vbins= np.array([vtmp[0:-1],vtmp[1:]]).T
+	E, V = np.hstack(E), np.hstack(V)
+	iNu  = np.array(1/Nu)
+	Q    = np.zeros(V.T.shape)
+	def eig_pow(A, p):
+		if A.size == 0: return A
+		e,v = np.linalg.eigh(A)
+		return v.dot(np.diag(e**p)).dot(v.T)
+	# Nu" - Nu"V(E"+V'Nu"V)"V'Nu" = Nu" - Q'Q
+	# Q = (E"+V'Nu"V)**-0.5 V'Nu
+	# Q[nvec,ndet]
+	for i, b in enumerate(vbins):
+		Vb, Eb, iNub = V[:,b[0]:b[1]], E[b[0]:b[1]], iNu[i]
+		VtNi   = Vb.T*iNub[None,:]
+		core   = np.diag(1/Eb) + VtNi.dot(Vb)
+		Q[b[0]:b[1],:] = eig_pow(core,-0.5).dot(VtNi)
+	return bunch.Bunch(
+		bins  = bins,
+		vbins = vbins,
+		iNu   = iNu,
+		Q     = Q)
+
+
 def scan_ceslike(nsamp, box, sys="equ", srate=100, azrate=0.123):
 	t = np.arange(nsamp,dtype=float)/srate
 	boresight = np.zeros([nsamp,3])
@@ -90,7 +134,7 @@ def nocut(ndet, nsamp):
 	return rangelist.Multirange([rangelist.Rangelist(np.zeros([0,2],dtype=int),n=nsamp) for i  in range(ndet)])
 
 class SimSrcs(scan.Scan):
-	def __init__(self, scanpattern, dets, srcs, noise):
+	def __init__(self, scanpattern, dets, srcs, noise, cache=False):
 		# Set up the telescope
 		self.boresight = scanpattern.boresight
 		self.sys       = scanpattern.sys
@@ -103,8 +147,12 @@ class SimSrcs(scan.Scan):
 		self.srcs  = srcs
 		self.noise = noise
 
+		if cache: self._tod = None
+
 	def get_samples(self):
 		# Start with the noise
+		if hasattr(self, "_tod") and self._tod is not None:
+			return self._tod.copy()
 		np.random.seed(self.noise.seed)
 		tod = np.random.standard_normal([self.ndet,self.nsamp]).astype(np.float32)
 		# Ad hoc support for non-detector correlations
@@ -120,6 +168,8 @@ class SimSrcs(scan.Scan):
 				r2 = np.sum((point-pos[None,:])**2,1)/beam**2
 				I  = np.where(r2 < 6**2)[0]
 				tod[di,I] += np.exp(-0.5*r2[I])*np.sum(amp*self.comps[di])
+		if hasattr(self, "_tod"):
+			self._tod = tod.copy()
 		return tod
 
 	def get_model(self, point):
