@@ -40,6 +40,7 @@ class PmatMap(PointingMatrix):
 		self.comps= np.arange(template.shape[0])
 		self.scan  = scan
 		self.order = order
+		self.dtype = template.dtype
 		if order == 0:
 			self.func = pmat_core.pmat_nearest
 		elif order == 1:
@@ -50,6 +51,19 @@ class PmatMap(PointingMatrix):
 		self.func( 1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 	def backward(self, tod, m):
 		self.func(-1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
+	def translate(self, bore=None, offs=None, comps=None):
+		"""Perform the coordinate transformation used in the pointing matrix without
+		actually projecting TOD values to a map."""
+		if bore  is None: bore  = self.scan.boresight
+		if offs  is None: offs  = self.scan.offsets[:1]*0
+		if comps is None: comps = self.scan.comps[:self.scan.offsets.shape[0]]*0
+		bore, offs, comps = np.asarray(bore), np.asarray(offs), np.asarray(comps)
+		nsamp, ndet, ncomp = bore.shape[0], offs.shape[0], comps.shape[1]
+		dtype = self.dtype
+		pix   = np.empty([ndet,nsamp,2],dtype=dtype)
+		phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
+		pmat_core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
+		return pix, phase
 
 class PmatMapSlow(PointingMatrix):
 	"""Reference implementation of the simple nearest neighbor

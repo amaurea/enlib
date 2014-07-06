@@ -9,13 +9,15 @@ def get_dtype_fun(funcs, dtype):
 		raise NotImplementedError("Only dtypes " + ", ".join([key for key in funcs]) + " implemented")
 
 dtype_map = { np.float32: "32", np.float64: "64", np.complex64: "c64", np.complex128: "c128" }
+# FIXME: These functions all operate on the transposed matrices, i.e. matmul(A,B) really does
+# matmul(A.T,B.T).T = matmul(B,A).
 def gen_wrap2(vec2mat=False, **funcs):
 	def f(A,b,axes=[-2,-1]):
 		axes = [i if i >= 0 else A.ndim+i for i in axes]
 		b  = b.copy()
 		Af = utils.partial_flatten(A,axes)
 		bf = utils.partial_flatten(b,axes[:len(axes)-(A.ndim-b.ndim)])
-		if vec2mat and bf.ndim == 2: bf = bf.reshape(bf.shape+(1,))
+		if vec2mat and bf.ndim == 2: bf = bf.reshape(bf.shape[:-1]+(1,bf.shape[-1]))
 		b2 = np.ascontiguousarray(bf)
 		assert A.dtype == b.dtype
 		fun = get_dtype_fun(funcs, A.dtype)

@@ -236,3 +236,22 @@ def mkdir(path):
 	except OSError as exception:
 		if exception.errno != errno.EEXIST:
 			raise
+
+def find_period(d, axis=-1):
+	"""This is a simple second-order estimate of the period of the
+	assumed-periodic signal d. It finds the frequency with the highest
+	power using an fft, and partially compensates for nonperiodicity
+	by taking a weighted mean of the position of the top."""
+	d2 = partial_flatten(d, [axis])
+	fd  = np.fft.rfft(d2)
+	ps = np.abs(fd)**2
+	ps[0] = 0
+	periods = []
+	for p in ps:
+		n = np.argmax(p)
+		r = [int(n*0.5),int(n*1.5)+1]
+		denom = np.sum(p[r[0]:r[1]])
+		if denom <= 0: denom = 1
+		n2 = np.sum(np.arange(r[0],r[1])*p[r[0]:r[1]])/denom
+		periods.append(float(d.shape[axis])/n2)
+	return np.array(periods).reshape(d.shape[:axis]+d.shape[axis:][1:])

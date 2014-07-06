@@ -1,8 +1,8 @@
 """This module represents the map-making equation P'N"Px = P'N"d.
 At this level of abstraction, we still deal mostly with maps and cuts etc.
 directly."""
-import numpy as np, bunch, time, h5py
-from enlib import pmat, config, nmat, enmap, array_ops, fft, cg
+import numpy as np, bunch, time, h5py, copy
+from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils
 from enlib.degrees_of_freedom import DOF
 from mpi4py import MPI
 
@@ -25,6 +25,8 @@ class LinearSystemMap(LinearSystem):
 			self.precon = PrecondBinned(self.mapeq)
 		elif precon == "cyc":
 			self.precon = PrecondCirculant(self.mapeq)
+		elif precon == "sub":
+			self.precon = PrecondSubmap(self.mapeq)
 		self.mask   = self.precon.mask
 		self.dof    = DOF({"shared":self.mask},{"distributed":self.mapeq.njunk})
 		self.b      = self.dof.zip(*self.mapeq.b())
@@ -33,14 +35,14 @@ class LinearSystemMap(LinearSystem):
 		# we will use when going up and down in levels.
 		self._upsys = None
 	def A(self, x):
-		print "linmap A1", np.sum(x**2)
+		#print "linmap A1", np.sum(x**2)
 		res = self.dof.zip(*self.mapeq.A(*self.dof.unzip(x)))
-		print "linmap A2", np.sum(res**2)
+		#print "linmap A2", np.sum(res**2)
 		return res
 	def M(self, x):
-		print "linmap M1", np.sum(x**2)
+		#print "linmap M1", np.sum(x**2)
 		res = self.dof.zip(*self.precon.apply(*self.dof.unzip(x)))
-		print "linmap M2", np.sum(res**2)
+		#print "linmap M2", np.sum(res**2)
 		return res
 	def dot(self, x, y): return self.dof.dot(x,y)
 	@property
@@ -144,6 +146,10 @@ class MapEquation:
 		return self.A(map, junk, white=True)
 
 class PrecondBinned:
+	"""This class implements a simple "binned" preconditioner, which
+	disregards detector and time correlations, and solves the system on
+	a pixel by pixel basis. It does take into account correlations between
+	the different signal components inside each pixel, though."""
 	def __init__(self, mapeq):
 		ncomp     = mapeq.area.shape[0]
 		# Compute the per pixel approximate inverse covmat
@@ -162,13 +168,19 @@ class PrecondBinned:
 		return array_ops.solve_masked(self.div_map, map, [0,1]), junk/self.div_junk
 
 class PrecondCirculant:
+	"""This preconditioner approximates the A matrix as
+	SCS, where S is a position-dependent standard deviation,
+	and C is a position-independent correlation pattern.
+	It works well for maps with uniform scanning patterns."""
 	def __init__(self, mapeq):
 		ncomp, h,w = mapeq.area.shape
 		binned = PrecondBinned(mapeq)
 
 		S  = array_ops.eigpow(binned.div_map, -0.5, axes=[0,1])
+		# Sample 4 points to avoid any pathologies
 		N  = 2
-		pix = [[h*(2*i+1)/N/2,w*(2*j+1)/N/2] for i in range(N) for j in range(i,N)]
+		pix = [[h*(2*i+1)/N/2,w*(2*j+1)/N/2] for i in range(N) for j in range(0,N)]
+		pix = np.array([[-1,-1],[1,1]])*10+np.array([h/2,w/2])[None,:]
 		Arow = measure_corr_cyclic(mapeq, S, pix)
 		iC = np.conj(fft.fft(Arow, axes=[-2,-1]))
 
@@ -184,13 +196,88 @@ class PrecondCirculant:
 		m  = fft.ifft(mf, axes=[-2,-1]).astype(map.dtype)
 		m/= np.prod(m.shape[-2:])
 		m  = array_ops.matmul(self.S, m,   axes=[0,1])
-		#print np.min(m), np.max(m)
-		#with h5py.File("test.hdf","w") as hfile:
-		#	hfile["mfR"] = mf.real
-		#	hfile["mfI"] = mf.imag
-		#	hfile["m"]   = m
 		return m, junk/self.div_junk
 
+class PrecondSubmap:
+	"""This preconditioner splits the scans into
+	subsets with as similar properties as possible.
+	For each subset, a good approximation to the pixel
+	covariance matrix is constructed, and the submaps are
+	then optimally combined using these matrices (in
+	practice using conjugate gradients). This is a somewhat
+	expensive preconditioner, but will hopefully pay for
+	it with much fewer iterations needed.
+	"""
+	def __init__(self, mapeq):
+		# Categorize each scan into groups which can be
+		# combined into one large scan with the same
+		# scanning pattern as the individual scans.
+		scaninfo = []
+		for d in mapeq.data:
+			scaninfo.append(analyze_scanning_pattern(d))
+		allinfo = mapeq.comm.allreduce(scaninfo)
+		groups  = group_scans_by_scandirs(allinfo)
+		groups  = split_disjoint_scan_groups(groups)
+		# For each group, define a single effective
+		# scan.
+		for group in groups:
+			obox_tot = np.array([np.min([g.obox[0] for g in group],0),np.max([g.obox[1] for g in group],0)])
+			# We already know that the scanning directions and amplitudes agree.
+			# So to construct the total bounds in input coordinates, we just need
+			# to take into account the drift vector. First compute the number of drift
+			# vectors we are off. out_off = ovec*x, in_off = ivec*x,
+			# x = (ovec'ovec)"ovec'out_off
+			ivec, iref = group[0].ivecs, group[0].ibox
+			ovec, oref = group[0].ovecs, group[0].obox
+			x = np.linalg.solve(ovec.T.dot(ovec),ovec.T.dot((obox_tot-oref).T)).T
+			ibox_tot = iref + x.dot(ivec)
+			# We must now create new effective scan objects. These require:
+			#  boresight: fit to ibox_tot, repeating scanning pattern as necessary
+			#  offsets:   ncomp detectors, all with same (zero?) offsets
+			#  comps:     detectors have only a single comp each
+			#  cut:       no cuts
+			#  sys, site, mjd0: copy
+			# TODO: 1. extract and repeat scanning pattern. Amplitude?
+			#          Just use triangle wave based on scan and drift vectors?
+			#       2. Identify scan to use as basis.
+			#          The problem is that that scan may not be available in this
+			#          mpi task. Could add mpi_id, scan_id to scaninfo and then
+			#          use mpi_receive or something to get that scan.
+			#       3. Distribute groups.
+
+
+		print [[id(g) for g in group] for group in groups]
+
+		1/0
+
+		# 2. Build sub-map-equations for each of these
+		# 3. Build a pixel ordering that closely approximates the
+		# order the pixels are hit in the scanning pattern.
+		# 4. Build an approximate noise matrix for the TOD implied by
+		# that pixel ordering.
+		# 5. Build a right-hand-side for each submap based on each
+		# sub-map-equation.
+	def __apply__(self, map, junk):
+		pass
+		# 1. Solve the equation sum_sub(A_sub) x = sum_sub b_sub
+		# by reading off the pixels from each, unapplying the noise
+		# matrix and adding them back to the right position.
+		#
+		# How to handle polarization? The effective noise correlation
+		# length is different for polarization, so making one timestream
+		# for each component will be suboptimal unless we build a different
+		# noise model for each. On the other hand, projecting them down into
+		# a single time-stream won't work because the effective model only
+		# has one detector.
+		#
+		# If we assume that all detectors are hitting the same pixel, then
+		# it should be possible to compute effective T and P TOD noise models.
+		# n"(f,c1,c2) = N"(f,d1,d2) phase(d1,c1) phase(d2,c2)
+		# We here assume that the detector phases are time-independent.
+		# N(f,d1,d2) = U(f,d1) delta(d1,d2) + V(f,d1,b) E(f,b) V(f,d2,b)
+		# N"(f,d1,d2)= iU(f,d1) delta(d1,d2) - Q(f,d1,b)Q(f,d2,b)
+		# The interaction between phase and Q will ensure that the polarized
+		# noise ends up lower.
 
 config.default("precond_condition_lim", 10., "Maximum allowed condition number in per-pixel polarization matrices.")
 def makemask(div):
@@ -264,34 +351,92 @@ def measure_corr_cyclic(mapeq, S, pixels):
 	d /= len(pixels)
 	return d
 
-#	for ci in range(ncomp):
-#		for p in pixels:
-#			d[ci,:,p[0],p[1]] = S[ci,:,p[0],p[1]]
-#		junk[...]         = 0
-#		d[ci], _ = mapeq.A(d[ci], junk)
-#	d = array_ops.matmul(S, d, axes=[0,1])
-#	# d now holds a linear combination of various rows from the matrix (SAS).
-#	# We wish to disentangle these to get an estimate "a" for the typical
-#	# correlation around each pixel, assuming this is the same for all pixels.
-#	# To do this we solve the system Pa = d, where P represents the operation
-#	# that takes us from the real correlation structure centered on pixel (0,0)
-#	# to the superimposed pattern we have now.
-#	def P(a, dir=1):
-#		d = a*0
-#		for p in pixels:
-#			tmp = np.roll(a,   -p[0]*dir, 2)
-#			tmp = np.roll(tmp, -p[1]*dir, 3)
-#			d += tmp
-#		return d
-#	def PT(d): return P(d, dir=-1)
-#	dof = DOF(np.isfinite(d))
-#	def A(x): return dof.zip(PT(P(*dof.unzip(x))))
-#	b = dof.zip(d)
-#	solver = cg.CG(A, b)
-#	while True:
-#		solver.step()
-#		print "mcc %4d %15.7e" % (solver.i, solver.err)
-#		x, = dof.unzip(solver.x)
-#		with h5py.File("mcc%03d.hdf" % solver.i,"w") as hfile:
-#			hfile["data"] = x
-#	return dof.unzip(solver.x)
+def analyze_scanning_pattern(d):
+	"""Computes bounding boxes for d.scan in both input and output
+	coordinates. Also computes the scan and drift vectors. Returns
+	bunch(ibox, obox, ivecs, ovecs). The ivecs and ovecs are in units
+	per sample."""
+	box   = d.scan.box
+	nidim = box.shape[1]
+	# First determine the scanning direction. This is the dimension
+	# that is responsible for the fastest change in output coordinates,
+	# but a simpler way of finding it is to find the direction with the
+	# most sign changes in the derivative.
+	nsamp   = d.scan.boresight.shape[0]
+	periods = utils.find_period(d.scan.boresight.T)
+	dscan   = np.argmin(periods)
+	# The remaining dimensions are assumed to change uniformly.
+	# ivecs[0] is the scanning vector, ivecs[1] is the drift vector
+	ivecs = np.array([box[1]-box[0],box[1]-box[0]])
+	ivecs[1,dscan] = 0
+	ivecs[0,np.arange(nidim)!=dscan] = 0
+	# Normalize ivecs so that they show the typical step per pixel
+	# The 2 is because we cross the full distance twice in one period
+	# (unless this is a wrapping scan, but we assume that isn't the case)
+	ivecs[0] /= periods[dscan]/2
+	ivecs[1] /= nsamp
+
+	# Translate these input vectors to the output coordinate system
+	mid   = np.mean(box,0)
+	bore  = np.array([mid+v for v in [0] + list(ivecs)])
+	pix, _= d.pmap.translate(bore)
+	ovecs = np.array([pix[0,i+1]-pix[0,0] for i in range(2)])
+
+	# Compute an approximate bounding box in output coordinates
+	obox = d.pmap.translate(box)[0][0]
+
+	return bunch.Bunch(ibox=box, ivecs=ivecs, obox=obox, ovecs=ovecs, scandim=dscan)
+
+def group_scans_by_scandirs(info, vectol=0.1, postol=0.1):
+	# Group them into overlapping groups with
+	# consistent scanning directions and consistent
+	# position in the scan direction.
+	unclassified = range(len(info))
+	groups = []
+	while len(unclassified) > 0:
+		me = info[unclassified.pop()]
+		veclens = np.sum(me.ovecs**2,1)**0.5
+		poslens = np.abs(me.obox[1]-me.obox[0])
+		accepted = []
+		for oi in unclassified:
+			other = info[oi]
+			vecdiff = np.sum((me.ovecs-other.ovecs)**2,1)**0.5
+			if np.any(vecdiff > veclens*vectol): continue
+			# Ok, the scanning directions match.
+			# Check that the positions also match. The range in position
+			# in the scanning direction must be the same.
+			posdiff = np.linalg.solve(me.ovecs.T.dot(me.ovecs),me.ovecs.T.dot((me.obox-other.obox).T))
+			posdiff = np.sum(posdiff**2,1)**0.5
+			if posdiff[0] > poslens[0]*postol: continue
+			accepted.append(oi)
+		mygroup = [me]
+		for v in accepted:
+			mygroup.append(info[v])
+			unclassified.remove(v)
+		groups.append(mygroup)
+	return groups
+
+def split_disjoint_scan_groups(groups):
+	# 3. Split disjoint groups into contiguous subgroups
+	subgroups = []
+	for group in groups:
+		print "A", len(group)
+		# Compute from-to for each in the drift direction
+		driftvec = group[0].ovecs[1]
+		driftvec /= np.sum(driftvec**2)**0.5
+		pos = np.array([np.sum(member.obox*driftvec,1) for member in group])
+		# Sort group by the starting position
+		inds = np.argsort(pos[:,0])
+		group, pos = [group[i] for i in inds], pos[inds]
+		print "B", pos
+		# Then split into non-touching regions
+		sub = []
+		end = pos[0,1]
+		for p, member in zip(pos,group):
+			if p[0] > end:
+				if len(sub) > 0: subgroups.append(sub)
+				sub = []
+			end = max(end,p[1])
+			sub.append(member)
+		if len(sub) > 0: subgroups.append(sub)
+	return subgroups

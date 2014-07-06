@@ -212,6 +212,50 @@ contains
 
 	end subroutine
 
+	subroutine translate( &
+			bore, pix, phase,           &! Main input/output
+			det_pos, det_comps, comps,  &! Pointing metainformation
+			rbox, nbox, ys              &! Coordinate transformation
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: comps(:), nbox(:)
+		real(4),    intent(in)    :: bore(:,:), ys(:,:,:) ! comp, derivs, pix
+		real(4),    intent(inout) :: phase(:,:,:), pix(:,:,:)
+		real(4),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
+		! Work
+		integer(4), parameter :: bz = 321
+		integer(4) :: ndet, nsamp, di, si, nproc, id, ic, i, j, k, l, nj
+		integer(4) :: steps(size(rbox,1))
+		real(4)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
+		real(4)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
+
+		nsamp   = size(bore, 2)
+		ndet    = size(det_pos, 2)
+
+		! In C order, ys has pixel axes t,ra,dec, so nbox = [nt,nra,ndec]
+		! Index mapping is therefore given by [nra*ndec,ndec,1]
+		steps(size(steps)) = 1
+		do ic = size(steps)-1, 1, -1
+			steps(ic) = steps(ic+1)*nbox(ic+1)
+		end do
+		x0 = rbox(:,1); inv_dx = nbox/(rbox(:,2)-rbox(:,1))
+
+		!$omp parallel do collapse(2) private(di,si,nj,j,ipoint,opoint,id)
+		do di = 1, ndet
+			do si = 1, nsamp, bz
+				nj = min(bz,nsamp-si+1)
+				do j = 1, nj
+					ipoint(:,j) = bore(:,si+j-1)+det_pos(:,di)
+				enddo
+				opoint(:,:nj) = lookup_grad(ipoint(:,:nj), x0, inv_dx, steps, ys)
+				pix(:,si:si+nj-1,di)  = opoint(1:2,:nj)
+				phase(:,si:si+nj-1,di) = get_phase(comps, det_comps(:,di), opoint(3:,:nj))
+			end do
+		end do
+	end subroutine
+
 	! Trilinear is 35% slower for almost no gain, it seems.
 	!function lookup_trilinear(ipoint, x0, inv_dx, steps, ys) result(opoint)
 	!	implicit none
