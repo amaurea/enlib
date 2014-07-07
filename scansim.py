@@ -1,5 +1,5 @@
 import numpy as np, bunch, copy, warnings
-from enlib import scan, rangelist, coordinates, utils, nmat
+from enlib import scan, rangelist, coordinates, utils, nmat, pmat
 warnings.filterwarnings("ignore")
 
 def rand_srcs(box, nsrc, amp, fwhm, rand_fwhm=False):
@@ -183,3 +183,22 @@ class SimSrcs(scan.Scan):
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
 		return res
+
+class SimMap(scan.Scan):
+	def __init__(self, map, boresight, offsets, comps, sys, cut, site, mjd0, noise):
+		# Boresight will always be unwound, i.e. it will have no 2pi jumps in it.
+		# Time is measured in seconds since start of scan, with mjd0 indicating the MJD of the scan start.
+		self.boresight = np.asfarray(boresight) # [nsamp,coords]
+		self.offsets   = np.asfarray(offsets)   # [ndet,coords]
+		self.comps     = np.asfarray(comps)     # [ndet,comps]
+		self.cut       = rangelist.Multirange(cut) # Multirange[ndet,ranges]
+		self.noise     = noise
+		self.map       = map
+		self.sys       = str(sys)               # str
+		self.site      = site
+		self.mjd0      = mjd0                   # time basis
+		self.pmat      = pmat.PmatMap(self, self.map, sys=sys)
+	def get_samples(self):
+		tod = np.empty([self.comps.shape[0],self.boresight.shape[0]],dtype=self.map.dtype)
+		self.pmat.forward(tod, self.map)
+		return tod

@@ -105,6 +105,11 @@ class Multirange:
 	def clear(self):
 		for d in self.data: d.clear()
 
+def zeros(shape):
+	assert(len(shape)==2)
+	ranges = [Rangelist(np.zeros((0,2),dtype=int),shape[1]) for i in range(shape[0])]
+	return Multirange(ranges)
+
 def slice_helper(ranges, sel):
 	"""Helper function for rangelist slicing. Gets an expanded slice with positive
 	step size."""

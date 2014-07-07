@@ -41,17 +41,19 @@ I therefore go with option #1 above, and explicitly do not provide a way
 of skipping samples here.
 """
 import numpy as np, enlib.utils, enlib.slice, copy as cpy
+from enlib import rangelist
 
 class Scan:
 	"""This defines the minimal interface for a Scan. It will usually be
 	inherited from."""
-	def __init__(self, boresight=None, offsets=None, comps=None, tod=None, sys=None, cut=None, site=None, mjd0=0):
+	def __init__(self, boresight=None, offsets=None, comps=None, tod=None, sys=None, cut=None, site=None, mjd0=0, noise=None):
 		# Boresight will always be unwound, i.e. it will have no 2pi jumps in it.
 		# Time is measured in seconds since start of scan, with mjd0 indicating the MJD of the scan start.
 		self.boresight = np.asfarray(boresight) # [nsamp,coords]
 		self.offsets   = np.asfarray(offsets)   # [ndet,coords]
 		self.comps     = np.asfarray(comps)     # [ndet,comps]
 		self.cut       = rangelist.Multirange(cut) # Multirange[ndet,ranges]
+		self.noise     = noise
 		# These are needed in order to interpret the coordinates
 		self.sys       = str(sys)               # str
 		self.site      = site

@@ -237,6 +237,9 @@ def mkdir(path):
 		if exception.errno != errno.EEXIST:
 			raise
 
+def decomp_basis(basis, vec):
+	return np.linalg.solve(basis.dot(basis.T),basis.dot(vec.T)).T
+
 def find_period(d, axis=-1):
 	"""This is a simple second-order estimate of the period of the
 	assumed-periodic signal d. It finds the frequency with the highest

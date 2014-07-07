@@ -2,7 +2,7 @@
 At this level of abstraction, we still deal mostly with maps and cuts etc.
 directly."""
 import numpy as np, bunch, time, h5py, copy
-from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils
+from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim
 from enlib.degrees_of_freedom import DOF
 from mpi4py import MPI
 
@@ -134,11 +134,14 @@ class MapEquation:
 		for d in self.data:
 			tod = np.empty([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
 			d.pmap.forward(tod,map)
+			if white: print "white A", np.sum(tod**2)
 			d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
+			if white: print "white B", np.sum(tod**2)
 			if white:
 				d.nmat.white(tod)
 			else:
 				d.nmat.apply(tod)
+			if white: print "white C", np.sum(tod**2)
 			d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
 			d.pmap.backward(tod,omap)
 		return reduce(omap, self.comm), ojunk
@@ -151,6 +154,7 @@ class PrecondBinned:
 	a pixel by pixel basis. It does take into account correlations between
 	the different signal components inside each pixel, though."""
 	def __init__(self, mapeq):
+		print "PrecondBinned init A"
 		ncomp     = mapeq.area.shape[0]
 		# Compute the per pixel approximate inverse covmat
 		div_map   = enmap.zeros((ncomp,ncomp)+mapeq.area.shape[1:],mapeq.area.wcs, mapeq.area.dtype)
@@ -160,6 +164,11 @@ class PrecondBinned:
 			div_junk[...]  = 1
 			div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
 		self.div_map, self.div_junk = reduce(div_map, mapeq.comm), div_junk
+
+
+		enmap.write_map("foo.hdf", self.div_map)
+
+
 		# Compute the pixel component masks, and use it to mask out the
 		# corresonding parts of the map preconditioner
 		self.mask = makemask(self.div_map)
@@ -208,57 +217,63 @@ class PrecondSubmap:
 	expensive preconditioner, but will hopefully pay for
 	it with much fewer iterations needed.
 	"""
-	def __init__(self, mapeq):
+	def __init__(self, mapeq, precon="bin"):
+		binned = PrecondBinned(mapeq)
+
 		# Categorize each scan into groups which can be
 		# combined into one large scan with the same
 		# scanning pattern as the individual scans.
 		scaninfo = []
 		for d in mapeq.data:
-			scaninfo.append(analyze_scanning_pattern(d))
+			scaninfo.append(analyze_scan(d))
 		allinfo = mapeq.comm.allreduce(scaninfo)
+		#extra = copy.deepcopy(allinfo[0])
+		#estep = 40000
+		#extra.ibox += extra.ivecs[1]*estep
+		#extra.obox += extra.ovecs[1]*estep
+		#allinfo.append(extra)
 		groups  = group_scans_by_scandirs(allinfo)
 		groups  = split_disjoint_scan_groups(groups)
-		# For each group, define a single effective
-		# scan.
-		for group in groups:
-			obox_tot = np.array([np.min([g.obox[0] for g in group],0),np.max([g.obox[1] for g in group],0)])
-			# We already know that the scanning directions and amplitudes agree.
-			# So to construct the total bounds in input coordinates, we just need
-			# to take into account the drift vector. First compute the number of drift
-			# vectors we are off. out_off = ovec*x, in_off = ivec*x,
-			# x = (ovec'ovec)"ovec'out_off
-			ivec, iref = group[0].ivecs, group[0].ibox
-			ovec, oref = group[0].ovecs, group[0].obox
-			x = np.linalg.solve(ovec.T.dot(ovec),ovec.T.dot((obox_tot-oref).T)).T
-			ibox_tot = iref + x.dot(ivec)
-			# We must now create new effective scan objects. These require:
-			#  boresight: fit to ibox_tot, repeating scanning pattern as necessary
-			#  offsets:   ncomp detectors, all with same (zero?) offsets
-			#  comps:     detectors have only a single comp each
-			#  cut:       no cuts
-			#  sys, site, mjd0: copy
-			# TODO: 1. extract and repeat scanning pattern. Amplitude?
-			#          Just use triangle wave based on scan and drift vectors?
-			#       2. Identify scan to use as basis.
-			#          The problem is that that scan may not be available in this
-			#          mpi task. Could add mpi_id, scan_id to scaninfo and then
-			#          use mpi_receive or something to get that scan.
-			#       3. Distribute groups.
+		# Assign ownership of groups
+		mygroups = groups[mapeq.comm.rank::mapeq.comm.size]
+		# For each group, define a single effective scan
+		myscans = [sim_scan_from_group(group, mapeq.area) for group in mygroups]
+		self.linsys = LinearSystemMap(myscans, mapeq.area, mapeq.comm, precon=precon)
+		self.nmax = 100
+		self.mask = binned.mask
 
-
-		print [[id(g) for g in group] for group in groups]
-
+	def apply(self, map, junk):
+		# Insert map as new RHS for local linear system.
+		# This breaks encapsulation (though we didn't have much of that
+		# to begin with), but lets us avoid recomputing everything, in
+		# particular the pointing matrix.
+		map  = map.copy()
+		eq   = self.linsys
+		eq.b = eq.dof.zip(map,junk)
+		print "eq.b", eq.b
 		1/0
 
-		# 2. Build sub-map-equations for each of these
-		# 3. Build a pixel ordering that closely approximates the
-		# order the pixels are hit in the scanning pattern.
-		# 4. Build an approximate noise matrix for the TOD implied by
-		# that pixel ordering.
-		# 5. Build a right-hand-side for each submap based on each
-		# sub-map-equation.
-	def __apply__(self, map, junk):
-		pass
+
+		for d in eq.mapeq.data:
+			d.scan.map = map
+
+		print "eq.mapeq.b()", eq.mapeq.b()
+
+		eq.b = eq.dof.zip(*eq.mapeq.b())
+
+
+		# And solve this system
+		solver = cg.CG(eq.A, eq.b, eq.dof.dot)
+		for i in range(nmax):
+			t1 = time.time()
+			solver.step()
+			t2 = time.time()
+			print "%5d %15.7e %6.3f" % (cg.i, cg.err, t2-t1)
+			map, _ = eq.dof.unzip(solver.x)
+			enmap.write_map("sub%03d.hdf" % cg.i, map)
+		map, _ = eq.dof.unzip(solver.x)
+		return map, junk
+
 		# 1. Solve the equation sum_sub(A_sub) x = sum_sub b_sub
 		# by reading off the pixels from each, unapplying the noise
 		# matrix and adding them back to the right position.
@@ -351,7 +366,7 @@ def measure_corr_cyclic(mapeq, S, pixels):
 	d /= len(pixels)
 	return d
 
-def analyze_scanning_pattern(d):
+def analyze_scan(d):
 	"""Computes bounding boxes for d.scan in both input and output
 	coordinates. Also computes the scan and drift vectors. Returns
 	bunch(ibox, obox, ivecs, ovecs). The ivecs and ovecs are in units
@@ -385,7 +400,17 @@ def analyze_scanning_pattern(d):
 	# Compute an approximate bounding box in output coordinates
 	obox = d.pmap.translate(box)[0][0]
 
-	return bunch.Bunch(ibox=box, ivecs=ivecs, obox=obox, ovecs=ovecs, scandim=dscan)
+	return bunch.Bunch(
+			ibox   = box,   obox  = obox,
+			ivecs  = ivecs, ovecs = ovecs,
+			sys    = d.scan.sys,
+			site   = d.scan.site,
+			mjd0   = d.scan.mjd0,
+			noise  = d.scan.noise,
+			offsets= d.scan.offsets,
+			comps  = d.scan.comps,
+			ncomp  = len(d.pmap.comps),
+			scandim=dscan)
 
 def group_scans_by_scandirs(info, vectol=0.1, postol=0.1):
 	# Group them into overlapping groups with
@@ -405,8 +430,8 @@ def group_scans_by_scandirs(info, vectol=0.1, postol=0.1):
 			# Ok, the scanning directions match.
 			# Check that the positions also match. The range in position
 			# in the scanning direction must be the same.
-			posdiff = np.linalg.solve(me.ovecs.T.dot(me.ovecs),me.ovecs.T.dot((me.obox-other.obox).T))
-			posdiff = np.sum(posdiff**2,1)**0.5
+			posdiff = utils.decomp_basis(me.ovecs, me.obox-other.obox)
+			posdiff = np.sum(posdiff**2,0)**0.5
 			if posdiff[0] > poslens[0]*postol: continue
 			accepted.append(oi)
 		mygroup = [me]
@@ -420,7 +445,6 @@ def split_disjoint_scan_groups(groups):
 	# 3. Split disjoint groups into contiguous subgroups
 	subgroups = []
 	for group in groups:
-		print "A", len(group)
 		# Compute from-to for each in the drift direction
 		driftvec = group[0].ovecs[1]
 		driftvec /= np.sum(driftvec**2)**0.5
@@ -428,7 +452,6 @@ def split_disjoint_scan_groups(groups):
 		# Sort group by the starting position
 		inds = np.argsort(pos[:,0])
 		group, pos = [group[i] for i in inds], pos[inds]
-		print "B", pos
 		# Then split into non-touching regions
 		sub = []
 		end = pos[0,1]
@@ -440,3 +463,116 @@ def split_disjoint_scan_groups(groups):
 			sub.append(member)
 		if len(sub) > 0: subgroups.append(sub)
 	return subgroups
+
+def build_triangle_wave(ibox, ivec):
+	"""Build a triangle wave scan based on the given bounding box and
+	scan/drift per-sample-steps ivec. Returns an [nsamp,ncoord] array."""
+	period, nsamp = utils.decomp_basis(ivec, ibox[1]-ibox[0])
+	phase = np.arange(nsamp)%(2*period)
+	phase[phase>period] = 2*period-phase[phase>period]
+	return (ibox[0,:,None] + ivec[1][:,None]*np.arange(nsamp)[None,:] + ivec[0][:,None]*phase[None,:]).T
+
+def sim_scan_from_group(group, area):
+	obox_tot = np.array([np.min([g.obox[0] for g in group],0),np.max([g.obox[1] for g in group],0)])
+	# We already know that the scanning directions and amplitudes agree.
+	# So to construct the total bounds in input coordinates, we just need
+	# to take into account the drift vector. First compute the number of drift
+	# vectors we are off. out_off = ovec*x, in_off = ivec*x,
+	# x = (ovec'ovec)"ovec'out_off
+	ivec, iref = group[0].ivecs, group[0].ibox
+	ovec, oref = group[0].ovecs, group[0].obox
+	ibox_tot = iref + utils.decomp_basis(ovec, obox_tot-oref).dot(ivec)
+	# We must now create new effective scan objects. These require:
+	#  boresight: fit to ibox_tot, repeating scanning pattern as necessary
+	#  we use a simplified triangle wave scanning pattern.
+	bore  = build_triangle_wave(ibox_tot, ivec)
+	#  offsets:   ncomp detectors, all with same (zero?) offsets
+	ncomp  = group[0].ncomp
+	nsamp, ncoord = bore.shape
+	ndet   = ncomp
+	offset = np.zeros([ndet,ncoord])
+	comps  = np.eye(ncomp)                   # only a single comp each
+	cut    = rangelist.zeros([ndet,nsamp])   # no cuts
+	sys, site, mjd0 = group[0].sys, group[0].site, group[0].mjd0
+
+	noise = build_effective_noise_model(group, nsamp, ndet)
+
+	return scansim.SimMap(map=area, boresight=bore, offsets=offset, comps=comps, cut=cut, sys=sys, site=site, mjd0=mjd0, noise=noise)
+
+def build_effective_noise_model(group, nsamp, ndet):
+	# Next, construct a noise model for this scan. If all the individual
+	# scans perfectly overlapped, this would simply be the sum of all
+	# the inverse covariances projected down to our ncomp detectors.
+	# Because they don't all overlap, we first need to renormalize
+	# the noise in tod space, but that doesn't fit into our current
+	# noise model.
+	#
+	# Basically, we need
+	#  Ntot(x) = N(x/norm)*norm
+	# except that we need to handle norm ~ 0 or norm == None
+	# Norm would be a per-sample mask, and would be quite large under
+	# normal circumstances, though not in our case. Since this is
+	# so simple, it might be best to include this as an optional
+	# element in NmatDetvecs and the normal noise parameters.
+	# For now, just compute what we would get if they did overlap.
+	ncomp     = group[0].ncomp
+	noise_tot = copy.deepcopy(group[0].noise)
+	# The individual scans do not have the same frequency bins,
+	# because they don't all have the same length. We handle this
+	# by rebinning.
+	nf       = nsamp/2+1
+	lens     = [g.noise.bins[-1,-1] for g in group]
+	ilongest = np.argmax(lens)
+	bins     = group[ilongest].noise.bins
+	if bins[-1,-1] < nf:
+		rest     = [[group[ilongest].noise.bins[-1,-1],nf]]
+		bins     = np.concatenate([bins,rest])
+	nbin     = bins.shape[0]
+
+	iNu = np.zeros([nbin,ndet])
+	iC  = np.zeros([nbin,ndet,ndet])
+
+	for member in group:
+		noise    = member.noise
+		# Compute mapping between local and global binning
+		my_nf    = noise.bins[-1,-1]
+		my_nbin  = len(noise.bins)
+		rebins   = bins[:,0]*my_nf/nf
+		inds     = np.searchsorted(noise.bins[:,1], rebins)
+		inds     = inds + (rebins-noise.bins[inds,0])/(noise.bins[inds,1]-noise.bins[inds,0]).astype(float)
+
+		# Compute detector-collapsed local noise parameters, assuming
+		# equal noise for each
+		small_iC  = np.zeros([my_nbin,ndet,ndet])
+		for i,vb in enumerate(noise.vbins):
+			small_Q  = noise.Q[vb[0]:vb[1]].dot(member.comps[:,:ncomp])
+			small_U  = member.comps[:,:ncomp].T.dot(np.diag(noise.iNu[i])).dot(member.comps[:,:ncomp])
+			small_iC[i] = small_U - small_Q.T.dot(small_Q)
+		# Interpolate to global bins
+		iC  += utils.interpol(small_iC.T,  inds[None,:], order=1).T
+
+	# Extract diagonal approximation of iC. This is only needed in the white noise
+	# approximation regions - otherwise we could have used Q for everything.
+	# This is actually not trivial. It is the same operation we encounter when trying
+	# to estimate the noise model in the first place. The problem is that if we extract too much,
+	# then the remainder becomes non-positive definite, making eigpow discard stuff.
+	for i in range(5,nbin):
+		iC[i] += np.mean(iC[i])
+		a = 2.0
+		while True:
+			iNu[i] = np.diag(iC[i])*a
+			iC2    = iC[i] - np.diag(iNu[i])
+			Q      = array_ops.eigpow(iC2[None], 0.5, axes=[-2,-1])[0]
+			iC3    = Q.T.dot(Q) + np.diag(iNu[i])
+			res    = np.sum((iC3-iC[i])**2)/np.sum(iC[i]**2)
+			if res < 1e-6: break
+			a *= 0.9
+		iC[i] = iC2
+
+	# Compute equivalent Q for iC
+	Q = array_ops.eigpow(iC, 0.5, axes=[-2,-1]).T.reshape(-1,ndet)
+	tmp = np.arange(nbin+1)
+	vbins = np.array([tmp[:-1],tmp[1:]]).T*ndet
+
+	# Phew! That's the total noise parameters we get
+	return bunch.Bunch(bins=bins, iNu=iNu, Q=Q, vbins=vbins)

@@ -48,9 +48,11 @@ class PmatMap(PointingMatrix):
 		else:
 			raise NotImplementedError("order > 1 is not implemented")
 	def forward(self, tod, m):
+		"""m -> tod"""
 		self.func( 1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 	def backward(self, tod, m):
 		self.func(-1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
+		"""tod -> m"""
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
