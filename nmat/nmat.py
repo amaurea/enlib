@@ -72,7 +72,7 @@ class NmatBinned(NoiseMatrix):
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
 		dets  = res.dets[detslice]
-		step = np.abs(sampslice.step)
+		step = np.abs(sampslice.step or 1)
 		fmax = res.bins[-1,-1]/step
 		mask = res.bins[:,0] < fmax
 		bins, icovs = res.bins[mask], res.icovs[mask]
@@ -133,7 +133,7 @@ class NmatDetvecs(NmatBinned):
 		res, detslice, sampslice = self.getitem_helper(sel)
 		dets = res.dets[detslice]
 		# Reduce sample rate if necessary
-		step = np.abs(sampslice.step)
+		step = np.abs(sampslice.step or 1)
 		fmax = res.bins[-1,-1]/step
 		mask = res.bins[:,0] < fmax
 		bins, vbins = res.bins[mask], res.vbins[mask]
