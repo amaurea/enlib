@@ -67,6 +67,42 @@ class PmatMap(PointingMatrix):
 		pmat_core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 		return pix, phase
 
+# Neither this approach nor time-domain linear interpolation works at the moment.
+# In theory, they would help with the subpixel bias issue. In practice, they
+# lead to even mjore subpixel bias, and runaway residuals. There are two issues
+#  1. In order for CG to converge, forward must be the exact transpose of backward.
+#  2. In order to get rid of the bias, forward must be a good approximation of the
+#     beam, and must not have any pixel offsets or similar.
+#
+#class PmatMapIP(PointingMatrix):
+#	def __init__(self, scan, template, sys=None, order=None, oversample=5):
+#		self.scan     = scan
+#		self.template = template
+#		self.dtype    = template.dtype
+#		self.sys      = sys
+#		self.oversample= oversample
+#		ncomp, h, w = template.shape
+#		wcs = template.wcs.deepcopy()
+#		wcs.wcs.cdelt /= oversample
+#		wcs.wcs.crpix *= oversample
+#		self.big = enmap.zeros([ncomp,h*oversample,w*oversample],wcs=wcs,dtype=self.dtype)
+#		self.pmat = PmatMap(scan, self.big, self.sys, order)
+#	def forward(self, tod, m):
+#		# Interpolate map to full res
+#		print "FA", np.sum(m**2)
+#		m2 = m.project(self.big.shape, self.big.wcs)
+#		self.pmat.forward(tod, m2)
+#		print "FB", np.sum(tod**2)
+#	def backward(self, tod, m):
+#		print "BA", np.sum(tod**2)
+#		self.big[...] = 0
+#		self.pmat.backward(tod, self.big)
+#		# This is not the real transpose of project.
+#		m[...] = enmap.downgrade(self.big, self.oversample)
+#		print "Bb", np.sum(m**2)
+#	def translate(self, bore=None, offs=None, comps=None):
+#		return self.pmat.translate(bore, offs, comps)
+
 class PmatMapSlow(PointingMatrix):
 	"""Reference implementation of the simple nearest neighbor
 	pointing matrix. Very slow - not meant for serious use. It's interesting

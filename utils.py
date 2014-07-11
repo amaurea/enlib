@@ -174,7 +174,7 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 	returns interpolated values at these positions
 	as [{x},{z}]."""
 	npre = a.ndim - inds.shape[0]
-	res = np.empty(a.shape[:npre]+inds.shape[1:])
+	res = np.empty(a.shape[:npre]+inds.shape[1:],dtype=a.dtype)
 	fa, fr = partial_flatten(a, range(npre,a.ndim)), partial_flatten(res, range(npre, res.ndim))
 	if mask_nan:
 		mask = ~np.isfinite(fa)

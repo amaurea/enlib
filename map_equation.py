@@ -109,8 +109,7 @@ class MapEquation:
 			d.pcut = pmat.PmatCut(scan, cut_type)
 			d.cutrange = [njunk,njunk+d.pcut.njunk]
 			njunk = d.cutrange[1]
-			# This should be configurable
-			d.nmat = nmat.NmatDetvecs(scan.noise)
+			d.nmat = scan.noise
 			data.append(d)
 		self.area = area.copy()
 		self.njunk = njunk
@@ -132,16 +131,16 @@ class MapEquation:
 		map, junk = map.copy(), junk.copy()
 		omap, ojunk = map*0, junk*0
 		for d in self.data:
-			tod = np.empty([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
+			tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
 			d.pmap.forward(tod,map)
-			if white: print "white A", np.sum(tod**2)
+			#if white: print "white A", np.sum(tod**2)
 			d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
-			if white: print "white B", np.sum(tod**2)
+			#if white: print "white B", np.sum(tod**2)
 			if white:
 				d.nmat.white(tod)
 			else:
 				d.nmat.apply(tod)
-			if white: print "white C", np.sum(tod**2)
+			#if white: print "white C", np.sum(tod**2)
 			d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
 			d.pmap.backward(tod,omap)
 		return reduce(omap, self.comm), ojunk
@@ -154,7 +153,6 @@ class PrecondBinned:
 	a pixel by pixel basis. It does take into account correlations between
 	the different signal components inside each pixel, though."""
 	def __init__(self, mapeq):
-		print "PrecondBinned init A"
 		ncomp     = mapeq.area.shape[0]
 		# Compute the per pixel approximate inverse covmat
 		div_map   = enmap.zeros((ncomp,ncomp)+mapeq.area.shape[1:],mapeq.area.wcs, mapeq.area.dtype)
@@ -164,10 +162,6 @@ class PrecondBinned:
 			div_junk[...]  = 1
 			div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
 		self.div_map, self.div_junk = reduce(div_map, mapeq.comm), div_junk
-
-
-		enmap.write_map("foo.hdf", self.div_map)
-
 
 		# Compute the pixel component masks, and use it to mask out the
 		# corresonding parts of the map preconditioner
@@ -239,38 +233,20 @@ class PrecondSubmap:
 		# For each group, define a single effective scan
 		myscans = [sim_scan_from_group(group, mapeq.area) for group in mygroups]
 		self.linsys = LinearSystemMap(myscans, mapeq.area, mapeq.comm, precon=precon)
-		self.nmax = 100
+		self.nmax = 20
 		self.mask = binned.mask
 
 	def apply(self, map, junk):
-		# Insert map as new RHS for local linear system.
-		# This breaks encapsulation (though we didn't have much of that
-		# to begin with), but lets us avoid recomputing everything, in
-		# particular the pointing matrix.
-		map  = map.copy()
-		eq   = self.linsys
-		eq.b = eq.dof.zip(map,junk)
-		print "eq.b", eq.b
-		1/0
-
-
-		for d in eq.mapeq.data:
-			d.scan.map = map
-
-		print "eq.mapeq.b()", eq.mapeq.b()
-
-		eq.b = eq.dof.zip(*eq.mapeq.b())
-
-
-		# And solve this system
-		solver = cg.CG(eq.A, eq.b, eq.dof.dot)
-		for i in range(nmax):
+		eq     = self.linsys
+		b      = eq.dof.zip(map,junk)
+		solver = cg.CG(eq.A, b, M=eq.M, dot=eq.dof.dot)
+		for i in range(self.nmax):
 			t1 = time.time()
 			solver.step()
 			t2 = time.time()
-			print "%5d %15.7e %6.3f" % (cg.i, cg.err, t2-t1)
-			map, _ = eq.dof.unzip(solver.x)
-			enmap.write_map("sub%03d.hdf" % cg.i, map)
+			print "sub %5d %15.7e %6.3f" % (solver.i, solver.err, t2-t1)
+			#map, _ = eq.dof.unzip(solver.x)
+			#enmap.write_map("sub%03d.hdf" % solver.i, map)
 		map, _ = eq.dof.unzip(solver.x)
 		return map, junk
 
@@ -406,7 +382,7 @@ def analyze_scan(d):
 			sys    = d.scan.sys,
 			site   = d.scan.site,
 			mjd0   = d.scan.mjd0,
-			noise  = d.scan.noise,
+			noise  = d.nmat,
 			offsets= d.scan.offsets,
 			comps  = d.scan.comps,
 			ncomp  = len(d.pmap.comps),
@@ -472,7 +448,7 @@ def build_triangle_wave(ibox, ivec):
 	phase[phase>period] = 2*period-phase[phase>period]
 	return (ibox[0,:,None] + ivec[1][:,None]*np.arange(nsamp)[None,:] + ivec[0][:,None]*phase[None,:]).T
 
-def sim_scan_from_group(group, area):
+def sim_scan_from_group(group, area, oversample=2):
 	obox_tot = np.array([np.min([g.obox[0] for g in group],0),np.max([g.obox[1] for g in group],0)])
 	# We already know that the scanning directions and amplitudes agree.
 	# So to construct the total bounds in input coordinates, we just need
@@ -481,6 +457,13 @@ def sim_scan_from_group(group, area):
 	# x = (ovec'ovec)"ovec'out_off
 	ivec, iref = group[0].ivecs, group[0].ibox
 	ovec, oref = group[0].ovecs, group[0].obox
+
+	# We will oversample by a certain factor to ensure that we hit every
+	# pixel. This means that the simulated telescope moves less per sample,
+	# and that the last frequency bin must be extended.
+	ivec /= oversample
+	ovec /= oversample
+
 	ibox_tot = iref + utils.decomp_basis(ovec, obox_tot-oref).dot(ivec)
 	# We must now create new effective scan objects. These require:
 	#  boresight: fit to ibox_tot, repeating scanning pattern as necessary
@@ -495,11 +478,12 @@ def sim_scan_from_group(group, area):
 	cut    = rangelist.zeros([ndet,nsamp])   # no cuts
 	sys, site, mjd0 = group[0].sys, group[0].site, group[0].mjd0
 
-	noise = build_effective_noise_model(group, nsamp, ndet)
+	noise = build_effective_noise_model(group, nsamp)
+	noise.bins[-1,-1] *= oversample
 
 	return scansim.SimMap(map=area, boresight=bore, offsets=offset, comps=comps, cut=cut, sys=sys, site=site, mjd0=mjd0, noise=noise)
 
-def build_effective_noise_model(group, nsamp, ndet):
+def build_effective_noise_model(group, nsamp):
 	# Next, construct a noise model for this scan. If all the individual
 	# scans perfectly overlapped, this would simply be the sum of all
 	# the inverse covariances projected down to our ncomp detectors.
@@ -517,62 +501,27 @@ def build_effective_noise_model(group, nsamp, ndet):
 	# For now, just compute what we would get if they did overlap.
 	ncomp     = group[0].ncomp
 	noise_tot = copy.deepcopy(group[0].noise)
-	# The individual scans do not have the same frequency bins,
-	# because they don't all have the same length. We handle this
-	# by rebinning.
-	nf       = nsamp/2+1
-	lens     = [g.noise.bins[-1,-1] for g in group]
-	ilongest = np.argmax(lens)
-	bins     = group[ilongest].noise.bins
-	if bins[-1,-1] < nf:
-		rest     = [[group[ilongest].noise.bins[-1,-1],nf]]
-		bins     = np.concatenate([bins,rest])
+	# The individual scans may not have the same frequency bins.
+	# We handle this by rebinning to the bins of the first member.
+	bins     = group[0].noise.bins
 	nbin     = bins.shape[0]
 
-	iNu = np.zeros([nbin,ndet])
-	iC  = np.zeros([nbin,ndet,ndet])
-
+	iC  = np.zeros([nbin,ncomp,ncomp])
 	for member in group:
 		noise    = member.noise
 		# Compute mapping between local and global binning
-		my_nf    = noise.bins[-1,-1]
-		my_nbin  = len(noise.bins)
-		rebins   = bins[:,0]*my_nf/nf
-		inds     = np.searchsorted(noise.bins[:,1], rebins)
-		inds     = inds + (rebins-noise.bins[inds,0])/(noise.bins[inds,1]-noise.bins[inds,0]).astype(float)
+		bcenters = np.mean(bins,1)
+		inds     = np.searchsorted(noise.bins[:,1], bcenters)
+		inds     = inds + (bcenters-noise.bins[inds,0])/(noise.bins[inds,1]-noise.bins[inds,0])
 
 		# Compute detector-collapsed local noise parameters, assuming
 		# equal noise for each
-		small_iC  = np.zeros([my_nbin,ndet,ndet])
-		for i,vb in enumerate(noise.vbins):
-			small_Q  = noise.Q[vb[0]:vb[1]].dot(member.comps[:,:ncomp])
-			small_U  = member.comps[:,:ncomp].T.dot(np.diag(noise.iNu[i])).dot(member.comps[:,:ncomp])
-			small_iC[i] = small_U - small_Q.T.dot(small_Q)
+		comps    = member.comps[:,:ncomp]
+		small_iC = np.zeros([len(noise.bins),ncomp,ncomp])
+		for i,icov in enumerate(noise.icovs):
+			small_iC[i] = comps.T.dot(icov).dot(comps)
 		# Interpolate to global bins
 		iC  += utils.interpol(small_iC.T,  inds[None,:], order=1).T
 
-	# Extract diagonal approximation of iC. This is only needed in the white noise
-	# approximation regions - otherwise we could have used Q for everything.
-	# This is actually not trivial. It is the same operation we encounter when trying
-	# to estimate the noise model in the first place. The problem is that if we extract too much,
-	# then the remainder becomes non-positive definite, making eigpow discard stuff.
-	for i in range(5,nbin):
-		iC[i] += np.mean(iC[i])
-		a = 2.0
-		while True:
-			iNu[i] = np.diag(iC[i])*a
-			iC2    = iC[i] - np.diag(iNu[i])
-			Q      = array_ops.eigpow(iC2[None], 0.5, axes=[-2,-1])[0]
-			iC3    = Q.T.dot(Q) + np.diag(iNu[i])
-			res    = np.sum((iC3-iC[i])**2)/np.sum(iC[i]**2)
-			if res < 1e-6: break
-			a *= 0.9
-		iC[i] = iC2
-
-	# Compute equivalent Q for iC
-	Q = array_ops.eigpow(iC, 0.5, axes=[-2,-1]).T.reshape(-1,ndet)
-	tmp = np.arange(nbin+1)
-	vbins = np.array([tmp[:-1],tmp[1:]]).T*ndet
-
-	# Phew! That's the total noise parameters we get
-	return bunch.Bunch(bins=bins, iNu=iNu, Q=Q, vbins=vbins)
+	# Build a dense binned noise model based on this
+	return nmat.NmatBinned(iC, bins)

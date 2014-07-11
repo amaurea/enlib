@@ -90,7 +90,6 @@ class BCG:
 		self.M = M
 		self.M2 = M2
 		self.dot = dot
-		self.x = x0.copy()
 		self.bnorm = self.dot(b,b)
 		if x0 == None:
 			self.x = b*0

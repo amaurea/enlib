@@ -1,5 +1,6 @@
 import numpy as np, bunch, copy, warnings
-from enlib import scan, rangelist, coordinates, utils, nmat, pmat
+from enlib import scan, rangelist, coordinates, utils, nmat, pmat, array_ops
+from enlib.bins import linbin
 warnings.filterwarnings("ignore")
 
 def rand_srcs(box, nsrc, amp, fwhm, rand_fwhm=False):
@@ -21,76 +22,34 @@ def rand_srcs(box, nsrc, amp, fwhm, rand_fwhm=False):
 		ofwhm = np.zeros([nsrc]) + fwhm
 	return bunch.Bunch(pos=pos,amps=amps,beam=ofwhm/(8*np.log(2))**0.5)
 
-def white_noise(ndet, nsamp, sigma, seed=0):
-	noise = bunch.Bunch(
-		bins  = np.array([[0,nsamp/2+1]]),
-		vbins = np.array([[0,0]]),
-		iNu   = np.zeros([1,ndet])+sigma**-2,
-		Q     = np.zeros([1,ndet]),
-		seed  = seed,
-		sigma = sigma)
-	return noise
+def white_noise(ndet, nsamp, sigma):
+	bins  = linbin(1.0, 1)
+	vbins = np.array([[0,0]])
+	D     = np.zeros([1,ndet])+sigma**2
+	V     = np.zeros([1,ndet])
+	E     = np.zeros([1])
+	return nmat.NmatDetvecs(D, V, E, bins, vbins)
 
-def oneoverf_noise(ndet, nsamp, sigma, seed=0, fknee=0.2, alpha=1):
+def oneoverf_noise(ndet, nsamp, sigma, fknee=0.2, alpha=1):
 	nbin  = 1000
-	freq  = np.arange(nbin)*1.0/nbin
-	iNu   = np.empty([nbin,ndet])
-	iNu[:,:] = (1/((1+(freq/fknee)**-alpha)*sigma**2))[:,None]
-	bins  = np.arange(nbin+1)*(nsamp/2+1)/nbin
-	bins  = np.ascontiguousarray([bins[:-1],bins[1:]]).T
+	bins  = linbin(1.0, nbin)
+	freq  = np.mean(bins,1)
+	Nu    = np.empty([nbin,ndet])
+	Nu[:,:] = ((1+(freq/fknee)**-alpha)*sigma**2)[:,None]
+	#Nu[:,:] = ((0+(freq/fknee)**-alpha)*sigma**2)[:,None]
 	vbins = np.zeros([nbin,2],dtype=int)
-	noise = bunch.Bunch(
-		bins  = bins,
-		vbins = vbins,
-		iNu   = iNu,
-		Q     = np.zeros([1,ndet]),
-		seed  = seed,
-		sigma = sigma)
-	return noise
+	return nmat.NmatDetvecs(Nu, np.zeros([1,ndet]), np.zeros([1]), bins, vbins)
 
-def oneoverf_detcorr_noise(ndet, nsamp, sigma, seed=0, fknee=0.2, alpha=1, atm=10):
-	nmode = 1
+def oneoverf_detcorr_noise(ndet, nsamp, sigma, fknee=0.2, alpha=1):
+	# A single, atmospheric mode
 	nbin  = 1000
-	bins  = np.arange(nbin+1)*(nsamp/2+1)/nbin
-	bins  = np.ascontiguousarray([bins[:-1],bins[1:]]).T
-	freq  = np.arange(nbin)*1.0/nbin
-	freq += freq[0]/2
-	Nu    = np.zeros([nbin,ndet])+sigma**2*1e-10
-	E     = np.zeros([nbin,nmode])
-	E[:,0]= (freq/fknee)**-alpha * sigma**2
-	V     = np.zeros([nbin,ndet,1])
-	V[:,:,0] = ((2*(np.arange(ndet)%2)-1)*ndet**-0.5)[None,:]
-	res = prepare_params(bins, Nu, E, V)
-	res.seed = seed
-	return res
-
-def prepare_params(bins, Nu, E, V):
-	"""Return a Detvecs params object given measured diagonal noise Nu[nbin,ndet],
-	correlated eigenvalues E[nbin][nmode] and correlated modes V[nbin][ndet,nmode]
-	for the given bins[nbin,2]."""
-	vtmp = np.concatenate([[0],np.cumsum(np.array([len(e) for e in E]))])
-	vbins= np.array([vtmp[0:-1],vtmp[1:]]).T
-	E, V = np.hstack(E), np.hstack(V)
-	iNu  = np.array(1/Nu)
-	Q    = np.zeros(V.T.shape)
-	def eig_pow(A, p):
-		if A.size == 0: return A
-		e,v = np.linalg.eigh(A)
-		return v.dot(np.diag(e**p)).dot(v.T)
-	# Nu" - Nu"V(E"+V'Nu"V)"V'Nu" = Nu" - Q'Q
-	# Q = (E"+V'Nu"V)**-0.5 V'Nu
-	# Q[nvec,ndet]
-	for i, b in enumerate(vbins):
-		Vb, Eb, iNub = V[:,b[0]:b[1]], E[b[0]:b[1]], iNu[i]
-		VtNi   = Vb.T*iNub[None,:]
-		core   = np.diag(1/Eb) + VtNi.dot(Vb)
-		Q[b[0]:b[1],:] = eig_pow(core,-0.5).dot(VtNi)
-	return bunch.Bunch(
-		bins  = bins,
-		vbins = vbins,
-		iNu   = iNu,
-		Q     = Q)
-
+	bins  = linbin(1.0, nbin)
+	freq  = np.mean(bins,1)
+	Nu    = np.zeros([nbin,ndet])+sigma**2
+	E     = (freq/fknee)**-alpha * sigma**2
+	V     = np.zeros([nbin,ndet])+1
+	vbins = linbin(nbin,nbin)
+	return nmat.NmatDetvecs(Nu, V, E, bins, vbins)
 
 def scan_ceslike(nsamp, box, sys="equ", srate=100, azrate=0.123):
 	t = np.arange(nsamp,dtype=float)/srate
@@ -119,11 +78,12 @@ def scan_grid(box, res, sys="equ", dir=0):
 	boresight[:,1:] = decra.T
 	return bunch.Bunch(boresight=boresight, sys=sys)
 
-def dets_scattered(ndet, rad=0.5*np.pi/180):
-	offsets = np.random.standard_normal([ndet,3])*rad
+def dets_scattered(nmul, nper=3, rad=0.5*np.pi/180):
+	ndet = nmul*nper
+	offsets = np.repeat(np.random.standard_normal([nmul,3])*rad, nper,0)
 	offsets[:,0] = 0
 	# T,Q,U sensitivity
-	angles = np.arange(ndet)*np.pi/ndet
+	angles = np.arange(ndet)*np.pi/nmul
 	comps     = np.zeros([ndet,4])
 	comps[:,0] = 1
 	comps[:,1] = np.cos(2*angles)
@@ -134,7 +94,7 @@ def nocut(ndet, nsamp):
 	return rangelist.Multirange([rangelist.Rangelist(np.zeros([0,2],dtype=int),n=nsamp) for i  in range(ndet)])
 
 class SimSrcs(scan.Scan):
-	def __init__(self, scanpattern, dets, srcs, noise, cache=False):
+	def __init__(self, scanpattern, dets, srcs, noise, cache=False, seed=0):
 		# Set up the telescope
 		self.boresight = scanpattern.boresight
 		self.sys       = scanpattern.sys
@@ -146,6 +106,7 @@ class SimSrcs(scan.Scan):
 		# Set up the simulated signal properties
 		self.srcs  = srcs
 		self.noise = noise
+		self.seed  = seed
 
 		if cache: self._tod = None
 
@@ -153,12 +114,12 @@ class SimSrcs(scan.Scan):
 		# Start with the noise
 		if hasattr(self, "_tod") and self._tod is not None:
 			return self._tod.copy()
-		np.random.seed(self.noise.seed)
+		np.random.seed(self.seed)
 		tod = np.random.standard_normal([self.ndet,self.nsamp]).astype(np.float32)
-		# Ad hoc support for non-detector correlations
-		tmp = copy.deepcopy(self.noise)
-		tmp.iNu = 1/tmp.iNu; tmp.iNu[~np.isfinite(tmp.iNu)] = 0
-		nmat.NmatDetvecs(tmp).apply(tod)
+		covs = array_ops.eigpow(self.noise.icovs, -0.5, axes=[-2,-1])
+		N12  = nmat.NmatBinned(covs, self.noise.bins, self.noise.dets)
+		N12.apply(tod)
+		tod[...] = 0 # FIXME
 		tod = tod.astype(np.float64)
 		# And add the point sources
 		for di in range(self.ndet):
@@ -166,7 +127,7 @@ class SimSrcs(scan.Scan):
 			for i, (pos,amp,beam) in enumerate(zip(self.srcs.pos,self.srcs.amps,self.srcs.beam)):
 				point = (self.boresight+self.offsets[di,None,:])[:,1:]
 				r2 = np.sum((point-pos[None,:])**2,1)/beam**2
-				I  = np.where(r2 < 6**2)[0]
+				I  = np.where(r2 < 4**2)[0]
 				tod[di,I] += np.exp(-0.5*r2[I])*np.sum(amp*self.comps[di])
 		if hasattr(self, "_tod"):
 			self._tod = tod.copy()
