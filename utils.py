@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, os, errno
+import numpy as np, scipy.ndimage, os, errno, scipy.optimize
 
 degree = np.pi/180
 arcmin = degree/60
@@ -241,6 +241,17 @@ def decomp_basis(basis, vec):
 	return np.linalg.solve(basis.dot(basis.T),basis.dot(vec.T)).T
 
 def find_period(d, axis=-1):
+	dwork = partial_flatten(d, [axis])
+	guess = find_period_fourier(dwork)
+	res = np.empty([3,len(dwork)])
+	for i, (d1, g1) in enumerate(zip(dwork, guess)):
+		res[:,i] = find_period_exact(d1, g1)
+	periods = res[0].reshape(d.shape[:axis]+d.shape[axis:][1:])
+	phases  = res[1].reshape(d.shape[:axis]+d.shape[axis:][1:])
+	chisqs  = res[2].reshape(d.shape[:axis]+d.shape[axis:][1:])
+	return periods, phases, chisqs
+
+def find_period_fourier(d, axis=-1):
 	"""This is a simple second-order estimate of the period of the
 	assumed-periodic signal d. It finds the frequency with the highest
 	power using an fft, and partially compensates for nonperiodicity
@@ -248,7 +259,7 @@ def find_period(d, axis=-1):
 	d2 = partial_flatten(d, [axis])
 	fd  = np.fft.rfft(d2)
 	ps = np.abs(fd)**2
-	ps[0] = 0
+	ps[:,0] = 0
 	periods = []
 	for p in ps:
 		n = np.argmax(p)
@@ -258,3 +269,16 @@ def find_period(d, axis=-1):
 		n2 = np.sum(np.arange(r[0],r[1])*p[r[0]:r[1]])/denom
 		periods.append(float(d.shape[axis])/n2)
 	return np.array(periods).reshape(d.shape[:axis]+d.shape[axis:][1:])
+
+def find_period_exact(d, guess):
+	n = d.size
+	# Restrict to at most 10 fiducial periods
+	n = int(min(10,n/float(guess))*guess)
+	off = (d.size-n)/2
+	d = d[off:off+n]
+	def chisq(x):
+		w,phase = x
+		model = interpol(d, np.arange(n)[None]%w+phase, order=1)
+		return np.var(d-model)
+	period,phase = scipy.optimize.fmin_powell(chisq, [guess,guess], xtol=1, disp=False)
+	return period, phase+off, chisq([period,phase])/np.var(d**2)

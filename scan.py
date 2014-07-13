@@ -46,7 +46,7 @@ from enlib import rangelist
 class Scan:
 	"""This defines the minimal interface for a Scan. It will usually be
 	inherited from."""
-	def __init__(self, boresight=None, offsets=None, comps=None, tod=None, sys=None, cut=None, site=None, mjd0=0, noise=None):
+	def __init__(self, boresight=None, offsets=None, comps=None, tod=None, sys=None, cut=None, site=None, mjd0=0, noise=None, dets=None):
 		# Boresight will always be unwound, i.e. it will have no 2pi jumps in it.
 		# Time is measured in seconds since start of scan, with mjd0 indicating the MJD of the scan start.
 		self.boresight = np.asfarray(boresight) # [nsamp,coords]
@@ -58,6 +58,7 @@ class Scan:
 		self.sys       = str(sys)               # str
 		self.site      = site
 		self.mjd0      = mjd0                   # time basis
+		self.dets      = np.arange(len(self.bomps)) if dets is None else dets
 		# Not part of the general interface
 		self._tod      = np.asfarray(tod)       # [ndet,nsamp]
 	def get_samples(self):
@@ -87,7 +88,9 @@ class Scan:
 		res.boresight = np.ascontiguousarray(enlib.slice.slice_downgrade(res.boresight, sampslice, axis=0))
 		res.offsets   = np.ascontiguousarray(res.offsets[detslice])
 		res.comps     = np.ascontiguousarray(res.comps[detslice])
+		res.dets      = res.dets[detslice]
 		res.cut       = res.cut[sel]
+		res.noise     = res.noise[sel]
 		return res, detslice, sampslice
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
