@@ -34,16 +34,20 @@ class DOF:
 				k = a.keys()[0]
 				distributed = k in ["dist", "distributed", "d"]
 				a = a[k]
-			a = np.atleast_1d(a)
-			if a.dtype == bool:
-				self.masks.append(a)
-				self.shapes.append(a.shape)
-				m = np.sum(a)
-			else:
-				assert a.ndim == 1
+			if type(a) is tuple:
 				self.masks.append(None)
-				self.shapes.append(tuple(a))
+				self.shapes.append(a)
 				m = np.prod(a)
+			else:
+				a = np.atleast_1d(a)
+				if a.dtype == bool:
+					self.masks.append(a)
+					self.shapes.append(a.shape)
+					m = np.sum(a)
+				else:
+					self.masks.append(a.astype(bool)+True)
+					self.shapes.append(a.shape)
+					m = np.prod(a.shape)
 			self.r.append([n,n+m])
 			self.sizes.append(m)
 			self.dist.append(distributed)

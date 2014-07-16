@@ -26,6 +26,10 @@ class LinearSystemMap(LinearSystem):
 		elif precon == "cyc":
 			self.precon = PrecondCirculant(self.mapeq)
 		elif precon == "sub":
+			# This introduces a circular dependency, as PrecondSubmap constructs
+			# a LinearSystemMap. This can be broken by sending in a class rather
+			# than a string for the precon argument. The current way works. But
+			# prevents factorizing out the preconditioners.
 			self.precon = PrecondSubmap(self.mapeq)
 		self.mask   = self.precon.mask
 		self.dof    = DOF({"shared":self.mask},{"distributed":self.mapeq.njunk})

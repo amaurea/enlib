@@ -8,6 +8,7 @@ try:
 	np.linalg.cholesky(np.array([1]).reshape(1,1,1))
 	def svd_pow(a,e):
 		U, s, Vh = np.linalg.svd(a)
+		if e < 0: s[s==0] = np.inf
 		seU = s[:,None,:]**e*U
 		return np.einsum("xij,xjk->xik",seU,Vh)
 except np.linalg.LinAlgError:
@@ -94,7 +95,7 @@ class ndmap(np.ndarray):
 			Whether to include pixels that are only partially
 			inside the bounding box. Default: False."""
 		ibox = self.subinds(box, inclusive)
-		return self[...,ibox[0,0]:ibox[1,0],ibox[0,1]:ibox[1,1]]
+		return self[...,ibox[0,0]:ibox[1,0]:ibox[2,0],ibox[0,1]:ibox[1,1]:ibox[2,1]]
 	def subinds(self, box, inclusive=False):
 		"""Helper function for submap. Translates the bounding
 		box provided into a pixel units. Assumes rectangular
@@ -105,12 +106,13 @@ class ndmap(np.ndarray):
 		# which we need to distinguish between fully or partially
 		# included pixels
 		bpix = self.wcs.wcs_world2pix(box[:,::-1]*180/np.pi,0)[:,::-1]+0.5
+		dir  = 2*(bpix[1]>bpix[0])-1
 		# If we are inclusive, find a bounding box, otherwise,
 		# an internal box
 		if inclusive:
-			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1])],dtype=int)
+			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
 		else:
-			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1])],dtype=int)
+			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
 		return ibox
 
 def slice_wcs(shape, wcs, sel):
@@ -413,7 +415,7 @@ def pad(emap, pix, return_slice=False):
 	w.wcs.crpix += pix[0,::-1]
 	# Construct a slice between the new and old map
 	s = (Ellipsis,slice(pix[0,0],emap.shape[-2]-pix[1,0]),slice(pix[0,1],emap.shape[-1]-pix[1,1]))
-	res = zeros(emap.shape[:-2]+tuple([s+sum(p) for s,p in zip(emap.shape[-2:],pix.T)]),dtype=emap.dtype)
+	res = zeros(emap.shape[:-2]+tuple([s+sum(p) for s,p in zip(emap.shape[-2:],pix.T)]),wcs=w, dtype=emap.dtype)
 	res[s] = emap
 	return res,s if return_slice else res
 

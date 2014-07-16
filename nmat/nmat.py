@@ -174,7 +174,7 @@ def woodbury_invert(D, V, E, vbins=None):
 		return iD, iV, np.zeros(len(E))-sign
 	else:
 		assert(D.ndim == 2)
-		iD, iV, iE = D*0, V*0, E*0
+		iD, iV, iE = D.copy(), V.copy(), E.copy()
 		for b, vb in enumerate(vbins):
 			iD[b], iV[vb[0]:vb[1]], iE[vb[0]:vb[1]] = woodbury_invert(D[b], V[vb[0]:vb[1]], E[vb[0]:vb[1]])
 		return iD, iV, iE
