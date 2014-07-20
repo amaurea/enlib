@@ -154,12 +154,12 @@ def enmap(arr, wcs=None, dtype=None, copy=True):
 		if isinstance(arr, ndmap):
 			wcs = arr.wcs
 		else:
-			return arr
+			wcs = create_wcs(arr.shape)
 	return ndmap(arr, wcs)
 
-def zeros(shape, wcs, dtype=None):
+def zeros(shape, wcs=None, dtype=None):
 	return enmap(np.zeros(shape), wcs, dtype=dtype)
-def empty(shape, wcs, dtype=None):
+def empty(shape, wcs=None, dtype=None):
 	return enmap(np.empty(shape), wcs, dtype=dtype)
 
 def posmap(shape, wcs, safe=True, corner=False):
@@ -357,6 +357,10 @@ def samewcs(arr, *args):
 		except AttributeError: pass
 	return arr
 
+def create_wcs(shape, box=None, proj="cea"):
+	if box is None: box = np.array([[-1,-1],[1,1]])*0.5
+	return getattr(enlib.wcs, proj)(shape[-2:][::-1], box[:,::-1])
+
 def spec2flat(shape, wcs, cov, exp=1.0):
 	"""Given a (ncomp,ncomp,l) power spectrum, expand it to harmonic map space,
 	returning (ncomp,ncomp,y,x). This involves a rescaling which converts from
@@ -377,6 +381,7 @@ def spec2flat(shape, wcs, cov, exp=1.0):
 	oshape= shape
 	if len(oshape) == 2: oshape = (1,)+oshape
 	ls  = np.sum(lmap(oshape, wcs)**2,0)**0.5
+	# Translate from steradians to pixels
 	cov = cov * np.prod(shape[-2:])/area(shape,wcs)
 	if exp != 1.0: cov = multi_pow(cov, exp)
 	cov[~np.isfinite(cov)] = 0
