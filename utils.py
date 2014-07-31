@@ -168,6 +168,22 @@ def partial_expand(a, shape, axes=[-1], pos=0):
 	a = np.reshape(a, list(a.shape[:len(axes)])+rest)
 	return moveaxes(a, range(len(axes)), axes)
 
+def addaxes(a, axes):
+	axes = np.array(axes)
+	axes[axes<0] += a.ndim
+	axes = np.sort(axes)[::-1]
+	inds = [slice(None) for i in a.shape]
+	for ax in axes: inds.insert(ax, None)
+	return a[inds]
+
+def delaxes(a, axes):
+	axes = np.array(axes)
+	axes[axes<0] += a.ndim
+	axes = np.sort(axes)[::-1]
+	inds = [slice(None) for i in a.shape]
+	for ax in axes: inds[ax] = 0
+	return a[inds]
+
 def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 	"""Given an array a[{x},{y}] and a list of
 	float indices into a, inds[len(y),{z}],

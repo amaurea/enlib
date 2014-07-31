@@ -345,7 +345,7 @@ def map_mul(mat, vec):
 	tvec = np.reshape(vec, oshape)
 	# It is a bit clunky to get einsum to handle arbitrary numbers of dimensions.
 	vpre  = "".join([chr(ord('a')+i) for i in range(len(oshape)-3)])
-	mpre  = vpre[vec.ndim-mat.ndim:]
+	mpre  = vpre[vec.ndim-(mat.ndim-1):]
 	data  = np.reshape(np.einsum("%sxyzw,%syzw->%sxzw" % (mpre,vpre,vpre), mat, tvec), vec.shape)
 	return samewcs(data, mat, vec)
 
@@ -419,10 +419,10 @@ def pad(emap, pix, return_slice=False):
 	w = emap.wcs.deepcopy()
 	w.wcs.crpix += pix[0,::-1]
 	# Construct a slice between the new and old map
-	s = (Ellipsis,slice(pix[0,0],emap.shape[-2]-pix[1,0]),slice(pix[0,1],emap.shape[-1]-pix[1,1]))
 	res = zeros(emap.shape[:-2]+tuple([s+sum(p) for s,p in zip(emap.shape[-2:],pix.T)]),wcs=w, dtype=emap.dtype)
-	res[s] = emap
-	return res,s if return_slice else res
+	mslice = (Ellipsis,slice(pix[0,0],res.shape[-2]-pix[1,0]),slice(pix[0,1],res.shape[-1]-pix[1,1]))
+	res[mslice] = emap
+	return (res,mslice) if return_slice else res
 
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
