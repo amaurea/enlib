@@ -5,29 +5,9 @@ For example, for the actpol data set, querying with "1376512459.1376536951.ar1"
 would respond with an object giving the location of the TOD, cuts, gains, etc.
 for that id."""
 import glob, shlex, pipes, re, bunch, itertools
-class Filedb:
+
+class Basedb:
 	def __init__(self, file=None, data=None):
-		"""Initializes the database based on a simple file with lines with
-		format name: glob-path [glob-path] [: glob-path ...], which can be quoted.
-		For each name specified this way, there will be an entry in the
-		"entries" returned from a query with the matching filename from
-		that category. The right hand side consists of a " : "-separated
-		list of globs. The colons separate priority classes - in case
-		no match is found in one, the next list is searched, and so on,
-		until a match is found. If a list only contains a single file, that will
-		be returned regardless of matching to allow for files that are
-		shared for all ids. Hence, a list of specific files followed by
-		a default can be specified as
-			foo: foofiles/*.txt : foodefault.txt
-		
-		The special class id specifies a regular expression to apply
-		to another class in order to recover ids. This allows Filedb to
-		not only passively supply paths in response to ids, but also to
-		supply a list of ids to begin with (though no validation is done
-		to ensure that files exist for all those ids). The format for
-		this rule is: id: [name] [regex]. The specified class must
-		already have been mentioned in the file.
-		"""
 		if file != None:
 			try:
 				with open(file,"r") as fileobj:
@@ -36,6 +16,35 @@ class Filedb:
 				self.load(file.read())
 		else:
 			self.load(data)
+	def load(self, data):
+		raise NotImplementedError
+	def dump(self, data):
+		raise NotImplementedError
+	def __getitem__(self, id):
+		raise NotImplementedError
+
+class Filedb(Basedb):
+	"""Initializes the database based on a simple file with lines with
+	format name: glob-path [glob-path] [: glob-path ...], which can be quoted.
+	For each name specified this way, there will be an entry in the
+	"entries" returned from a query with the matching filename from
+	that category. The right hand side consists of a " : "-separated
+	list of globs. The colons separate priority classes - in case
+	no match is found in one, the next list is searched, and so on,
+	until a match is found. If a list only contains a single file, that will
+	be returned regardless of matching to allow for files that are
+	shared for all ids. Hence, a list of specific files followed by
+	a default can be specified as
+		foo: foofiles/*.txt : foodefault.txt
+	
+	The special class id specifies a regular expression to apply
+	to another class in order to recover ids. This allows Filedb to
+	not only passively supply paths in response to ids, but also to
+	supply a list of ids to begin with (though no validation is done
+	to ensure that files exist for all those ids). The format for
+	this rule is: id: [name] [regex]. The specified class must
+	already have been mentioned in the file.
+	"""
 	def load(self, data):
 		self.files   = {}
 		self.rules   = {}
@@ -91,22 +100,13 @@ class Filedb:
 def cheap_glob(fname):
 	return glob.glob(fname) if re.search("[][*?]", fname) else [fname]
 
-class Regdb:
+class Regdb(Basedb):
 	"""Filedb needs to search through the file system to identify the files,
 	which can be very slow on some systems. This alternative class computes the
 	location of the resource files based on regular expressions without ever
 	looking at the file system. The cost is that it can't be queried for a list
 	of valid ids, which must be provided from the outside. It is also limited
 	to the sort of substitutions that can be expressed as a regular expression."""
-	def __init__(self, file=None, data=None):
-		if file != None:
-			try:
-				with open(file,"r") as fileobj:
-					self.load(fileobj.read())
-			except AttributeError:
-				self.load(file.read())
-		else:
-			self.load(data)
 	def load(self, data):
 		"""Each line that does not begin with # and isn't blank is a rule of
 		the form name: substitution [regex], where regex defaults to "(.*)"""
