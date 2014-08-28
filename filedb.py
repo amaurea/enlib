@@ -90,3 +90,47 @@ class Filedb:
 
 def cheap_glob(fname):
 	return glob.glob(fname) if re.search("[][*?]", fname) else [fname]
+
+class Regdb:
+	"""Filedb needs to search through the file system to identify the files,
+	which can be very slow on some systems. This alternative class computes the
+	location of the resource files based on regular expressions without ever
+	looking at the file system. The cost is that it can't be queried for a list
+	of valid ids, which must be provided from the outside. It is also limited
+	to the sort of substitutions that can be expressed as a regular expression."""
+	def __init__(self, file=None, data=None):
+		if file != None:
+			try:
+				with open(file,"r") as fileobj:
+					self.load(fileobj.read())
+			except AttributeError:
+				self.load(file.read())
+		else:
+			self.load(data)
+	def load(self, data):
+		"""Each line that does not begin with # and isn't blank is a rule of
+		the form name: substitution [regex], where regex defaults to "(.*)"""
+		self.rules = []
+		for line in data.splitlines():
+			if len(line) < 1 or line[0] == "#": continue
+			toks = shlex.split(line)
+			assert len(toks)>=2
+			name  = toks[0][:-1]
+			subst = toks[1]
+			regex = toks[2] if len(toks)>2 else r"(.*)"
+			self.rules.append({"name":name, "regex": re.compile(regex), "subst": subst})
+	def __getitem__(self, id):
+		"""Returns a bunch describing all the paths corresponding to id."""
+		res = bunch.Bunch()
+		for rule in self.rules:
+			res[rule["name"]] = rule["regex"].sub(rule["subst"], id)
+		res.id = id
+		return res
+	def dump(self):
+		lines = []
+		for rule in self.rules:
+			line = "%s: %s" %(rule["name"], pipes.quote(rule["subst"]))
+			if rule["regex"].pattern != r"(.*)":
+				line += " " + pipes.quote(rule["regex"].pattern)
+			lines.append(line)
+		return "\n".join(lines)
