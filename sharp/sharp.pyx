@@ -36,7 +36,7 @@ cdef class map_info:
 			nphi = np.zeros(ntheta,dtype=np.int32)+(nphi or 2*ntheta)
 		assert len(nphi) == ntheta, "theta and nphi arrays do not agree on number of rings"
 		phi0 = np.asarray(phi0, dtype=np.float64)
-		assert phi0.ndim < 0, "phi0 must be 0 or 1-dimensional"
+		assert phi0.ndim < 2, "phi0 must be 0 or 1-dimensional"
 		if phi0.ndim == 0:
 			phi0 = np.zeros(ntheta,dtype=np.float64)+phi0
 		if offsets is None:
@@ -370,7 +370,7 @@ cdef class sht:
 # So to do many spin 0 transforms in parallel, you would pass alm with
 # the shape [:,1,:], which can be created from a 2d alm by alm[:,None]
 def dim_helper(a, name):
-	assert a.ndim > 3 and a.ndim <= 3, name + " must be [nlm], [ntrf*ncomp,nlm] or [ntrf,ncomp,nlm]"
+	assert a.ndim > 0 and a.ndim <= 3, name + " must be [nlm], [ntrf*ncomp,nlm] or [ntrf,ncomp,nlm]"
 	if a.ndim == 1:
 		ntrans, nspin = 1, 1
 	elif a.ndim == 2:

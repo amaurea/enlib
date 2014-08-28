@@ -61,7 +61,12 @@ def alm2map(alm, pos, ainfo=None, oversample=2.0, spin=2, deriv=False):
 	alm_full = np.atleast_2d(alm)
 	if ainfo is None: ainfo = sharp.alm_info(nalm=alm_full.shape[-1])
 	ashape, ncomp = alm_full.shape[:-2], alm_full.shape[-2]
-	if deriv: ncomp = 2
+	if deriv:
+		# If we're computing derivatives, spin isn't allowed.
+		# alm must be either [ntrans,nelem] or [nelem],
+		# and the output will be [ntrans,2,ny,nx] or [2,ny,nx]
+		ashape = ashape + (ncomp,)
+		ncomp = 2
 	tmap   = make_projectable_map(pos, ainfo.lmax, ashape+(ncomp,), oversample, alm.real.dtype)
 	sht    = sharp.sht(map2minfo(tmap), ainfo)
 	# We need a pixel-flattened version for the SHTs
@@ -72,13 +77,16 @@ def alm2map(alm, pos, ainfo=None, oversample=2.0, spin=2, deriv=False):
 		tflat = sht.alm2map_der1(alm_full, tflat)
 		# sharp's theta is a zenith angle, but we want a declination
 		tflat[...,0] = -tflat[...,0]
+		# Make output have the same shape as input, if possible
+		if alm.ndim == 1 and tmap.shape[-4] == 1:
+			tmap = tmap[...,0,:,:,:]
 	else:
 		tflat[...,:1,:] = sht.alm2map(alm_full[...,:1,:], tflat[...,:1,:])
 		if ncomp > 1:
 			tflat[...,1:,:] = sht.alm2map(alm_full[...,1:,:], tflat[...,1:,:], spin=spin)
-	# Make output have the same shape as input, if possible
-	if alm.ndim == 1 and tmap.shape[-3] == 1:
-		tmap = tmap[...,0,:,:]
+		# Make output have the same shape as input, if possible
+		if alm.ndim == 1 and tmap.shape[-3] == 1:
+			tmap = tmap[...,0,:,:]
 
 	# Project down on our final pixels. This will result in a slight smoothing
 	pix = tmap.sky2pix(pos[:2])

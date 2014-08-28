@@ -40,6 +40,18 @@ def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None
 		elif c == "a": res.append(grad)
 	return tuple(res)
 
+def lens_map_flat(cmb_map, phi_map):
+	obs_pos  = cmb_map.posmap()
+	grad_phi = enmap.ifft(enmap.map2harm(phi_map)*phi_map.lmap()*1j).real
+	raw_pos  = obs_pos + grad_phi
+	# Convert to pixel positions
+	raw_pix  = cmb_map.sky2pix(raw_pos, safe=False)
+	# And extract the interpolated values. Because of a bug in map_pixels with
+	# mode="wrap", we must handle wrapping ourselves.
+	npad = int(np.ceil(max(np.max(-raw_pix),np.max(raw_pix-np.array(cmb_map.shape[-2:])[:,None,None]))))
+	pmap = enmap.pad(cmb_map, npad, wrap=True)
+	return enmap.samewcs(utils.interpol(pmap, raw_pix+npad, order=4, mode="wrap"), cmb_map)
+
 def offset_by_grad(ipos, grad, geodesic=True, pol=None):
 	"""Given a set of coordinates ipos[{dec,ra},...] and a gradient
 	grad[{ddec,dphi/cos(dec)},...] (as returned by curvedsky.alm2map(deriv=True)),

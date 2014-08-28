@@ -66,9 +66,11 @@ class FieldSampler:
 			dof = DOF(self.d)
 			def wrap(fun):
 				return lambda x: dof.zip(fun(*dof.unzip(x)))
+
 			solver = cg.CG(wrap(self.A), dof.zip(b), x0=dof.zip(x0), M=wrap(self.M))
 			#for i in range(50):
-			while solver.err > 1e-6:
+			#while solver.err > 1e-6:
+			while solver.err_true > 10:
 				solver.step()
 				if verbose:
 					print "%5d %15.7e %15.7e" % (solver.i, solver.err, solver.err_true)
@@ -107,8 +109,13 @@ class NoiseSampler:
 	"""
 	def __init__(self, data):
 		chisq = np.sum(np.abs(data-np.mean(data,0)[None])**2,0)
-		ndof  = data.shape[0]
-		if issubclass(data.dtype.type, np.complex): ndof *= 2
-		self.chisq, self.ndof, self.dtype = chisq, ndof, data.dtype
+		ndof, scale = data.shape[0]+1, 1
+		# Check this more properly. Logically I should multiply
+		# by two, since I have twice as many numbers. But that gives
+		# the wrong expectation value. Also, I really should subtract
+		# one due to removing the mean, but that doesn't work either.
+		#if issubclass(data.dtype.type, np.complex):
+		#	ndof *= 2; scale = 0.5
+		self.chisq, self.ndof, self.dtype, self.scale = chisq, ndof, data.dtype, scale
 	def sample(self):
-		return 1/np.random.gamma(self.ndof, 1/self.chisq)
+		return 1/np.random.gamma(self.ndof/2.0, 2.0/self.chisq)

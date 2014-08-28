@@ -199,7 +199,7 @@ def sky2pix(wcs, coords, safe=True, corner=False):
 		# opposite side of the sky relative to the zero pixel
 		for i in range(len(pix)):
 			n = np.abs(360./wcs.wcs.cdelt[i])
-			pix[i] = enlib.utils.rewind(pix[i], 0, n)
+			pix[i] = enlib.utils.rewind(pix[i], pix[i,0]%n, n)
 	return pix[::-1].reshape(coords.shape)
 
 def project(map, shape, wcs, order=3, mode="nearest"):
@@ -213,10 +213,13 @@ def project(map, shape, wcs, order=3, mode="nearest"):
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode)
 	return ndmap(pmap, wcs)
 
-def rand_map(shape, wcs, cov):
+def rand_map(shape, wcs, cov, scalar=False):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
 	the provided power spectrum."""
-	return harm2map(rand_gauss_iso_harm(shape, wcs, cov))
+	if scalar:
+		return ifft(rand_gauss_iso_harm(shape, wcs, cov)).real
+	else:
+		return harm2map(rand_gauss_iso_harm(shape, wcs, cov))
 
 def rand_gauss(shape, wcs):
 	"""Generate a map with random gaussian noise in pixel space."""
@@ -404,7 +407,7 @@ def downgrade(emap, factor):
 	res = np.mean(np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),-1),-2)
 	return ndmap(res, emap[...,::factor[0],::factor[1]].wcs)
 
-def pad(emap, pix, return_slice=False):
+def pad(emap, pix, return_slice=False,wrap=False):
 	"""Pad enmap "emap", creating a larger map with zeros filled in on the sides.
 	How much to pad is controlled via pix. If pix is a scalar, it specifies the number
 	of pixels to add on all sides. If it is 1d, it specifies the number of pixels to add
@@ -422,6 +425,11 @@ def pad(emap, pix, return_slice=False):
 	res = zeros(emap.shape[:-2]+tuple([s+sum(p) for s,p in zip(emap.shape[-2:],pix.T)]),wcs=w, dtype=emap.dtype)
 	mslice = (Ellipsis,slice(pix[0,0],res.shape[-2]-pix[1,0]),slice(pix[0,1],res.shape[-1]-pix[1,1]))
 	res[mslice] = emap
+	if wrap:
+		res[...,:pix[0,0],:]  = res[...,-pix[0,0]-pix[1,0]:-pix[1,0],:]
+		res[...,-pix[1,0]:,:] = res[...,pix[0,0]:pix[0,0]+pix[1,0],:]
+		res[...,:,:pix[0,1]]  = res[...,:,-pix[0,1]-pix[1,1]:-pix[1,1]]
+		res[...,:,-pix[1,1]:] = res[...,:,pix[0,1]:pix[0,1]+pix[1,1]]
 	return (res,mslice) if return_slice else res
 
 def grad(m):
