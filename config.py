@@ -63,7 +63,7 @@ config.save is particularly useful for recording the exact parmaeters
 your program was run with together with its output, so that the output
 can be easily interpreted later."""
 
-import argparse, os, textwrap
+import argparse, os, textwrap, ast
 from collections import OrderedDict
 
 # Preserve order in order to give reasonable grouping of variable in the
@@ -116,19 +116,21 @@ def from_str(string):
 			raise ValueError("Invalid format in config: %s" % line)
 		name  = toks[0].strip()
 		value = toks[1].strip()
-		try:
-			ptype = type(parameters[name]["value"])
-			if ptype in [int,float,bool]: value = ptype(value)
-			elif ptype is str:
-				if len(value) < 2 or value[0] != value[-1] or value[0] != "'" and value[0] != '"':
-					raise ValueError("Invalid string in config: %s" % line)
-				value = value[1:-1]
-			else:
-				raise ValueError("Unsupported config type: %s", repr(ptype))
-			set(name, value, " ".join(comment), priority=0)
-			comment = []
-		except KeyError:
-			raise ValueError("Unrecognized parameter in config: %s" % name)
+		def deduce_ptype(name, value):
+			try:
+				return type(parameters[name]["value"])
+			except KeyError:
+				return type(ast.literal_eval(value))
+		ptype = deduce_ptype(name, value)
+		if ptype in [int,float,bool]: value = ptype(value)
+		elif ptype is str:
+			if len(value) < 2 or value[0] != value[-1] or value[0] != "'" and value[0] != '"':
+				raise ValueError("Invalid string in config: %s" % line)
+			value = value[1:-1]
+		else:
+			raise ValueError("Unsupported config type: %s", repr(ptype))
+		set(name, value, " ".join(comment), priority=0)
+		comment = []
 
 def save(config_file):
 	"""Save our configuration parameters to the specified file. We support

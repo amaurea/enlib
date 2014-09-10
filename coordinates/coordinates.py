@@ -74,7 +74,7 @@ def hor2cel(coord, time, site):
 	coord  = np.asarray(coord)
 	info   = iers.lookup(time[0])
 	as2rad = np.pi/180/60/60
-	ao = slalib.sla_aoppa(time[0], info.dUT, site.lon, site.lat, site.alt,
+	ao = slalib.sla_aoppa(time[0], info.dUT, site.lon*np.pi/180, site.lat*np.pi/180, site.alt,
 		info.pmx*as2rad, info.pmy*as2rad, site.T, site.P, site.hum,
 		299792.458/site.freq, 0.0065)
 	am = slalib.sla_mappa(2000.0, time[0])
@@ -85,7 +85,7 @@ def cel2hor(coord, time, site):
 	coord  = np.asarray(coord)
 	info   = iers.lookup(time[0])
 	as2rad = np.pi/180/60/60
-	ao = slalib.sla_aoppa(time[0], info.dUT, site.lon, site.lat, site.alt,
+	ao = slalib.sla_aoppa(time[0], info.dUT, site.lon*np.pi/180, site.lat*np.pi/180, site.alt,
 		info.pmx*as2rad, info.pmy*as2rad, site.T, site.P, site.hum,
 		299792.458/site.freq, 0.0065)
 	am = slalib.sla_mappa(2000.0, time[0])

@@ -32,23 +32,30 @@ class LinearSystemMap(LinearSystem):
 			# prevents factorizing out the preconditioners.
 			self.precon = PrecondSubmap(self.mapeq)
 		self.mask   = self.precon.mask
-		self.dof    = DOF({"shared":self.mask},{"distributed":self.mapeq.njunk})
+		self.dof    = DOF({"shared":self.mask},{"distributed":(self.mapeq.njunk,)})
 		self.b      = self.dof.zip(*self.mapeq.b())
 		self.scans, self.area, self.comm = scans, area, comm
 		# Store a copy of the next level, which
 		# we will use when going up and down in levels.
 		self._upsys = None
 	def A(self, x):
-		#print "linmap A1", np.sum(x**2)
+		t1 = time.time()
 		res = self.dof.zip(*self.mapeq.A(*self.dof.unzip(x)))
-		#print "linmap A2", np.sum(res**2)
+		t2 = time.time()
+		print "top A %5.1f" % (t2-t1)
 		return res
 	def M(self, x):
-		#print "linmap M1", np.sum(x**2)
+		t1 = time.time()
 		res = self.dof.zip(*self.precon.apply(*self.dof.unzip(x)))
-		#print "linmap M2", np.sum(res**2)
+		t2 = time.time()
+		print "top B %5.1f" % (t2-t1)
 		return res
-	def dot(self, x, y): return self.dof.dot(x,y)
+	def dot(self, x, y):
+		t1 = time.time()
+		res = self.dof.dot(x,y)
+		t2 = time.time()
+		print "top . %5.1" % (t2-t1)
+		return res
 	@property
 	def upsys(self):
 		if self._upsys is None:
@@ -124,29 +131,43 @@ class MapEquation:
 		rhs_map  = enmap.zeros(self.area.shape, self.area.wcs, dtype=self.dtype)
 		rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
 		for d in self.data:
+			t1 = time.time()
 			tod = d.scan.get_samples()
 			tod-= np.mean(tod,1)[:,None]
 			tod = tod.astype(self.dtype)
+			print "b A", np.sum(tod**2)
+			t2 = time.time()
 			d.nmat.apply(tod)
+			print "b B", np.sum(tod**2)
+			t3 = time.time()
 			d.pmap.backward(tod,rhs_map)
+			print "b C", np.sum(rhs_map**2)
+			t4 = time.time()
 			d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
+			print "b D", np.sum(rhs_junk**2)
+			t5 = time.time()
+			print "b %5.1f %5.1f %5.1f %5.1f" % (t2-t1,t3-t2,t4-t3,t5-t4)
 		return reduce(rhs_map, self.comm), rhs_junk
 	def A(self, map, junk, white=False):
 		map, junk = map.copy(), junk.copy()
 		omap, ojunk = map*0, junk*0
 		for d in self.data:
+			t1 = time.time()
 			tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
 			d.pmap.forward(tod,map)
-			#if white: print "white A", np.sum(tod**2)
+			t2 = time.time()
 			d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
-			#if white: print "white B", np.sum(tod**2)
+			t3 = time.time()
 			if white:
 				d.nmat.white(tod)
 			else:
 				d.nmat.apply(tod)
-			#if white: print "white C", np.sum(tod**2)
+			t4 = time.time()
 			d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
+			t5 = time.time()
 			d.pmap.backward(tod,omap)
+			t6 = time.time()
+			print "A %5.1f %5.1f %5.1f %5.1f %5.1f" % (t2-t1,t3-t2,t4-t3,t5-t4,t6-t5)
 		return reduce(omap, self.comm), ojunk
 	def white(self, map, junk):
 		return self.A(map, junk, white=True)

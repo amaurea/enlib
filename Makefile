@@ -1,18 +1,31 @@
-all: sharp/sharp.so iers/_iers.so coordinates/pyfsla.so
-clean: clean_sharp clean_iers clean_coordinates
+all: sharp iers coordinates array_ops pmat nmat
+clean: clean_sharp clean_iers clean_coordinates clean_array_ops clean_pmat clean_nmat
 	rm -rf *.pyc
 
-sharp/sharp.so: foo
+sharp: foo
 	make -C sharp
 clean_sharp:
 	make -C sharp clean
-iers/_iers.so: foo
+iers: foo
 	make -C iers
 clean_iers:
 	make -C iers clean
-coordinates/pyfsla.so: foo
+coordinates: foo
 	make -C coordinates
 clean_coordinates:
 	make -C coordinates clean
+array_ops: foo
+	make -C array_ops
+clean_array_ops:
+	make -C array_ops clean
+pmat: foo
+	make -C pmat
+clean_pmat:
+	make -C pmat clean
+nmat: foo
+	make -C nmat
+clean_nmat:
+	make -C nmat clean
+
 
 foo:
