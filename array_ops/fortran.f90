@@ -140,7 +140,7 @@ subroutine solve_masked_32(A, b)
 	real(4)    :: Awork(size(A,1),size(A,2)), bwork(size(A,1)), work(size(A,1)*size(A,1))
 	integer(4) :: x, ny, nx, i, j, ni, nj, nc, err, piv(size(A,1))
 	nx = size(A,3); nc = size(A,1)
-	!$omp parallel do default(private) shared(A,b,nx,nc)
+	!$omp parallel do private(x,nj,j,Awork,bwork,ni,i,err,piv,work)
 	do x = 1, nx
 		nj = 0
 		do j = 1, nc
@@ -177,7 +177,7 @@ subroutine solve_masked_64(A, b)
 	real(8)    :: Awork(size(A,1),size(A,2)), bwork(size(A,1)), work(size(A,1)*size(A,1))
 	integer(4) :: x, ny, nx, i, j, ni, nj, nc, err, piv(size(A,1))
 	nx = size(A,3); nc = size(A,1)
-	!$omp parallel do default(private) shared(A,b,nx,nc)
+	!$omp parallel do private(x,nj,j,Awork,bwork,ni,i,err,piv,work)
 	do x = 1, nx
 		nj = 0
 		do j = 1, nc
@@ -214,7 +214,7 @@ subroutine solve_masked_c64(A, b)
 	complex(4)    :: Awork(size(A,1),size(A,2)), bwork(size(A,1)), work(size(A,1)*size(A,1))
 	integer(4) :: x, ny, nx, i, j, ni, nj, nc, err, piv(size(A,1))
 	nx = size(A,3); nc = size(A,1)
-	!$omp parallel do default(private) shared(A,b,nx,nc)
+	!$omp parallel do private(x,nj,j,Awork,bwork,ni,i,err,piv,work)
 	do x = 1, nx
 		nj = 0
 		do j = 1, nc
@@ -251,7 +251,7 @@ subroutine solve_masked_c128(A, b)
 	complex(8)    :: Awork(size(A,1),size(A,2)), bwork(size(A,1)), work(size(A,1)*size(A,1))
 	integer(4) :: x, ny, nx, i, j, ni, nj, nc, err, piv(size(A,1))
 	nx = size(A,3); nc = size(A,1)
-	!$omp parallel do default(private) shared(A,b,nx,nc)
+	!$omp parallel do private(x,nj,j,Awork,bwork,ni,i,err,piv,work)
 	do x = 1, nx
 		nj = 0
 		do j = 1, nc
@@ -294,7 +294,7 @@ subroutine condition_number_multi_32(A, nums)
 	! Generate +inf as badval, while hiding this from gfortran
 	info   = 0
 	badval = 1d0/info
-	!$omp parallel default(private) shared(A, nums, n, m, badval, lwork)
+	!$omp parallel private(i,Acopy,info,work,eigs)
 	allocate(work(lwork))
 	!$omp parallel do
 	do i = 1, n
@@ -328,7 +328,7 @@ subroutine condition_number_multi_64(A, nums)
 	! Generate +inf as badval, while hiding this from gfortran
 	info   = 0
 	badval = 1d0/info
-	!$omp parallel default(private) shared(A, nums, n, m, badval, lwork)
+	!$omp parallel private(i,Acopy,info,work,eigs)
 	allocate(work(lwork))
 	!$omp parallel do
 	do i = 1, n

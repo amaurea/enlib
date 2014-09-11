@@ -42,19 +42,16 @@ class LinearSystemMap(LinearSystem):
 		t1 = time.time()
 		res = self.dof.zip(*self.mapeq.A(*self.dof.unzip(x)))
 		t2 = time.time()
-		print "top A %5.1f" % (t2-t1)
 		return res
 	def M(self, x):
 		t1 = time.time()
 		res = self.dof.zip(*self.precon.apply(*self.dof.unzip(x)))
 		t2 = time.time()
-		print "top B %5.1f" % (t2-t1)
 		return res
 	def dot(self, x, y):
 		t1 = time.time()
 		res = self.dof.dot(x,y)
 		t2 = time.time()
-		print "top . %5.1" % (t2-t1)
 		return res
 	@property
 	def upsys(self):
@@ -135,16 +132,12 @@ class MapEquation:
 			tod = d.scan.get_samples()
 			tod-= np.mean(tod,1)[:,None]
 			tod = tod.astype(self.dtype)
-			print "b A", np.sum(tod**2)
 			t2 = time.time()
 			d.nmat.apply(tod)
-			print "b B", np.sum(tod**2)
 			t3 = time.time()
 			d.pmap.backward(tod,rhs_map)
-			print "b C", np.sum(rhs_map**2)
 			t4 = time.time()
 			d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
-			print "b D", np.sum(rhs_junk**2)
 			t5 = time.time()
 			print "b %5.1f %5.1f %5.1f %5.1f" % (t2-t1,t3-t2,t4-t3,t5-t4)
 		return reduce(rhs_map, self.comm), rhs_junk
@@ -322,11 +315,9 @@ def measure_Arow(mapeq, pix):
 	return Arow
 
 def cov2corr(iC, S, ref, beam):
-	print "A", np.max(iC), np.min(iC)
 	Sref = S.copy(); S[...] = S[:,:,ref[0],ref[1]][:,:,None,None]
 	iC = array_ops.matmul(iC,    S, axes=[0,1])
 	iC = array_ops.matmul(Sref, iC, axes=[0,1])
-	print "B", np.max(iC), np.min(iC)
 	# Shift the reference pixel to 0,0:
 	iC = np.roll(iC, -ref[0], 2)
 	iC = np.roll(iC, -ref[1], 3)

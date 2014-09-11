@@ -25,7 +25,9 @@ class PmatMap(PointingMatrix):
 		sys   = config.get("map_eqsys",      sys)
 		order = config.get("pmat_map_order", order)
 
-		box = np.array(scan.box); box[1] += (box[1]-box[0])*1e-3 # margin to avoid rounding errors
+		box = np.array(scan.box)
+		margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
+		box[0] -= margin/2; box[1] += margin/2
 		ipol = interpol.build(pos2pix(scan,template,sys), interpol.ip_linear, box, [1e-3,1e-3,utils.arcsec,utils.arcsec])
 		self.rbox = ipol.box
 		self.nbox = np.array(ipol.ys.shape[4:])
@@ -51,8 +53,8 @@ class PmatMap(PointingMatrix):
 		"""m -> tod"""
 		self.func( 1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 	def backward(self, tod, m):
-		self.func(-1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 		"""tod -> m"""
+		self.func(-1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
