@@ -2,17 +2,19 @@
 import numpy as np
 from enlib import utils, fft
 
-def resample(d, factor=[0.5], axes=None, method="fft"):
+def resample(d, factors=[0.5], axes=None, method="fft"):
+	if np.allclose(factors,1): return d
 	if method == "fft":
-		return resample_fft(d, factor, axes)
+		return resample_fft(d, factors, axes)
 	elif method == "bin":
-		return resample_bin(d, factor, axes)
+		return resample_bin(d, factors, axes)
 	else:
 		raise NotImplementedError("Resampling method '%s' is not implemented" % method)
 
-def resample_bin(d, factor=[0.5], axes=None):
-	down = [max(1,int(round(1/f))) for f in factor]
-	up   = [max(1,int(round(f)))   for f in factor]
+def resample_bin(d, factors=[0.5], axes=None):
+	if np.allclose(factors,1): return d
+	down = [max(1,int(round(1/f))) for f in factors]
+	up   = [max(1,int(round(f)))   for f in factors]
 	d    = downsample_bin(d, down, axes)
 	return upsample_bin  (d, up, axes)
 
@@ -54,6 +56,7 @@ def resample_fft(d, factors=[0.5], axes=None):
 	increased. If less factors are specified than the number of axes,
 	the numbers apply to the last N axes, unless the "axes" argument
 	is used to specify which ones."""
+	if np.allclose(factors,1): return d
 	factors = np.atleast_1d(factors)
 	assert len(factors) <= d.ndim
 	if axes is None: axes = np.arange(-len(factors),0)
