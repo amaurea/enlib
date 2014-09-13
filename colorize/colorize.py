@@ -1,5 +1,6 @@
 # Transform from real numbers to RGB colors.
 import numpy as np, time
+import fortran
 
 # Predefined schemes
 schemes = {}
@@ -49,22 +50,21 @@ def colorize(arr, desc="wmap", method="simple"):
 		return np.tile(desc.cols[0],arr.shape+(1,)).T
 	else:
 		a   = arr.reshape(-1)
-		res = np.empty((len(a),4),dtype=np.uint8)
 		if method == "simple":
-			colorize_simple(a, res, desc)
+			res = colorize_simple(a, desc)
 		elif method == "fast":
-			colorize_fast(a, res, desc)
+			res = colorize_fast(a, desc)
 		else:
 			raise NotImplementedError("colorize method '%d' is not implemented" % method)
 		return res.reshape(arr.shape+(4,))
 
-def colorize_fast(a, res, desc):
-	import fortran
-	tmp = res.astype(np.int16)
-	fortran.remap(a, tmp.T, desc.vals, desc.cols.astype(np.int16).T)
-	res[...] = tmp.astype(np.uint8)
+def colorize_fast(a, desc):
+	res = np.empty((len(a),4),dtype=np.uint16)
+	fortran.remap(a, res.T, desc.vals, desc.cols.astype(np.int16).T)
+	return res.astype(np.uint8)
 
-def colorize_simple(a, res, desc):
+def colorize_simple(a, desc):
+	res = np.empty((len(a),4),dtype=np.uint8)
 	ok  = np.where(~np.isnan(a))
 	bad = np.where( np.isnan(a))
 	# Bad values are transparent
@@ -81,3 +81,4 @@ def colorize_simple(a, res, desc):
 	# end points
 	col = np.round(desc.cols[i-1]*(1-x)[:,None] + desc.cols[i]*x[:,None])
 	res[ok] = np.array(np.minimum(np.maximum(col,0),0xff),dtype=np.uint8)
+	return res
