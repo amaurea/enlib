@@ -2,11 +2,7 @@
 import numpy as np, time
 
 # Predefined schemes
-schemes = {
-	"wmap"    : "0:000080,0.15:0000ff,0.4:00ffff,0.7:ffff00,0.9:ff5500,1:800000",
-	"gray"    : "0:000000,1:ffffff",
-	"hotcold" : "0:0000ff,0.5:000000,1:ff0000",
-}
+schemes = {}
 
 class Colorscheme:
 	def __init__(self, desc):
@@ -39,6 +35,10 @@ class Colorscheme:
 		order = np.argsort(vals)
 		self.vals, self.cols = vals[order], cols[order]
 		self.desc = desc
+
+schemes["wmap"]    = Colorscheme("0:000080,0.15:0000ff,0.4:00ffff,0.7:ffff00,0.9:ff5500,1:800000")
+schemes["gray"]    = Colorscheme("0:000000,1:ffffff")
+schemes["hotcold"] = Colorscheme("0:0000ff,0.5:000000,1:ff0000")
 
 def colorize(arr, desc="wmap", method="simple"):
 	# Accept both color schemes and strings
