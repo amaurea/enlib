@@ -1,37 +1,46 @@
 # Transform from real numbers to RGB colors.
 import numpy as np, time
 
+# Predefined schemes
+schemes = {
+	"wmap"    : "0:000080,0.15:0000ff,0.4:00ffff,0.7:ffff00,0.9:ff5500,1:800000",
+	"gray"    : "0:000000,1:ffffff",
+	"hotcold" : "0:0000ff,0.5:000000,1:ff0000",
+}
+
 class Colorscheme:
 	def __init__(self, desc):
 		"""Parses a color description string of the form "v1:c1,v2:c2,...,vn,vn"
 		into a numpy array of values [v1,v2,..,vn] and a numpy array of colors,
 		[[r,g,b,a],[r,g,b,a],[r,g,b,a],...]."""
 		try:
+			desc = schemes[desc]
+		except KeyError:
+			pass
+		try:
 			self.vals, self.cols, self.desc = desc.vals, desc.cols, desc.desc
+			return
 		except AttributeError:
-			toks = desc.split(",")
-			# Construct the output arrays
-			vals = np.zeros((len(toks)))
-			cols = np.zeros((len(toks),4))
-			# And populate them
-			for i, tok in enumerate(toks):
-				val, code = tok.split(":")
-				vals[i] = float(val)
-				color = np.array((0,0,0,0xff),dtype=np.uint8)
-				m = len(code)/2
-				for j in range(m):
-					color[j] = int(code[2*j:2*(j+1)],16)
-				cols[i,:] = color
-			# Sort result
-			order = np.argsort(vals)
-			self.vals, self.cols = vals[order], cols[order]
-			self.desc = desc
+			pass
+		toks = desc.split(",")
+		# Construct the output arrays
+		vals = np.zeros((len(toks)))
+		cols = np.zeros((len(toks),4))
+		# And populate them
+		for i, tok in enumerate(toks):
+			val, code = tok.split(":")
+			vals[i] = float(val)
+			color = np.array((0,0,0,0xff),dtype=np.uint8)
+			m = len(code)/2
+			for j in range(m):
+				color[j] = int(code[2*j:2*(j+1)],16)
+			cols[i,:] = color
+		# Sort result
+		order = np.argsort(vals)
+		self.vals, self.cols = vals[order], cols[order]
+		self.desc = desc
 
-wmap    = Colorscheme("0:000080,0.15:0000ff,0.4:00ffff,0.7:ffff00,0.9:ff5500,1:800000")
-gray    = Colorscheme("0:000000,1:ffffff")
-hotcold = Colorscheme("0:0000ff,0.5:000000,1:ff0000")
-
-def colorize(arr, desc=wmap, method="simple"):
+def colorize(arr, desc="wmap", method="simple"):
 	# Accept both color schemes and strings
 	desc = Colorscheme(desc)
 	if len(desc.vals) == 0:
