@@ -1,12 +1,18 @@
 subroutine remap(a, res, vals, cols)
+	use iso_c_binding
 	implicit none
 	real(8),    intent(in)    :: a(:), vals(:)
-	integer(1), intent(in)    :: cols(:,:)
-	integer(1), intent(inout) :: res(:,:)
+	integer(2), intent(in)    :: cols(:,:)
+	integer(2), intent(inout) :: res(:,:)
 	real(8) :: v, x(2), y(size(cols,1),2)
 	integer :: i, j
+	!$omp parallel do private(i,v,x,y)
 	do i = 1, size(a)
 		v = a(i)
+		if(v .ne. v) then
+			res(:,i) = 0
+			cycle
+		end if
 		! Find location first greater value in vals
 		do j = 1, size(vals)
 			if(vals(j) > v) exit

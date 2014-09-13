@@ -1,6 +1,5 @@
 # Transform from real numbers to RGB colors.
 import numpy as np, time
-import fortran
 
 class Colorscheme:
 	def __init__(self, desc):
@@ -33,7 +32,8 @@ gray    = Colorscheme("0:000000,1:ffffff")
 hotcold = Colorscheme("0:0000ff,0.5:000000,1:ff0000")
 
 def colorize(arr, desc=wmap, method="simple"):
-	desc = Colorscheme(desc) # Accept both color schemes and strings
+	# Accept both color schemes and strings
+	desc = Colorscheme(desc)
 	if len(desc.vals) == 0:
 		return np.zeros(arr.shape+(4,),dtype=np.uint8)
 	elif len(desc.vals) == 1:
@@ -44,36 +44,31 @@ def colorize(arr, desc=wmap, method="simple"):
 		if method == "simple":
 			colorize_simple(a, res, desc)
 		elif method == "fast":
-			fortran.remap(a, res.T, desc.vals, desc.cols.T)
+			colorize_fast(a, res, desc)
 		else:
 			raise NotImplementedError("colorize method '%d' is not implemented" % method)
 		return res.reshape(arr.shape+(4,))
 
+def colorize_fast(a, res, desc):
+	import fortran
+	tmp = res.astype(np.int16)
+	fortran.remap(a, tmp.T, desc.vals, desc.cols.astype(np.int16).T)
+	res[...] = tmp.astype(np.uint8)
+
 def colorize_simple(a, res, desc):
-	t = []
-	t.append(time.time())
 	ok  = np.where(~np.isnan(a))
 	bad = np.where( np.isnan(a))
-	t.append(time.time())
 	# Bad values are transparent
 	res[bad,:] = np.array((0,0,0,0),np.uint8)
-	t.append(time.time())
 	# Good ones get proper treatment
 	i = np.searchsorted(desc.vals, a[ok])
-	t.append(time.time())
 	# We always want a point to our left and right
 	i = np.minimum(np.maximum(i,1),len(desc.vals)-1)
-	t.append(time.time())
 	# Fractional distance to next point
 	x = (a[ok] - desc.vals[i-1])/(desc.vals[i]-desc.vals[i-1])
-	t.append(time.time())
 	# Cap this value too
 	x = np.minimum(np.maximum(x,0),1)
-	t.append(time.time())
 	# The result is the linear combination of the two
 	# end points
 	col = np.round(desc.cols[i-1]*(1-x)[:,None] + desc.cols[i]*x[:,None])
-	t.append(time.time())
 	res[ok] = np.array(np.minimum(np.maximum(col,0),0xff),dtype=np.uint8)
-	t.append(time.time())
-	print (" %7.3f"*8) % tuple([(t2-t2)*1000 for t1,t2 in zip(t[:-1],t[1:])])
