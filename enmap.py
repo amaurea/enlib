@@ -352,6 +352,14 @@ def map_mul(mat, vec):
 	data  = np.reshape(np.einsum("%sxyzw,%syzw->%sxzw" % (mpre,vpre,vpre), mat, tvec), vec.shape)
 	return samewcs(data, mat, vec)
 
+def smooth_gauss(emap, sigma):
+	"""Smooth the map given as the first argument with a gaussian beam
+	with the given standard deviation in radians."""
+	f  = map2harm(emap)
+	l2 = np.sum(emap.lmap()**2,0)
+	f *= np.exp(-l2*sigma**2)
+	return harm2map(f)
+
 def samewcs(arr, *args):
 	"""Returns arr with the same wcs information as the first enmap among args.
 	If no mathces are found, arr is returned as is."""
