@@ -57,7 +57,7 @@ class PmatMap(PointingMatrix):
 		self.func(-1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 	def hitcount(self, hitmap):
 		"""Accumulate hits in pixels of m"""
-		pmat_core.hitcount(hitmap.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox, self.nbox.T, self.ys.T)
+		pmat_core.hitcount(hitmap.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
