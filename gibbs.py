@@ -68,9 +68,9 @@ class FieldSampler:
 				return lambda x: dof.zip(fun(*dof.unzip(x)))
 
 			solver = cg.CG(wrap(self.A), dof.zip(b), x0=dof.zip(x0), M=wrap(self.M))
-			#for i in range(50):
+			for i in range(50):
 			#while solver.err > 1e-6:
-			while solver.err_true > 10:
+			#while solver.err_true > 10:
 				solver.step()
 				if verbose:
 					print "%5d %15.7e %15.7e" % (solver.i, solver.err, solver.err_true)
