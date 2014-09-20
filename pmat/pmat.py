@@ -55,6 +55,9 @@ class PmatMap(PointingMatrix):
 	def backward(self, tod, m):
 		"""tod -> m"""
 		self.func(-1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
+	def hitcount(self, hitmap):
+		"""Accumulate hits in pixels of m"""
+		pmat_core.hitcount(hitmap.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox, self.nbox.T, self.ys.T)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -68,6 +71,8 @@ class PmatMap(PointingMatrix):
 		phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
 		pmat_core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 		return pix, phase
+
+
 
 # Neither this approach nor time-domain linear interpolation works at the moment.
 # In theory, they would help with the subpixel bias issue. In practice, they
