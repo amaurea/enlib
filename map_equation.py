@@ -223,7 +223,7 @@ class PrecondCirculant:
 		#N  = 2
 		#pix = [[h*(2*i+1)/N/2,w*(2*j+1)/N/2] for i in range(N) for j in range(0,N)]
 		#pix = np.array([[-1,-1],[1,1]])*10+np.array([h/2,w/2])[None,:]
-		pix = pick_ref_points(binned.div_map[0,0], 4)
+		pix = pick_ref_points(binned.div_map[0,0], 3)
 		Arow = measure_corr_cyclic(mapeq, S, pix)
 		iC = np.conj(fft.fft(Arow, axes=[-2,-1]))
 
@@ -259,7 +259,7 @@ def pick_ref_points(hitmap, npoint):
 	w   = fft.ifft(fw, axes=[-2,-1]).real
 	# Find typical radius of hitmap
 	area_tot  = np.sum(w)/np.max(w)
-	area_mask = area_tot/npoint/2
+	area_mask = area_tot/npoint/3
 	r_mask    = (area_mask/np.pi)**0.5
 	for i in range(npoint):
 		# Find highest-weight point

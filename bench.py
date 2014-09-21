@@ -86,8 +86,8 @@ class Register(defaultdict):
 			lines.append(line)
 		return "\n".join(lines)
 	def write(self, fname):
-		with open(fname,"w"):
-			fname.write(str(self)+"\n")
+		with open(fname,"w") as f:
+			f.write(str(self)+"\n")
 
 stats = Register()
 

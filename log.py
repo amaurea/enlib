@@ -63,7 +63,7 @@ def init(level=INFO, rank=MPI.COMM_WORLD.rank, file=None, fmt=default_format, co
 			oname = file % rank
 		except:
 			oname = file
-		fh = FileHandler(oname)
+		fh = FileHandler(oname,mode="w")
 		fh.setLevel(DEBUG)
 		fh.addFilter(EnFilter(rank))
 		formatter = Formatter(fmt)
