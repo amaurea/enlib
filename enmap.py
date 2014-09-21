@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, warnings, enlib.wcs, enlib.slice, enlib.fft, astropy.io.fits
+import numpy as np, scipy.ndimage, warnings, enlib.wcs, enlib.slice, enlib.fft, astropy.io.fits, sys
 try:
 	import h5py
 except ImportError:
@@ -50,8 +50,8 @@ class ndmap(np.ndarray):
 	def __array_wrap__(self, arr, context=None):
 		if arr.ndim < 2: return arr
 		return ndmap(arr, self.wcs)
-	def copy(self):
-		return ndmap(np.array(self), self.wcs)
+	def copy(self, order='K'):
+		return ndmap(np.copy(self,order), self.wcs)
 	def sky2pix(self, coords, safe=True, corner=False): return sky2pix(self.wcs, coords, safe, corner)
 	def pix2sky(self, pix,    safe=True, corner=False): return pix2sky(self.wcs, pix,    safe, corner)
 	def box(self): return box(self.shape, self.wcs)
@@ -506,7 +506,10 @@ def read_fits(fname, hdu=0):
 	hdu = astropy.io.fits.open(fname)[hdu]
 	with warnings.catch_warnings():
 		wcs = enlib.wcs.WCS(hdu.header).sub(2)
-	return ndmap(hdu.data, wcs)
+	res = ndmap(hdu.data, wcs)
+	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
+		res = res.byteswap().newbyteorder()
+	return res
 
 def write_hdf(fname, emap):
 	"""Write an enmap as an hdf file, preserving all
@@ -533,10 +536,13 @@ def read_hdf(fname):
 			for key in hwcs:
 				header[key] = hwcs[key].value
 			wcs = enlib.wcs.WCS(header).sub(2)
-			return ndmap(data, wcs)
+			res = ndmap(data, wcs)
 		else:
 			# Compatibility for old format
 			sys = hfile["system"].value if "system" in hfile else "equ"
 			if sys == "equ": sys = "car"
 			wcs = enlib.wcs.from_bounds(data.shape[-2:][::-1], hfile["box"].value[:,::-1]*np.pi/180, sys)
-			return ndmap(data, wcs)
+			res = ndmap(data, wcs)
+	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
+		res = res.byteswap().newbyteorder()
+	return res

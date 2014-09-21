@@ -35,7 +35,7 @@ def split_slice_simple(sel, ndims):
 	"""Helper function for split_slice. Splits a slice
 	in the absence of ellipsis."""
 	res = [[] for n in ndims]
-	notNone = [v != None for v in sel]
+	notNone = [v is not None for v in sel]
 	subs = np.concatenate([[0],cumsplit(notNone, ndims)])
 	for i, r in enumerate(res):
 		r += sel[subs[i]:subs[i+1]]
