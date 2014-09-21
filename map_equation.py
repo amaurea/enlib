@@ -4,6 +4,7 @@ directly."""
 import numpy as np, bunch, time, h5py, copy
 from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim
 from enlib.degrees_of_freedom import DOF
+from scipy import ndimage
 from mpi4py import MPI
 
 class LinearSystem:
@@ -80,6 +81,12 @@ class LinearSystemMap(LinearSystem):
 			rebin = pmat.PmatCutRebin(hdata.pcut, ldata.pcut)
 			rebin.backward(hjunk[hdata.cutrange[0]:hdata.cutrange[1]], ljunk[ldata.cutrange[0]:ldata.cutrange[1]])
 		return self.dof.zip(hmap,hjunk)
+	def write(self, dir=None):
+		if self.comm.rank > 0: return
+		if dir is None: dir = "."
+		utils.mkdir(dir)
+		enmap.write_map(dir + "/rhs.fits", self.dof.unzip(self.b)[0])
+		self.precon.write(dir)
 
 # FIXME: How should I get the noise matrix? As an argument?
 # Should it already be measured, or should it be measured internally?
@@ -164,6 +171,11 @@ class MapEquation:
 		return reduce(omap, self.comm), ojunk
 	def white(self, map, junk):
 		return self.A(map, junk, white=True)
+	def hitcount(self):
+		hitmap = enmap.zeros(self.area.shape[-2:], dtype=np.int32)
+		for d in self.data:
+			d.pmap.hitcount(hitmap)
+		return hitmap
 
 class PrecondBinned:
 	"""This class implements a simple "binned" preconditioner, which
@@ -180,6 +192,8 @@ class PrecondBinned:
 			div_junk[...]  = 1
 			div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
 		self.div_map, self.div_junk = reduce(div_map, mapeq.comm), div_junk
+		self.hitmap = reduce(mapeq.hitcount(), mapeq.comm)
+		self.mapeq  = mapeq
 
 		# Compute the pixel component masks, and use it to mask out the
 		# corresonding parts of the map preconditioner
@@ -187,6 +201,13 @@ class PrecondBinned:
 		self.div_map *= self.mask[None,:]*self.mask[:,None]
 	def apply(self, map, junk):
 		return array_ops.solve_masked(self.div_map, map, [0,1]), junk/self.div_junk
+	def write(self, dir=None):
+		if self.mapeq.comm.rank > 0: return
+		if dir is None: dir = "."
+		utils.mkdir(dir)
+		enmap.write_map(dir + "/div.fits", self.div_map)
+		enmap.write_map(dir + "/hits.fits", self.hitmap)
+		enmap.write_map(dir + "/mask.fits", self.mask.astype(np.uint8))
 
 class PrecondCirculant:
 	"""This preconditioner approximates the A matrix as
@@ -198,16 +219,21 @@ class PrecondCirculant:
 		binned = PrecondBinned(mapeq)
 
 		S  = array_ops.eigpow(binned.div_map, -0.5, axes=[0,1])
+
 		# Sample 4 points to avoid any pathologies
-		N  = 2
-		pix = [[h*(2*i+1)/N/2,w*(2*j+1)/N/2] for i in range(N) for j in range(0,N)]
-		pix = np.array([[-1,-1],[1,1]])*10+np.array([h/2,w/2])[None,:]
+		#N  = 2
+		#pix = [[h*(2*i+1)/N/2,w*(2*j+1)/N/2] for i in range(N) for j in range(0,N)]
+		#pix = np.array([[-1,-1],[1,1]])*10+np.array([h/2,w/2])[None,:]
+		pix = pick_ref_points(binned.div_map[0,0], 4)
 		Arow = measure_corr_cyclic(mapeq, S, pix)
 		iC = np.conj(fft.fft(Arow, axes=[-2,-1]))
 
+		self.Arow = enmap.samewcs(Arow, binned.div_map)
 		self.S, self.iC = S, iC
 		self.div_junk = binned.div_junk
 		self.mask = binned.mask
+		self.binned = binned
+		self.mapeq = mapeq
 	def apply(self, map, junk):
 		# We will apply the operation m \approx S C S map
 		# The fft normalization is baked into iC.
@@ -218,6 +244,33 @@ class PrecondCirculant:
 		m/= np.prod(m.shape[-2:])
 		m  = array_ops.matmul(self.S, m,   axes=[0,1])
 		return m, junk/self.div_junk
+	def write(self, dir=None):
+		if self.mapeq.comm.rank > 0: return
+		if dir is None: dir = "."
+		utils.mkdir(dir)
+		enmap.write_map(dir + "/arow.fits", self.Arow)
+		self.binned.write(dir)
+
+def pick_ref_points(hitmap, npoint):
+	pix = []
+	w   = hitmap.copy()
+	# Smooth map to avoid atypical, sharp features
+	fw  = fft.fft(w, axes=[-2,-1])
+	apply_gaussian(fw, 10)
+	w   = fft.ifft(fw, axes=[-2,-1]).real
+	# Find typical radius of hitmap
+	area_tot  = np.sum(w)/np.max(w)
+	area_mask = area_tot/npoint/2
+	r_mask    = (area_mask/np.pi)**0.5
+	for i in range(npoint):
+		# Find highest-weight point
+		pix.append(np.unravel_index(np.argmax(w),w.shape))
+		# Mask surrounding area
+		mask = np.zeros(hitmap.shape)+1
+		mask[tuple(pix[-1])] = 0
+		mask = ndimage.distance_transform_edt(mask)>r_mask
+		w *= mask
+	return np.array(pix)
 
 class PrecondSubmap:
 	"""This preconditioner splits the scans into
@@ -267,6 +320,8 @@ class PrecondSubmap:
 			#enmap.write_map("sub%03d.hdf" % solver.i, map)
 		map, _ = eq.dof.unzip(solver.x)
 		return map, junk
+	def write(self, dir=None):
+		self.binned.write(dir)
 
 		# 1. Solve the equation sum_sub(A_sub) x = sum_sub b_sub
 		# by reading off the pixels from each, unapplying the noise
