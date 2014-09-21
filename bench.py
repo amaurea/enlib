@@ -37,7 +37,11 @@ class Value:
 	@property
 	def mean(self): return self.v/self.n if self.n > 0 else np.nan
 	@property
-	def std(self): return (self.vv/self.n - (self.v/self.n)**2)**0.5 if self.n > 0 else np.nan
+	def std(self):
+		try:
+			return (self.vv/self.n - (self.v/self.n)**2)**0.5 if self.n > 0 else np.nan
+		except ValueError:
+			return np.nan
 	def __repr__(self): return "Value(mean=%f, std=%f, n=%d)" % (self.mean, self.std, self.n)
 
 class Entry(defaultdict):

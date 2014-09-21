@@ -199,7 +199,9 @@ class PrecondBinned:
 		self.mask = makemask(self.div_map)
 		self.div_map *= self.mask[None,:]*self.mask[:,None]
 	def apply(self, map, junk):
-		return array_ops.solve_masked(self.div_map, map, [0,1]), junk/self.div_junk
+		with bench.mark("prec_bin"):
+			res = array_ops.solve_masked(self.div_map, map, [0,1]), junk/self.div_junk
+		return res
 	def write(self, dir=None):
 		if self.mapeq.comm.rank > 0: return
 		if dir is None: dir = "."
@@ -236,12 +238,13 @@ class PrecondCirculant:
 	def apply(self, map, junk):
 		# We will apply the operation m \approx S C S map
 		# The fft normalization is baked into iC.
-		m  = array_ops.matmul(self.S, map, axes=[0,1])
-		mf = fft.fft(m, axes=[-2,-1])
-		mf = array_ops.solve_masked(self.iC, mf, axes=[0,1])
-		m  = fft.ifft(mf, axes=[-2,-1]).astype(map.dtype)
-		m/= np.prod(m.shape[-2:])
-		m  = array_ops.matmul(self.S, m,   axes=[0,1])
+		with bench.mark("prec_cyc"):
+			m  = array_ops.matmul(self.S, map, axes=[0,1])
+			mf = fft.fft(m, axes=[-2,-1])
+			mf = array_ops.solve_masked(self.iC, mf, axes=[0,1])
+			m  = fft.ifft(mf, axes=[-2,-1]).astype(map.dtype)
+			m/= np.prod(m.shape[-2:])
+			m  = array_ops.matmul(self.S, m,   axes=[0,1])
 		return m, junk/self.div_junk
 	def write(self, dir=None):
 		if self.mapeq.comm.rank > 0: return
