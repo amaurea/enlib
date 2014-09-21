@@ -85,7 +85,7 @@ class Register(defaultdict):
 				line += (" " + info[1] + " " + info[2]) % (val.mean, val.std)
 			lines.append(line)
 		return "\n".join(lines)
-	def write(fname):
+	def write(self, fname):
 		with open(fname,"w"):
 			fname.write(str(self)+"\n")
 

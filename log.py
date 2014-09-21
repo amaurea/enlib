@@ -45,24 +45,24 @@ class ColoredFormatter(Formatter):
 
 default_format = "%(rank)3d %(wmins)7.2f %(mem)5.2f %(memmax)5.2f %(message)s"
 
-def init(level=INFO, rank=MPI.COMM_WORLD.rank, ofile=None, fmt=default_format, color=True):
+def init(level=INFO, rank=MPI.COMM_WORLD.rank, file=None, fmt=default_format, color=True):
 	"""Set up the root logger for output to console and file. Extra output records
 	for mpi rank, time since process start and memory usage are added by default.
 	Console output is colored by default, and info-level messages are muted from
 	others than root for console output. File output is done independently for each
-	task. If file-name can be a format string, which is then used as ofile%rank
+	task. If file-name can be a format string, which is then used as file%rank
 	to produce the output file. Otherwise, a different output file must be passed
-	for each mpi task. If ofile is None (the default), no file output is produced.
+	for each mpi task. If file is None (the default), no file output is produced.
 	The console level threshold is set by the level argument, which must be a
 	python logging module level. The threshold does not apply to file output, where
 	everything is output."""
 	logger  = getLogger("")
 	logger.setLevel(DEBUG)
-	if ofile:
+	if file:
 		try:
-			oname = ofile % rank
+			oname = file % rank
 		except:
-			oname = ofile
+			oname = file
 		fh = FileHandler(oname)
 		fh.setLevel(DEBUG)
 		fh.addFilter(EnFilter(rank))
@@ -77,3 +77,8 @@ def init(level=INFO, rank=MPI.COMM_WORLD.rank, ofile=None, fmt=default_format, c
 	ch.addFilter(QuietOthers(rank))
 	logger.addHandler(ch)
 	return logger
+
+def verbosity2level(verbosity):
+	if verbosity <= 0: return ERROR
+	if verbosity <= 1: return INFO
+	return DEBUG

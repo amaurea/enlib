@@ -123,7 +123,6 @@ class SimSrcs(scan.Scan):
 		tod = tod.astype(np.float64)
 		# And add the point sources
 		for di in range(self.ndet):
-			print di
 			for i, (pos,amp,beam) in enumerate(zip(self.srcs.pos,self.srcs.amps,self.srcs.beam)):
 				point = (self.boresight+self.offsets[di,None,:])[:,1:]
 				r2 = np.sum((point-pos[None,:])**2,1)/beam**2

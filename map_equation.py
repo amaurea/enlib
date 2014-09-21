@@ -1,11 +1,13 @@
 """This module represents the map-making equation P'N"Px = P'N"d.
 At this level of abstraction, we still deal mostly with maps and cuts etc.
 directly."""
-import numpy as np, bunch, time, h5py, copy
-from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim
+import numpy as np, bunch, time, h5py, copy, logging
+from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim, bench
 from enlib.degrees_of_freedom import DOF
 from scipy import ndimage
 from mpi4py import MPI
+
+L = logging.getLogger(__name__)
 
 class LinearSystem:
 	def A(self): raise NotImplementedError
@@ -21,6 +23,7 @@ class LinearSystem:
 # Abstract interface to the Map-making system.
 class LinearSystemMap(LinearSystem):
 	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin"):
+		L.info("Building preconditioner")
 		self.mapeq  = MapEquation(scans, area, comm=comm)
 		if precon == "bin":
 			self.precon = PrecondBinned(self.mapeq)
@@ -34,25 +37,20 @@ class LinearSystemMap(LinearSystem):
 			self.precon = PrecondSubmap(self.mapeq)
 		self.mask   = self.precon.mask
 		self.dof    = DOF({"shared":self.mask},{"distributed":(self.mapeq.njunk,)})
+		L.info("Building right-hand side")
 		self.b      = self.dof.zip(*self.mapeq.b())
 		self.scans, self.area, self.comm = scans, area, comm
 		# Store a copy of the next level, which
 		# we will use when going up and down in levels.
 		self._upsys = None
 	def A(self, x):
-		t1 = time.time()
 		res = self.dof.zip(*self.mapeq.A(*self.dof.unzip(x)))
-		t2 = time.time()
 		return res
 	def M(self, x):
-		t1 = time.time()
 		res = self.dof.zip(*self.precon.apply(*self.dof.unzip(x)))
-		t2 = time.time()
 		return res
 	def dot(self, x, y):
-		t1 = time.time()
 		res = self.dof.dot(x,y)
-		t2 = time.time()
 		return res
 	@property
 	def upsys(self):
@@ -135,40 +133,41 @@ class MapEquation:
 		rhs_map  = enmap.zeros(self.area.shape, self.area.wcs, dtype=self.dtype)
 		rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
 		for d in self.data:
-			t1 = time.time()
-			tod = d.scan.get_samples()
-			tod-= np.mean(tod,1)[:,None]
-			tod = tod.astype(self.dtype)
-			t2 = time.time()
-			d.nmat.apply(tod)
-			t3 = time.time()
-			d.pmap.backward(tod,rhs_map)
-			t4 = time.time()
-			d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
-			t5 = time.time()
-			print "b %5.1f %5.1f %5.1f %5.1f" % (t2-t1,t3-t2,t4-t3,t5-t4)
-		return reduce(rhs_map, self.comm), rhs_junk
+			with bench.mark("meq_b_get"):
+				tod = d.scan.get_samples()
+				tod-= np.mean(tod,1)[:,None]
+				tod = tod.astype(self.dtype)
+			with bench.mark("meq_b_N"):
+				d.nmat.apply(tod)
+			with bench.mark("meq_b_P'"):
+				d.pmap.backward(tod,rhs_map)
+				d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
+		with bench.mark("meq_b_red"):
+			rhs_map = reduce(rhs_map, self.comm)
+		times = [bench.stats[s]["time"].last for s in ["meq_b_get","meq_b_N","meq_b_P'","meq_b_red"]]
+		L.debug("meq b get %5.1f N %5.1f P' %5.1f red %5.1f" % tuple(times))
+		return rhs_map, rhs_junk
 	def A(self, map, junk, white=False):
 		map, junk = map.copy(), junk.copy()
 		omap, ojunk = map*0, junk*0
 		for d in self.data:
-			t1 = time.time()
-			tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
-			d.pmap.forward(tod,map)
-			t2 = time.time()
-			d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
-			t3 = time.time()
-			if white:
-				d.nmat.white(tod)
-			else:
-				d.nmat.apply(tod)
-			t4 = time.time()
-			d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
-			t5 = time.time()
-			d.pmap.backward(tod,omap)
-			t6 = time.time()
-			print "A %5.1f %5.1f %5.1f %5.1f %5.1f" % (t2-t1,t3-t2,t4-t3,t5-t4,t6-t5)
-		return reduce(omap, self.comm), ojunk
+			with bench.mark("meq_A_P"):
+				tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
+				d.pmap.forward(tod,map)
+				d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
+			with bench.mark("meq_A_N"):
+				if white:
+					d.nmat.white(tod)
+				else:
+					d.nmat.apply(tod)
+			with bench.mark("meq_A_P'"):
+				d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
+				d.pmap.backward(tod,omap)
+		with bench.mark("meq_A_red"):
+			omap = reduce(omap, self.comm)
+		times = [bench.stats[s]["time"].last for s in ["meq_A_P","meq_A_N","meq_A_P'","meq_A_red"]]
+		L.debug("meq A P %5.1f N %5.1f P' %5.1f red %5.1f" % tuple(times))
+		return omap, ojunk
 	def white(self, map, junk):
 		return self.A(map, junk, white=True)
 	def hitcount(self):
