@@ -539,9 +539,9 @@ def read_hdf(fname):
 			res = ndmap(data, wcs)
 		else:
 			# Compatibility for old format
-			sys = hfile["system"].value if "system" in hfile else "equ"
-			if sys == "equ": sys = "car"
-			wcs = enlib.wcs.from_bounds(data.shape[-2:][::-1], hfile["box"].value[:,::-1]*np.pi/180, sys)
+			csys = hfile["system"].value if "system" in hfile else "equ"
+			if csys == "equ": csys = "car"
+			wcs = enlib.wcs.from_bounds(data.shape[-2:][::-1], hfile["box"].value[:,::-1]*np.pi/180, csys)
 			res = ndmap(data, wcs)
 	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		res = res.byteswap().newbyteorder()

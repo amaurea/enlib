@@ -1,7 +1,7 @@
 all: pyfsla.so tidy
 
 pyfsla.so: pyfsla.f90 libsla.so
-	python setup.py build_ext --inplace
+	python setup.py build_ext --inplace --fcompiler=intelem
 
 libsla.so:
 	$(FC) -O2 -shared -fPIC -o $@ slalib/*.f

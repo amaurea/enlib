@@ -79,7 +79,8 @@ def hor2cel(coord, time, site):
 		299792.458/site.freq, 0.0065)
 	am = slalib.sla_mappa(2000.0, time[0])
 	# This involves a transpose operation, which is not optimal
-	return pyfsla.aomulti(time, coord, ao, am)
+	res = pyfsla.aomulti(time, coord, ao, am)
+	return res
 
 def cel2hor(coord, time, site):
 	coord  = np.asarray(coord)

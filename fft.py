@@ -1,8 +1,9 @@
 """This is a convenience wrapper of pyfftw."""
 import numpy as np, pyfftw, multiprocessing, os, enlib.utils
+from enlib import log
 
 try:
-	nthread_fft = int(os.environ['OMP_NUM_THREAD'])
+	nthread_fft = int(os.environ['OMP_NUM_THREADS'])
 except KeyError, ValueError:
 	nthread_fft=multiprocessing.cpu_count()
 nthread_ifft=nthread_fft

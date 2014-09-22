@@ -21,6 +21,7 @@ class EnFilter(Filter):
 		record.wmins = record.wtime/60.
 		record.whours= record.wmins/60.
 		record.mem   = memory.current()/1024.**3
+		record.resmem= memory.resident()/1024.**3
 		record.memmax= memory.max()/1024.**3
 		return record
 
@@ -43,7 +44,7 @@ class ColoredFormatter(Formatter):
 			col = colors.reset
 		return col + Formatter.format(self, record) + colors.reset
 
-default_format = "%(rank)3d %(wmins)7.2f %(mem)5.2f %(memmax)5.2f %(message)s"
+default_format = "%(rank)3d %(wmins)7.2f %(resmem)5.2f %(mem)5.2f %(message)s"
 
 def init(level=INFO, rank=MPI.COMM_WORLD.rank, file=None, fmt=default_format, color=True):
 	"""Set up the root logger for output to console and file. Extra output records
