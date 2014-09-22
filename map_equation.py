@@ -194,7 +194,7 @@ class MapEquation:
 			tod = np.empty([d.scan.ndet,d.scan.nsamp],dtype=self.dtype); tod[...] = 1
 			d.pcut.backward(tod,junk)
 			d.pmap.backward(tod,hitmap)
-		return hitmap[0].astype(np.int32)
+		return reduce(hitmap[0].astype(np.int32),self.comm)
 
 class PrecondBinned:
 	"""This class implements a simple "binned" preconditioner, which
@@ -213,9 +213,9 @@ class PrecondBinned:
 			div_junk[...]  = 1
 			div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
 		L.debug("prec bin C")
-		self.div_map, self.div_junk = reduce(div_map, mapeq.comm), div_junk
+		self.div_map, self.div_junk = div_map, div_junk
 		L.debug("prec bin D")
-		self.hitmap = reduce(mapeq.hitcount(), mapeq.comm)
+		self.hitmap = mapeq.hitcount()
 		L.debug("prec bin E")
 		self.mapeq  = mapeq
 
