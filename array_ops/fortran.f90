@@ -361,7 +361,9 @@ subroutine eigpow_32(A, pow)
 	! Workspace query
 	call ssyev('V', 'U', m, A(:,:,1), m, eigs, tmp, -1, info)
 	lwork = int(tmp(1))
+	!$omp parallel private(work,i,vecs,tmp2,info,eigs,j)
 	allocate(work(lwork))
+	!$omp do
 	do i = 1, n
 		vecs = A(:,:,i)
 		call ssyev('V', 'U', m, vecs, m, eigs, work, lwork, info)
@@ -380,6 +382,7 @@ subroutine eigpow_32(A, pow)
 		end if
 	end do
 	deallocate(work)
+	!$omp end parallel
 end subroutine
 
 subroutine eigpow_64(A, pow)
@@ -395,7 +398,9 @@ subroutine eigpow_64(A, pow)
 	! Workspace query
 	call dsyev('V', 'U', m, A(:,:,1), m, eigs, tmp, -1, info)
 	lwork = int(tmp(1))
+	!$omp parallel private(work,i,vecs,tmp2,info,eigs,j)
 	allocate(work(lwork))
+	!$omp do
 	do i = 1, n
 		vecs = A(:,:,i)
 		call dsyev('V', 'U', m, vecs, m, eigs, work, lwork, info)
@@ -414,6 +419,7 @@ subroutine eigpow_64(A, pow)
 		end if
 	end do
 	deallocate(work)
+	!$omp end parallel
 end subroutine
 
 end module
