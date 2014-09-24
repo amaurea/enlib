@@ -138,15 +138,22 @@ class MapEquation:
 		rhs_map  = enmap.zeros(self.area.shape, self.area.wcs, dtype=self.dtype)
 		rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
 		for d in self.data:
+			L.debug("b A")
 			with bench.mark("meq_b_get"):
 				tod = d.scan.get_samples()
+				L.debug("b B")
 				tod-= np.mean(tod,1)[:,None]
+				L.debug("b C")
 				tod = tod.astype(self.dtype)
+				L.debug("b D")
 			with bench.mark("meq_b_N"):
 				d.nmat.apply(tod)
+				L.debug("b E")
 			with bench.mark("meq_b_P'"):
 				d.pmap.backward(tod,rhs_map)
+				L.debug("b F")
 				d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
+				L.debug("b G")
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["meq_b_get","meq_b_N","meq_b_P'"]]
 			L.debug("meq b get %5.1f N %5.1f P' %5.1f" % tuple(times))

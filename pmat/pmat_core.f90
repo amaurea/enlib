@@ -281,7 +281,7 @@ contains
 	!		opoint(:,j) = opoint(:,j) + xrel(3)*(ys(:,2,1,1,ig)+xrel(1)* ys(:,2,1,2,ig))
 	!	end do
 	!end function
-	function lookup_grad(ipoint, x0, inv_dx, steps, ys) result(opoint)
+	pure function lookup_grad(ipoint, x0, inv_dx, steps, ys) result(opoint)
 		implicit none
 		real(4),    intent(in) :: ipoint(:,:), x0(:), inv_dx(:)
 		real(4),    intent(in) :: ys(:,:,:)
@@ -391,12 +391,14 @@ contains
 		real(4),    intent(in) :: det_comps(:), cossin(:,:)
 		real(4)                :: phase(size(comps),size(cossin,2))
 		integer(4) :: i, j
-		do j = 1, size(cossin,2)
-			do i = 1, size(phase,1)
-				if(comps(i) == 0) phase(i,j) = det_comps(1)
-				if(comps(i) == 1) phase(i,j) = cossin(1,j)*det_comps(2) - cossin(2,j)*det_comps(3)
-				if(comps(i) == 2) phase(i,j) = cossin(2,j)*det_comps(2) + cossin(1,j)*det_comps(3)
-				if(comps(i) == 3) phase(i,j) = det_comps(4)
+		do i = 1, size(phase,1)
+			do j = 1, size(cossin,2)
+				select case(comps(i))
+					case(0); phase(i,j) = det_comps(1)
+					case(1); phase(i,j) = cossin(1,j)*det_comps(2) - cossin(2,j)*det_comps(3)
+					case(2); phase(i,j) = cossin(2,j)*det_comps(2) + cossin(1,j)*det_comps(3)
+					case(3); phase(i,j) = det_comps(4)
+				end select
 			end do
 		end do
 	end function

@@ -3,8 +3,10 @@ Individual experiments can inherit from this - other functions
 in enlib will work as long as this interface is followed.
 For performance and memory reasons, the noise matrix
 overwrites its input array."""
-import numpy as np, enlib.fft, copy, enlib.slice, enlib.array_ops, h5py
+import numpy as np, enlib.fft, copy, enlib.slice, enlib.array_ops, h5py, logging
 from nmat_core import nmat_core
+
+L = logging.getLogger(__name__)
 
 class NoiseMatrix:
 	def apply(self, tod):
@@ -124,10 +126,17 @@ class NmatDetvecs(NmatBinned):
 			res[bi] = np.diag(d) + v.T.dot(np.diag(e)).dot(v)
 		return res
 	def apply(self, tod):
+		L.debug("nmat apply A")
 		ft = enlib.fft.rfft(tod)
+		L.debug("nmat apply B")
 		fft_norm = tod.shape[1]
+		L.debug("nmat apply C")
 		nmat_core.nmat_detvecs(ft.T, self.get_ibins(tod.shape[-1]).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.vbins.T)
+		L.debug("nmat apply D")
 		enlib.fft.irfft(ft, tod)
+		L.debug("nmat apply E")
+		del ft
+		L.debug("nmat apply F")
 		return tod
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)

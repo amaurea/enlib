@@ -31,6 +31,7 @@ class dirfile:
 			self.dfile = orig_dirfile(name, flags, sethandler, extra)
 	def close(self):
 		"""Closes the dirfile, and cleans up any resources used."""
+		print "Closing dfile"
 		self.dfile.close()
 		if self.tmpdir != None:
 			try: shutil.rmtree(self.tmpdir)
