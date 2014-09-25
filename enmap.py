@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, warnings, enlib.wcs, enlib.slice, enlib.fft, astropy.io.fits, sys
+import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, astropy.io.fits, sys, enlib.array_ops
 try:
 	import h5py
 except ImportError:
@@ -60,6 +60,7 @@ class ndmap(np.ndarray):
 	def area(self): return area(self.shape, self.wcs)
 	def extent(self): return extent(self.shape, self.wcs)
 	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode)
+	def optimize_fft(self, value=np.nan, margin=0, factors=None): return optimize_fft(self, value, margin, factors)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
@@ -439,6 +440,37 @@ def pad(emap, pix, return_slice=False,wrap=False):
 		res[...,:,:pix[0,1]]  = res[...,:,-pix[0,1]-pix[1,1]:-pix[1,1]]
 		res[...,:,-pix[1,1]:] = res[...,:,pix[0,1]:pix[0,1]+pix[1,1]]
 	return (res,mslice) if return_slice else res
+
+def optimize_fft(m, value=np.nan, margin=0, factors=None):
+	"""Adjust the size of m to be more fft-friendly. If possible,
+	blank areas at the edge of the map are cropped to bring us to a nice
+	length. If there there aren't enough blank areas, the map is padded
+	instead."""
+	# Count blank areas on each side
+	if np.isnan(value):
+		hitmask = np.any(~np.isnan(m),axis=tuple(range(m.ndim-2)))
+	else:
+		hitmask = np.any(m!=value,axis=tuple(range(m.ndim-2)))
+	hitrows = np.any(hitmask,1)
+	hitcols = np.any(hitmask,0)
+	blanks  = np.array([np.where(hitrows)[0][[0,-1]],np.where(hitcols)[0][[0,-1]]]).T
+	blanks[1] = m.shape[-2:]-blanks[1]-1
+	nblank  = np.sum(blanks,0)
+	# Find the first good sizes larger than the unblank lengths
+	minshape  = m.shape[-2:]-nblank+margin
+	goodshape = np.array([enlib.fft.fft_len(l, direction="above", factors=None) for l in minshape])
+	# Pad if necessary
+	adiff = np.maximum(0,goodshape-m.shape[-2:])
+	if any(adiff>0):
+		m = pad(m, [adiff,[0,0]])
+		blanks[0] += adiff
+		nblank = np.sum(blanks,0)
+	# Then crop to goodshape
+	tocrop = m.shape[-2:]-goodshape
+	lower  = np.minimum(tocrop,blanks[0])
+	upper  = tocrop-lower
+	m = m[...,lower[0]:m.shape[-2]-upper[0],lower[1]:m.shape[-1]-upper[1]]
+	return m
 
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""

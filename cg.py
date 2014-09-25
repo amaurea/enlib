@@ -34,7 +34,7 @@ class CG:
 		self.b   = b
 		self.M   = M
 		self.dot = dot
-		if x0 == None:
+		if x0 is None:
 			self.x = b*0
 		else:
 			self.x   = x0.copy()
@@ -91,7 +91,7 @@ class BCG:
 		self.M2 = M2
 		self.dot = dot
 		self.bnorm = self.dot(b,b)
-		if x0 == None:
+		if x0 is None:
 			self.x = b*0
 		else:
 			self.x   = x0.copy()

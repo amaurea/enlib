@@ -7,8 +7,9 @@ try:
 except KeyError, ValueError:
 	nthread_fft=multiprocessing.cpu_count()
 nthread_ifft=nthread_fft
+default_flags=['FFTW_MEASURE']
 
-def fft(tod, ft=None, nthread=0, axes=[-1]):
+def fft(tod, ft=None, nthread=0, axes=[-1], flags=None):
 	"""Compute discrete fourier transform of tod, and store it in ft. What
 	transform to do (real or complex, number of dimension etc.) is determined
 	from the size and type of tod and ft. The optional nthread argument specifies
@@ -19,15 +20,16 @@ def fft(tod, ft=None, nthread=0, axes=[-1]):
 	tod = asfcarray(tod)
 	if tod.size == 0: return
 	nt = nthread or nthread_fft
+	if flags is None: flags = default_flags
 	if ft is None:
 		otype = np.result_type(tod.dtype,0j)
 		ft  = np.empty(tod.shape, otype)
 		tod = tod.astype(otype, copy=False)
-	plan = pyfftw.FFTW(tod, ft, flags=['FFTW_ESTIMATE'], threads=nt, axes=axes)
+	plan = pyfftw.FFTW(tod, ft, flags=flags, threads=nt, axes=axes)
 	plan()
 	return ft
 
-def ifft(ft, tod=None, nthread=0, normalize=False, axes=[-1]):
+def ifft(ft, tod=None, nthread=0, normalize=False, axes=[-1],flags=None):
 	"""Compute inverse discrete fourier transform of ft, and store it in tod. What
 	transform to do (real or complex, number of dimension etc.) is determined
 	from the size and type of tod and ft. The optional nthread argument specifies
@@ -40,12 +42,13 @@ def ifft(ft, tod=None, nthread=0, normalize=False, axes=[-1]):
 	ft = asfcarray(ft)
 	if ft.size == 0: return
 	nt = nthread or nthread_ifft
+	if flags is None: flags = default_flags
 	if tod is None: tod = np.empty(ft.shape, ft.dtype)
-	plan = pyfftw.FFTW(ft, tod, flags=['FFTW_ESTIMATE'], direction='FFTW_BACKWARD', threads=nt, axes=axes)
+	plan = pyfftw.FFTW(ft, tod, flags=flags, direction='FFTW_BACKWARD', threads=nt, axes=axes)
 	plan(normalise_idft=normalize)
 	return tod
 
-def rfft(tod, ft=None, nthread=0, axes=[-1]):
+def rfft(tod, ft=None, nthread=0, axes=[-1], flags=None):
 	"""Equivalent to fft, except that if ft is not passed, it is allocated with
 	appropriate shape and data type for a real-to-complex transform."""
 	tod = asfcarray(tod)
@@ -54,9 +57,9 @@ def rfft(tod, ft=None, nthread=0, axes=[-1]):
 		oshape[axes[-1]] = oshape[axes[-1]]/2+1
 		dtype = np.result_type(tod.dtype,0j)
 		ft = np.empty(oshape, dtype)
-	return fft(tod, ft, nthread, axes)
+	return fft(tod, ft, nthread, axes, flags=flags)
 
-def irfft(ft, tod=None, n=None, nthread=0, normalize=False, axes=[-1]):
+def irfft(ft, tod=None, n=None, nthread=0, normalize=False, axes=[-1], flags=None):
 	"""Equivalent to ifft, except that if tod is not passed, it is allocated with
 	appropriate shape and data type for a complex-to-real transform. If n
 	is specified, that is used as the length of the last transform axis
@@ -68,9 +71,9 @@ def irfft(ft, tod=None, n=None, nthread=0, normalize=False, axes=[-1]):
 		oshape[axes[-1]] = n or (oshape[axes[-1]]-1)*2
 		dtype = np.zeros([],ft.dtype).real.dtype
 		tod = np.empty(oshape, dtype)
-	return ifft(ft, tod, nthread, normalize, axes)
+	return ifft(ft, tod, nthread, normalize, axes, flags=flags)
 
-def redft00(a, b=None, nthread=0, normalize=False):
+def redft00(a, b=None, nthread=0, normalize=False, flags=None):
 	"""pyFFTW does not support the DCT yet, so this is a work-around.
 	It's not very fast, sadly - about 5 times slower than an rfft.
 	Transforms along the last axis."""
@@ -81,15 +84,15 @@ def redft00(a, b=None, nthread=0, normalize=False):
 	itmp = np.empty(tshape, a.dtype)
 	itmp[...,:n] = a[...,:n]
 	itmp[...,n:] = a[...,-2:0:-1]
-	otmp = rfft(itmp, axes=[-1], nthread=nthread)
+	otmp = rfft(itmp, axes=[-1], nthread=nthread, flags=flags)
 	del itmp
 	b[...] = otmp[...,:n].real
 	if normalize: b /= 2*(n-1)
 	return b
 
-def chebt(a, b=None, nthread=0):
+def chebt(a, b=None, nthread=0, flags=None):
 	"""The chebyshev transform of a, along its last dimension."""
-	b = redft00(a, b, nthread, normalize=True)
+	b = redft00(a, b, nthread, normalize=True, flags=flags)
 	b[1:-1] *= 2
 	return b
 
@@ -99,8 +102,9 @@ def ichebt(a, b=None, nthread=0):
 	a[1:-1] *= 0.5
 	return redft00(a, b, nthread)
 
-def fft_len(n, factors=[2,3,5,7,11,13]):
-	return enlib.utils.nearest_product(n, factors)
+def fft_len(n, direction="below", factors=None):
+	if factors is None: factors = [2,3,5,7,11,13]
+	return enlib.utils.nearest_product(n, factors, direction)
 
 def asfcarray(a):
 	a = np.asarray(a)
