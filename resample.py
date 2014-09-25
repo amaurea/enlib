@@ -83,5 +83,7 @@ def resample_fft(d, factors=[0.5], axes=None):
 			spost = tuple([slice(None)]*ax+[slice(nnew/2-dn,None)]+[slice(None)]*(fd.ndim-ax-1))
 			fd = np.concatenate([fd[spre],fd[spost]],axis=ax)
 	# And transform back
-	res = fft.ifft(fd, axes=axes, normalize=True)*np.product(factors)
+	res  = fft.ifft(fd, axes=axes, normalize=True)
+	del fd
+	res *= np.product(factors)
 	return res if np.issubdtype(d.dtype, np.complexfloating) else res.real

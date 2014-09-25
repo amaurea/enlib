@@ -303,3 +303,16 @@ def find_period_exact(d, guess):
 		return np.var(d-model)
 	period,phase = scipy.optimize.fmin_powell(chisq, [guess,guess], xtol=1, disp=False)
 	return period, phase+off, chisq([period,phase])/np.var(d**2)
+
+def equal_split(weights, nbin):
+	"""Split weights into nbin bins such that the total
+	weight in each bin is as close to equal as possible.
+	Returns a list of indices for each bin."""
+	inds = np.argsort(weights)[::-1]
+	bins = [[] for b in range(nbin)]
+	bw   = np.zeros([nbin])
+	for i in inds:
+		j = np.argmin(bw)
+		bins[j].append(i)
+		bw[j] += weights[i]
+	return bins

@@ -118,16 +118,11 @@ class MapEquation:
 		for scan in scans:
 			d = bunch.Bunch()
 			d.scan = scan
-			L.debug("me init A")
 			d.pmap = pmat.PmatMap(scan, area, order=pmat_order, sys=eqsys)
-			L.debug("me init B")
 			d.pcut = pmat.PmatCut(scan, cut_type)
-			L.debug("me init C")
 			d.cutrange = [njunk,njunk+d.pcut.njunk]
 			njunk = d.cutrange[1]
-			L.debug("me init D")
 			d.nmat = scan.noise
-			L.debug("me init E")
 			data.append(d)
 		self.area = area.copy()
 		self.njunk = njunk
@@ -138,59 +133,42 @@ class MapEquation:
 		rhs_map  = enmap.zeros(self.area.shape, self.area.wcs, dtype=self.dtype)
 		rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
 		for d in self.data:
-			L.debug("b A")
 			with bench.mark("meq_b_get"):
 				tod = d.scan.get_samples()
-				L.debug("b B")
 				tod-= np.mean(tod,1)[:,None]
-				L.debug("b C")
 				tod = tod.astype(self.dtype)
-				L.debug("b D")
 			with bench.mark("meq_b_N"):
 				d.nmat.apply(tod)
-				L.debug("b E")
 			with bench.mark("meq_b_P'"):
 				d.pmap.backward(tod,rhs_map)
-				L.debug("b F")
 				d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
-				L.debug("b G")
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["meq_b_get","meq_b_N","meq_b_P'"]]
-			L.debug("meq b get %5.1f N %5.1f P' %5.1f" % tuple(times))
+			L.debug("meq b get %5.1f N %4.1f P' %4.1f" % tuple(times))
 		with bench.mark("meq_b_red"):
 			rhs_map = reduce(rhs_map, self.comm)
 		return rhs_map, rhs_junk
 	def A(self, map, junk, white=False):
-		L.debug("A A")
 		map, junk = map.copy(), junk.copy()
 		omap, ojunk = map*0, junk*0
-		L.debug("A B")
 		for d in self.data:
 			with bench.mark("meq_A_P"):
 				tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
-				L.debug("A B")
 				d.pmap.forward(tod,map)
-				L.debug("A C")
 				d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
-				L.debug("A D")
 			with bench.mark("meq_A_N"):
 				if white:
 					d.nmat.white(tod)
 				else:
 					d.nmat.apply(tod)
-				L.debug("A E")
 			with bench.mark("meq_A_P'"):
 				d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
-				L.debug("A F")
 				d.pmap.backward(tod,omap)
-				L.debug("A G")
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["meq_A_P","meq_A_N","meq_A_P'"]]
-			L.debug("meq A P %5.1f N %5.1f P' %5.1f" % tuple(times))
-		L.debug("A H")
+			L.debug("meq A P %4.1f N %4.1f P' %4.1f" % tuple(times))
 		with bench.mark("meq_A_red"):
 			omap = reduce(omap, self.comm)
-		L.debug("A I")
 		return omap, ojunk
 	def white(self, map, junk):
 		return self.A(map, junk, white=True)
@@ -209,34 +187,25 @@ class PrecondBinned:
 	a pixel by pixel basis. It does take into account correlations between
 	the different signal components inside each pixel, though."""
 	def __init__(self, mapeq):
-		L.debug("prec bin A")
 		ncomp     = mapeq.area.shape[0]
 		# Compute the per pixel approximate inverse covmat
 		div_map   = enmap.zeros((ncomp,ncomp)+mapeq.area.shape[1:],mapeq.area.wcs, mapeq.area.dtype)
 		div_junk  = np.zeros(mapeq.njunk, dtype=mapeq.area.dtype)
-		L.debug("prec bin B")
 		for ci in range(ncomp):
 			div_map[ci,ci] = 1
 			div_junk[...]  = 1
 			div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
-		L.debug("prec bin C")
 		self.div_map, self.div_junk = div_map, div_junk
-		L.debug("prec bin D")
 		self.hitmap = mapeq.hitcount()
-		L.debug("prec bin E")
 		self.mapeq  = mapeq
 
 		# Compute the pixel component masks, and use it to mask out the
 		# corresonding parts of the map preconditioner
 		self.mask = makemask(self.div_map)
-		L.debug("prec bin F")
 		self.div_map *= self.mask[None,:]*self.mask[:,None]
-		L.debug("prec bin G")
 	def apply(self, map, junk):
-		L.debug("prec bin H")
 		with bench.mark("prec_bin"):
 			res = array_ops.solve_masked(self.div_map, map, [0,1]), junk/self.div_junk
-		L.debug("prec bin I")
 		return res
 	def write(self, dir=None):
 		if self.mapeq.comm.rank > 0: return
@@ -252,50 +221,35 @@ class PrecondCirculant:
 	and C is a position-independent correlation pattern.
 	It works well for maps with uniform scanning patterns."""
 	def __init__(self, mapeq):
-		L.debug("prec cyc A")
 		ncomp, h,w = mapeq.area.shape
 		binned = PrecondBinned(mapeq)
 
-		L.debug("prec cyc B")
 		S  = array_ops.eigpow(binned.div_map, -0.5, axes=[0,1])
-		L.debug("prec cyc C")
 
 		# Sample 4 points to avoid any pathologies
 		#N  = 2
 		#pix = [[h*(2*i+1)/N/2,w*(2*j+1)/N/2] for i in range(N) for j in range(0,N)]
 		#pix = np.array([[-1,-1],[1,1]])*10+np.array([h/2,w/2])[None,:]
 		pix = pick_ref_points(binned.div_map[0,0], 3)
-		L.debug("prec cyc D")
 		Arow = measure_corr_cyclic(mapeq, S, pix)
-		L.debug("prec cyc E")
 		iC = np.conj(fft.fft(Arow, axes=[-2,-1]))
-		L.debug("prec cyc F")
 
 		self.Arow = enmap.samewcs(Arow, binned.div_map)
-		L.debug("prec cyc G")
 		self.S, self.iC = S, iC
 		self.div_junk = binned.div_junk
 		self.mask = binned.mask
 		self.binned = binned
 		self.mapeq = mapeq
-		L.debug("prec cyc H")
 	def apply(self, map, junk):
 		# We will apply the operation m \approx S C S map
 		# The fft normalization is baked into iC.
-		L.debug("prec cyc I")
 		with bench.mark("prec_cyc"):
 			m  = array_ops.matmul(self.S, map, axes=[0,1])
-			L.debug("prec cyc J")
 			mf = fft.fft(m, axes=[-2,-1])
-			L.debug("prec cyc K")
 			mf = array_ops.solve_masked(self.iC, mf, axes=[0,1])
-			L.debug("prec cyc L")
 			m  = fft.ifft(mf, axes=[-2,-1]).astype(map.dtype)
-			L.debug("prec cyc M")
 			m/= np.prod(m.shape[-2:])
-			L.debug("prec cyc N")
 			m  = array_ops.matmul(self.S, m,   axes=[0,1])
-		L.debug("prec cyc O")
 		return m, junk/self.div_junk
 	def write(self, dir=None):
 		if self.mapeq.comm.rank > 0: return
@@ -306,37 +260,23 @@ class PrecondCirculant:
 
 def pick_ref_points(hitmap, npoint):
 	pix = []
-	L.debug("ref A")
 	w   = hitmap.copy()
-	L.debug("ref B")
 	# Smooth map to avoid atypical, sharp features
 	fw  = fft.fft(w, axes=[-2,-1])
-	L.debug("ref C")
 	apply_gaussian(fw, 10)
-	L.debug("ref D")
 	w   = fft.ifft(fw, axes=[-2,-1]).real
-	L.debug("ref E")
 	# Find typical radius of hitmap
 	area_tot  = np.sum(w)/np.max(w)
-	L.debug("ref F")
 	area_mask = area_tot/npoint/3
-	L.debug("ref G")
 	r_mask    = (area_mask/np.pi)**0.5
-	L.debug("ref H")
 	for i in range(npoint):
 		# Find highest-weight point
 		pix.append(np.unravel_index(np.argmax(w),w.shape))
-		L.debug("ref I")
 		# Mask surrounding area
 		mask = np.zeros(hitmap.shape)+1
-		L.debug("ref J")
 		mask[tuple(pix[-1])] = 0
-		L.debug("ref K")
 		mask = ndimage.distance_transform_edt(mask)>r_mask
-		L.debug("ref L")
 		w *= mask
-		L.debug("ref M")
-	L.debug("ref N")
 	return np.array(pix)
 
 class PrecondSubmap:
@@ -412,22 +352,14 @@ class PrecondSubmap:
 
 config.default("precond_condition_lim", 10., "Maximum allowed condition number in per-pixel polarization matrices.")
 def makemask(div):
-	L.debug("makemask A")
 	condition = array_ops.condition_number_multi(div, [0,1])
-	L.debug("makemask B")
 	tmask = div[0,0] > 0
-	L.debug("makemask C")
 	lim   = config.get("precond_condition_lim")
-	L.debug("makemask D")
 	pmask = (condition >= 1)*(condition < lim)
-	L.debug("makemask E")
 	masks = enmap.zeros(div.shape[1:], div.wcs, dtype=bool)
-	L.debug("makemask F")
 	masks[0]  = tmask
 	masks[1:] = pmask[None]
-	L.debug("makemask G")
 	del condition
-	L.debug("makemask H")
 	return masks
 
 def reduce(a, comm=MPI.COMM_WORLD):
@@ -471,29 +403,20 @@ def measure_corr_cyclic(mapeq, S, pixels):
 	# Measure the typical correlation pattern by using multiple
 	# pixels at the same time.
 	ncomp,h,w = mapeq.area.shape
-	L.debug("mcc A")
 	d = enmap.zeros([ncomp,ncomp,h,w],mapeq.area.wcs, dtype=mapeq.area.dtype)
 	junk = np.zeros(mapeq.njunk, dtype=mapeq.area.dtype)
-	L.debug("mcc B %d", d.size)
 	for p in pixels:
-		L.debug("mcc C")
 		Arow = d*0
-		L.debug("mcc D")
 		for ci in range(ncomp):
 			#Arow[ci,:,p[0],p[1]] = S[ci,:,p[0],p[1]]
 			Arow[ci,ci,p[0],p[1]] = 1
 			junk[...] = 0
 			Arow[ci,:],_ = mapeq.A(Arow[ci], junk)
-		L.debug("mcc E")
 		Sref = S.copy(); S[...] = S[:,:,p[0],p[1]][:,:,None,None]
-		L.debug("mcc F")
 		Arow = array_ops.matmul(Arow, S,    axes=[0,1])
-		L.debug("mcc G")
 		Arow = array_ops.matmul(Sref, Arow, axes=[0,1])
-		L.debug("mcc H")
 		Arow = np.roll(Arow, -p[0], 2)
 		Arow = np.roll(Arow, -p[1], 3)
-		L.debug("mcc I")
 		d += Arow
 	d /= len(pixels)
 	return d
