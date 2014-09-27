@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, astropy.io.fits, sys, enlib.array_ops
+import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, astropy.io.fits, sys
 try:
 	import h5py
 except ImportError:
@@ -60,7 +60,7 @@ class ndmap(np.ndarray):
 	def area(self): return area(self.shape, self.wcs)
 	def extent(self): return extent(self.shape, self.wcs)
 	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode)
-	def optimize_fft(self, value=np.nan, margin=0, factors=None): return optimize_fft(self, value, margin, factors)
+	def autocrop(self, method="plain", value=np.nan, margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
@@ -222,9 +222,9 @@ def rand_map(shape, wcs, cov, scalar=False):
 	else:
 		return harm2map(rand_gauss_iso_harm(shape, wcs, cov))
 
-def rand_gauss(shape, wcs):
+def rand_gauss(shape, wcs, dtype=None):
 	"""Generate a map with random gaussian noise in pixel space."""
-	return ndmap(np.random.standard_normal(shape), wcs)
+	return ndmap(np.random.standard_normal(shape), wcs).astype(dtype,copy=False)
 
 def rand_gauss_harm(shape, wcs):
 	"""Mostly equivalent to np.fft.fft2(np.random.standard_normal(shape)),
@@ -441,7 +441,7 @@ def pad(emap, pix, return_slice=False,wrap=False):
 		res[...,:,-pix[1,1]:] = res[...,:,pix[0,1]:pix[0,1]+pix[1,1]]
 	return (res,mslice) if return_slice else res
 
-def optimize_fft(m, value=np.nan, margin=0, factors=None):
+def autocrop(m, method="plain", value=np.nan, margin=0, factors=None, return_info=False):
 	"""Adjust the size of m to be more fft-friendly. If possible,
 	blank areas at the edge of the map are cropped to bring us to a nice
 	length. If there there aren't enough blank areas, the map is padded
@@ -458,19 +458,35 @@ def optimize_fft(m, value=np.nan, margin=0, factors=None):
 	nblank  = np.sum(blanks,0)
 	# Find the first good sizes larger than the unblank lengths
 	minshape  = m.shape[-2:]-nblank+margin
-	goodshape = np.array([enlib.fft.fft_len(l, direction="above", factors=None) for l in minshape])
+	if method == "plain":
+		goodshape = minshape
+	elif method == "fft":
+		goodshape = np.array([enlib.fft.fft_len(l, direction="above", factors=None) for l in minshape])
+	else:
+		raise ValueError("Unknown autocrop method %s!" % method)
 	# Pad if necessary
-	adiff = np.maximum(0,goodshape-m.shape[-2:])
+	adiff   = np.maximum(0,goodshape-m.shape[-2:])
+	padding = [[0,0],[0,0]]
 	if any(adiff>0):
-		m = pad(m, [adiff,[0,0]])
+		padding = [adiff,[0,0]]
+		m = pad(m, padding)
 		blanks[0] += adiff
 		nblank = np.sum(blanks,0)
 	# Then crop to goodshape
 	tocrop = m.shape[-2:]-goodshape
 	lower  = np.minimum(tocrop,blanks[0])
 	upper  = tocrop-lower
-	m = m[...,lower[0]:m.shape[-2]-upper[0],lower[1]:m.shape[-1]-upper[1]]
-	return m
+	s      = (Ellipsis,slice(lower[0],m.shape[-2]-upper[0]),slice(lower[1],m.shape[-1]-upper[1]))
+	class PadcropInfo:
+		slice   = s
+		pad     = padding
+	if return_info:
+		return m[s], PadcropInfo
+	else:
+		return m[s]
+
+def padcrop(m, info):
+	return pad(m, info.pad)[info.slice]
 
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
@@ -519,6 +535,9 @@ def read_map(fname, fmt=None):
 
 def write_fits(fname, emap):
 	"""Write an enmap to a fits file."""
+	# The fits write routines may attempt to modify
+	# the map. So make a copy.
+	emap = emap.copy()
 	# Get our basic wcs header
 	header = emap.wcs.to_header()
 	# Add our map headers

@@ -422,4 +422,78 @@ subroutine eigpow_64(A, pow)
 	!$omp end parallel
 end subroutine
 
+subroutine eigpow_c64(A, pow)
+	implicit none
+	complex(4), intent(inout) :: A(:,:,:)
+	real(4)    :: eigs(size(A,1)), pow, rwork(size(A,1)*3-2)
+	complex(4) :: vecs(size(A,1),size(A,2)), tmp2(size(A,1),size(A,2)), tmp(1)
+	real(4), parameter   :: lim = 1e-6, lim0 = 1e-25
+	complex(4), allocatable :: work(:)
+	integer(4) :: i, j, n, m, lwork, info
+	n = size(A,3)
+	m = size(A,1)
+	! Workspace query
+	call cheev('V', 'U', m, A(:,:,1), m, eigs, tmp, -1, rwork, info)
+	lwork = int(tmp(1))
+	!$omp parallel private(work,i,vecs,tmp2,info,eigs,j,rwork)
+	allocate(work(lwork))
+	!$omp do
+	do i = 1, n
+		vecs = A(:,:,i)
+		call cheev('V', 'U', m, vecs, m, eigs, work, lwork, rwork, info)
+		if(maxval(eigs) <= lim0) then
+			A(:,:,i) = 0
+		else
+			where(eigs < lim*maxval(eigs))
+				eigs = 0
+			elsewhere
+				eigs = eigs**pow
+			end where
+			do j = 1, m
+				tmp2(:,j) = vecs(:,j)*eigs(j)
+			end do
+			call cgemm('N','C', m, m, m, (1e0,0e0), tmp2, m, vecs, m, (0e0,0e0), A(:,:,i), m)
+		end if
+	end do
+	deallocate(work)
+	!$omp end parallel
+end subroutine
+
+subroutine eigpow_c128(A, pow)
+	implicit none
+	complex(8), intent(inout) :: A(:,:,:)
+	real(8)    :: eigs(size(A,1)), pow, rwork(size(A,1)*3-2)
+	complex(8) :: vecs(size(A,1),size(A,2)), tmp2(size(A,1),size(A,2)), tmp(1)
+	real(8), parameter   :: lim = 1d-9, lim0 = 1d-50
+	complex(8), allocatable :: work(:)
+	integer(4) :: i, j, n, m, lwork, info
+	n = size(A,3)
+	m = size(A,1)
+	! Workspace query
+	call zheev('V', 'U', m, A(:,:,1), m, eigs, tmp, -1, rwork, info)
+	lwork = int(tmp(1))
+	!$omp parallel private(work,i,vecs,tmp2,info,eigs,j,rwork)
+	allocate(work(lwork))
+	!$omp do
+	do i = 1, n
+		vecs = A(:,:,i)
+		call zheev('V', 'U', m, vecs, m, eigs, work, lwork, rwork, info)
+		if(maxval(eigs) <= lim0) then
+			A(:,:,i) = 0
+		else
+			where(eigs < lim*maxval(eigs))
+				eigs = 0
+			elsewhere
+				eigs = eigs**pow
+			end where
+			do j = 1, m
+				tmp2(:,j) = vecs(:,j)*eigs(j)
+			end do
+			call zgemm('N','C', m, m, m, (1d0,0d0), tmp2, m, vecs, m, (0d0,0d0), A(:,:,i), m)
+		end if
+	end do
+	deallocate(work)
+	!$omp end parallel
+end subroutine
+
 end module

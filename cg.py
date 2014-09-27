@@ -17,7 +17,7 @@
 import numpy as np
 
 def default_M(x):     return np.copy(x)
-def default_dot(a,b): return a.dot(b)
+def default_dot(a,b): return a.dot(np.conj(b))
 
 class CG:
 	"""A simple Preconditioner Conjugate gradients solver. Solves
@@ -36,11 +36,12 @@ class CG:
 		self.dot = dot
 		if x0 is None:
 			self.x = b*0
+			self.r = b
 		else:
 			self.x   = x0.copy()
+			self.r   = b-self.A(self.x)
 		# Internal work variables
 		n = b.size
-		self.r   = b-self.A(self.x)
 		self.z   = self.M(self.r)
 		self.rz  = self.dot(self.r, self.z)
 		self.rz0 = float(self.rz)

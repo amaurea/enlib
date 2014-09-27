@@ -111,5 +111,7 @@ condition_number_multi = gen_wrap1(
 		d=array_ops.condition_number_multi_64)
 eigpow = wrap_m_m(
 		f=array_ops.eigpow_32,
-		d=array_ops.eigpow_64)
+		d=array_ops.eigpow_64,
+		F=array_ops.eigpow_c64,
+		D=array_ops.eigpow_c128)
 

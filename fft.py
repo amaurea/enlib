@@ -7,7 +7,7 @@ try:
 except KeyError, ValueError:
 	nthread_fft=multiprocessing.cpu_count()
 nthread_ifft=nthread_fft
-default_flags=['FFTW_MEASURE']
+default_flags=['FFTW_ESTIMATE']
 
 def fft(tod, ft=None, nthread=0, axes=[-1], flags=None):
 	"""Compute discrete fourier transform of tod, and store it in ft. What
