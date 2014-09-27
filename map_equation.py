@@ -419,6 +419,10 @@ def measure_corr_cyclic(mapeq, S, pixels):
 		Arow = np.roll(Arow, -p[1], 3)
 		d += Arow
 	d /= len(pixels)
+	# We should be symmetric from the beginning, but it turns out
+	# we're not. Should investigate that. In the mean while,
+	# symmetrize so that conjugate gradients doesn't break down.
+	d = (d+np.rollaxis(d,1))/2
 	return d
 
 def analyze_scan(d):
