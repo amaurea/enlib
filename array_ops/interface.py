@@ -1,14 +1,22 @@
 import numpy as np
-from fortran import array_ops
 from enlib import utils
+import fortran_32, fortran_64, fortran_c64, fortran_c128
+
+def get_f(c):
+	if   c == 'f': return fortran_32.array_ops
+	elif c == 'd': return fortran_64.array_ops
+	elif c == 'F': return fortran_c64.array_ops
+	elif c == 'D': return fortran_c128.array_ops
+	raise ValueError("Unrecognized data char '%d'" % c)
+
+def get_funcs(name, chars='fdFD'):
+	return {c: getattr(get_f(c),name) for c in chars}
 
 def get_dtype_fun(funcs, dtype):
 	if dtype.char in funcs:
 		return funcs[dtype.char]
 	else:
 		raise NotImplementedError("Only dtypes " + ", ".join([key for key in funcs]) + " implemented")
-
-dtype_map = { np.float32: "32", np.float64: "64", np.complex64: "c64", np.complex128: "c128" }
 
 def wrap_mm_m(vec2mat=False, **funcs):
 	"""Wrap a fortran subroutine which takes (n,n,m),(n,k,m) and overwrites
@@ -91,27 +99,9 @@ def gen_mat2mat(**funcs):
 	return f
 
 # Our wrapped functions
-matmul = wrap_mm_m(vec2mat=True,
-		f=array_ops.matmul_32,
-		d=array_ops.matmul_64,
-		F=array_ops.matmul_c64,
-		D=array_ops.matmul_c128)
-solve_multi = wrap_mm_m(
-		f=array_ops.solve_multi_32,
-		d=array_ops.solve_multi_64,
-		F=array_ops.solve_multi_c64,
-		D=array_ops.solve_multi_c128)
-solve_masked = wrap_mm_m(
-		f=array_ops.solve_masked_32,
-		d=array_ops.solve_masked_64,
-		F=array_ops.solve_masked_c64,
-		D=array_ops.solve_masked_c128)
-condition_number_multi = gen_wrap1(
-		f=array_ops.condition_number_multi_32,
-		d=array_ops.condition_number_multi_64)
-eigpow = wrap_m_m(
-		f=array_ops.eigpow_32,
-		d=array_ops.eigpow_64,
-		F=array_ops.eigpow_c64,
-		D=array_ops.eigpow_c128)
-
+matmul = wrap_mm_m(vec2mat=True, **get_funcs("matmul_multi"))
+solve_multi = wrap_mm_m(**get_funcs("solve_multi"))
+solve_masked = wrap_mm_m(**get_funcs("solve_masked"))
+condition_number_multi = gen_wrap1(**get_funcs("condition_number_multi"))
+eigpow = wrap_m_m(**get_funcs("eigpow"))
+eigflip = wrap_m_m(**get_funcs("eigflip"))
