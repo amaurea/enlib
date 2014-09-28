@@ -4,7 +4,13 @@ in enlib will work as long as this interface is followed.
 For performance and memory reasons, the noise matrix
 overwrites its input array."""
 import numpy as np, enlib.fft, copy, enlib.slice, enlib.array_ops, h5py
-from nmat_core import nmat_core
+import nmat_core_32, nmat_core_64
+
+def get_core(dtype):
+	if dtype == np.float32:
+		return nmat_core_32.nmat_core
+	else:
+		return nmat_core_64.nmat_core
 
 class NoiseMatrix:
 	def apply(self, tod):
@@ -58,7 +64,8 @@ class NmatBinned(NoiseMatrix):
 	def apply(self, tod):
 		ft = enlib.fft.rfft(tod)
 		fft_norm = tod.shape[1]
-		nmat_core.nmat_covs(ft.T, self.get_ibins(tod.shape[1]).T, self.icovs.T/fft_norm)
+		core = get_core(tod.type)
+		core.nmat_covs(ft.T, self.get_ibins(tod.shape[1]).T, self.icovs.T/fft_norm)
 		enlib.fft.irfft(ft, tod)
 		return tod
 	def white(self, tod):
@@ -126,7 +133,8 @@ class NmatDetvecs(NmatBinned):
 	def apply(self, tod):
 		ft = enlib.fft.rfft(tod)
 		fft_norm = tod.shape[1]
-		nmat_core.nmat_detvecs(ft.T, self.get_ibins(tod.shape[-1]).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.vbins.T)
+		core = get_core(tod.dtype)
+		core.nmat_detvecs(ft.T, self.get_ibins(tod.shape[-1]).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.vbins.T)
 		enlib.fft.irfft(ft, tod)
 		return tod
 	def __getitem__(self, sel):

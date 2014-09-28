@@ -1,7 +1,7 @@
 """This module represents the map-making equation P'N"Px = P'N"d.
 At this level of abstraction, we still deal mostly with maps and cuts etc.
 directly."""
-import numpy as np, bunch, time, h5py, copy, logging
+import numpy as np, bunch, time, h5py, copy, logging, sys
 from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim, bench
 from enlib.degrees_of_freedom import DOF
 from scipy import ndimage
@@ -35,6 +35,9 @@ class LinearSystemMap(LinearSystem):
 			# than a string for the precon argument. The current way works. But
 			# prevents factorizing out the preconditioners.
 			self.precon = PrecondSubmap(self.mapeq)
+		elif precon == "symcheck":
+			test_symmetry(self.mapeq, 50)
+			sys.exit(0)
 		self.mask   = self.precon.mask
 		self.dof    = DOF({"shared":self.mask},{"distributed":(self.mapeq.njunk,)})
 		L.info("Building right-hand side")
@@ -424,6 +427,40 @@ def measure_corr_cyclic(mapeq, S, pixels):
 	# symmetrize so that conjugate gradients doesn't break down.
 	d = (d+np.rollaxis(d,1))/2
 	return d
+
+def normalize(A):
+	# Normalize to unit diagonal
+	D = np.maximum(1e-30,np.abs(np.diag(A)))**-0.5
+	A = A * D[:,None]
+	A *= D[None,:]
+	return A
+
+def checksym(A):
+	A = normalize(A)
+	n = len(A)
+	res = np.zeros(n)
+	for i in range(n):
+		res[i] = np.max(np.abs(A[:,i]-A[i,:]))
+	return res
+
+def test_symmetry(mapeq, nmax):
+	# Measure the typical correlation pattern by using multiple
+	# pixels at the same time.
+	mask = mapeq.area.astype(bool)+True
+	dof  = DOF({"shared":mask},{"distributed":(mapeq.njunk,)})
+	a = np.random.standard_normal(dof.n).astype(mapeq.dtype)
+	mask = mapeq.A(*dof.unzip(a))[0] != 0
+	dof  = DOF({"shared":mask},{"distributed":(mapeq.njunk,)})
+	rows = []
+	inds = np.random.permutation(dof.n-mapeq.njunk)[:nmax]
+	inds = mapeq.comm.bcast(inds)
+	def helper(rows, inds):
+		return checksym(np.array(rows)[:,np.array(inds)])
+	for i, ind in enumerate(inds):
+		a = np.zeros(dof.n,dtype=mapeq.dtype); a[ind] = 1
+		rows.append(dof.zip(*mapeq.A(*dof.unzip(a))))
+		sym = helper(rows, inds[:i+1])
+		print "sym %4d %15.7e" % (i, np.max(sym))
 
 def analyze_scan(d):
 	"""Computes bounding boxes for d.scan in both input and output

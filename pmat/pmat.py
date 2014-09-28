@@ -8,7 +8,13 @@ to incrementally project different parts of the signal.
 """
 import numpy as np
 from enlib import enmap, interpol, utils, coordinates, config
-from pmat_core import pmat_core
+import pmat_core_32
+import pmat_core_64
+def get_core(dtype):
+	if dtype == np.float32:
+		return pmat_core_32.pmat_core
+	else:
+		return pmat_core_64.pmat_core
 
 config.default("pmat_map_order",      0, "The interpolation order of the map pointing matrix.")
 config.default("pmat_cut_type",  "full", "The cut sample representation used. 'full' uses one degree of freedom for each cut sample. 'bin:N' uses one degree of freedom for every N samples. 'exp' used one degree of freedom for the first sample, then one for the next two, one for the next 4, and so on, giving high resoultion at the edges of each cut range, and low resolution in the middle.")
@@ -43,10 +49,11 @@ class PmatMap(PointingMatrix):
 		self.scan  = scan
 		self.order = order
 		self.dtype = template.dtype
+		self.core = get_core(self.dtype)
 		if order == 0:
-			self.func = pmat_core.pmat_nearest
+			self.func = self.core.pmat_nearest
 		elif order == 1:
-			self.func = pmat_core.pmat_linear
+			self.func = self.core.pmat_linear
 		else:
 			raise NotImplementedError("order > 1 is not implemented")
 	def forward(self, tod, m):
@@ -66,7 +73,7 @@ class PmatMap(PointingMatrix):
 		dtype = self.dtype
 		pix   = np.empty([ndet,nsamp,2],dtype=dtype)
 		phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
-		pmat_core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
+		self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 		return pix, phase
 
 # Neither this approach nor time-domain linear interpolation works at the moment.
@@ -148,7 +155,7 @@ class PmatCut(PointingMatrix):
 		self.cuts[:,2] = flat[:,1]-flat[:,0]
 		self.cuts[:,5:]= par[None,:]
 		if self.cuts.size > 0:
-			pmat_core.measure_cuts(self.cuts.T)
+			get_core(np.float32).measure_cuts(self.cuts.T)
 		self.cuts[:,3] = utils.cumsum(self.cuts[:,4])
 		# njunk is the number of cut parameters for *this scan*
 		self.njunk  = np.sum(self.cuts[:,4])
@@ -158,7 +165,7 @@ class PmatCut(PointingMatrix):
 		"""Project from the cut parameter (junk) space for this scan
 		to tod."""
 		if self.cuts.size > 0:
-			pmat_core.pmat_cut( 1, tod.T, junk, self.cuts.T)
+			get_core(tod.dtype).pmat_cut( 1, tod.T, junk, self.cuts.T)
 	def backward(self, tod, junk):
 		"""Project from tod to cut parameters (junk) for this scan.
 		This is meant to be called before the map projection, and
@@ -166,7 +173,7 @@ class PmatCut(PointingMatrix):
 		replacing them with zeros. That way the map projection can
 		be done without needing to care about the cuts."""
 		if self.cuts.size > 0:
-			pmat_core.pmat_cut(-1, tod.T, junk, self.cuts.T)
+			get_core(tod.dtype).pmat_cut(-1, tod.T, junk, self.cuts.T)
 	def parse_params(self,params):
 		toks = params.split(":")
 		kind = toks[0]
@@ -191,16 +198,16 @@ class pos2pix:
 class PmatMapRebin(PointingMatrix):
 	"""Fortran-accelerated rebinning of maps."""
 	def forward (self, mhigh, mlow):
-		pmat_core.pmat_map_rebin( 1, mhigh.T, mlow.T)
+		get_core(mhigh.dtype).pmat_map_rebin( 1, mhigh.T, mlow.T)
 	def backward(self, mhigh, mlow):
-		pmat_core.pmat_map_rebin(-1, mhigh.T, mlow.T)
+		get_core(mhigh.dtype).pmat_map_rebin(-1, mhigh.T, mlow.T)
 
 class PmatCutRebin(PointingMatrix):
 	"""Fortran-accelerated rebinning of cut data."""
 	def __init__(self, pmat_cut_high, pmat_cut_low):
 		self.cut_high, self.cut_low = pmat_cut_high.cuts, pmat_cut_low.cuts
 	def forward (self, jhigh, jlow):
-		pmat_core.pmat_cut_rebin( 1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
+		get_core(jhigh.dtype).pmat_cut_rebin( 1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
 	def backward(self, jhigh, jlow):
-		pmat_core.pmat_cut_rebin(-1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
+		get_core(jhigh.dtype).pmat_cut_rebin(-1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
 
