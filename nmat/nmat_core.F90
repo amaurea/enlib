@@ -58,15 +58,15 @@ contains
 				! Construct Q = VE**0.5 on the fly. This has practically no cost, so
 				! it is worth the convenience of being able to send in the more general
 				! V and E.
-				esign = sign(1.0,E(v1))
+				esign = sign(1##D##0,E(v1))
 				do vi = v1, v2
 					Q(:,vi-v1+1) = V(:,vi)*abs(E(vi))**0.5
 				end do
 				! Q'd' = matmul(transpose(Q)(nvec,ndet),transpose(ftod)(ndet,nf))
 				! QQ'd = matmul(Q(ndet,nvec),Qd(nvec,nf))
 				! => (QQ'd)' = matmul(transpose(Qd)(nf,nvec),transpose(Q)(nvec,det))
-				call C##gemm('T', 'T', nv, nf, ndet, (1##E##0,0##E##0), Q, ndet, orig, nf,   (0##E##0,0##E##0), Qd, nv)
-				call C##gemm('T', 'T', nf, ndet, nv, esign,    Qd,   nv,    Q, ndet, (1##E##0,0##E##0), iNud, nf)
+				call C##gemm('T', 'T', nv, nf, ndet, (1##D##0,0##D##0), Q, ndet, orig, nf,   (0##D##0,0##D##0), Qd, nv)
+				call C##gemm('T', 'T', nf, ndet, nv, esign,    Qd,   nv,    Q, ndet, (1##D##0,0##D##0), iNud, nf)
 			end if
 			do di = 1, ndet
 				ftod(b1:b2,di) = iNud(:,di)
