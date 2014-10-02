@@ -64,7 +64,7 @@ class NmatBinned(NoiseMatrix):
 	def apply(self, tod):
 		ft = enlib.fft.rfft(tod)
 		fft_norm = tod.shape[1]
-		core = get_core(tod.type)
+		core = get_core(tod.dtype)
 		core.nmat_covs(ft.T, self.get_ibins(tod.shape[1]).T, self.icovs.T/fft_norm)
 		enlib.fft.irfft(ft, tod)
 		return tod
@@ -149,24 +149,36 @@ class NmatDetvecs(NmatBinned):
 		# Slice covs, not icovs
 		return NmatDetvecs(res.D[mask][:,detslice], res.V[:,detslice], res.E, bins, vbins, dets)
 
-def read_nmat(fname):
-	with h5py.File(fname, "r") as f:
-		typ = np.array(f["type"])[...]
-		if typ == "detvecs":
-			return NmatDetvecs(f["D"], f["V"], f["E"], f["bins"], f["vbins"], f["dets"])
-		elif typ == "binned":
-			return NmatBinned(f["icovs"], f["bins"], f["dets"])
-		else:
-			raise IOError("Unrecognized noise matrix format %s" % typ)
+def read_nmat(fname, group=None):
+	if isinstance(fname, basestring):
+		f = h5py.File(fname, "r")
+	else:
+		f = fname
+	g = f[group] if group else f
+	typ = np.array(g["type"])[...]
+	if typ == "detvecs":
+		return NmatDetvecs(g["D"], g["V"], g["E"], g["bins"], g["vbins"], g["dets"])
+	elif typ == "binned":
+		return NmatBinned(g["icovs"], g["bins"], g["dets"])
+	else:
+		raise IOError("Unrecognized noise matrix format %s" % typ)
+	if isinstance(fname, basestring):
+		f.close()
 
-def write_nmat(fname, nmat):
-	with h5py.File(fname, "w") as f:
-		if isinstance(nmat, NmatDetvecs):
-			for k,v in [("type","detvecs"),("D",nmat.D),("V",nmat.V),("E",nmat.E),("bins",nmat.bins),("vbins",nmat.vbins),("dets",nmat.dets)]:
-				f[k] = v
-		elif isinstance(nmat, NmatBinned):
-			for k,v in [("type","binned"),("icovs",nmat.icovs),("bins",nmat.bins),("dets",nmat.dets)]:
-				f[k] = v
+def write_nmat(fname, nmat, group=None):
+	if isinstance(fname, basestring):
+		f = h5py.File(fname, "w")
+	else:
+		f = fname
+	prefix = group + "/" if group else ""
+	if isinstance(nmat, NmatDetvecs):
+		for k,v in [("type","detvecs"),("D",nmat.D),("V",nmat.V),("E",nmat.E),("bins",nmat.bins),("vbins",nmat.vbins),("dets",nmat.dets)]:
+			f[prefix+k] = v
+	elif isinstance(nmat, NmatBinned):
+		for k,v in [("type","binned"),("icovs",nmat.icovs),("bins",nmat.bins),("dets",nmat.dets)]:
+			f[prefix+k] = v
+	if isinstance(fname, basestring):
+		f.close()
 
 def woodbury_invert(D, V, E, vbins=None):
 	"""Given a compressed representation C = D + V'EV, compute a

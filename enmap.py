@@ -370,7 +370,7 @@ def samewcs(arr, *args):
 	return arr
 
 def create_wcs(shape, box=None, proj="cea"):
-	if box is None: box = np.array([[-1,-1],[1,1]])*0.5
+	if box is None: box = np.array([[-1,-1],[1,1]])*0.5*10*np.pi/180
 	return getattr(enlib.wcs, proj)(shape[-2:][::-1], box[:,::-1])
 
 def spec2flat(shape, wcs, cov, exp=1.0):

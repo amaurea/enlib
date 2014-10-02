@@ -3,7 +3,7 @@ providing both a mask-like (numpy bool array) and list of from:to interface.
 It also provides a convenience class for handling multiple of these range lists."""
 import numpy as np
 from enlib.slice import expand_slice, split_slice
-from enlib.utils import mask2range
+from enlib.utils import mask2range, cumsum
 
 class Rangelist:
 	def __init__(self, ranges, n=None, copy=True):
@@ -68,6 +68,10 @@ class Multirange:
 		if isinstance(rangelists, Multirange):
 			if copy: rangelists = rangelists.copy()
 			self.data = rangelists.data
+		elif isinstance(rangelists, tuple):
+			n, neach, flat = rangelists
+			ncum = cumsum(neach)
+			self.data = np.asarray([Rangelist(flat[a:b],n) for a,b in zip(ncum[:-1],ncum[1:])])
 		else:
 			if copy: rangelists = np.array(rangelists)
 			self.data = np.asarray(rangelists)
@@ -95,7 +99,8 @@ class Multirange:
 		getlens = np.vectorize(lambda x: len(x.ranges), 'i')
 		neach   = getlens(self.data)
 		flat    = np.concatenate([r.ranges for r in self.data.reshape(self.data.size)])
-		return neach, flat
+		n       = self.data[0].n
+		return n, neach, flat
 	def to_mask(self):
 		dflat = self.data.reshape(self.data.size)
 		res   = np.zeros([dflat.size, dflat[0].n],dtype=bool)

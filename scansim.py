@@ -1,6 +1,7 @@
 import numpy as np, bunch, copy, warnings
 from enlib import scan, rangelist, coordinates, utils, nmat, pmat, array_ops
 from enlib.bins import linbin
+from scipy import ndimage
 warnings.filterwarnings("ignore")
 
 def rand_srcs(box, nsrc, amp, fwhm, rand_fwhm=False):
@@ -107,6 +108,8 @@ class SimSrcs(scan.Scan):
 		self.srcs  = srcs
 		self.noise = noise
 		self.seed  = seed
+		self.dets  = np.arange(len(self.comps))
+		self.site  = scan.default_site
 
 		if cache: self._tod = None
 
