@@ -38,6 +38,13 @@ class LinearSystemMap(LinearSystem):
 		elif precon == "symcheck":
 			test_symmetry(self.mapeq, 50)
 			sys.exit(0)
+		elif precon == "symtot":
+			prec = PrecondCirculant(self.mapeq)
+			test_symmetry(self.mapeq, 100, prec=prec)
+			sys.exit(0)
+		elif precon == "dumpcov":
+			test_symmetry(self.mapeq, 0, verbose=False, shuf=False)
+			sys.exit(0)
 		self.mask   = self.precon.mask
 		self.dof    = DOF({"shared":self.mask},{"distributed":(self.mapeq.njunk,)})
 		L.info("Building right-hand side")
@@ -198,6 +205,8 @@ class PrecondBinned:
 			div_map[ci,ci] = 1
 			div_junk[...]  = 1
 			div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
+		# Make sure we're symmetric in the TQU-direction
+		div_map = 0.5*(div_map+np.rollaxis(div_map,1))
 		self.div_map, self.div_junk = div_map, div_junk
 		self.hitmap = mapeq.hitcount()
 		self.mapeq  = mapeq
@@ -235,11 +244,13 @@ class PrecondCirculant:
 		#pix = np.array([[-1,-1],[1,1]])*10+np.array([h/2,w/2])[None,:]
 		pix = pick_ref_points(binned.div_map[0,0], 3)
 		Arow = measure_corr_cyclic(mapeq, S, pix)
-		iC = np.conj(fft.fft(Arow, axes=[-2,-1]))
-		print np.min(iC.real), np.max(iC.real), np.min(iC.imag), np.max(iC.imag)
+		# Measure this fft, since we will perform it a lot
+		fft.ifft(fft.fft(Arow.copy(), axes=[-2,-1], flags=["FFTW_MEASURE"]),axes=[-2,-1], flags=["FFTW_MEASURE"])
+		iC = fft.fft(Arow, axes=[-2,-1])
+		C  = enmap.samewcs(array_ops.eigpow(iC,-1,axes=[0,1]), binned.div_map)
 
 		self.Arow = enmap.samewcs(Arow, binned.div_map)
-		self.S, self.iC = S, iC
+		self.S, self.C = S, C
 		self.div_junk = binned.div_junk
 		self.mask = binned.mask
 		self.binned = binned
@@ -248,12 +259,11 @@ class PrecondCirculant:
 		# We will apply the operation m \approx S C S map
 		# The fft normalization is baked into iC.
 		with bench.mark("prec_cyc"):
-			m  = array_ops.matmul(self.S, map, axes=[0,1])
+			m  = enmap.map_mul(self.S, map)
 			mf = fft.fft(m, axes=[-2,-1])
-			mf = array_ops.solve_masked(self.iC, mf, axes=[0,1])
-			m  = fft.ifft(mf, axes=[-2,-1]).astype(map.dtype)
-			m/= np.prod(m.shape[-2:])
-			m  = array_ops.matmul(self.S, m,   axes=[0,1])
+			mf = enmap.map_mul(self.C, mf)
+			m  = fft.ifft(mf, axes=[-2,-1], normalize=True).real
+			m  = enmap.map_mul(self.S, m)
 		return m, junk/self.div_junk
 	def write(self, dir=None):
 		if self.mapeq.comm.rank > 0: return
@@ -405,6 +415,18 @@ def apply_gaussian(fa, sigma):
 	flat *= gauss[0][None,:,None]
 	flat *= gauss[1][None,None,:]
 
+def sympos(arow):
+	f = fft.fft(arow, axes=[-2,-1])
+	print "sympos A", np.min(f.real), np.min(f.imag), np.max(f.real), np.max(f.imag)
+	# Make us symmetric in real space by killing the imaginary part
+	f = f.real
+	# Make us symmetric in component space
+	f = 0.5*(f+np.rollaxis(f,1))
+	# Remove negative eigenvalues
+	f = array_ops.eigflip(f, axes=[0,1])
+	x = fft.ifft(f+0j, axes=[-2,-1], normalize=True).real
+	return x
+
 def measure_corr_cyclic(mapeq, S, pixels):
 	# Measure the typical correlation pattern by using multiple
 	# pixels at the same time.
@@ -419,8 +441,8 @@ def measure_corr_cyclic(mapeq, S, pixels):
 			junk[...] = 0
 			Arow[ci,:],_ = mapeq.A(Arow[ci], junk)
 		Sref = S.copy(); S[...] = S[:,:,p[0],p[1]][:,:,None,None]
-		Arow = array_ops.matmul(Arow, S,    axes=[0,1])
-		Arow = array_ops.matmul(Sref, Arow, axes=[0,1])
+		Arow = enmap.map_mul(Arow, S)
+		Arow = enmap.map_mul(Sref, Arow)
 		Arow = np.roll(Arow, -p[0], 2)
 		Arow = np.roll(Arow, -p[1], 3)
 		d += Arow
@@ -428,8 +450,8 @@ def measure_corr_cyclic(mapeq, S, pixels):
 	# We should be symmetric from the beginning, but it turns out
 	# we're not. Should investigate that. In the mean while,
 	# symmetrize so that conjugate gradients doesn't break down.
-	d = (d+np.rollaxis(d,1))/2
-	return d
+	#return d
+	return sympos(d)
 
 def normalize(A):
 	# Normalize to unit diagonal
@@ -446,7 +468,12 @@ def checksym(A):
 		res[i] = np.max(np.abs(A[:,i]-A[i,:]))
 	return res
 
-def test_symmetry(mapeq, nmax):
+def checkeig(A):
+	A = normalize(A)
+	e,v = np.linalg.eig(A)
+	return e/np.max(e)
+
+def test_symmetry(mapeq, nmax=0, shuf=True, verbose=True, prec=None):
 	# Measure the typical correlation pattern by using multiple
 	# pixels at the same time.
 	mask = mapeq.area.astype(bool)+True
@@ -454,16 +481,29 @@ def test_symmetry(mapeq, nmax):
 	a = np.random.standard_normal(dof.n).astype(mapeq.dtype)
 	mask = mapeq.A(*dof.unzip(a))[0] != 0
 	dof  = DOF({"shared":mask},{"distributed":(mapeq.njunk,)})
+	fun = mapeq.A
+	if prec:
+		def fun(*args): return prec.apply(*mapeq.A(*mapeq.A(*prec.apply(*args))))
+		#def fun(*args): return prec.apply(*args)
+	if nmax == 0: nmax = dof.n-mapeq.njunk
 	rows = []
-	inds = np.random.permutation(dof.n-mapeq.njunk)[:nmax]
-	inds = mapeq.comm.bcast(inds)
-	def helper(rows, inds):
-		return checksym(np.array(rows)[:,np.array(inds)])
+	if shuf:
+		inds = np.random.permutation(dof.n-mapeq.njunk)[:nmax]
+		inds = mapeq.comm.bcast(inds)
+	else:
+		inds = np.arange(nmax)
 	for i, ind in enumerate(inds):
 		a = np.zeros(dof.n,dtype=mapeq.dtype); a[ind] = 1
-		rows.append(dof.zip(*mapeq.A(*dof.unzip(a))))
-		sym = helper(rows, inds[:i+1])
-		print "sym %4d %15.7e" % (i, np.max(sym))
+		rows.append(dof.zip(*fun(*dof.unzip(a))))
+		if verbose:
+			b = np.array(rows)[:,np.array(inds[:i+1])]
+			sym = checksym(b)
+			eig = checkeig(b)
+			print "sym %4d %15.7e %15.7e" % (i, np.max(sym), np.min(eig))
+	if mapeq.comm.rank == 0:
+		A = np.array(rows)[:,inds[:nmax]]
+		with h5py.File("A.hdf","w") as hfile:
+			hfile["data"] = A
 
 def analyze_scan(d):
 	"""Computes bounding boxes for d.scan in both input and output
