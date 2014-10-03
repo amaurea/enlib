@@ -111,7 +111,7 @@ def scale_lensing_spectrum(a, direction):
 	a[...,0] = 0
 	return a
 
-def read_spectrum(fname, inds=True, scale=True, expand=None, ncol=None, ncomp=None):
+def read_spectrum(fname, inds=True, scale=True, expand="diag", ncol=None, ncomp=None):
 	"""Read a power spectrum from disk and return a dense
 	array cl[nspec,lmax+1]. Unless scale=False, the spectrum
 	will be multiplied by 2pi/l/(l+1) when being read.

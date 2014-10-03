@@ -146,7 +146,7 @@ class PmatCut(PointingMatrix):
 	scan."""
 	def __init__(self, scan, params=None):
 		params = config.get("pmat_cut_type", params)
-		neach, flat = scan.cut.flatten()
+		n, neach, flat = scan.cut.flatten()
 		dets = np.concatenate([np.zeros(n,dtype=int)+i for i,n in enumerate(neach)])
 		par  = np.array(self.parse_params(params))
 		self.cuts = np.zeros([flat.shape[0],5+len(par)],dtype=np.int32)

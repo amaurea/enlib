@@ -40,8 +40,8 @@ values in boresight to determine the effective duration of each sample.
 I therefore go with option #1 above, and explicitly do not provide a way
 of skipping samples here.
 """
-import numpy as np, enlib.utils, enlib.slice, copy as cpy
-from enlib import rangelist
+import numpy as np, enlib.slice, copy as cpy, h5py, bunch
+from enlib import rangelist, nmat, config, resample, utils
 
 class Scan:
 	"""This defines the minimal interface for a Scan. It will usually be
@@ -75,7 +75,7 @@ class Scan:
 	@property
 	def srate(self):
 		step = self.boresight.shape[0]/100
-		return float(step)/enlib.utils.medmean(self.boresight[::step,0][1:]-self.boresight[::step,0][:-1])
+		return float(step)/utils.medmean(self.boresight[::step,0][1:]-self.boresight[::step,0][:-1])
 	def copy(self): return cpy.deepcopy(self)
 	def getitem_helper(self, sel):
 		if type(sel) != tuple: sel = (sel,)
@@ -96,3 +96,56 @@ class Scan:
 		res, detslice, sampslice = self.getitem_helper(sel)
 		res._tod = np.ascontiguousarray(enlib.slice.slice_downgrade(res._tod[detslice], sampslice, axis=-1))
 		return res
+
+class H5Scan(Scan):
+	def __init__(self, fname):
+		self.fname = fname
+		with h5py.File(fname, "r") as hfile:
+			for k in ["boresight","offsets","comps","sys","mjd0","dets"]:
+				setattr(self, k, hfile[k].value)
+			n = self.boresight.shape[0]
+			neach = hfile["cut/neach"].value
+			flat  = hfile["cut/flat"].value
+			self.cut  = rangelist.Multirange((n,neach,flat),copy=False)
+			self.noise= nmat.read_nmat(hfile, "noise")
+			self.site = bunch.Bunch({k:hfile["site/"+k].value for k in hfile["site"]})
+			self.subdets = np.arange(self.ndet)
+			self.sampslices = []
+	def get_samples(self):
+		"""Return the actual detector samples. Slow! Data is read from disk,
+		so store the result if you need to reuse it."""
+		with h5py.File(self.fname, "r") as hfile:
+			tod = hfile["tod"].value[self.subdets]
+		method = config.get("downsample_method")
+		for s in self.sampslices:
+			tod = resample.resample(tod, 1.0/np.abs(s.step or 1), method=method)
+			s = slice(s.start, s.stop, np.sign(s.step) if s.step else None)
+			tod = tod[:,s]
+		res = np.ascontiguousarray(tod)
+		return res
+	def __repr__(self):
+		return self.__class__.__name__ + "[ndet=%d,nsamp=%d,name=%s]" % (self.ndet,self.nsamp,self.fname)
+	def __getitem__(self, sel):
+		res, detslice, sampslice = self.getitem_helper(sel)
+		res.sampslices.append(sampslice)
+		res.subdets = res.subdets[detslice]
+		return res
+
+def write_scan(fname, scan):
+	with h5py.File(fname, "w") as hfile:
+		for k in ["boresight","offsets","comps","sys","mjd0","dets"]:
+			hfile[k] = getattr(scan, k)
+		n, neach, flat = scan.cut.flatten()
+		# h5py has problems with zero size arrays
+		if flat.size == 0: flat = np.zeros([1,2],dtype=np.int32)
+		hfile["cut/neach"] = neach
+		hfile["cut/flat"]  = flat
+		nmat.write_nmat(hfile, scan.noise, "noise")
+		for k in scan.site:
+			hfile["site/"+k] = 550#scan.site[k]
+		hfile["tod"]       = scan.get_samples()
+
+def read_scan(fname):
+	return H5Scan(fname)
+
+default_site = bunch.Bunch(lat=0,lon=0,alt=0,T=273,P=550,hum=0.2,freq=100)
