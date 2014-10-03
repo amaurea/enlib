@@ -190,7 +190,7 @@ class pos2pix:
 		time  = self.scan.mjd0 + ipos[0]/utils.day2sec
 		opos = coordinates.transform(self.scan.sys, self.sys, ipos[1:], time=time, site=self.scan.site, pol=True)
 		opix = np.zeros((4,)+ipos.shape[1:])
-		opix[:2] = self.template.sky2pix(opos[1::-1])
+		opix[:2] = self.template.sky2pix(opos[1::-1],safe=False)
 		opix[2]  = np.cos(2*opos[2])
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)

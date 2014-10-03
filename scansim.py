@@ -60,7 +60,9 @@ def scan_ceslike(nsamp, box, sys="equ", srate=100, azrate=0.123):
 	boresight[:,2] = box[0,0]+(box[1,0]-box[0,0])*np.arange(nsamp)/nsamp
 	return bunch.Bunch(boresight=boresight, sys=sys)
 
-def scan_grid(box, res, sys="equ", dir=0):
+def scan_grid(box, res, sys="equ", dir=0, margin=0):
+	box[np.argmin(box,0)] += margin
+	box[np.argmax(box,0)] -= margin
 	n = (np.asarray(box[1]-box[0])/res).astype(int)
 	dec = np.linspace(box[0,0],box[1,0],n[0])
 	ra  = np.linspace(box[0,1],box[1,1],n[1])
@@ -81,7 +83,7 @@ def scan_grid(box, res, sys="equ", dir=0):
 
 def dets_scattered(nmul, nper=3, rad=0.5*np.pi/180):
 	ndet = nmul*nper
-	offsets = np.repeat(np.random.standard_normal([nmul,3])*rad, nper,0)
+	offsets = np.repeat(np.random.uniform(size=[nmul,3])*rad, nper,0)
 	offsets[:,0] = 0
 	# T,Q,U sensitivity
 	angles = np.arange(ndet)*np.pi/nmul
@@ -95,7 +97,7 @@ def nocut(ndet, nsamp):
 	return rangelist.Multirange([rangelist.Rangelist(np.zeros([0,2],dtype=int),n=nsamp) for i  in range(ndet)])
 
 class SimSrcs(scan.Scan):
-	def __init__(self, scanpattern, dets, srcs, noise, cache=False, seed=0):
+	def __init__(self, scanpattern, dets, srcs, noise, cache=False, seed=0, nonoise=False):
 		# Set up the telescope
 		self.boresight = scanpattern.boresight
 		self.sys       = scanpattern.sys
@@ -110,6 +112,7 @@ class SimSrcs(scan.Scan):
 		self.seed  = seed
 		self.dets  = np.arange(len(self.comps))
 		self.site  = scan.default_site
+		self.nonoise = nonoise
 
 		if cache: self._tod = None
 
@@ -119,10 +122,12 @@ class SimSrcs(scan.Scan):
 			return self._tod.copy()
 		np.random.seed(self.seed)
 		tod = np.random.standard_normal([self.ndet,self.nsamp]).astype(np.float32)
-		covs = array_ops.eigpow(self.noise.icovs, -0.5, axes=[-2,-1])
-		N12  = nmat.NmatBinned(covs, self.noise.bins, self.noise.dets)
-		N12.apply(tod)
-		tod[...] = 0 # FIXME
+		if not self.nonoise:
+			covs = array_ops.eigpow(self.noise.icovs, -0.5, axes=[-2,-1])
+			N12  = nmat.NmatBinned(covs, self.noise.bins, self.noise.dets)
+			N12.apply(tod)
+		else:
+			tod[...] = 0
 		tod = tod.astype(np.float64)
 		# And add the point sources
 		for di in range(self.ndet):

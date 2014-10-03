@@ -56,6 +56,7 @@ class ndmap(np.ndarray):
 	def pix2sky(self, pix,    safe=True, corner=False): return pix2sky(self.wcs, pix,    safe, corner)
 	def box(self): return box(self.shape, self.wcs)
 	def posmap(self, corner=False): return posmap(self.shape, self.wcs, corner=corner)
+	def pixmap(self): return pixmap(self.shape, self.wcs)
 	def lmap(self): return lmap(self.shape, self.wcs)
 	def area(self): return area(self.shape, self.wcs)
 	def extent(self): return extent(self.shape, self.wcs)
@@ -171,6 +172,11 @@ def posmap(shape, wcs, safe=True, corner=False):
 	avoided."""
 	pix    = np.mgrid[:shape[-2],:shape[-1]]
 	return ndmap(pix2sky(wcs, pix, safe, corner), wcs)
+
+def pixmap(shape, wcs=None):
+	"""Return an enmap where each entry is the pixel coordinate of that entry."""
+	res = np.mgrid[:shape[-2],:shape[-1]]
+	return res if wcs is None else ndmap(res,wcs)
 
 def pix2sky(wcs, pix, safe=True, corner=False):
 	"""Given an array of corner-based pixel coordinates [{y,x},...],

@@ -236,6 +236,7 @@ class PrecondCirculant:
 		pix = pick_ref_points(binned.div_map[0,0], 3)
 		Arow = measure_corr_cyclic(mapeq, S, pix)
 		iC = np.conj(fft.fft(Arow, axes=[-2,-1]))
+		print np.min(iC.real), np.max(iC.real), np.min(iC.imag), np.max(iC.imag)
 
 		self.Arow = enmap.samewcs(Arow, binned.div_map)
 		self.S, self.iC = S, iC
@@ -264,10 +265,12 @@ class PrecondCirculant:
 def pick_ref_points(hitmap, npoint):
 	pix = []
 	w   = hitmap.copy()
-	# Smooth map to avoid atypical, sharp features
-	fw  = fft.fft(w, axes=[-2,-1])
-	apply_gaussian(fw, 10)
-	w   = fft.ifft(fw, axes=[-2,-1]).real
+	# kill edge, since hits may accumulate there
+	w[0]=0;w[-1]=0;w[:,0]=0;w[:,-1]=0
+	# Bias us towards center of map
+	com = np.sum(w.pixmap()*hitmap,(-2,-1))/np.sum(hitmap)
+	dist= np.sum((w.pixmap()-com[:,None,None])**2,0)**0.5
+	w  *= np.exp(-4*dist**2/np.product(w.shape[-2:]))
 	# Find typical radius of hitmap
 	area_tot  = np.sum(w)/np.max(w)
 	area_mask = area_tot/npoint/3
@@ -280,7 +283,7 @@ def pick_ref_points(hitmap, npoint):
 		mask[tuple(pix[-1])] = 0
 		mask = ndimage.distance_transform_edt(mask)>r_mask
 		w *= mask
-	return np.array(pix)
+	return np.array(pix)+1
 
 class PrecondSubmap:
 	"""This preconditioner splits the scans into
