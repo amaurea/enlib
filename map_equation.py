@@ -198,6 +198,8 @@ class PrecondBinned:
 			div_map[ci,ci] = 1
 			div_junk[...]  = 1
 			div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
+		# Make sure we're symmetric in the TQU-direction
+		div_map = 0.5*(div_map+np.rollaxis(div_map,1))
 		self.div_map, self.div_junk = div_map, div_junk
 		self.hitmap = mapeq.hitcount()
 		self.mapeq  = mapeq
@@ -235,7 +237,9 @@ class PrecondCirculant:
 		#pix = np.array([[-1,-1],[1,1]])*10+np.array([h/2,w/2])[None,:]
 		pix = pick_ref_points(binned.div_map[0,0], 3)
 		Arow = measure_corr_cyclic(mapeq, S, pix)
-		iC = np.conj(fft.fft(Arow, axes=[-2,-1]))
+		# Measure this fft, since we will perform it a lot
+		fft.ifft(fft.fft(Arow.copy(), axes=[-2,-1], flags=["FFTW_MEASURE"]),axes=[-2,-1], flags=["FFTW_MEASURE"])
+		iC = fft.fft(Arow, axes=[-2,-1])
 
 		self.Arow = enmap.samewcs(Arow, binned.div_map)
 		self.S, self.iC = S, iC
@@ -247,12 +251,12 @@ class PrecondCirculant:
 		# We will apply the operation m \approx S C S map
 		# The fft normalization is baked into iC.
 		with bench.mark("prec_cyc"):
-			m  = array_ops.matmul(self.S, map, axes=[0,1])
+			m  = enmap.map_mul(self.S, map)
 			mf = fft.fft(m, axes=[-2,-1])
 			mf = array_ops.solve_masked(self.iC, mf, axes=[0,1])
-			m  = fft.ifft(mf, axes=[-2,-1]).astype(map.dtype)
+			m  = fft.ifft(mf, axes=[-2,-1]).real
 			m/= np.prod(m.shape[-2:])
-			m  = array_ops.matmul(self.S, m,   axes=[0,1])
+			m  = enmap.map_mul(self.S, m)
 		return m, junk/self.div_junk
 	def write(self, dir=None):
 		if self.mapeq.comm.rank > 0: return
@@ -402,6 +406,17 @@ def apply_gaussian(fa, sigma):
 	flat *= gauss[0][None,:,None]
 	flat *= gauss[1][None,None,:]
 
+def sympos(arow):
+	f = fft.fft(arow, axes=[-2,-1])
+	# Make us symmetric in real space by killing the imaginary part
+	f = f.real
+	# Make us symmetric in component space
+	f = 0.5*(f+np.rollaxis(f,1))
+	# Remove negative eigenvalues
+	f = array_ops.eigflip(f, axes=[0,1])
+	x = fft.ifft(f+0j, axes=[-2,-1], normalize=True).real
+	return x
+
 def measure_corr_cyclic(mapeq, S, pixels):
 	# Measure the typical correlation pattern by using multiple
 	# pixels at the same time.
@@ -416,8 +431,8 @@ def measure_corr_cyclic(mapeq, S, pixels):
 			junk[...] = 0
 			Arow[ci,:],_ = mapeq.A(Arow[ci], junk)
 		Sref = S.copy(); S[...] = S[:,:,p[0],p[1]][:,:,None,None]
-		Arow = array_ops.matmul(Arow, S,    axes=[0,1])
-		Arow = array_ops.matmul(Sref, Arow, axes=[0,1])
+		Arow = enmap.map_mul(Arow, S)
+		Arow = enmap.map_mul(Sref, Arow)
 		Arow = np.roll(Arow, -p[0], 2)
 		Arow = np.roll(Arow, -p[1], 3)
 		d += Arow
@@ -425,8 +440,7 @@ def measure_corr_cyclic(mapeq, S, pixels):
 	# We should be symmetric from the beginning, but it turns out
 	# we're not. Should investigate that. In the mean while,
 	# symmetrize so that conjugate gradients doesn't break down.
-	d = (d+np.rollaxis(d,1))/2
-	return d
+	return sympos(d)
 
 def normalize(A):
 	# Normalize to unit diagonal
