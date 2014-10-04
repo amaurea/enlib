@@ -45,6 +45,7 @@ class ndmap(np.ndarray):
 		self.wcs = getattr(obj, "wcs", None)
 	def __repr__(self):
 		return "ndmap(%s,%s)" % (np.asarray(self), enlib.wcs.describe(self.wcs))
+	def __str__(self): return repr(self)
 	def __getitem__(self, sel):
 		return np.ndarray.__getitem__(self, sel)
 	def __array_wrap__(self, arr, context=None):
@@ -151,7 +152,7 @@ def enmap(arr, wcs=None, dtype=None, copy=True):
 	copy : boolean
 		If true, arr is copied. Otherwise, a referance is kept."""
 	if copy:
-		arr = np.array(arr, dtype=dtype)
+		arr = np.asanyarray(arr, dtype=dtype).copy()
 	if wcs is None:
 		if isinstance(arr, ndmap):
 			wcs = arr.wcs
@@ -203,10 +204,19 @@ def sky2pix(wcs, coords, safe=True, corner=False):
 	if corner: pix += 0.5
 	if safe:
 		# Avoid angle cuts inside the map. Place the cut at the
-		# opposite side of the sky relative to the zero pixel
+		# opposite side of the sky relative to the zero pixel.
+		# That still leaves ambiguity on the pixel winding.
+		# Naively one would want the lowest possible positive
+		# numbers for all the pixels. But if a couple of pixels
+		# are slightly negative this results in all the pixels
+		# being shifted to huge numbers. I therefore instead
+		# place the mean pixel value at the lowest positive position
+		# possible after unwrapping.
 		for i in range(len(pix)):
 			n = np.abs(360./wcs.wcs.cdelt[i])
-			pix[i] = enlib.utils.rewind(pix[i], pix[i,0]%n, n)
+			pix[i] = enlib.utils.rewind(pix[i], pix[i,0], n)
+			ref = int(np.mean(pix[1]))
+			pix[i] = enlib.utils.rewind(pix[i], ref%n, n)
 	return pix[::-1].reshape(coords.shape)
 
 def project(map, shape, wcs, order=3, mode="nearest"):

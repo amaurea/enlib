@@ -142,7 +142,7 @@ def write_scan(fname, scan):
 		hfile["cut/flat"]  = flat
 		nmat.write_nmat(hfile, scan.noise, "noise")
 		for k in scan.site:
-			hfile["site/"+k] = 550#scan.site[k]
+			hfile["site/"+k] = scan.site[k]
 		hfile["tod"]       = scan.get_samples()
 
 def read_scan(fname):

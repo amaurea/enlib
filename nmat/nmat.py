@@ -88,6 +88,8 @@ class NmatBinned(NoiseMatrix):
 		covs  = enlib.array_ops.eigpow(icovs, -1, axes=[-2,-1])[mask][:,detslice][:,:,detslice]
 		icovs = enlib.array_ops.eigpow(covs,  -1, axes=[-2,-1])
 		return BinnedNmat(dets, bins, icovs)
+	def __mul__(self, a):
+		return NmatBinned(self.icovs/a, self.bins, self.dets)
 
 class NmatDetvecs(NmatBinned):
 	"""A binned noise matrix where the inverse covariance matrix is stored and
@@ -148,6 +150,8 @@ class NmatDetvecs(NmatBinned):
 		bins[-1,-1] = fmax
 		# Slice covs, not icovs
 		return NmatDetvecs(res.D[mask][:,detslice], res.V[:,detslice], res.E, bins, vbins, dets)
+	def __mul__(self, a):
+		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.vbins, self.dets)
 
 def read_nmat(fname, group=None):
 	if isinstance(fname, basestring):

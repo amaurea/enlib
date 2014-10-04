@@ -99,7 +99,7 @@ contains
 			orig = ftod(b1:b2,:)
 			!C.T(ndet,ndet)*tod.T(ndet,nf) = tod.T(ndet,nf)
 			! tod(nf,ndet) = tod(nf,ndet)*C(ndet,ndet)
-			call C##gemm('N', 'N', nf, ndet, ndet, (1##E##0,0##E##0), orig, nf, cC, ndet, (0##E##0,0##E##0), ftod(b1:b2,:), nf)
+			call C##gemm('N', 'N', nf, ndet, ndet, (1##D##0,0##D##0), orig, nf, cC, ndet, (0##D##0,0##D##0), ftod(b1:b2,:), nf)
 			deallocate(cC, orig)
 		end do
 	end subroutine
