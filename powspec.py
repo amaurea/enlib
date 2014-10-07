@@ -120,20 +120,20 @@ def read_spectrum(fname, inds=True, scale=True, expand="diag", ncol=None, ncomp=
 	valid expansion schemes from compressed_order, and will
 	cause the returned array to be cl[ncomp,ncomp,lmax+1]
 	instaed."""
-	a = np.loadtxt(fname).T
+	a = np.atleast2d(np.loadtxt(fname).T)
 	if inds: a = expand_inds(np.array(a[0],dtype=int), a[1:])
 	if scale: a = scale_spectrum(a, 1)
 	if ncol: a = a[:ncol]
 	if expand is not None: a = sym_expand(a, scheme=expand, ncomp=ncomp)
 	return a
 
-def read_lensing_spectrum(fname, coloff=0, inds=True, scale=True, expand=None):
-	a = read_spectrum(fname, inds=inds, scale=False)[coloff]
+def read_lensing_spectrum(fname, coloff=0, inds=True, scale=True, expand="diag"):
+	a = read_spectrum(fname, inds=inds, scale=False, expand=None)[coloff]
 	if scale: a = scale_lensing_spectrum(a, 1)
 	if expand is not None: a = a[None,None]
 	return a
 
-def read_camb_scalar(fname, inds=True, scale=True, expand=None, ncmb=3):
+def read_camb_scalar(fname, inds=True, scale=True, expand=True, ncmb=3):
 	if expand: expand = "diag"
 	ps_cmb  = read_spectrum(fname, inds=inds, scale=scale, expand=expand, ncol=ncmb, ncomp=3)
 	ps_lens = read_lensing_spectrum(fname, inds=inds, scale=scale, expand=expand, coloff=ncmb)
