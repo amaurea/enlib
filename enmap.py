@@ -278,7 +278,7 @@ def extent(shape, wcs, nsub=0x10):
 	radius 1 m, then this function returns approximately how many meters
 	tall and width the patch is."""
 	wcs = wcs.deepcopy()
-	step = np.asfarray(shape[-2:])/nsub
+	step = (np.asfarray(shape[-2:])/nsub)[::-1]
 	wcs.wcs.cdelt *= step
 	wcs.wcs.crpix /= step
 	# Get position of all the corners, including the far ones
