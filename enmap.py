@@ -294,7 +294,7 @@ def extent(shape, wcs, nsub=0x10):
 	Ay, Ax = np.sum(areas,0), np.sum(areas,1)
 	Ly = np.sum(np.sum(ly,0)*Ay)/np.sum(Ay)
 	Lx = np.sum(np.sum(lx,1)*Ax)/np.sum(Ax)
-	return np.array([Lx,Ly])
+	return np.array([Ly,Lx])
 
 def area(shape, wcs, nsub=0x10):
 	"""Returns the area of a patch with the given shape
