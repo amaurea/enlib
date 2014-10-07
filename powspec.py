@@ -120,7 +120,7 @@ def read_spectrum(fname, inds=True, scale=True, expand="diag", ncol=None, ncomp=
 	valid expansion schemes from compressed_order, and will
 	cause the returned array to be cl[ncomp,ncomp,lmax+1]
 	instaed."""
-	a = np.atleast2d(np.loadtxt(fname).T)
+	a = np.atleast_2d(np.loadtxt(fname).T)
 	if inds: a = expand_inds(np.array(a[0],dtype=int), a[1:])
 	if scale: a = scale_spectrum(a, 1)
 	if ncol: a = a[:ncol]
