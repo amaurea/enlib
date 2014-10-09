@@ -414,7 +414,7 @@ def spec2flat(shape, wcs, cov, exp=1.0):
 	if exp != 1.0: cov = multi_pow(cov, exp)
 	cov[~np.isfinite(cov)] = 0
 	cov   = cov[:oshape[-3],:oshape[-3]]
-	return ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape)),wcs)
+	return ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape),mode="constant",cval=0),wcs)
 
 def multi_pow(mat, exp, axes=[0,1]):
 	"""Raise each sub-matrix of mat (ncomp,ncomp,...) to
