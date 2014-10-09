@@ -1,5 +1,6 @@
+include ../compile_opts/$(ENLIB_COMP).mk
 all:fortran.so
-fortran.so: fortran.f90
-	F90FLAGS="-fopenmp -Ofast -ffree-line-length-none" f2py2 -c -m fortran{,.f90} -lgomp
+%.so: %.f90
+	$(F2PY) --fcompiler=$(F2PYCOMP) -c -m $(basename $<) $< $(OMP_LINK)
 clean:
 	rm -rf *.pyc *.so

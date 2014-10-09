@@ -1,5 +1,5 @@
-all: sharp iers coordinates array_ops pmat nmat
-clean: clean_sharp clean_iers clean_coordinates clean_array_ops clean_pmat clean_nmat
+all: sharp iers coordinates array_ops pmat nmat colorize
+clean: clean_sharp clean_iers clean_coordinates clean_array_ops clean_pmat clean_nmat clean_colorize
 	rm -rf *.pyc
 
 sharp: foo
@@ -14,6 +14,10 @@ coordinates: foo
 	make -C coordinates
 clean_coordinates:
 	make -C coordinates clean
+colorize: foo
+	make -C colorize
+clean_colorize: foo
+	make -C clean_colorize
 array_ops: foo
 	make -C array_ops
 clean_array_ops:
