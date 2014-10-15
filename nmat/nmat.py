@@ -28,6 +28,8 @@ class NoiseMatrix:
 		a slice object, which must have empty start and stop values,
 		and a positive step value."""
 		return self
+	@property
+	def ivar(self): raise NotImplementedError
 	def getitem_helper(self, sel):
 		"""Expands sel to a detector and sample slice.
 		The detector slice is straightforward. The sample slice
@@ -71,6 +73,8 @@ class NmatBinned(NoiseMatrix):
 	def white(self, tod):
 		tod *= self.tdiag[:,None]
 		return tod
+	@property
+	def ivar(self): return self.tdiag
 	def get_ibins(self, n):
 		nf = n/2+1
 		ibins = (self.bins*nf/self.bins[-1,-1]).astype(np.int32)

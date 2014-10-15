@@ -126,7 +126,7 @@ contains
 		integer(4) :: steps(size(rbox,1)), pix(2,bz)
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1)), phase(size(map,3),bz)
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
-		real(_)    :: mt(2,2), fpix(2,bz)
+		real(_)    :: fpix(2,bz)
 		real(_), allocatable :: wmap(:,:,:,:)
 
 		nsamp   = size(tod, 1)
@@ -288,7 +288,7 @@ contains
 		integer(4), intent(in) :: steps(:)
 		real(_)                :: opoint(size(ys,1),size(ipoint,2))
 		real(_)    :: xrel(size(x0))
-		integer(4) :: xind(size(x0)), ig, oc, i, j
+		integer(4) :: xind(size(x0)), ig, i, j
 		if(size(xrel)==3) then
 			do j = 1, size(ipoint,2)
 				! Our location in grid units
@@ -614,6 +614,203 @@ contains
 				call pmat_cut_range(-1, ibuf, junk_high(gh1:gh2), cut_high(cuttype:,ci))
 			end if
 			deallocate(ibuf,obuf)
+		end do
+	end subroutine
+
+	subroutine pmat_ptsrc( &
+			tod, params,                      &! Main inputs/outpus
+			bore, det_pos, det_comps,  comps, &! Input pointing
+			rbox, nbox, ys,                   &! Coordinate transformation
+			ranges, rinds                     &! Precomputed relevant sample info
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		real(_),    intent(inout) :: tod(:,:)      ! (nsamp,ndet)
+		real(_),    intent(in)    :: params(:,:)   ! (nparam,nsrc)
+		real(_),    intent(in)    :: bore(:,:), ys(:,:,:)
+		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
+		integer(4), intent(in)    :: comps(:), nbox(:), rinds(:,:), ranges(:,:)
+		! Work
+		integer(4), parameter :: bz = 321
+		integer(4) :: ndet, nsrc, di, ri, si, i, j, i1, i2, ic, nj, namp
+		integer(4) :: steps(size(rbox,1))
+		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
+		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1)), phase(size(comps),bz)
+		real(_)    :: ra, dec, amps(size(comps)), ibeam(3), ddec, dra, r2, cosdec
+
+		ndet  = size(tod,2)
+		nsrc  = size(params,2)
+		namp  = size(amps)
+
+		steps(size(steps)) = 1
+		do ic = size(steps)-1, 1, -1
+			steps(ic) = steps(ic+1)*nbox(ic+1)
+		end do
+		x0 = rbox(:,1); inv_dx = nbox/(rbox(:,2)-rbox(:,1))
+
+		!$omp parallel do collapse(2) private(si,di,ri,i1,i2,i,j,nj,ipoint,opoint,phase,ddec,dra,r2,dec,ra,amps,ibeam,cosdec)
+		do si = 1, nsrc
+			do di = 1, ndet
+				dec   = params(1,si)
+				ra    = params(2,si)
+				amps  = params(3:2+namp,si)
+				ibeam = params(3+namp:5+namp,si)
+				cosdec= cos(dec)
+				do ri = rinds(di,si)+1, rinds(di+1,si)
+					i1=ranges(1,ri)+1; i2 = ranges(2,ri)
+					do i = i1, i2, bz
+						! Ok, we're finally at the relevant sample block. We now
+						! need the physical coordinate of that sample.
+						nj = min(i2+1-i,bz)
+						do j = 1, nj
+							ipoint(:,j) = bore(:,i+j-1)+det_pos(:,di)
+						enddo
+						opoint(:,:nj) = lookup_grad(ipoint(:,:nj), x0, inv_dx, steps, ys)
+						phase(:,:nj)  = get_phase(comps, det_comps(:,di), opoint(3:,:nj))
+						do j = 1, nj
+							! Compute shape-normalized distance from each sample to the current source.
+							ddec = dec-opoint(1,j)
+							dra  = (ra-opoint(2,j))*cosdec
+							r2   = ddec*(ibeam(1)*ddec+ibeam(3)*dra) + dra*(ibeam(2)*dra+ibeam(3)*ddec)
+							! And finally evaluate the model
+							tod(i+j-1,di) = sum(amps*phase(:,j))*exp(-0.5*r2)
+						end do
+					end do
+				end do
+			end do
+		end do
+	end subroutine
+
+	! Loops through all samples for all detectors for all sources, computing
+	! the distance between each. Builds up a list of which samples are close
+	! enough to each source to matter. Also builds up an inverse variance for
+	! each source based on how much eac detector hits it. This can be used to
+	! divide sources into sets of sufficient sensitivity.
+	!  pos(2,nsrc), rhit(nsrc), rmax(nsrc), det_ivars(nsrc), src_ivars(nsrc)
+	!  ranges(2,maxrange,ndet,nsrc), nrange(ndet,nsrc)
+	! ranges is zero-based and half-open, like python.
+	! maxrange must be large enough to hold all the discovered ranges. Otherwise,
+	! the last ranges will be lost. Nrange holds the actual number of discovered
+	! ranges.
+	subroutine pmat_ptsrc_prepare( &
+			pos, rhit, rmax, det_ivars, src_ivars, ranges, nrange, &
+			bore, det_pos,  &! Input pointing
+			rbox, nbox, ys  &! Coordinate transformation
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		real(_),    intent(in)    :: pos(:,:), rhit(:), rmax(:), det_ivars(:)
+		real(_),    intent(inout) :: src_ivars(:)
+		real(_),    intent(in)    :: bore(:,:), ys(:,:,:)
+		real(_),    intent(in)    :: det_pos(:,:), rbox(:,:)
+		integer(4), intent(inout) :: nrange(:,:), ranges(:,:,:,:)
+		integer(4), intent(in)    :: nbox(:)
+		! Work
+		integer(4), parameter :: bz = 321
+		integer(4), allocatable :: grid(:,:,:), ngrid(:,:)
+		integer(4) :: ndet, nsamp, nsrc, di, ri, si, i, j, k, i1, i2, ic, nj, maxrange, gi(2)
+		integer(4) :: steps(size(rbox,1)), glen(2), off(2), gsi
+		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
+		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
+		real(_)    :: ddec, dra, r2, rmaxmax
+		real(_)    :: rmax2(size(pos,2)), rhit2(size(pos,2)), cosdec(size(pos,2))
+		real(_)    :: g0(2), g1(2), igstep(2)
+		integer(4) :: prev(size(det_pos,2),size(pos,2))
+
+		nsamp = size(bore,2)
+		ndet  = size(det_pos,2)
+		nsrc  = size(pos,2)
+		maxrange = size(ranges,2)
+
+		steps(size(steps)) = 1
+		do ic = size(steps)-1, 1, -1
+			steps(ic) = steps(ic+1)*nbox(ic+1)
+		end do
+		x0 = rbox(:,1); inv_dx = nbox/(rbox(:,2)-rbox(:,1))
+
+		! Set up our source pruning grid. The cell size must be at least rmax in
+		! order to ensure that all relevant samples are within +-1 neighbor.
+		! We also need an extra cell of padding at each side. Without this
+		! approach, things were far too slow (minute instead of seconds).
+		rmaxmax = maxval(rmax)
+		g0 = minval(pos(1:2,:),2)-1.5*rmaxmax
+		g1 = maxval(pos(1:2,:),2)+1.5*rmaxmax
+		igstep = 1.0/rmaxmax
+		glen = int((g1-g0)*igstep)+1
+		allocate(ngrid(glen(1),glen(2)))
+		ngrid  = 0
+		do si = 1, nsrc
+			gi = int((pos(1:2,si)-g0)*igstep)
+			do i = -1,1; do j = -1,1;
+				off(1)=i;off(2)=j
+				if(any(gi+off<=0.or.gi+off>glen)) cycle
+				ngrid(gi(1)+off(1),gi(2)+off(2)) = ngrid(gi(1)+off(1),gi(2)+off(2))+1
+			end do; end do;
+		end do
+		! And then allocate and do it all over again, for real this time.
+		allocate(grid(maxval(ngrid),glen(1),glen(2)))
+		ngrid = 0
+		do si = 1, nsrc
+			gi = int((pos(1:2,si)-g0)*igstep)
+			do i = -1,1; do j = -1,1;
+				off(1)=i;off(2)=j
+				if(any(gi+off<=0.or.gi+off>glen)) cycle
+				ngrid(gi(1)+off(1),gi(2)+off(2)) = ngrid(gi(1)+off(1),gi(2)+off(2))+1
+				grid(ngrid(gi(1)+off(1),gi(2)+off(2)),gi(1)+off(1),gi(2)+off(2)) = si
+			end do; end do;
+		end do
+
+		src_ivars = 0
+		prev   = -1
+		cosdec = cos(pos(1,:))
+		rmax2  = rmax**2
+		rhit2  = rhit**2
+		nrange = 0
+
+		! For each source, find the samples that are close enough to
+		! it to matter.
+		!$omp parallel do private(di,i,nj,j,k,ipoint,opoint,gi,gsi,si,ddec,dra,r2) reduction(+:src_ivars)
+		do di = 1, ndet
+			do i = 1, nsamp, bz
+				! Ok, we're finally at the relevant sample block. We now
+				! need the physical coordinate of that sample.
+				nj = min(nsamp+1-i,bz)
+				do j = 1, nj
+					ipoint(:,j) = bore(:,i+j-1)+det_pos(:,di)
+				enddo
+				opoint(:,:nj) = lookup_grad(ipoint(:,:nj), x0, inv_dx, steps, ys)
+				do j = 1, nj
+					! Find which grid point we're in
+					gi = int((opoint(1:2,j)-g0)*igstep)
+					if(all(gi>0 .and. gi <= glen)) then
+						! Loop through all nearby sources.
+						do gsi = 1, ngrid(gi(1),gi(2))
+							si   = grid(gsi,gi(1),gi(2))
+							ddec = pos(1,si)-opoint(1,j)
+							dra  = (pos(2,si)-opoint(2,j))*cosdec(si)
+							r2   = ddec**2+dra**2
+							if(r2 < rmax2(si)) then
+								! If the previous visited sample was not our last one, we must
+								! have made a jump, so start a new range.
+								k = i+j-1
+								if(prev(di,si) .ne. k-1) then
+									nrange(di,si) = nrange(di,si)+1
+									ranges(1,min(maxrange,nrange(di,si)),di,si) = k-1
+								end if
+								ranges(2,min(maxrange,nrange(di,si)),di,si) = k
+								prev(di,si) = k
+
+								! Update source hits if close enough to fiducial position
+								if(r2 < rhit2(si)) then
+									src_ivars(si) = src_ivars(si) + det_ivars(di)
+								end if
+							end if
+						end do
+					end if
+				end do
+			end do
 		end do
 	end subroutine
 

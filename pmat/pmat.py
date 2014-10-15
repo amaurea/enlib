@@ -190,7 +190,13 @@ class pos2pix:
 		time  = self.scan.mjd0 + ipos[0]/utils.day2sec
 		opos = coordinates.transform(self.scan.sys, self.sys, ipos[1:], time=time, site=self.scan.site, pol=True)
 		opix = np.zeros((4,)+ipos.shape[1:])
-		opix[:2] = self.template.sky2pix(opos[1::-1],safe=True)
+		if self.template is not None:
+			opix[:2] = self.template.sky2pix(opos[1::-1],safe=True)
+		else:
+			# If we have no template, output angles instead of pixels.
+			# Make sure the angles don't have any jumps in them
+			opix[:2] = opos[1::-1]
+			opix[1]  = utils.rewind(opix[1], opix[1,0])
 		opix[2]  = np.cos(2*opos[2])
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)
@@ -211,3 +217,65 @@ class PmatCutRebin(PointingMatrix):
 	def backward(self, jhigh, jlow):
 		get_core(jhigh.dtype).pmat_cut_rebin(-1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
 
+config.default("pmat_ptsrc_rsigma", 5.0, "Mat number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
+class PmatPtsrc(PointingMatrix):
+	def __init__(self, scan, params, sys=None):
+		sys   = config.get("map_eqsys", sys)
+		rmul  = config.get("pmat_ptsrc_rsigma")
+		self.dtype = params.dtype
+
+		# Set up pointing interpolation
+		box = np.array(scan.box)
+		margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
+		box[0] -= margin/2; box[1] += margin/2
+		ipol = interpol.build(pos2pix(scan,None,sys), interpol.ip_linear, box, [utils.arcsec,utils.arcsec,utils.arcsec,utils.arcsec])
+		self.rbox = ipol.box
+		self.nbox = np.array(ipol.ys.shape[4:])
+		n = self.rbox.shape[1]
+		self.ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
+		self.ys = np.rollaxis(self.ys.reshape(self.ys.shape[:2]+(-1,)),-1).astype(self.dtype)
+		self.comps = np.arange(params.shape[0]-5)
+		self.scan  = scan
+		self.core = pmat_core_32.pmat_core if self.dtype == np.float32 else pmat_core_64.pmat_core
+
+		# Collect information about which samples hit which sources
+		nsrc = params.shape[1]
+		ndet = scan.ndet
+		rhit = np.zeros(nsrc)+(np.sum(1./params[-3]*params[2]**2)/np.sum(params[2]**2))**0.5
+		rmax = rhit*rmul
+		src_ivars = np.zeros(nsrc,dtype=self.dtype)
+
+		# Measure ranges. May need to iterate if initial allocation was too small
+		nrange = np.zeros([nsrc,ndet],dtype=np.int32)
+		ranges = np.zeros([nsrc,ndet,100,2],dtype=np.int32)
+		self.core.pmat_ptsrc_prepare(params, rhit, rmax, scan.noise.ivar, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
+		if np.max(nrange) > ranges.shape[2]:
+			ranges = np.zeros([nsrc,ndet,np.max(nrange),2],dtype=np.int32)
+			self.core.pmat_ptsrc_prepare(params, rhit, rmax, scan.noise.ivar, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
+
+		# Collapse ranges and compute offsets for each
+		flat_ranges = []
+		offsets = np.zeros([nsrc,ndet+1],dtype=np.int32)
+		for si in range(nsrc):
+			for di in range(ndet):
+				offsets[si,di] = len(flat_ranges)
+				current_ranges = ranges[si,di,:nrange[si,di]]
+				cut_ranges = scan.cut[di].ranges
+				cut_ranges = []
+				# Remove cut samples, splitting range if necessary
+				for r in current_ranges:
+					for c in cut_ranges:
+
+
+
+
+				flat_ranges += list(ranges[si,di,:nrange[si,di]])
+			offsets[si,ndet] = len(flat_ranges)
+		# Phew! All done. Store for later use
+		self.src_ivars = src_ivars
+		self.ranges  = np.array(flat_ranges,dtype=np.int32)
+		self.offsets = offsets
+
+	def forward(self, tod, params):
+		"""params -> tod"""
+		self.core.pmat_ptsrc(tod.T, params, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.ranges.T, self.offsets.T)

@@ -316,3 +316,22 @@ def equal_split(weights, nbin):
 		bins[j].append(i)
 		bw[j] += weights[i]
 	return bins
+
+#def range_sub(a,b):
+#	"""Given a set of ranges a[:,{from,to}] and b[:,{from,to}],
+#	return a new set of ranges c[:,{from,to}] which corresponds to
+#	the ranges in a with those in b removed. This might split individual
+#	ranges into multiple ones."""
+#	c = []
+#	i = np.argsort(b[:,0])
+#	b = b[i]
+#	for ar in a:
+#		# Find first range in b that overlaps with ar (the first one
+#		# that ends after ar[0]).
+#		bi1 = np.searchsorted(b[:,1],ar[0],side="right")
+#		# Find the end of the overlap (the first that starts after ar[1])
+#		bi2 = np.searchsorted[b[:,0],ar[1],side="left")
+
+
+
+
