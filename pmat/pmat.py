@@ -6,7 +6,7 @@ forward will update tod based on m, and backward will update m based on tod.
 The reason for allowing the other argument to be modified is to make it easier
 to incrementally project different parts of the signal.
 """
-import numpy as np
+import numpy as np, bunch
 from enlib import enmap, interpol, utils, coordinates, config
 import pmat_core_32
 import pmat_core_64
@@ -253,29 +253,56 @@ class PmatPtsrc(PointingMatrix):
 			ranges = np.zeros([nsrc,ndet,np.max(nrange),2],dtype=np.int32)
 			self.core.pmat_ptsrc_prepare(params, rhit, rmax, scan.noise.ivar, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
 
-		# Collapse ranges and compute offsets for each
-		flat_ranges = []
-		offsets = np.zeros([nsrc,ndet+1],dtype=np.int32)
-		for si in range(nsrc):
-			for di in range(ndet):
-				offsets[si,di] = len(flat_ranges)
-				current_ranges = ranges[si,di,:nrange[si,di]]
-				cut_ranges = scan.cut[di].ranges
-				cut_ranges = []
-				# Remove cut samples, splitting range if necessary
-				for r in current_ranges:
-					for c in cut_ranges:
-
-
-
-
-				flat_ranges += list(ranges[si,di,:nrange[si,di]])
-			offsets[si,ndet] = len(flat_ranges)
-		# Phew! All done. Store for later use
+		self.ranges, self.rangesets, self.offsets = compress_ranges(ranges, nrange, scan.cut, scan.nsamp)
+		print "A", self.ranges.shape
 		self.src_ivars = src_ivars
-		self.ranges  = np.array(flat_ranges,dtype=np.int32)
-		self.offsets = offsets
+		self.nhit = np.sum(self.ranges[:,1]-self.ranges[:,0])
 
 	def forward(self, tod, params):
 		"""params -> tod"""
-		self.core.pmat_ptsrc(tod.T, params, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.ranges.T, self.offsets.T)
+		self.core.pmat_ptsrc(tod.T, params, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
+
+	def extract(self, tod):
+		"""Extract precomputed pointing and phase information for the selected samples.
+		These are stored in a compressed format, where sample I of range R of detector D
+		of source S has index ranges[offsets[S,D]+R,0]+I.
+
+		Ideally the ranges should cover the data once and no more, to avoid double-counting
+		and unsubtracted sources when several sources are near each other. In that case,
+		overlapping ranges must be merged, and both sources must be made to refer to the
+		same range, meaning that there will be duplicate entries in offsets."""
+		point = np.zeros([self.nhit,2],dtype=self.dtype)
+		phase = np.zeros([self.nhit,len(self.comps)],dtype=self.dtype)
+		srctod= np.zeros([self.nhit],dtype=self.dtype)
+		oranges= np.zeros(self.ranges.shape, dtype=np.int32)
+		self.core.pmat_ptsrc_extract(tod.T, srctod, point.T, phase.T, oranges.T, self.scan.boresight.T,
+				self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
+				self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
+		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets)
+		return res
+
+def compress_ranges(ranges, nrange, cut, nsamp):
+	"""Given ranges[nsrc,ndet,nmax,2], nrange[nsrc,ndet] where ranges has
+	det-local numbering, return the same information in a compressed format
+	ranges[nr,2], rangesets[nind], offsets[nsrc,ndet], where ranges now has
+	global sample ordering."""
+	nsrc, ndet = nrange.shape
+	# First collapse ranges,nrange to flat ranges and indices into it
+	flat_ranges = []
+	offsets = np.zeros([nsrc,ndet+1],dtype=np.int32)
+	for si in range(nsrc):
+		for di in range(ndet):
+			s0 = di*nsamp
+			offsets[si,di] = len(flat_ranges)
+			current_ranges = ranges[si,di,:nrange[si,di]]
+			cutsplit_ranges = utils.range_sub(current_ranges, cut[di].ranges)
+			flat_ranges += list(cutsplit_ranges+s0)
+			offsets[si,di+1] = len(flat_ranges)
+	flat_ranges = np.array(flat_ranges)
+	# Then merge overlapping ranges and produce our final output format.
+	ranges, map = utils.range_union(flat_ranges, mapping=True)
+	# Because some ranges are shared now, we need a list of which
+	# range indices belongs to which src,det. That is what map
+	# does. offsets, which used to be indices into ranges, are now
+	# indices into map instead.
+	return ranges, map, offsets

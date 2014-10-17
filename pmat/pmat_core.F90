@@ -226,7 +226,7 @@ contains
 		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
 		! Work
 		integer(4), parameter :: bz = 321
-		integer(4) :: ndet, nsamp, di, si, nproc, id, ic, i, j, k, l, nj
+		integer(4) :: ndet, nsamp, di, si, id, ic, j, l, nj
 		integer(4) :: steps(size(rbox,1))
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
@@ -402,6 +402,8 @@ contains
 			end do
 		end do
 	end function
+
+	!!! Cut stuff here !!!
 
 	! Simple cut scheme: a simple array of ({det,lstart,len,gstart,glen,type,params...},ncut)
 	! This is very flexible, allowing each cut to be processed independently and with
@@ -590,7 +592,7 @@ contains
 		integer(4), intent(in)    :: dir, cut_high(:,:), cut_low(:,:)
 		real(_),    intent(inout) :: junk_high(:), junk_low(:)
 		integer(4), parameter     :: det=1, lstart=2, llen=3, gstart=4, glen=5, cuttype=6
-		integer(4) :: ci, di, gl1, gl2, gh1, gh2, nl, nh, i
+		integer(4) :: ci, gl1, gl2, gh1, gh2, nl, nh, i
 		real(_), allocatable :: ibuf(:), obuf(:)
 		! Assume that the high-res and low-res cuts have the same number of entries
 		! and come in the same order.
@@ -617,11 +619,13 @@ contains
 		end do
 	end subroutine
 
+	!!! Point source stuff !!!
+
 	subroutine pmat_ptsrc( &
 			tod, params,                      &! Main inputs/outpus
 			bore, det_pos, det_comps,  comps, &! Input pointing
 			rbox, nbox, ys,                   &! Coordinate transformation
-			ranges, rinds                     &! Precomputed relevant sample info
+			ranges, rangesets, offsets        &! Precomputed relevant sample info
 		)
 		use omp_lib
 		implicit none
@@ -630,18 +634,22 @@ contains
 		real(_),    intent(in)    :: params(:,:)   ! (nparam,nsrc)
 		real(_),    intent(in)    :: bore(:,:), ys(:,:,:)
 		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
-		integer(4), intent(in)    :: comps(:), nbox(:), rinds(:,:), ranges(:,:)
+		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:), ranges(:,:), rangesets(:)
 		! Work
 		integer(4), parameter :: bz = 321
-		integer(4) :: ndet, nsrc, di, ri, si, i, j, i1, i2, ic, nj, namp
+		integer(4) :: ndet, nsrc, di, ri, oi, si, s0, i, j, i1, i2, ic, nj, namp, nsamp
 		integer(4) :: steps(size(rbox,1))
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1)), phase(size(comps),bz)
 		real(_)    :: ra, dec, amps(size(comps)), ibeam(3), ddec, dra, r2, cosdec
 
+		! NB: Ranges has units of nsamp*ndet, i.e. a range-value of R corresonds to
+		! sample R%nsamp of detector R/nsamp.
+
 		ndet  = size(tod,2)
 		nsrc  = size(params,2)
 		namp  = size(amps)
+		nsamp = size(tod,1)
 
 		steps(size(steps)) = 1
 		do ic = size(steps)-1, 1, -1
@@ -649,7 +657,12 @@ contains
 		end do
 		x0 = rbox(:,1); inv_dx = nbox/(rbox(:,2)-rbox(:,1))
 
-		!$omp parallel do collapse(2) private(si,di,ri,i1,i2,i,j,nj,ipoint,opoint,phase,ddec,dra,r2,dec,ra,amps,ibeam,cosdec)
+		!$omp parallel workshare
+		tod = 0
+		!$omp end parallel workshare
+
+		! Note: don't add collapse(2) here without handling tod-clobbering
+		!$omp parallel do private(si,di,oi,s0,ri,i1,i2,i,j,nj,ipoint,opoint,phase,ddec,dra,r2,dec,ra,amps,ibeam,cosdec)
 		do si = 1, nsrc
 			do di = 1, ndet
 				dec   = params(1,si)
@@ -657,8 +670,10 @@ contains
 				amps  = params(3:2+namp,si)
 				ibeam = params(3+namp:5+namp,si)
 				cosdec= cos(dec)
-				do ri = rinds(di,si)+1, rinds(di+1,si)
-					i1=ranges(1,ri)+1; i2 = ranges(2,ri)
+				do oi = offsets(di,si)+1, offsets(di+1,si)
+					ri = rangesets(oi)+1
+					s0 = ranges(1,ri)/nsamp*nsamp
+					i1=ranges(1,ri)-s0+1; i2 = ranges(2,ri)-s0
 					do i = i1, i2, bz
 						! Ok, we're finally at the relevant sample block. We now
 						! need the physical coordinate of that sample.
@@ -673,8 +688,8 @@ contains
 							ddec = dec-opoint(1,j)
 							dra  = (ra-opoint(2,j))*cosdec
 							r2   = ddec*(ibeam(1)*ddec+ibeam(3)*dra) + dra*(ibeam(2)*dra+ibeam(3)*ddec)
-							! And finally evaluate the model
-							tod(i+j-1,di) = sum(amps*phase(:,j))*exp(-0.5*r2)
+							! And finally evaluate the model.
+							tod(i+j-1,di) = tod(i+j-1,di) + sum(amps*phase(:,j))*exp(-0.5*r2)
 						end do
 					end do
 				end do
@@ -692,7 +707,7 @@ contains
 	! ranges is zero-based and half-open, like python.
 	! maxrange must be large enough to hold all the discovered ranges. Otherwise,
 	! the last ranges will be lost. Nrange holds the actual number of discovered
-	! ranges.
+	! ranges. ranges has units of det-local samples.
 	subroutine pmat_ptsrc_prepare( &
 			pos, rhit, rmax, det_ivars, src_ivars, ranges, nrange, &
 			bore, det_pos,  &! Input pointing
@@ -710,7 +725,7 @@ contains
 		! Work
 		integer(4), parameter :: bz = 321
 		integer(4), allocatable :: grid(:,:,:), ngrid(:,:)
-		integer(4) :: ndet, nsamp, nsrc, di, ri, si, i, j, k, i1, i2, ic, nj, maxrange, gi(2)
+		integer(4) :: ndet, nsamp, nsrc, di, si, i, j, k, ic, nj, maxrange, gi(2)
 		integer(4) :: steps(size(rbox,1)), glen(2), off(2), gsi
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
@@ -811,6 +826,78 @@ contains
 					end if
 				end do
 			end do
+		end do
+	end subroutine
+
+	subroutine pmat_ptsrc_extract( &
+			tod, out_tod, point, phase, oranges, &! Main inputs/outpus
+			bore, det_pos, det_comps,  comps,    &! Input pointing
+			rbox, nbox, ys,                      &! Coordinate transformation
+			ranges, rangesets, offsets           &! Precomputed relevant sample info
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		real(_),    intent(in)    :: tod(:,:)      ! (nsamp,ndet)
+		real(_),    intent(inout) :: out_tod(:), point(:,:), phase(:,:)
+		real(_),    intent(in)    :: bore(:,:), ys(:,:,:)
+		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
+		integer(4), intent(inout) :: oranges(:,:)
+		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:), rangesets(:), ranges(:,:)
+		! Work
+		integer(4), parameter :: bz = 321
+		integer(4) :: ndet, nsrc, di, ri, si, s0, oi, i, j, k, i1, i2, ic, nj, n, nsamp
+		integer(4) :: r2det(size(ranges,2)), srcoff(size(ranges,2)+1)
+		integer(4) :: steps(size(rbox,1))
+		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
+		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
+
+		ndet  = size(tod,2)
+		nsrc  = size(offsets,2)
+		nsamp = size(tod,1)
+
+		steps(size(steps)) = 1
+		do ic = size(steps)-1, 1, -1
+			steps(ic) = steps(ic+1)*nbox(ic+1)
+		end do
+		x0 = rbox(:,1); inv_dx = nbox/(rbox(:,2)-rbox(:,1))
+
+		! For each range we need to know which detector that range belongs to
+		do si = 1, nsrc
+			do di = 1, ndet
+				do oi = offsets(di,si)+1, offsets(di+1,si)
+					ri = rangesets(oi)+1
+					r2det(ri) = di
+				end do
+			end do
+		end do
+		srcoff(1) = 0
+		do ri = 1, size(ranges,2)
+			srcoff(ri+1) = srcoff(ri) + ranges(2,ri)-ranges(1,ri)
+		end do
+
+		! Then loop through each range, extracting information as necessary
+		!$omp parallel do private(ri,di,k,s0,i1,i2,i,nj,j,ipoint,opoint)
+		do ri = 1, size(ranges,2)
+			di = r2det(ri)
+			k  = srcoff(ri)
+			s0 = ranges(1,ri)/nsamp*nsamp
+			i1=ranges(1,ri)-s0+1; i2 = ranges(2,ri)-s0
+			oranges(1,ri) = k
+			do i = i1, i2, bz
+				! Ok, we're finally at the relevant sample block. We now
+				! need the physical coordinate of that sample.
+				nj = min(i2+1-i,bz)
+				do j = 1, nj
+					ipoint(:,j) = bore(:,i+j-1)+det_pos(:,di)
+				enddo
+				opoint(:,:nj)     = lookup_grad(ipoint(:,:nj), x0, inv_dx, steps, ys)
+				phase(:,k+1:k+nj) = get_phase(comps, det_comps(:,di), opoint(3:,:nj))
+				point(:,k+1:k+nj) = opoint(1:2,:nj)
+				out_tod(k+1:k+nj) = tod(i:i+nj-1,di)
+				k = k+nj
+			end do
+			oranges(2,ri) = k
 		end do
 	end subroutine
 

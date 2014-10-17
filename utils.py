@@ -317,21 +317,55 @@ def equal_split(weights, nbin):
 		bw[j] += weights[i]
 	return bins
 
-#def range_sub(a,b):
-#	"""Given a set of ranges a[:,{from,to}] and b[:,{from,to}],
-#	return a new set of ranges c[:,{from,to}] which corresponds to
-#	the ranges in a with those in b removed. This might split individual
-#	ranges into multiple ones."""
-#	c = []
-#	i = np.argsort(b[:,0])
-#	b = b[i]
-#	for ar in a:
-#		# Find first range in b that overlaps with ar (the first one
-#		# that ends after ar[0]).
-#		bi1 = np.searchsorted(b[:,1],ar[0],side="right")
-#		# Find the end of the overlap (the first that starts after ar[1])
-#		bi2 = np.searchsorted[b[:,0],ar[1],side="left")
+def range_sub(a,b):
+	"""Given a set of ranges a[:,{from,to}] and b[:,{from,to}],
+	return a new set of ranges c[:,{from,to}] which corresponds to
+	the ranges in a with those in b removed. This might split individual
+	ranges into multiple ones."""
+	a = np.sort(a)
+	b = np.sort(b)
+	ai,bi = 0,0
+	def ap(c,r1,r2):
+		if r2-r1 > 0: c.append([r1,r2])
+	c = []
+	while ai < len(a):
+		# Iterate b until it ends past the start of a
+		while bi < len(b) and b[bi,1] <= a[ai,0]: bi += 1
+		# Now handle each b until the start of b is past the end of a
+		pstart = a[ai,0]
+		bi2 = bi
+		while bi2 < len(b) and b[bi2,0] <= a[ai,1]:
+			ap(c,pstart,min(a[ai,1],b[bi2,0]))
+			pstart = b[bi2,1]
+			bi2 += 1
+		# Then append what remains
+		ap(c,pstart,a[ai,1])
+		# And advance to the next range in a
+		ai += 1
+	return np.array(c)
 
-
-
-
+def range_union(a, mapping=False):
+	"""Given a set of ranges a[:,{from,to}], return a new set where all
+	overlapping ranges have been merged. If mapping=True, then the mapping
+	from old to new ranges is also returned."""
+	# We will make a single pass through a in sorted order
+	a    = np.asarray(a)
+	n    = len(a)
+	inds = np.argsort(a[:,0])
+	rmap = np.zeros(n)-1
+	b    = []
+	# i will point at the first unprocessed range
+	for i in range(n):
+		if rmap[inds[i]] >= 0: continue
+		rmap[inds[i]] = len(b)
+		start, end = a[inds[i]]
+		# loop through every unprocessed range in range
+		for j in range(i+1,n):
+			if rmap[inds[j]] >= 0: continue
+			if a[inds[j],0] >= end: break
+			# This range overlaps, so register it and merge
+			rmap[inds[j]] = len(b)
+			end = max(end, a[inds[j],1])
+		b.append([start,end])
+	b = np.array(b)
+	return (b,rmap) if mapping else b

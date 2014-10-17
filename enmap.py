@@ -135,7 +135,7 @@ def slice_wcs(shape, wcs, sel):
 def box(shape, wcs):
 	pix    = np.array([[0,0],shape[-2:]]).T-0.5
 	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
-	return enlib.utils.unwind(np.array(coords).T*np.pi/180)
+	return enlib.utils.unwind(np.array(coords)*np.pi/180).T
 
 def enmap(arr, wcs=None, dtype=None, copy=True):
 	"""Construct an ndmap from data.
@@ -252,7 +252,7 @@ def rand_gauss_harm(shape, wcs):
 def rand_gauss_iso_harm(shape, wcs, cov):
 	"""Generates an isotropic random map with component covariance
 	cov in harmonic space, where cov is a (comp,comp,l) array."""
-	data = map_mul(spec2flat(shape, wcs, cov, 0.5), rand_gauss_harm(shape, wcs))
+	data = map_mul(spec2flat(shape, wcs, cov, 0.5, mode="constant"), rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
 
 # Approximations to physical box size and area are needed
@@ -389,7 +389,7 @@ def create_wcs(shape, box=None, proj="cea"):
 	if box is None: box = np.array([[-1,-1],[1,1]])*0.5*10*np.pi/180
 	return getattr(enlib.wcs, proj)(shape[-2:][::-1], box[:,::-1])
 
-def spec2flat(shape, wcs, cov, exp=1.0):
+def spec2flat(shape, wcs, cov, exp=1.0, mode="nearest"):
 	"""Given a (ncomp,ncomp,l) power spectrum, expand it to harmonic map space,
 	returning (ncomp,ncomp,y,x). This involves a rescaling which converts from
 	power in terms of multipoles, to power in terms of 2d frequency.
@@ -414,7 +414,7 @@ def spec2flat(shape, wcs, cov, exp=1.0):
 	if exp != 1.0: cov = multi_pow(cov, exp)
 	cov[~np.isfinite(cov)] = 0
 	cov   = cov[:oshape[-3],:oshape[-3]]
-	return ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape),mode="constant",cval=0),wcs)
+	return ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape),mode=mode),wcs)
 
 def multi_pow(mat, exp, axes=[0,1]):
 	"""Raise each sub-matrix of mat (ncomp,ncomp,...) to
