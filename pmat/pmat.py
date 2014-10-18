@@ -254,7 +254,6 @@ class PmatPtsrc(PointingMatrix):
 			self.core.pmat_ptsrc_prepare(params, rhit, rmax, scan.noise.ivar, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
 
 		self.ranges, self.rangesets, self.offsets = compress_ranges(ranges, nrange, scan.cut, scan.nsamp)
-		print "A", self.ranges.shape
 		self.src_ivars = src_ivars
 		self.nhit = np.sum(self.ranges[:,1]-self.ranges[:,0])
 
@@ -278,7 +277,7 @@ class PmatPtsrc(PointingMatrix):
 		self.core.pmat_ptsrc_extract(tod.T, srctod, point.T, phase.T, oranges.T, self.scan.boresight.T,
 				self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
 				self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
-		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets)
+		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets)
 		return res
 
 def compress_ranges(ranges, nrange, cut, nsamp):
