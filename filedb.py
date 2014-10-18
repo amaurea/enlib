@@ -134,3 +134,36 @@ class Regdb(Basedb):
 				line += " " + pipes.quote(rule["regex"].pattern)
 			lines.append(line)
 		return "\n".join(lines)
+
+class FormatDB(Basedb):
+	"""This File DB variant takes a more general approach than Regdb.
+	It does not attempt to describe everything in the parameter file.
+	Instead, it is meant to be subclassed or otherwise configured to
+	add a set of functions that build strings from the identifiers.
+	These are then inserted into the format strings listed in the
+	parameter file using string.format. This should allow, compact,
+	readable and flexible parameter files."""
+	def __init__(self, file=None, data=None, funcs={"id":lambda id:id}):
+		self.funcs = funcs.items()
+		Basedb.__init__(self, file=file, data=data)
+	def load(self, data, funcs={}):
+		self.rules = []
+		for line in data.splitlines():
+			if len(line) < 1 or line[0] == "#": continue
+			toks = shlex.split(line)
+			assert len(toks)==2
+			name, format   = toks[0][:-1], toks[1]
+			self.rules.append({"name":name, "format": format})
+	def __getitem__(self, id):
+		info = {name: fun(id) for name, fun in self.funcs}
+		res = bunch.Bunch()
+		for rule in self.rules:
+			res[rule["name"]] = rule["format"].format(**info)
+			res.id = id
+		return res
+	def dump(self):
+		lines = []
+		for rule in self.rules:
+			line = "%s: %s" %(rule["name"], pipes.quote(rule["format"]))
+			lines.append(line)
+		return "\n".join(lines)
