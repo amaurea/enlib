@@ -7,7 +7,7 @@ def get_core(dtype):
 		return fortran_64.fortran
 	raise NotImplementedError
 
-def nmat_mwhite(tod, noise, submean=1.0):
+def nmat_mwhite(tod, noise, submean=2):
 	"""Applies white noise + mean subtraction noise model to tod, overwriting it."""
 	core = get_core(tod.dtype)
 	core.nmat_mwhite(tod, noise.ranges.T, noise.rangesets, noise.offsets.T, noise.ivars, submean)

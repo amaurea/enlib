@@ -70,7 +70,7 @@ class Multirange:
 			self.data = rangelists.data
 		elif isinstance(rangelists, tuple):
 			n, neach, flat = rangelists
-			ncum = cumsum(neach)
+			ncum = cumsum(neach,True)
 			self.data = np.asarray([Rangelist(flat[a:b],n) for a,b in zip(ncum[:-1],ncum[1:])])
 		else:
 			if copy: rangelists = np.array(rangelists)

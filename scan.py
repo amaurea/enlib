@@ -97,6 +97,7 @@ class Scan:
 		res._tod = np.ascontiguousarray(enlib.slice.slice_downgrade(res._tod[detslice], sampslice, axis=-1))
 		return res
 
+config.default("downsample_method", "fft", "Method to use when downsampling the TOD")
 class H5Scan(Scan):
 	def __init__(self, fname):
 		self.fname = fname
