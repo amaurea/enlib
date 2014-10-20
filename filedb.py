@@ -23,6 +23,10 @@ class Basedb:
 	def __getitem__(self, id):
 		raise NotImplementedError
 
+def pre_split(line):
+	toks = line.split(":")
+	return [toks[0]] + shlex.split(":".join(toks[1:]))
+
 class Filedb(Basedb):
 	"""Initializes the database based on a simple file with lines with
 	format name: glob-path [glob-path] [: glob-path ...], which can be quoted.
@@ -52,8 +56,8 @@ class Filedb(Basedb):
 		for line in data.splitlines():
 			# Shlex split is 100 times slower than string split, and is only
 			# needed if our line contains quotes
-			toks = shlex.split(line) if "'" in line or '"' in line or '\\' in line else line.split()
-			name, globs = toks[0][:-1], toks[1:]
+			toks = pre_split(line)
+			name, globs = toks[0], toks[1:]
 			if name == "id":
 				other = globs[0]
 				regex = [re.compile(g) for g in globs[1:]]
@@ -113,9 +117,9 @@ class Regdb(Basedb):
 		self.rules = []
 		for line in data.splitlines():
 			if len(line) < 1 or line[0] == "#": continue
-			toks = shlex.split(line)
+			toks = pre_split(line)
 			assert len(toks)>=2
-			name  = toks[0][:-1]
+			name  = toks[0]
 			subst = toks[1]
 			regex = toks[2] if len(toks)>2 else r"(.*)"
 			self.rules.append({"name":name, "regex": re.compile(regex), "subst": subst})
@@ -132,5 +136,43 @@ class Regdb(Basedb):
 			line = "%s: %s" %(rule["name"], pipes.quote(rule["subst"]))
 			if rule["regex"].pattern != r"(.*)":
 				line += " " + pipes.quote(rule["regex"].pattern)
+			lines.append(line)
+		return "\n".join(lines)
+
+class FormatDB(Basedb):
+	"""This File DB variant takes a more general approach than Regdb.
+	It does not attempt to describe everything in the parameter file.
+	Instead, it is meant to be subclassed or otherwise configured to
+	add a set of functions that build strings from the identifiers.
+	These are then inserted into the format strings listed in the
+	parameter file using string.format. This should allow, compact,
+	readable and flexible parameter files."""
+	def __init__(self, file=None, data=None, funcs={"id":lambda id:id}):
+		self.funcs = funcs.items()
+		Basedb.__init__(self, file=file, data=data)
+	def load(self, data, funcs={}):
+		self.rules = []
+		for line in data.splitlines():
+			if len(line) < 1 or line[0] == "#": continue
+			toks = pre_split(line)
+			assert len(toks)==2
+			name, format   = toks[0], toks[1]
+			self.rules.append({"name":name, "format": format})
+	def __getitem__(self, id):
+		info = {name: fun(id) for name, fun in self.funcs}
+		res = bunch.Bunch()
+		selected=True
+		for rule in self.rules:
+			name, format = rule["name"], rule["format"]
+			if name[0] == "@":
+				selected = ("{%s}"%name[1:]).format(**info) == format
+			elif selected:
+				res[rule["name"]] = rule["format"].format(**info)
+		res.id = id
+		return res
+	def dump(self):
+		lines = []
+		for rule in self.rules:
+			line = "%s: %s" %(rule["name"], pipes.quote(rule["format"]))
 			lines.append(line)
 		return "\n".join(lines)
