@@ -25,8 +25,8 @@ contains
 			end do
 		end do
 
-		foo = 0
-		!$omp parallel do private(ri,i1,i2,m,s,x,sn,mid) reduction(+:foo)
+		!foo = 0
+		!$omp parallel do private(ri,i1,i2,m,s,x,sn,mid) ! reduction(+:foo)
 		do ri = 1, size(ranges,2)
 			i1 = ranges(1,ri)+1
 			i2 = ranges(2,ri)
@@ -49,27 +49,81 @@ contains
 			elseif(detrend > 0) then
 				tod(i1:i2) = tod(i1:i2) - sum(tod(i1:i2))/(i2-i1+1)
 			end if
-			foo(r2det(ri),1) = foo(r2det(ri),1) + sum(tod(i1:i2)**2)
-			foo(r2det(ri),2) = foo(r2det(ri),2) + i2-i1+1
+			!foo(r2det(ri),1) = foo(r2det(ri),1) + sum(tod(i1:i2)**2)
+			!foo(r2det(ri),2) = foo(r2det(ri),2) + i2-i1+1
 			tod(i1:i2) = tod(i1:i2) * ivar(r2det(ri))
 		end do
 
-		if(detrend>0) then
-			write(*,*)
-			do di = 1, ndet
-				if(foo(di,1)/foo(di,2)*ivar(di) > 4) then
-					do ri = 1, size(ranges,2)
-						if(r2det(ri) .ne. di) cycle
-						i1 = ranges(1,ri)+1
-						i2 = ranges(2,ri)
-						do i = i1, i2
-							write(*,'(i4,i9,f6.2,2f15.3)') di,i,foo(di,1)/foo(di,2)*ivar(di),tod(i)**2/ivar(di), tod(i)/ivar(di)
-						end do
-					end do
-				end if
-			end do
-		end if
+		!if(detrend>0) then
+		!	write(*,*)
+		!	do di = 1, ndet
+		!		if(foo(di,1)/foo(di,2)*ivar(di) > 4) then
+		!			do ri = 1, size(ranges,2)
+		!				if(r2det(ri) .ne. di) cycle
+		!				i1 = ranges(1,ri)+1
+		!				i2 = ranges(2,ri)
+		!				do i = i1, i2
+		!					write(*,'(i4,i9,f6.2,4f15.3)') di,i,foo(di,1)/foo(di,2)*ivar(di),tod(i)**2/ivar(di), tod(i)/ivar(di), (foo(di,1)/foo(di,2))**0.5, ivar(di)**-0.5
+		!				end do
+		!			end do
+		!		end if
+		!	end do
+		!end if
+	end subroutine
 
+	subroutine measure_mwhite(tod, ranges, rangesets, offsets, ivars, detrend)
+		implicit none
+		real(_), intent(in) :: tod(:)
+		real(_), intent(inout) :: ivars(:,:)
+		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2)), r2src(size(ranges,2))
+		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, detrend, nivars(size(ivars,1),size(ivars,2))
+		real(_)    :: m,s,x,sn,mid
+		nsrc = size(offsets,2)
+		ndet = size(offsets,1)-1
+
+		! Prepare for parallel loop
+		do si = 1, nsrc
+			do di = 1, ndet
+				do oi = offsets(di,si)+1, offsets(di+1,si)
+					ri = rangesets(oi)+1
+					r2det(ri) = di
+					r2src(ri) = si
+				end do
+			end do
+		end do
+
+		ivars  = 0
+		nivars = 0
+		!$omp parallel do private(di,si,ri,i1,i2,m,s,x,sn,mid) reduction(+:ivars,nivars)
+		do ri = 1, size(ranges,2)
+			si = r2src(ri)
+			di = r2src(ri)
+			i1 = ranges(1,ri)+1
+			i2 = ranges(2,ri)
+			if(i2-i1 < 0) cycle
+			if(detrend > 1 .and. i1 .ne. i2) then
+				m = 0; s = 0; sn = 0
+				mid = 0.5*(i1+i2)
+				do i = i1, i2
+					m = m + tod(i)
+					x = i - mid
+					s = s + tod(i)*x
+					sn= sn+ x*x
+				end do
+				m = m/(i2-i1+1)
+				s = s/sn
+				do i = i1, i2
+					x = i - mid
+					ivars(di,si)  = ivars(di,si) + (tod(i)-m-x*s)**2
+				end do
+			elseif(detrend > 0) then
+				ivars(di,si) = ivars(di,si) + sum((tod(i1:i2)-sum(tod(i1:i2))/(i2-i1+1))**2)
+			else
+				ivars(di,si) = ivars(di,si) + sum(tod(i1:i2)**2)
+			end if
+			nivars(di,si)= nivars(di,si) + i2-i1+1
+		end do
+		ivars = nivars/ivars
 	end subroutine
 
 	subroutine pmat_thumbs(dir, tod, maps, point, phase, boxes)
