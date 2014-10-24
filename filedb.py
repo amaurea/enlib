@@ -24,7 +24,7 @@ class Basedb:
 		raise NotImplementedError
 
 def pre_split(line):
-	toks = line.split(":")
+	toks = line.strip().split(":")
 	return [toks[0]] + shlex.split(":".join(toks[1:]))
 
 class Filedb(Basedb):
