@@ -155,18 +155,22 @@ class FormatDB(Basedb):
 		for line in data.splitlines():
 			if len(line) < 1 or line[0] == "#": continue
 			toks = pre_split(line)
+			if len(toks) == 1: toks = toks + [""]
 			assert len(toks)==2
 			name, format   = toks[0], toks[1]
 			self.rules.append({"name":name, "format": format})
 	def __getitem__(self, id):
 		info = {name: fun(id) for name, fun in self.funcs}
 		res = bunch.Bunch()
-		selected=True
+		selected=[True]
 		for rule in self.rules:
 			name, format = rule["name"], rule["format"]
 			if name[0] == "@":
-				selected = ("{%s}"%name[1:]).format(**info) == format
-			elif selected:
+				if name == "@end":
+					selected.pop()
+				else:
+					selected.append(("{%s}"%name[1:]).format(**info) == format)
+			elif all(selected):
 				res[rule["name"]] = rule["format"].format(**info)
 		res.id = id
 		return res
