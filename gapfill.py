@@ -21,6 +21,16 @@ def gapfill_linear(arr, ranges, inplace=False):
 	return arr
 
 @multify
+def gapfill_constant(arr, ranges, inplace=False, value=0.0):
+	"""Returns arr with the ranges given by ranges, which can be [:,{from,to}] or
+	a Rangelist, filled using a constant value."""
+	ranges = Rangelist(ranges, len(arr), copy=False)
+	if not inplace: arr = np.array(arr)
+	for r1,r2 in ranges.ranges:
+		arr[r1:r2] = value
+	return arr
+
+@multify
 def gapfill_copy(arr, ranges, overlap=10, inplace=False):
 	"""Returns arr with the ranges given by ranges, which can be [:,{from,to}] or
 	a Rangelist, filled using resloped copies of parts of the uncut data. This

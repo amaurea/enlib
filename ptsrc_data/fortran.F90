@@ -54,59 +54,53 @@ contains
 		end do
 	end subroutine
 
-	subroutine measure_mwhite(tod, ranges, rangesets, offsets, ivars, detrend)
+	subroutine measure_mwhite(tod, ranges, rangesets, offsets, vars, nvars, detrend)
 		implicit none
 		real(_), intent(in) :: tod(:)
-		real(_), intent(inout) :: ivars(:,:)
+		real(_), intent(inout) :: vars(:,:)
+		integer(4), intent(inout) :: nvars(:,:)
 		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2)), r2src(size(ranges,2))
-		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, detrend, nivars(size(ivars,1),size(ivars,2))
+		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, detrend
 		real(_)    :: m,s,x,sn,mid
 		nsrc = size(offsets,2)
 		ndet = size(offsets,1)-1
 
+		vars  = 0
+		nvars = 0
+
 		! Prepare for parallel loop
+		!$omp parallel do collapse(2) private(si,di,oi,ri,i1,i2,m,s,sn,mid,x)
 		do si = 1, nsrc
 			do di = 1, ndet
 				do oi = offsets(di,si)+1, offsets(di+1,si)
 					ri = rangesets(oi)+1
-					r2det(ri) = di
-					r2src(ri) = si
+					i1 = ranges(1,ri)+1
+					i2 = ranges(2,ri)
+					if(i2-i1 < 0) cycle
+					if(detrend > 1 .and. i1 .ne. i2) then
+						m = 0; s = 0; sn = 0
+						mid = 0.5*(i1+i2)
+						do i = i1, i2
+							m = m + tod(i)
+							x = i - mid
+							s = s + tod(i)*x
+							sn= sn+ x*x
+						end do
+						m = m/(i2-i1+1)
+						s = s/sn
+						do i = i1, i2
+							x = i - mid
+							vars(di,si)	= vars(di,si) + (tod(i)-m-x*s)**2
+						end do
+					elseif(detrend > 0) then
+						vars(di,si) = vars(di,si) + sum((tod(i1:i2)-sum(tod(i1:i2))/(i2-i1+1))**2)
+					else
+						vars(di,si) = vars(di,si) + sum(tod(i1:i2)**2)
+					end if
+					nvars(di,si)= nvars(di,si) + i2-i1+1
 				end do
 			end do
 		end do
-
-		ivars  = 0
-		nivars = 0
-		!$omp parallel do private(di,si,ri,i1,i2,m,s,x,sn,mid) reduction(+:ivars,nivars)
-		do ri = 1, size(ranges,2)
-			si = r2src(ri)
-			di = r2src(ri)
-			i1 = ranges(1,ri)+1
-			i2 = ranges(2,ri)
-			if(i2-i1 < 0) cycle
-			if(detrend > 1 .and. i1 .ne. i2) then
-				m = 0; s = 0; sn = 0
-				mid = 0.5*(i1+i2)
-				do i = i1, i2
-					m = m + tod(i)
-					x = i - mid
-					s = s + tod(i)*x
-					sn= sn+ x*x
-				end do
-				m = m/(i2-i1+1)
-				s = s/sn
-				do i = i1, i2
-					x = i - mid
-					ivars(di,si)  = ivars(di,si) + (tod(i)-m-x*s)**2
-				end do
-			elseif(detrend > 0) then
-				ivars(di,si) = ivars(di,si) + sum((tod(i1:i2)-sum(tod(i1:i2))/(i2-i1+1))**2)
-			else
-				ivars(di,si) = ivars(di,si) + sum(tod(i1:i2)**2)
-			end if
-			nivars(di,si)= nivars(di,si) + i2-i1+1
-		end do
-		ivars = nivars/ivars
 	end subroutine
 
 	subroutine pmat_thumbs(dir, tod, maps, point, phase, boxes)

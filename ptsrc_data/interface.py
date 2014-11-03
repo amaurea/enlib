@@ -14,6 +14,14 @@ def nmat_mwhite(tod, noise, submean=2):
 	core.nmat_mwhite(tod, noise.ranges.T, noise.rangesets, noise.offsets.T, noise.ivars, submean, rangemask)
 	return tod
 
+def measure_mwhite(tod, data, submean=2):
+	core = get_core(tod.dtype)
+	nsrc, ndet = data.offsets[:,:-1].shape
+	vars  = np.zeros([nsrc,ndet],dtype=tod.dtype)
+	nvars = np.zeros([nsrc,ndet],dtype=np.int32)
+	core.measure_mwhite(tod, data.ranges.T, data.rangesets, data.offsets.T, vars.T, nvars.T, submean)
+	return vars, nvars
+
 def pmat_thumbs(dir, tod, maps, point, phase, boxes):
 	core = get_core(tod.dtype)
 	core.pmat_thumbs(dir, tod.T, maps.T, point.T, phase.T, boxes.T)
