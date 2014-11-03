@@ -10,10 +10,10 @@ class SrcScan:
 		self.phase   = phase
 		self.ranges  = ranges
 		self.rangesets=rangesets
-		self.offsets = offsets
+		self.offsets = offsets   # [nsrc,ndet+1]
 		self.ivars   = ivars
 		self.dets    = dets
-	def __str__(self): return "SrcScan(nsrc=%d,ndet=%d,nsamp=%d)" % (self.offsets.shape[0],self.offsets.shape[1],self.tod.size)
+	def __str__(self): return "SrcScan(nsrc=%d,ndet=%d,nsamp=%d)" % (self.offsets.shape[0],self.offsets.shape[1]-1,self.tod.size)
 	def __getitem__(self, sel):
 		if type(sel) != tuple:
 			sel = (sel,)
@@ -25,21 +25,26 @@ class SrcScan:
 	def select(self, srcs, dets):
 		"""Extract a new SrcScan for the specified srcs and dets,
 		eliminating ranges that are no longer needed."""
+		if np.all(dets==np.arange(len(self.dets))) and np.all(srcs==np.arange(self.offsets.shape[0])):
+			return self
 		# 1. First slice offsets and rangesets
 		rangesets = []
+		nset = 0
 		offsets = np.zeros([len(srcs),len(dets)+1],dtype=np.int32)
 		for si, src in enumerate(srcs):
 			for di, det in enumerate(dets):
 				o1,o2 = self.offsets[src,det:det+2]
-				offsets[si,di] = len(rangesets)
+				offsets[si,di] = nset
 				rangesets.append(self.rangesets[o1:o2])
-		rangesets = np.concatenate(rangesets)
+				nset += o2-o1
+				offsets[si,di+1] = nset
+		rangesets = np.concatenate(rangesets).astype(np.int32)
 		# 2. Then determine which ranges are no longer used, and
 		# a mappings between old and new ranges
 		used = np.zeros(len(self.ranges),dtype=bool)
 		used[rangesets] = True
 		rmap  = np.nonzero(used)[0]
-		irmap = np.zeros(len.self.ranges)
+		irmap = np.zeros(len(self.ranges),dtype=np.int32)
 		irmap[rmap] = np.arange(len(rmap))
 		# 3. Extract valid ranges and update rangesets
 		ranges = self.ranges[rmap]
@@ -55,7 +60,7 @@ class SrcScan:
 			o1,o2 = m,m+i2-i1
 			tod  [o1:o2] = self.tod [i1:i2]
 			point[o1:o2] = self.point[i1:i2]
-			phase[o1:o2] = self.phsae[i1:i2]
+			phase[o1:o2] = self.phase[i1:i2]
 			ranges[ri] = [o1,o2]
 			m = o2
 		return SrcScan(tod, point, phase, ranges, rangesets, offsets, self.ivars[dets], self.dets[dets])

@@ -3,7 +3,7 @@ At this level of abstraction, we still deal mostly with maps and cuts etc.
 directly."""
 import numpy as np, bunch, time, h5py, copy, logging, sys
 from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim, bench
-from enlib.degrees_of_freedom import DOF
+from enlib.degrees_of_freedom import DOF, Arg
 from scipy import ndimage
 from mpi4py import MPI
 
@@ -46,7 +46,7 @@ class LinearSystemMap(LinearSystem):
 			test_symmetry(self.mapeq, 0, verbose=False, shuf=False)
 			sys.exit(0)
 		self.mask   = self.precon.mask
-		self.dof    = DOF({"shared":self.mask},{"distributed":(self.mapeq.njunk,)})
+		self.dof    = DOF(Arg(mask=self.mask),Arg(shape=(self.mapeq.njunk,),distributed=True))
 		L.info("Building right-hand side")
 		self.b      = self.dof.zip(*self.mapeq.b())
 		self.scans, self.area, self.comm = scans, area, comm
@@ -477,10 +477,10 @@ def test_symmetry(mapeq, nmax=0, shuf=True, verbose=True, prec=None):
 	# Measure the typical correlation pattern by using multiple
 	# pixels at the same time.
 	mask = mapeq.area.astype(bool)+True
-	dof  = DOF({"shared":mask},{"distributed":(mapeq.njunk,)})
+	dof  = DOF(Arg(mask=mask),Arg(shape=(mapeq.njunk,),distributed=True))
 	a = np.random.standard_normal(dof.n).astype(mapeq.dtype)
 	mask = mapeq.A(*dof.unzip(a))[0] != 0
-	dof  = DOF({"shared":mask},{"distributed":(mapeq.njunk,)})
+	dof  = DOF(Arg(mask=mask),Arg(shape=(mapeq.njunk,),distributed=True))
 	fun = mapeq.A
 	if prec:
 		def fun(*args): return prec.apply(*mapeq.A(*mapeq.A(*prec.apply(*args))))

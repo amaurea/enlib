@@ -52,7 +52,7 @@ class Entry(defaultdict):
 		return "Entry("+", ".join(["%s=%s" % (name,str(self[name])) for name in names]) + ")"
 
 class Register(defaultdict):
-	def __init__(self, fmt=[("time","%6.2f","%6.3f"),("cpu","%6.2f","%6.3f"),("mem","%6.2f","%6.2f"),("leak","%6.2f","%6.3f")]):
+	def __init__(self, fmt=[("time","%6.2f","%6.3f",1),("cpu","%6.2f","%6.3f",1),("mem","%6.2f","%6.2f",2.0**30),("leak","%6.2f","%6.3f",2.0**30)]):
 		defaultdict.__init__(self, Entry)
 		self.info = fmt
 	def add(self, name, *args):
@@ -86,7 +86,8 @@ class Register(defaultdict):
 			line = "%-*s %*d" % (name_dig,name,nhit_dig,nh)
 			for info in self.info:
 				val = entry[info[0]]
-				line += (" " + info[1] + " " + info[2]) % (val.mean, val.std)
+				unit= float(info[3] if len(info) > 3 else 1)
+				line += (" " + info[1] + " " + info[2]) % (val.mean/unit, val.std/unit)
 			lines.append(line)
 		return "\n".join(lines)
 	def write(self, fname):
@@ -106,4 +107,4 @@ class mark:
 		self.time2  = time.time()
 		self.clock2 = time.clock()
 		self.mem2   = memory.current()
-		stats.add(self.name, self.time2 -self.time1, self.clock2-self.clock1, self.mem1/1024.**3, (self.mem2-self.mem1)/1024.**3)
+		stats.add(self.name, self.time2 -self.time1, self.clock2-self.clock1, self.mem1, self.mem2-self.mem1)

@@ -1,6 +1,6 @@
 import numpy as np
 from enlib import enmap, array_ops, cg
-from enlib.degrees_of_freedom import DOF
+from enlib.degrees_of_freedom import DOF, Arg
 
 def mul(mat, vec, axes):
 	return array_ops.matmul(mat.astype(vec.dtype),vec,axes=axes)
@@ -63,7 +63,7 @@ class FieldSampler:
 			return self.M(b)
 		else:
 			if x0 is None: x0 = b*0
-			dof = DOF(self.d)
+			dof = DOF(Arg(default=self.d))
 			def wrap(fun):
 				return lambda x: dof.zip(fun(*dof.unzip(x)))
 

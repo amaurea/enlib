@@ -5,13 +5,14 @@ contains
 
 	! Apply a simple white noise + mean subtraction noise model to a subrange tod with
 	! ranges specified by offsets[src,det], ranges[nrange,2].
-	subroutine nmat_mwhite(tod, ranges, rangesets, offsets, ivar, detrend)
+	subroutine nmat_mwhite(tod, ranges, rangesets, offsets, ivar, detrend, rangemask)
 		implicit none
 		real(_), intent(inout) :: tod(:)
+		integer(4), intent(in)    :: rangemask(:)
 		real(_)    :: ivar(:)
 		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2))
 		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, detrend
-		real(_)    :: m,s,x,sn,mid, foo(size(ivar),2)
+		real(_)    :: m,s,x,sn,mid
 		nsrc = size(offsets,2)
 		ndet = size(offsets,1)-1
 
@@ -25,9 +26,9 @@ contains
 			end do
 		end do
 
-		!foo = 0
-		!$omp parallel do private(ri,i1,i2,m,s,x,sn,mid) ! reduction(+:foo)
+		!$omp parallel do private(ri,i1,i2,m,s,x,sn,mid)
 		do ri = 1, size(ranges,2)
+			if(rangemask(ri) .eq. 0) cycle
 			i1 = ranges(1,ri)+1
 			i2 = ranges(2,ri)
 			if(i2-i1 < 0) cycle
@@ -49,26 +50,8 @@ contains
 			elseif(detrend > 0) then
 				tod(i1:i2) = tod(i1:i2) - sum(tod(i1:i2))/(i2-i1+1)
 			end if
-			!foo(r2det(ri),1) = foo(r2det(ri),1) + sum(tod(i1:i2)**2)
-			!foo(r2det(ri),2) = foo(r2det(ri),2) + i2-i1+1
 			tod(i1:i2) = tod(i1:i2) * ivar(r2det(ri))
 		end do
-
-		!if(detrend>0) then
-		!	write(*,*)
-		!	do di = 1, ndet
-		!		if(foo(di,1)/foo(di,2)*ivar(di) > 4) then
-		!			do ri = 1, size(ranges,2)
-		!				if(r2det(ri) .ne. di) cycle
-		!				i1 = ranges(1,ri)+1
-		!				i2 = ranges(2,ri)
-		!				do i = i1, i2
-		!					write(*,'(i4,i9,f6.2,4f15.3)') di,i,foo(di,1)/foo(di,2)*ivar(di),tod(i)**2/ivar(di), tod(i)/ivar(di), (foo(di,1)/foo(di,2))**0.5, ivar(di)**-0.5
-		!				end do
-		!			end do
-		!		end if
-		!	end do
-		!end if
 	end subroutine
 
 	subroutine measure_mwhite(tod, ranges, rangesets, offsets, ivars, detrend)
@@ -185,6 +168,114 @@ contains
 				end do
 			end do
 		end if
+	end subroutine
+
+	subroutine pmat_model(dir, tod, params, ranges, rangesets, offsets, point, phase, rangemask)
+		use omp_lib
+		implicit none
+		! Parameters
+		real(_),    intent(inout) :: tod(:), params(:,:)
+		real(_),    intent(in)    :: point(:,:), phase(:,:)
+		integer(4), intent(in)    :: offsets(:,:), ranges(:,:), rangesets(:), dir
+		integer(4), intent(in)    :: rangemask(:)
+		! Work
+		integer(4), parameter :: bz = 321
+		integer(4) :: si, di, oi, ri, i, nsrc, ndet, namp
+		real(_)    :: ra, dec, amps(size(params,1)-5), ibeam(3), ddec, dra, r2, cosdec
+		real(_)    :: oamps(size(params,1)-5,size(offsets,2))
+
+		ndet  = size(offsets,1)-1
+		nsrc  = size(offsets,2)
+		namp  = size(amps)
+
+		if(dir > 0) then
+			!$omp parallel workshare
+			tod = 0
+			!$omp end parallel workshare
+		else
+			oamps = 0
+		end if
+
+		!Note: it's safe to do di in parallel, but no si, as multiple sources may contribute
+		!to the same sample.
+		!$omp parallel do private(di,si,dec,ra,amps,ibeam,cosdec,oi,ri,i,ddec,dra,r2) reduction(+:oamps)
+		do di = 1, ndet
+			do si = 1, nsrc
+				dec   = params(1,si)
+				ra    = params(2,si)
+				amps  = params(3:2+namp,si)
+				if(dir > 0 .and. all(amps==0)) cycle
+				ibeam = params(3+namp:5+namp,si)
+				cosdec= cos(dec)
+				do oi = offsets(di,si)+1, offsets(di+1,si)
+					ri = rangesets(oi)+1
+					if(rangemask(ri) .eq. 0) cycle
+					do i = ranges(1,ri)+1, ranges(2,ri)
+						! Compute shape-normalized distance from each sample to the current source.
+						ddec = dec-point(1,i)
+						dra  = (ra-point(2,i))*cosdec
+						r2   = ddec*(ibeam(1)*ddec+ibeam(3)*dra) + dra*(ibeam(2)*dra+ibeam(3)*ddec)
+						if(dir > 0) then
+							! And finally evaluate the model.
+							tod(i) = tod(i) + sum(amps*phase(:namp,i))*exp(-0.5*r2)
+						else
+							! Project onto the amps part of the parameters
+							oamps(:,si) = oamps(:,si) + tod(i)*phase(:namp,i)*exp(-0.5*r2)
+						end if
+					end do
+				end do
+			end do
+		end do
+		if(dir <= 0) params(3:2+namp,:) = oamps
+	end subroutine
+
+	subroutine srcmask2rangemask(srcmask, rangesets, offsets, rangemask)
+		implicit none
+		integer(4), intent(in) :: srcmask(:)
+		integer(4), intent(in) :: rangesets(:), offsets(:,:)
+		integer(4), intent(inout) :: rangemask(:)
+		integer(4) :: si, di, oi, ri
+		rangemask = 0
+		do si = 1, size(srcmask)
+			if(srcmask(si) .eq. 0) cycle
+			do di = 1, size(offsets,1)-1
+				do oi = offsets(di,si)+1, offsets(di+1,si)
+					ri = rangesets(oi)+1
+					rangemask(ri) = 1
+				end do
+			end do
+		end do
+	end subroutine
+
+	subroutine rangesub(tod1, tod2, ranges, rangemask)
+		implicit none
+		real(_), intent(inout) :: tod1(:)
+		real(_), intent(in)    :: tod2(:)
+		integer(4), intent(in) :: ranges(:,:)
+		integer(4), intent(in) :: rangemask(:)
+		integer(4) :: ri, i1, i2
+		do ri = 1, size(ranges,2)
+			if(rangemask(ri) .eq. 0) cycle
+			i1 = ranges(1,ri)+1; i2 = ranges(2,ri)
+			tod1(i1:i2) = tod1(i1:i2) - tod2(i1:i2)
+		end do
+	end subroutine
+
+	subroutine rangechisq(tod1, tod2, ranges, chisqs, rangemask)
+		implicit none
+		real(_),    intent(in)    :: tod1(:), tod2(:)
+		real(8),    intent(inout) :: chisqs(:)
+		integer(4), intent(in)    :: ranges(:,:)
+		integer(4), intent(in)    :: rangemask(:)
+		integer(4) :: ri, i1, i2, i
+		do ri = 1, size(ranges,2)
+			if(rangemask(ri) .eq. 0) cycle
+			i1 = ranges(1,ri)+1; i2 = ranges(2,ri)
+			chisqs(ri) = 0
+			do i = i1, i2
+				chisqs(ri) = chisqs(ri) + dble(tod1(i))*tod2(i)
+			end do
+		end do
 	end subroutine
 
 end module

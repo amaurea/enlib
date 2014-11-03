@@ -369,3 +369,22 @@ def range_union(a, mapping=False):
 		b.append([start,end])
 	b = np.array(b)
 	return (b,rmap) if mapping else b
+
+def compress_beam(sigma, phi):
+	c,s=np.cos(phi),np.sin(phi)
+	R = np.array([[c,-s],[s,c]])
+	C = np.diag(sigma**-2)
+	C = R.dot(C).dot(R.T)
+	return np.array([C[0,0],C[1,1],C[0,1]])
+
+def expand_beam(irads):
+	C = np.array([[irads[0],irads[2]],[irads[2],irads[1]]])
+	E, V = np.linalg.eigh(C)
+	phi = np.arctan2(V[1,0],V[0,0])
+	sigma = E**-0.5
+	if sigma[1] > sigma[0]:
+		sigma = sigma[::-1]
+		phi += np.pi/2
+	phi %= np.pi
+	return sigma, phi
+

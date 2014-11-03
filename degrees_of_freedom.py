@@ -5,11 +5,95 @@ but solvers need to see these are a single vector of elements. The
 classes here implement the necessary mapping these representations."""
 import numpy as np
 
+class Arg:
+	def __init__(self, shape=None, mask=None, default=None, array=None, distributed=False):
+		"""array is an alias for default"""
+		self.distributed = distributed
+		self.mask        = mask
+		self.default     = default
+		shapes = []
+		if shape is not None:
+			shapes.append(shape)
+		if mask is not None:
+			shapes.append(mask.shape)
+		if array is not None: default = array
+		if default is not None:
+			default = np.asarray(default)
+			if default.ndim > 0:
+				shapes.append(default.shape)
+		assert len(shapes) > 0, "At least one of shape, mask, default is needed"
+		for s in shapes[1:]:
+			assert s == shapes[0], "Incompatible shapes in DOF: " + ", ".join(shapes)
+		self.shape = shapes[0]
+		self.size  = np.product(self.shape)
+		self.n     = self.size if mask is None else np.sum(mask)
+	def __repr__(self):
+		res = "Arg(shape="+str(self.shape)+",n="+str(self.n)
+		if self.mask is not None: res += ",mask=..."
+		if self.default is not None: res += ",default=..."
+		if self.distributed: res += ",distributed=True"
+		return res + ")"
+
 class DOF:
 	"""DOF represents a mapping between numbers in a set of arrays and a
 	set of degrees of freedom, represented as a plain 1-dimensional array. This
 	is useful for solving equation systems where elements of various arrays
 	enter as degrees of freedom."""
+	def __init__(self, *args, **kwargs):
+		"""DOF(info, info, info, ...., [comm=comom], where info is a DOFArg"""
+		self.info  = args
+		comm = kwargs["comm"] if "comm" in kwargs else None
+		n = 0
+		r = []
+		for info in self.info:
+			r.append([n,n+info.n])
+			n += info.n
+		self.n = n
+		self.r = np.asarray(r)
+
+		# Set up our communicator if necessary
+		comm_needed = any([info.distributed for info in self.info])
+		if comm_needed and comm is None:
+			from mpi4py import MPI
+			comm = MPI.COMM_WORLD
+		self.comm = comm
+	def zip(self, *args):
+		"""x = DOF.zip(arr1, arr2, ...)."""
+		args  = [np.asarray(a) for a in args]
+		dtype = np.result_type(*tuple([a.dtype for a in args]))
+		res = np.empty(self.n, dtype)
+		for info, r, arg in zip(self.info, self.r, args):
+			targ = res[r[0]:r[1]]
+			targ[...] = arg[info.mask] if info.mask is not None else arg.reshape(-1)
+		return res
+	def unzip(self, x):
+		"""arr1, arr2, ... = DOF.unzip(x)"""
+		res = []
+		for info, r in zip(self.info, self.r):
+			source = x[r[0]:r[1]]
+			if info.mask is not None:
+				a = info.mask.astype(x.dtype,copy=True)
+				if info.default is not None:
+					a[...] = info.default
+				a[info.mask] = source
+				res.append(a)
+			else:
+				res.append(source.copy().reshape(info.shape))
+		return tuple(res)
+	def dot(self, x, y):
+		"""Dot product of arrays x and y. Defined as sum(x*y) here,
+		except that distributed arrays are properly reduced."""
+		res = [0,0]
+		for info, r in zip(self.info, self.r):
+			res[info.distributed] += np.sum(x[r[0]:r[1]]*y[r[0]:r[1]])
+		if self.comm is None:
+			return np.sum(res)
+		else:
+			return res[0] + self.comm.allreduce(res[1])
+	def __repr__(self):
+		return "DOF("+",".join([str(info) for info in self.info])+"){n="+str(self.n)+"}"
+
+class OldDOF:
 	def __init__(self, *args, **kwargs):
 		"""DOF(info, info, info, ..., [comm=comm]), where info is either:
 			1. shape, where shape is a valid array shape as accepted by np.zeros.
