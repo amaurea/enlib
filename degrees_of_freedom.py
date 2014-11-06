@@ -10,7 +10,6 @@ class Arg:
 		"""array is an alias for default"""
 		self.distributed = distributed
 		self.mask        = mask
-		self.default     = default
 		shapes = []
 		if shape is not None:
 			shapes.append(shape)
@@ -18,12 +17,13 @@ class Arg:
 			shapes.append(mask.shape)
 		if array is not None: default = array
 		if default is not None:
-			default = np.asarray(default)
+			default = np.asanyarray(default)
 			if default.ndim > 0:
 				shapes.append(default.shape)
 		assert len(shapes) > 0, "At least one of shape, mask, default is needed"
 		for s in shapes[1:]:
 			assert s == shapes[0], "Incompatible shapes in DOF: " + ", ".join(shapes)
+		self.default     = default
 		self.shape = shapes[0]
 		self.size  = np.product(self.shape)
 		self.n     = self.size if mask is None else np.sum(mask)
@@ -49,7 +49,7 @@ class DOF:
 			r.append([n,n+info.n])
 			n += info.n
 		self.n = n
-		self.r = np.asarray(r)
+		self.r = np.asanyarray(r)
 
 		# Set up our communicator if necessary
 		comm_needed = any([info.distributed for info in self.info])
@@ -59,7 +59,7 @@ class DOF:
 		self.comm = comm
 	def zip(self, *args):
 		"""x = DOF.zip(arr1, arr2, ...)."""
-		args  = [np.asarray(a) for a in args]
+		args  = [np.asanyarray(a) for a in args]
 		dtype = np.result_type(*tuple([a.dtype for a in args]))
 		res = np.empty(self.n, dtype)
 		for info, r, arg in zip(self.info, self.r, args):
@@ -78,7 +78,12 @@ class DOF:
 				a[info.mask] = source
 				res.append(a)
 			else:
-				res.append(source.copy().reshape(info.shape))
+				if info.default is not None:
+					a = info.default.copy()
+					a[...] = source.reshape(a.shape)
+				else:
+					a = source.copy().reshape(info.shape)
+				res.append(a)
 		return tuple(res)
 	def dot(self, x, y):
 		"""Dot product of arrays x and y. Defined as sum(x*y) here,
@@ -136,7 +141,7 @@ class OldDOF:
 			self.sizes.append(m)
 			self.dist.append(distributed)
 			n += m
-		self.r = np.asarray(self.r)
+		self.r = np.asanyarray(self.r)
 		self.n = n
 
 		# Set up our communicator if necessary
@@ -147,7 +152,7 @@ class OldDOF:
 
 	def zip(self, *args):
 		"""x = flatterner.flatten(arr1, arr2, ...)."""
-		args = [np.asarray(a) for a in args]
+		args = [np.asanyarray(a) for a in args]
 		res = np.empty(self.n, args[0].dtype)
 		for r, mask, arg in zip(self.r, self.masks, args):
 			targ = res[r[0]:r[1]]
