@@ -3,6 +3,10 @@ import numpy as np, scipy.ndimage, os, errno, scipy.optimize
 degree = np.pi/180
 arcmin = degree/60
 arcsec = arcmin/60
+T_cmb = 2.73
+c = 299792458.0
+h = 6.62606957e-34
+k = 1.3806488e-23
 
 def lines(file_or_fname):
 	"""Iterates over lines in a file, which can be specified
@@ -387,4 +391,3 @@ def expand_beam(irads):
 		phi += np.pi/2
 	phi %= np.pi
 	return sigma, phi
-
