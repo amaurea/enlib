@@ -182,8 +182,9 @@ class PmatCut(PointingMatrix):
 
 class pos2pix:
 	"""Transforms from scan coordintaes to pixel-center coordinates."""
-	def __init__(self, scan, template, sys):
+	def __init__(self, scan, template, sys, ref_phi=0):
 		self.scan, self.template, self.sys = scan, template, sys
+		self.ref_phi = ref_phi
 	def __call__(self, ipos):
 		shape = ipos.shape[1:]
 		ipos  = ipos.reshape(ipos.shape[0],-1)
@@ -196,7 +197,7 @@ class pos2pix:
 			# If we have no template, output angles instead of pixels.
 			# Make sure the angles don't have any jumps in them
 			opix[:2] = opos[1::-1]
-			opix[1]  = utils.rewind(opix[1], opix[1,0])
+			opix[1]  = utils.rewind(opix[1], self.ref_phi)
 		opix[2]  = np.cos(2*opos[2])
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)
@@ -228,7 +229,8 @@ class PmatPtsrc(PointingMatrix):
 		box = np.array(scan.box)
 		margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
 		box[0] -= margin/2; box[1] += margin/2
-		ipol = interpol.build(pos2pix(scan,None,sys), interpol.ip_linear, box, [utils.arcsec,utils.arcsec,utils.arcsec,utils.arcsec])
+		ref_phi = params[1,0]
+		ipol = interpol.build(pos2pix(scan,None,sys,ref_phi=ref_phi), interpol.ip_linear, box, [utils.arcsec,utils.arcsec,utils.arcsec,utils.arcsec])
 		self.rbox = ipol.box
 		self.nbox = np.array(ipol.ys.shape[4:])
 		n = self.rbox.shape[1]
