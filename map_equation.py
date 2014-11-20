@@ -186,7 +186,7 @@ class MapEquation:
 		hitmap = enmap.zeros(self.area.shape, self.area.wcs, self.dtype)
 		junk   = np.zeros(self.njunk, self.dtype)
 		for d in self.data:
-			tod = np.empty([d.scan.ndet,d.scan.nsamp],dtype=self.dtype); tod[...] = 1
+			tod = np.full([d.scan.ndet,d.scan.nsamp],1,dtype=self.dtype)
 			d.pcut.backward(tod,junk)
 			d.pmap.backward(tod,hitmap)
 		return reduce(hitmap[0].astype(np.int32),self.comm)
