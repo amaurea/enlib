@@ -447,7 +447,7 @@ def downgrade(emap, factor):
 	factor = np.asarray(factor,dtype=int)
 	if factor.ndim == 0: factor = np.array([factor,factor],dtype=int)
 	tshape = emap.shape[-2:]/factor*factor
-	res = np.mean(np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),-1),-2)
+	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),(-2,-1))
 	return ndmap(res, emap[...,::factor[0],::factor[1]].wcs)
 
 def pad(emap, pix, return_slice=False,wrap=False):
@@ -626,7 +626,7 @@ def read_hdf(fname):
 			# Compatibility for old format
 			csys = hfile["system"].value if "system" in hfile else "equ"
 			if csys == "equ": csys = "car"
-			wcs = enlib.wcs.from_bounds(data.shape[-2:][::-1], hfile["box"].value[:,::-1]*np.pi/180, csys)
+			wcs = enlib.wcs.build(hfile["box"].value, shape=data.shape, system=csys, rowmajor=True)
 			res = ndmap(data, wcs)
 	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		res = res.byteswap().newbyteorder()

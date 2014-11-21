@@ -130,7 +130,7 @@ def finalize(w, pos, res, shape):
 	return w
 
 def describe(wcs):
-	"""Since astropy.wcs.WCS objects to not have a useful
+	"""Since astropy.wcs.WCS objects do not have a useful
 	str implementation, this function provides a relpacement."""
 	sys  = wcs.wcs.ctype[0][-3:].lower()
 	n    = wcs.naxis
@@ -237,6 +237,8 @@ def autobox(shape, box, name_or_wcs):
 	w.wcs.crpix += 0.5
 	return w
 
+systems_old = {"car": car_old, "cea": cea_old, "air": air_old, "zea": zea_old }
+
 def from_bounds(shape, box, system="cea"):
 	"""Construct a WCS object based with bounds
 	box=[[ra0,dec0],[ra1,dec1]] and pixels in each
@@ -245,4 +247,4 @@ def from_bounds(shape, box, system="cea"):
 	be wholly inside the box. The optional system
 	argument determines which WCS to use. The default
 	is "cea": cylindrical equal area"."""
-	return systems[system.lower()](shape, box)
+	return systems_old[system.lower()](shape, box)
