@@ -125,7 +125,8 @@ def slice_wcs(shape, wcs, sel):
 	for i,s in enumerate(sel):
 		s = enlib.slice.expand_slice(s, shape[i])
 		j = -1-i
-		wcs.wcs.crpix[j] -= s.start+0.5
+		start = s.start if s.step > 0 else s.start + 1
+		wcs.wcs.crpix[j] -= start+0.5
 		wcs.wcs.crpix[j] /= s.step
 		wcs.wcs.cdelt[j] *= s.step
 		wcs.wcs.crpix[j] += 0.5
