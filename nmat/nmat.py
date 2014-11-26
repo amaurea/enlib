@@ -111,30 +111,30 @@ class NmatDetvecs(NmatBinned):
 
 		Note that D, V and E correspond to the normal covmat, *not* the inverse!
 		"""
-		self.D    = np.array(D)
-		self.V    = np.array(V)
-		self.E    = np.array(E)
-		self.bins = np.array(bins)
-		self.vbins= np.array(vbins)
-		self.dets = np.array(dets) if dets is not None else np.arange(self.D.shape[1])
+		self.D    = np.ascontiguousarray(D)
+		self.V    = np.ascontiguousarray(V)
+		self.E    = np.ascontiguousarray(E)
+		self.bins = np.ascontiguousarray(bins)
+		self.vbins= np.ascontiguousarray(vbins)
+		self.dets = np.ascontiguousarray(dets) if dets is not None else np.arange(self.D.shape[1])
 		# Compute corresponding parameters for the inverse
 		self.iD, self.iV, self.iE = woodbury_invert(self.D, self.V, self.E, self.vbins)
 
 		# Compute white noise approximation
-		ticov = np.zeros([len(self.dets),len(self.dets)])
+		tdiag = np.zeros([len(self.dets)])
 		for d,b,vb in zip(self.iD, self.bins, self.vbins):
 			v, e = self.iV[vb[0]:vb[1]], self.iE[vb[0]:vb[1]]
-			ticov += (np.diag(d) + v.T.dot(np.diag(e)).dot(v))*(b[1]-b[0])
-		ticov /= np.sum(self.bins[:,1]-self.bins[:,0])
+			tdiag += (d + np.sum(v**2*e[:,None],0))*(b[1]-b[0])
+		tdiag /= np.sum(self.bins[:,1]-self.bins[:,0])
 
-		self.tdiag = np.diag(ticov)
+		self.tdiag = tdiag
 	@property
 	def icovs(self):
 		nbin, ndet = self.iD.shape
 		res = np.empty([nbin,ndet,ndet])
 		for bi,(d,vb) in enumerate(zip(self.iD, self.vbins)):
 			v, e = self.iV[vb[0]:vb[1]], self.iE[vb[0]:vb[1]]
-			res[bi] = np.diag(d) + v.T.dot(np.diag(e)).dot(v)
+			res[bi] = np.diag(d) + (v.T*e[None,:]).dot(v)
 		return res
 	def apply(self, tod):
 		ft = enlib.fft.rfft(tod)
@@ -165,7 +165,7 @@ def read_nmat(fname, group=None):
 	g = f[group] if group else f
 	typ = np.array(g["type"])[...]
 	if typ == "detvecs":
-		return NmatDetvecs(g["D"], g["V"], g["E"], g["bins"], g["vbins"], g["dets"])
+		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["vbins"].value, g["dets"].value)
 	elif typ == "binned":
 		return NmatBinned(g["icovs"], g["bins"], g["dets"])
 	else:
@@ -197,8 +197,9 @@ def woodbury_invert(D, V, E, vbins=None):
 		iD[~np.isfinite(iD)] = 0
 		iE[~np.isfinite(iE)] = 0
 		if len(iE) == 0: return iD, V, iE
-		core, sign = sichol(np.diag(iE) + V.dot(np.diag(iD)).dot(V.T))
-		iV   = (np.diag(iD).dot(V.T).dot(core)).T
+		arg = np.diag(iE) + (V*iD[None,:]).dot(V.T)
+		core, sign = sichol(arg)
+		iV = core.T.dot(V)*iD[None,:]
 		return iD, iV, np.zeros(len(E))-sign
 	else:
 		assert(D.ndim == 2)

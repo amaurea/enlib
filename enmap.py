@@ -125,7 +125,8 @@ def slice_wcs(shape, wcs, sel):
 	for i,s in enumerate(sel):
 		s = enlib.slice.expand_slice(s, shape[i])
 		j = -1-i
-		wcs.wcs.crpix[j] -= s.start+0.5
+		start = s.start if s.step > 0 else s.start + 1
+		wcs.wcs.crpix[j] -= start+0.5
 		wcs.wcs.crpix[j] /= s.step
 		wcs.wcs.cdelt[j] *= s.step
 		wcs.wcs.crpix[j] += 0.5
@@ -276,7 +277,8 @@ def extent(shape, wcs, nsub=0x10):
 	patch given by shape and wcs as [height,width] in
 	radians. That is, if the patch were on a sphere with
 	radius 1 m, then this function returns approximately how many meters
-	tall and width the patch is."""
+	tall and width the patch is. These are defined such that
+	their product equals the physical area of the patch."""
 	wcs = wcs.deepcopy()
 	step = (np.asfarray(shape[-2:])/nsub)[::-1]
 	wcs.wcs.cdelt *= step
@@ -385,9 +387,26 @@ def samewcs(arr, *args):
 		except AttributeError: pass
 	return arr
 
+def geometry(pos, res=None, shape=None, proj="cea"):
+	"""Consruct a shape,wcs pair suitable for initializing enmaps.
+	pos can be either a [2] center position or a [{from,to},2]
+	bounding box. At least one of res or shape must be specified.
+	If res is specified, it must either be a number, in
+	which the same resolution is used in each direction,
+	or [2]. If shape is specified, it must be [2]. All angles
+	are given in radians."""
+	pos = np.asarray(pos)*180/np.pi
+	if res is not None: res = np.asarray(res)*180/np.pi
+	wcs = enlib.wcs.build(pos, res, shape, rowmajor=True, system=proj)
+	if shape is None:
+		# Infer shape
+		corners = wcs.wcs_world2pix(pos[:,::-1],0)+0.5
+		shape = tuple(np.abs(corners[1]-corners[0]).astype(int))[::-1]
+	return shape, wcs
+
 def create_wcs(shape, box=None, proj="cea"):
 	if box is None: box = np.array([[-1,-1],[1,1]])*0.5*10*np.pi/180
-	return getattr(enlib.wcs, proj)(shape[-2:][::-1], box[:,::-1])
+	return enlib.wcs.build(box*180/np.pi, shape=shape, rowmajor=True, system=proj)
 
 def spec2flat(shape, wcs, cov, exp=1.0, mode="nearest"):
 	"""Given a (ncomp,ncomp,l) power spectrum, expand it to harmonic map space,
@@ -429,7 +448,7 @@ def downgrade(emap, factor):
 	factor = np.asarray(factor,dtype=int)
 	if factor.ndim == 0: factor = np.array([factor,factor],dtype=int)
 	tshape = emap.shape[-2:]/factor*factor
-	res = np.mean(np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),-1),-2)
+	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),(-2,-1))
 	return ndmap(res, emap[...,::factor[0],::factor[1]].wcs)
 
 def pad(emap, pix, return_slice=False,wrap=False):
@@ -608,7 +627,7 @@ def read_hdf(fname):
 			# Compatibility for old format
 			csys = hfile["system"].value if "system" in hfile else "equ"
 			if csys == "equ": csys = "car"
-			wcs = enlib.wcs.from_bounds(data.shape[-2:][::-1], hfile["box"].value[:,::-1]*np.pi/180, csys)
+			wcs = enlib.wcs.build(hfile["box"].value, shape=data.shape, system=csys, rowmajor=True)
 			res = ndmap(data, wcs)
 	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		res = res.byteswap().newbyteorder()

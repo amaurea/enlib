@@ -89,12 +89,10 @@ class LinearSystemMap(LinearSystem):
 			rebin = pmat.PmatCutRebin(hdata.pcut, ldata.pcut)
 			rebin.backward(hjunk[hdata.cutrange[0]:hdata.cutrange[1]], ljunk[ldata.cutrange[0]:ldata.cutrange[1]])
 		return self.dof.zip(hmap,hjunk)
-	def write(self, dir=None):
+	def write(self, prefix=""):
 		if self.comm.rank > 0: return
-		if dir is None: dir = "."
-		utils.mkdir(dir)
-		enmap.write_map(dir + "/rhs.fits", self.dof.unzip(self.b)[0])
-		self.precon.write(dir)
+		enmap.write_map(prefix + "rhs.fits", self.dof.unzip(self.b)[0])
+		self.precon.write(prefix)
 
 # FIXME: How should I get the noise matrix? As an argument?
 # Should it already be measured, or should it be measured internally?
@@ -186,10 +184,12 @@ class MapEquation:
 		hitmap = enmap.zeros(self.area.shape, self.area.wcs, self.dtype)
 		junk   = np.zeros(self.njunk, self.dtype)
 		for d in self.data:
-			tod = np.empty([d.scan.ndet,d.scan.nsamp],dtype=self.dtype); tod[...] = 1
+			tod = np.full([d.scan.ndet,d.scan.nsamp],1,dtype=self.dtype)
 			d.pcut.backward(tod,junk)
 			d.pmap.backward(tod,hitmap)
-		return reduce(hitmap[0].astype(np.int32),self.comm)
+		hitmap = reduce(hitmap[0].astype(np.int32),self.comm)
+		return hitmap
+
 
 class PrecondBinned:
 	"""This class implements a simple "binned" preconditioner, which
@@ -219,13 +219,11 @@ class PrecondBinned:
 		with bench.mark("prec_bin"):
 			res = array_ops.solve_masked(self.div_map, map, [0,1]), junk/self.div_junk
 		return res
-	def write(self, dir=None):
+	def write(self, prefix=""):
 		if self.mapeq.comm.rank > 0: return
-		if dir is None: dir = "."
-		utils.mkdir(dir)
-		enmap.write_map(dir + "/div.fits", self.div_map)
-		enmap.write_map(dir + "/hits.fits", self.hitmap)
-		enmap.write_map(dir + "/mask.fits", self.mask.astype(np.uint8))
+		enmap.write_map(prefix + "div.fits", self.div_map)
+		enmap.write_map(prefix + "hits.fits", self.hitmap)
+		enmap.write_map(prefix + "mask.fits", self.mask.astype(np.uint8))
 
 class PrecondCirculant:
 	"""This preconditioner approximates the A matrix as
@@ -265,12 +263,10 @@ class PrecondCirculant:
 			m  = fft.ifft(mf, axes=[-2,-1], normalize=True).real
 			m  = enmap.map_mul(self.S, m)
 		return m, junk/self.div_junk
-	def write(self, dir=None):
+	def write(self, prefix=""):
 		if self.mapeq.comm.rank > 0: return
-		if dir is None: dir = "."
-		utils.mkdir(dir)
-		enmap.write_map(dir + "/arow.fits", self.Arow)
-		self.binned.write(dir)
+		enmap.write_map(prefix + "arow.fits", self.Arow)
+		self.binned.write(prefix)
 
 def pick_ref_points(hitmap, npoint):
 	pix = []
@@ -343,8 +339,8 @@ class PrecondSubmap:
 			#enmap.write_map("sub%03d.hdf" % solver.i, map)
 		map, _ = eq.dof.unzip(solver.x)
 		return map, junk
-	def write(self, dir=None):
-		self.binned.write(dir)
+	def write(self, prefix=""):
+		self.binned.write(prefix)
 
 		# 1. Solve the equation sum_sub(A_sub) x = sum_sub b_sub
 		# by reading off the pixels from each, unapplying the noise
