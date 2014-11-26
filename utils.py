@@ -375,6 +375,7 @@ def range_union(a, mapping=False):
 	return (b,rmap) if mapping else b
 
 def compress_beam(sigma, phi):
+	sigma = np.asarray(sigma,dtype=float)
 	c,s=np.cos(phi),np.sin(phi)
 	R = np.array([[c,-s],[s,c]])
 	C = np.diag(sigma**-2)
@@ -391,3 +392,21 @@ def expand_beam(irads):
 		phi += np.pi/2
 	phi %= np.pi
 	return sigma, phi
+
+def combine_beams(irads_array):
+	Cs = np.array([[[ir[0],ir[2]],[ir[2],ir[1]]] for ir in irads_array])
+	Ctot = np.eye(2)
+	for C in Cs:
+		E, V = np.linalg.eigh(C)
+		B = (V*E[None]**0.5).dot(V.T)
+		Ctot = B.dot(Ctot).dot(B.T)
+	return np.array([Ctot[0,0],Ctot[1,1],Ctot[0,1]])
+
+def read_lines(fname):
+	"""Read lines from file fname, returning them as a list of strings.
+	If fname ends with :slice, then the specified slice will be applied
+	to the list before returning."""
+	toks = fname.split(":")
+	fname, fslice = toks[0], ":".join(toks[1:])
+	lines = [line.split()[0] for line in open(fname,"r") if line[0] != "#"]
+	return eval("lines"+fslice)

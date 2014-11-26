@@ -13,6 +13,8 @@ class SrcScan:
 		self.offsets = offsets   # [nsrc,ndet+1]
 		self.ivars   = ivars
 		self.dets    = dets
+	@property
+	def shape(self): return (self.offsets.shape[0],self.offsets.shape[1]-1)
 	def __str__(self): return "SrcScan(nsrc=%d,ndet=%d,nsamp=%d)" % (self.offsets.shape[0],self.offsets.shape[1]-1,self.tod.size)
 	def __getitem__(self, sel):
 		if type(sel) != tuple:

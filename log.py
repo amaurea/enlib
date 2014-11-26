@@ -46,7 +46,7 @@ class ColoredFormatter(Formatter):
 
 default_format = "%(rank)3d %(wmins)7.2f %(resmem)5.2f %(mem)5.2f %(memmax)5.2f %(message)s"
 
-def init(level=INFO, rank=MPI.COMM_WORLD.rank, file=None, fmt=default_format, color=True):
+def init(level=INFO, rank=MPI.COMM_WORLD.rank, file=None, fmt=default_format, color=True, shared=True):
 	"""Set up the root logger for output to console and file. Extra output records
 	for mpi rank, time since process start and memory usage are added by default.
 	Console output is colored by default, and info-level messages are muted from
@@ -75,7 +75,8 @@ def init(level=INFO, rank=MPI.COMM_WORLD.rank, file=None, fmt=default_format, co
 	ch.setLevel(level)
 	ch.setFormatter(fclass(fmt))
 	ch.addFilter(EnFilter(rank))
-	ch.addFilter(QuietOthers(rank))
+	if shared:
+		ch.addFilter(QuietOthers(rank))
 	logger.addHandler(ch)
 	return logger
 
