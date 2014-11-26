@@ -182,7 +182,7 @@ def pixmap(shape, wcs=None):
 def pix2sky(wcs, pix, safe=True, corner=False):
 	"""Given an array of corner-based pixel coordinates [{y,x},...],
 	return sky coordinates in the same ordering."""
-	pix = np.asarray(pix)
+	pix = np.asarray(pix).astype(float)
 	if corner: pix -= 0.5
 	pflat = pix.reshape(pix.shape[0], np.prod(pix.shape[1:]))
 	coords = np.asarray(wcs.wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*np.pi/180
