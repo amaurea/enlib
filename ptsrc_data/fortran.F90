@@ -3,6 +3,19 @@ module fortran
 
 contains
 
+	subroutine test(tod, ranges, rangesets, offsets, vars, nvars, detrend)
+		implicit none
+		real(_), intent(in) :: tod(:)
+		real(_), intent(inout) :: vars(:,:)
+		integer(4), intent(inout) :: nvars(:,:)
+		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2)), r2src(size(ranges,2))
+		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, detrend
+		real(_)    :: m,s,x,sn,mid
+		nsrc = size(offsets,2)
+		vars = 0
+		nvars = 0
+	end subroutine
+
 	! Apply a simple white noise + mean subtraction noise model to a subrange tod with
 	! ranges specified by offsets[src,det], ranges[nrange,2].
 	subroutine nmat_mwhite(tod, ranges, rangesets, offsets, ivar, detrend, rangemask)
@@ -11,7 +24,7 @@ contains
 		integer(4), intent(in)    :: rangemask(:)
 		real(_)    :: ivar(:)
 		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2))
-		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, detrend
+		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, detrend, err
 		real(_)    :: m,s,x,sn,mid
 		nsrc = size(offsets,2)
 		ndet = size(offsets,1)-1
@@ -103,6 +116,96 @@ contains
 		end do
 	end subroutine
 
+	! Apply a simple white + basis projection noise model to a subrange tod with
+	! ranges specified by offsets[src,det], ranges[nrange,2]. The basis functions
+	! are supplied as bvecs[nvec,nsamp] with the same ordering as tod. We assume
+	! that there aren't that many of these. For a given range, one can project
+	! out these by using the woodbury formula:
+	!  (N+VEV')" = N" - N"V(E" + V'N"V)"V'N"
+	! Assuming we want to get completely rid of those modes, E=inf and we get
+	!  N" - N"V(V'N"V)"V'N"
+	! If N is proportional to I, then this is simply N"(1-V(V'V)"V'), i.e.
+	! project out V-part and then apply N". Q = V(V'V)**-0.5 can be precomputed
+	! and used instead of V, to avoid needing lapack. Then we get N"(1-QQ').
+	! Q is then [nvec,nsamp]
+	subroutine nmat_basis(tod, ranges, rangesets, offsets, ivar, Q, rangemask)
+		implicit none
+		real(_), intent(inout) :: tod(:)
+		integer(4), intent(in) :: rangemask(:)
+		real(_)    :: ivar(:), Q(:,:), y(size(Q,1))
+		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2))
+		integer(4) :: si, di, ri, nsrc, ndet, oi, i, j, i1, i2, n
+		real(_), allocatable :: x(:)
+		nsrc = size(offsets,2)
+		ndet = size(offsets,1)-1
+
+		! Prepare for parallel loop
+		do si = 1, nsrc
+			do di = 1, ndet
+				do oi = offsets(di,si)+1, offsets(di+1,si)
+					ri = rangesets(oi)+1
+					r2det(ri) = di
+				end do
+			end do
+		end do
+
+		!$omp parallel do private(ri,i1,i2,n,x,i,y)
+		do ri = 1, size(ranges,2)
+			if(rangemask(ri) .eq. 0) cycle
+			i1 = ranges(1,ri)+1
+			i2 = ranges(2,ri)
+			if(i2-i1 < 0) cycle
+			! Project out given vectors
+			n = i2-i1+1
+			x = tod(i1:i2)
+			! The Q we receive from python is [nmode,nsamp], which
+			! is the transpose of what we want here. So we must
+			! compute Q'Q rather than QQ'.
+			!  y = Qd; d -= (Q'y = Q'Qd)
+			do i = 1, size(y)
+				y(i) = sum(Q(i,i1:i2)*tod(i1:i2))
+			end do
+			do i = i1, i2
+				tod(i) = tod(i) - sum(Q(:,i)*y)
+			end do
+			tod(i1:i2) = tod(i1:i2) * ivar(r2det(ri))
+		end do
+	end subroutine
+
+	subroutine measure_basis(tod, ranges, rangesets, offsets, vars, nvars, Q)
+		implicit none
+		real(_), intent(in) :: tod(:), Q(:,:)
+		real(_), intent(inout) :: vars(:,:)
+		integer(4), intent(inout) :: nvars(:,:)
+		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2)), r2src(size(ranges,2))
+		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, n
+		real(_), allocatable :: x(:)
+		nsrc = size(offsets,2)
+		ndet = size(offsets,1)-1
+
+		vars  = 0
+		nvars = 0
+
+		! Prepare for parallel loop
+		!$omp parallel do collapse(2) private(si,di,oi,ri,i1,i2,n,x)
+		do si = 1, nsrc
+			do di = 1, ndet
+				do oi = offsets(di,si)+1, offsets(di+1,si)
+					ri = rangesets(oi)+1
+					i1 = ranges(1,ri)+1
+					i2 = ranges(2,ri)
+					if(i2-i1 < 0) cycle
+					n = i2-i1+1
+					allocate(x(n))
+					x = tod(i1:i2) - matmul(transpose(Q(:,i1:i2)),matmul(Q(:,i1:i2),tod(i1:i2)))
+					vars(di,si) = vars(di,si) + sum(x**2)
+					nvars(di,si)= nvars(di,si) + n
+					deallocate(x)
+				end do
+			end do
+		end do
+	end subroutine
+
 	subroutine pmat_thumbs(dir, tod, maps, point, phase, boxes)
 		use omp_lib
 		implicit none
@@ -173,7 +276,6 @@ contains
 		integer(4), intent(in)    :: offsets(:,:), ranges(:,:), rangesets(:), dir
 		integer(4), intent(in)    :: rangemask(:)
 		! Work
-		integer(4), parameter :: bz = 321
 		integer(4) :: si, di, oi, ri, i, nsrc, ndet, namp
 		real(_)    :: ra, dec, amps(size(params,1)-5), ibeam(3), ddec, dra, r2, cosdec
 		real(_)    :: oamps(size(params,1)-5,size(offsets,2))
