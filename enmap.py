@@ -53,8 +53,8 @@ class ndmap(np.ndarray):
 		return ndmap(arr, self.wcs)
 	def copy(self, order='K'):
 		return ndmap(np.copy(self,order), self.wcs)
-	def sky2pix(self, coords, safe=True, corner=False): return sky2pix(self.wcs, coords, safe, corner)
-	def pix2sky(self, pix,    safe=True, corner=False): return pix2sky(self.wcs, pix,    safe, corner)
+	def sky2pix(self, coords, safe=True, corner=False): return sky2pix(self.shape, self.wcs, coords, safe, corner)
+	def pix2sky(self, pix,    safe=True, corner=False): return pix2sky(self.shape, self.wcs, pix,    safe, corner)
 	def box(self): return box(self.shape, self.wcs)
 	def posmap(self, corner=False): return posmap(self.shape, self.wcs, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
@@ -133,10 +133,14 @@ def slice_wcs(shape, wcs, sel):
 		oshape[i] = (oshape[i]+s.step-1)/s.step
 	return tuple(oshape), wcs
 
-def box(shape, wcs):
-	pix    = np.array([[0,0],shape[-2:]]).T-0.5
+def box(shape, wcs, npoint=10):
+	"""Compute a bounding box for the given geometry."""
+	# Because of wcs's wrapping, we need to evaluate several
+	# extra pixels to make our unwinding unambiguous
+	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
+		np.linspace(0,shape[-1],num=npoint,endpoint=True)])-0.5
 	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
-	return enlib.utils.unwind(np.array(coords)*np.pi/180).T
+	return enlib.utils.unwind(np.array(coords)*np.pi/180).T[[0,-1]]
 
 def enmap(arr, wcs=None, dtype=None, copy=True):
 	"""Construct an ndmap from data.
@@ -173,14 +177,14 @@ def posmap(shape, wcs, safe=True, corner=False):
 	if safe is true (default), then sharp coordinate edges will be
 	avoided."""
 	pix    = np.mgrid[:shape[-2],:shape[-1]]
-	return ndmap(pix2sky(wcs, pix, safe, corner), wcs)
+	return ndmap(pix2sky(shape, wcs, pix, safe, corner), wcs)
 
 def pixmap(shape, wcs=None):
 	"""Return an enmap where each entry is the pixel coordinate of that entry."""
 	res = np.mgrid[:shape[-2],:shape[-1]]
 	return res if wcs is None else ndmap(res,wcs)
 
-def pix2sky(wcs, pix, safe=True, corner=False):
+def pix2sky(shape, wcs, pix, safe=True, corner=False):
 	"""Given an array of corner-based pixel coordinates [{y,x},...],
 	return sky coordinates in the same ordering."""
 	pix = np.asarray(pix).astype(float)
@@ -191,7 +195,7 @@ def pix2sky(wcs, pix, safe=True, corner=False):
 	if safe: coords = enlib.utils.unwind(coords)
 	return coords
 
-def sky2pix(wcs, coords, safe=True, corner=False):
+def sky2pix(shape, wcs, coords, safe=True, corner=False):
 	"""Given an array of coordinates [{ra,dec},...], return
 	pixel coordinates with the same ordering. The corner argument
 	specifies whether pixel coordinates start at pixel corners
@@ -204,20 +208,16 @@ def sky2pix(wcs, coords, safe=True, corner=False):
 	pix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
 	if corner: pix += 0.5
 	if safe:
-		# Avoid angle cuts inside the map. Place the cut at the
-		# opposite side of the sky relative to the zero pixel.
-		# That still leaves ambiguity on the pixel winding.
-		# Naively one would want the lowest possible positive
-		# numbers for all the pixels. But if a couple of pixels
-		# are slightly negative this results in all the pixels
-		# being shifted to huge numbers. I therefore instead
-		# place the mean pixel value at the lowest positive position
-		# possible after unwrapping.
+		# Put the angle cut as far away from the map. We do this
+		# by computing the bounds in RA and putting the cut
+		# in the middle of the ra gap. This is equivalent to putting
+		# the reference point in the middle of the valid ra range.
+		ref = np.mean(box(shape, wcs),0)
+		refpix = np.asarray(wcs.wcs_world2pix(*tuple(ref[:,None])[::-1]+(0,)))[:,0]
+		if corner: refpix += 0.5
 		for i in range(len(pix)):
 			n = np.abs(360./wcs.wcs.cdelt[i])
-			pix[i] = enlib.utils.rewind(pix[i], pix[i,0], n)
-			ref = int(np.mean(pix[1]))
-			pix[i] = enlib.utils.rewind(pix[i], ref%n, n)
+			pix[i] = enlib.utils.rewind(pix[i], refpix[i], n)
 	return pix[::-1].reshape(coords.shape)
 
 def project(map, shape, wcs, order=3, mode="nearest"):

@@ -8,11 +8,19 @@ def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=
 	with the specified shape and WCS. This is identical to enlib.rand_map, except
 	that it takes into account the curvature of the full sky. This makes it much
 	slower and more memory-intensive. The map should not cross the poles."""
+	# Ensure everything has the right dimensions and restrict to relevant dimensions
+	ps = np.atleast_3d(ps)
+	assert ps.shape[0] == ps.shape[1], "ps must be [ncomp,ncomp,nl] or [nl]"
+	assert len(shape) == 2 or len(shape) == 3, "shape must be (ncomp,ny,nx) or (ny,nx)"
+	ncomp = 1 if len(shape) == 2 else shape[-2]
+	ps = ps[:ncomp,:ncomp]
+
 	ctype = np.result_type(dtype,0j)
 	alm   = rand_alm(ps, lmax=lmax, seed=seed, dtype=ctype)
 	# Now find the pixels to project on
 	pos   = enmap.posmap(shape,wcs)
-	return enmap.samewcs(alm2map(alm, pos, oversample=oversample, spin=spin), wcs)
+	res   = enmap.samewcs(alm2map(alm, pos, oversample=oversample, spin=spin), wcs)
+	return res[0] if len(shape) == 2 else res
 
 def rand_alm_healpy(ps, lmax=None, seed=None, dtype=np.complex128):
 	import healpy
@@ -103,10 +111,9 @@ def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	# two samples per mode.
 	step = np.pi/lmax/oversample
 	# Set up an intermediate coordinate system for the SHT
-	tbox   = np.array([[decrange[0],-np.pi],[decrange[1],np.pi]])
-	tshape = tuple(np.ceil(np.abs((tbox[1]-tbox[0])/step)).astype(int))
-	twcs   = wcs.cea(tshape[::-1], tbox[:,::-1])
-	tmap   = enmap.zeros(dims+tshape, twcs, dtype=dtype)
+	tbox = np.array([[decrange[0],-np.pi],[decrange[1],np.pi]])
+	shape, wcs = enmap.geometry(pos=tbox, res=step)
+	tmap = enmap.zeros(dims+shape, wcs, dtype=dtype)
 	return tmap
 
 def map2minfo(m):
