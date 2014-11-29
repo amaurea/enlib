@@ -401,7 +401,7 @@ def geometry(pos, res=None, shape=None, proj="cea"):
 	if shape is None:
 		# Infer shape
 		corners = wcs.wcs_world2pix(pos[:,::-1],0)+0.5
-		shape = tuple(np.abs(corners[1]-corners[0]).astype(int))[::-1]
+		shape = tuple(np.ceil(np.abs(corners[1]-corners[0])).astype(int))[::-1]
 	return shape, wcs
 
 def create_wcs(shape, box=None, proj="cea"):

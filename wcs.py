@@ -119,6 +119,7 @@ def finalize(w, pos, res, shape):
 		w.wcs.cdelt *= (corners[1]-corners[0])/shape
 	else:
 		w.wcs.cdelt = res
+		if pos.ndim == 2: w.wcs.cdelt[pos[1]<pos[0]] *= -1
 	if pos.ndim == 1:
 		if shape is not None:
 			# Place pixel origin at corner of shape centered on crval
