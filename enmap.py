@@ -108,7 +108,7 @@ class ndmap(np.ndarray):
 		# pixel-center coordinates to pixel-edge coordinates,
 		# which we need to distinguish between fully or partially
 		# included pixels
-		bpix = self.wcs.wcs_world2pix(box[:,::-1]*180/np.pi,0)[:,::-1]+0.5
+		bpix = self.wcs.wcs_world2pix(box[:,::-1]*180/np.pi,1)[:,::-1]+0.5
 		dir  = 2*(bpix[1]>bpix[0])-1
 		# If we are inclusive, find a bounding box, otherwise,
 		# an internal box
@@ -126,10 +126,10 @@ def slice_wcs(shape, wcs, sel):
 		s = enlib.slice.expand_slice(s, shape[i])
 		j = -1-i
 		start = s.start if s.step > 0 else s.start + 1
-		wcs.wcs.crpix[j] -= start+0.5
+		wcs.wcs.crpix[j] -= start-0.5
 		wcs.wcs.crpix[j] /= s.step
 		wcs.wcs.cdelt[j] *= s.step
-		wcs.wcs.crpix[j] += 0.5
+		wcs.wcs.crpix[j] -= 0.5
 		oshape[i] = (oshape[i]+s.step-1)/s.step
 	return tuple(oshape), wcs
 
@@ -139,7 +139,7 @@ def box(shape, wcs, npoint=10):
 	# extra pixels to make our unwinding unambiguous
 	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
 		np.linspace(0,shape[-1],num=npoint,endpoint=True)])-0.5
-	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
+	coords = wcs.wcs_pix2world(pix[1],pix[0],1)[::-1]
 	return enlib.utils.unwind(np.array(coords)*np.pi/180).T[[0,-1]]
 
 def enmap(arr, wcs=None, dtype=None, copy=True):
@@ -190,7 +190,7 @@ def pix2sky(shape, wcs, pix, safe=True, corner=False):
 	pix = np.asarray(pix).astype(float)
 	if corner: pix -= 0.5
 	pflat = pix.reshape(pix.shape[0], np.prod(pix.shape[1:]))
-	coords = np.asarray(wcs.wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*np.pi/180
+	coords = np.asarray(wcs.wcs_pix2world(*(tuple(pflat)[::-1]+(1,)))[::-1])*np.pi/180
 	coords = coords.reshape(pix.shape)
 	if safe: coords = enlib.utils.unwind(coords)
 	return coords
@@ -205,7 +205,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 	coords = np.asarray(coords)*180/np.pi
 	cflat  = coords.reshape(coords.shape[0], np.prod(coords.shape[1:]))
 	# period of the system
-	pix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
+	pix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(1,)))
 	if corner: pix += 0.5
 	if safe:
 		# Put the angle cut as far away from the map. We do this
@@ -213,7 +213,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 		# in the middle of the ra gap. This is equivalent to putting
 		# the reference point in the middle of the valid ra range.
 		ref = np.mean(box(shape, wcs),0)
-		refpix = np.asarray(wcs.wcs_world2pix(*tuple(ref[:,None])[::-1]+(0,)))[:,0]
+		refpix = np.asarray(wcs.wcs_world2pix(*tuple(ref[:,None])[::-1]+(1,)))[:,0]
 		if corner: refpix += 0.5
 		for i in range(len(pix)):
 			n = np.abs(360./wcs.wcs.cdelt[i])
@@ -400,7 +400,7 @@ def geometry(pos, res=None, shape=None, proj="cea"):
 	wcs = enlib.wcs.build(pos, res, shape, rowmajor=True, system=proj)
 	if shape is None:
 		# Infer shape
-		corners = wcs.wcs_world2pix(pos[:,::-1],0)+0.5
+		corners = wcs.wcs_world2pix(pos[:,::-1],1)
 		shape = tuple(np.ceil(np.abs(corners[1]-corners[0])).astype(int))[::-1]
 	return shape, wcs
 

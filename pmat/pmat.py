@@ -218,7 +218,7 @@ class PmatCutRebin(PointingMatrix):
 	def backward(self, jhigh, jlow):
 		get_core(jhigh.dtype).pmat_cut_rebin(-1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
 
-config.default("pmat_ptsrc_rsigma", 5.0, "Mat number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
+config.default("pmat_ptsrc_rsigma", 5.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
 class PmatPtsrc(PointingMatrix):
 	def __init__(self, scan, params, sys=None):
 		sys   = config.get("map_eqsys", sys)
@@ -243,6 +243,8 @@ class PmatPtsrc(PointingMatrix):
 		# Collect information about which samples hit which sources
 		nsrc = params.shape[1]
 		ndet = scan.ndet
+		# rhit is the inverse of the squared amplitude-weighted inverse beam for
+		# some reason. But it is basically going to be our beam size.
 		rhit = np.zeros(nsrc)+(np.sum(1./params[-3]*params[2]**2)/np.sum(params[2]**2))**0.5
 		rmax = rhit*rmul
 		src_ivars = np.zeros(nsrc,dtype=self.dtype)
