@@ -8,6 +8,11 @@ import numpy as np
 from astropy.wcs import WCS
 from enlib import slice
 
+# The origin argument used in the wcs pix<->world routines seems to
+# have to be 1 rather than the 0 one would expect. For example,
+# if wcs is CAR(crval=(0,0),crpix=(0,0),cdelt=(1,1)), then
+# pix2world(0,0,1) is (0,0) while pix2world(0,0,0) is (-1,-1).
+
 # Useful stuff to be able to do:
 #  * Create a wcs from (point,res)
 #  * Create a wcs from (box,res)
@@ -21,7 +26,6 @@ from enlib import slice
 # shape can be recovered from the wcs and a box by computing
 # the pixel coordinates of the corners. So we don't need to return
 # it.
-
 
 #  1. Construct wcs from box, res (and return shape?)
 #  2. Construct wcs from box, shape
@@ -38,10 +42,11 @@ def car(pos, res=None, shape=None, rowmajor=False):
 	w.wcs.crval = np.array([mid[0],0])
 	return finalize(w, pos, res, shape)
 
-def cea(pos, res=None, shape=None, rowmajor=False):
+def cea(pos, res=None, shape=None, rowmajor=False, lam=None):
 	"""Set up a cylindrical equal area system. See the build function for details."""
 	pos, res, shape, mid = validate(pos, res, shape, rowmajor)
-	lam = np.cos(mid[1]*deg2rad)**2
+	if lam is None:
+		lam = np.cos(mid[1]*deg2rad)**2
 	w = WCS(naxis=2)
 	w.wcs.ctype = ["RA---CEA", "DEC--CEA"]
 	w.wcs.set_pv([(2,1,lam)])
@@ -108,14 +113,14 @@ def validate(pos, res, shape, rowmajor=False):
 	mid = pos if pos.ndim == 1 else np.mean(pos,0)
 	return pos, res, shape, mid
 
-def finalize(w, pos, res, shape):
+def finalize(w, pos, res, shape, ref=None):
 	"""Common logic for the various wcs builders. Fills in the reference
 	pixel and resolution."""
 	w.wcs.crpix = [0,0]
 	if res is None:
 		# Find the resolution that gives our box the required extent.
 		w.wcs.cdelt = [1,1]
-		corners = w.wcs_world2pix(pos,0)+0.5
+		corners = w.wcs_world2pix(pos,1)
 		w.wcs.cdelt *= (corners[1]-corners[0])/shape
 	else:
 		w.wcs.cdelt = res
@@ -123,11 +128,17 @@ def finalize(w, pos, res, shape):
 	if pos.ndim == 1:
 		if shape is not None:
 			# Place pixel origin at corner of shape centered on crval
-			w.wcs.crpix = np.array(shape)/2+0.5
+			w.wcs.crpix = np.array(shape)/2-0.5
 	else:
-		# Make (0,0) in pixel coordinates correspond to pos[0].
-		off = w.wcs_world2pix(pos[0,None],0)[0]+0.5
+		# Make pos[0] the corner of the (0,0) pixel
+		off = w.wcs_world2pix(pos[0,None],1)[0]+0.5
 		w.wcs.crpix -= off
+	#if ref is not None:
+	#	# Tweak wcs so that 
+	#	# Modify crpix to give the reference location an integer pixel number
+	#	ref = np.asarray(ref)
+	#	refpix = w.wcs_world2pix(pixref[:,None],1)
+	#	w.wcs.crpix -= refpix-np.round(refpix)
 	return w
 
 def describe(wcs):
@@ -226,7 +237,7 @@ def autobox(shape, box, name_or_wcs):
 	w.wcs.cdelt = np.array([1.,1.])
 	w.wcs.crval = np.mean(box,0)*rad2deg
 	w.wcs.crpix = np.array([0.,0.])
-	corners = w.wcs_world2pix(box*rad2deg,0)+0.5
+	corners = w.wcs_world2pix(box*rad2deg,1)-0.5
 	# Shift crpix to make the corner the pixel origin
 	w.wcs.crpix -= corners[0]
 	# Scale cdelt so that the number of pixels inside
