@@ -7,7 +7,7 @@ The reason for allowing the other argument to be modified is to make it easier
 to incrementally project different parts of the signal.
 """
 import numpy as np, bunch
-from enlib import enmap, interpol, utils, coordinates, config
+from enlib import enmap, interpol, utils, coordinates, config, errors
 import pmat_core_32
 import pmat_core_64
 def get_core(dtype):
@@ -257,6 +257,7 @@ class PmatPtsrc(PointingMatrix):
 			ranges = np.zeros([nsrc,ndet,np.max(nrange),2],dtype=np.int32)
 			self.core.pmat_ptsrc_prepare(params, rhit, rmax, scan.noise.ivar, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
 
+		if np.sum(nrange) == 0: raise errors.DataMissing("No sources hit")
 		self.ranges, self.rangesets, self.offsets = compress_ranges(ranges, nrange, scan.cut, scan.nsamp)
 		self.src_ivars = src_ivars
 		self.nhit = np.sum(self.ranges[:,1]-self.ranges[:,0])
@@ -301,7 +302,7 @@ def compress_ranges(ranges, nrange, cut, nsamp):
 			cutsplit_ranges = utils.range_sub(current_ranges, cut[di].ranges)
 			flat_ranges += list(cutsplit_ranges+s0)
 			offsets[si,di+1] = len(flat_ranges)
-	flat_ranges = np.array(flat_ranges)
+	flat_ranges = np.atleast_2d(flat_ranges)
 	# Then merge overlapping ranges and produce our final output format.
 	ranges, map = utils.range_union(flat_ranges, mapping=True)
 	# Because some ranges are shared now, we need a list of which

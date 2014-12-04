@@ -34,15 +34,15 @@ from enlib import slice
 deg2rad = np.pi/180
 rad2deg = 1/deg2rad
 
-def car(pos, res=None, shape=None, rowmajor=False):
+def car(pos, res=None, shape=None, rowmajor=False, ref=None):
 	"""Set up a plate carree system. See the build function for details."""
 	pos, res, shape, mid = validate(pos, res, shape, rowmajor)
 	w = WCS(naxis=2)
 	w.wcs.ctype = ["RA---CAR", "DEC--CAR"]
 	w.wcs.crval = np.array([mid[0],0])
-	return finalize(w, pos, res, shape)
+	return finalize(w, pos, res, shape, ref=ref)
 
-def cea(pos, res=None, shape=None, rowmajor=False, lam=None):
+def cea(pos, res=None, shape=None, rowmajor=False, lam=None, ref=None):
 	"""Set up a cylindrical equal area system. See the build function for details."""
 	pos, res, shape, mid = validate(pos, res, shape, rowmajor)
 	if lam is None:
@@ -51,20 +51,20 @@ def cea(pos, res=None, shape=None, rowmajor=False, lam=None):
 	w.wcs.ctype = ["RA---CEA", "DEC--CEA"]
 	w.wcs.set_pv([(2,1,lam)])
 	w.wcs.crval = np.array([mid[0],0])
-	return finalize(w, pos, res, shape)
+	return finalize(w, pos, res, shape, ref=ref)
 
-def zea(pos, res=None, shape=None, rowmajor=False):
+def zea(pos, res=None, shape=None, rowmajor=False, ref=None):
 	"""Setups up an oblate Lambert's azimuthal equal area system.
 	See the build function for details."""
 	pos, res, shape, mid = validate(pos, res, shape, rowmajor)
 	w = WCS(naxis=2)
 	w.wcs.ctype = ["RA---ZEA", "DEC--ZEA"]
 	w.wcs.crval = mid
-	return finalize(w, pos, res, shape)
+	return finalize(w, pos, res, shape, ref=ref)
 
 # The airy distribution is a bit different, since is needs to
 # know the size of the patch.
-def air(pos, res=None, shape=None, rowmajor=False, rad=None):
+def air(pos, res=None, shape=None, rowmajor=False, rad=None, ref=None):
 	"""Setups up an Airy system. See the build function for details."""
 	pos, res, shape, mid = validate(pos, res, shape, rowmajor)
 	if rad is None:
@@ -76,11 +76,11 @@ def air(pos, res=None, shape=None, rowmajor=False, rad=None):
 	w = WCS(naxis=2)
 	w.wcs.ctype = ["RA---AIR","DEC--AIR"]
 	w.wcs.set_pv([(2,1,90-rad)])
-	return finalize(w, pos, res, shape)
+	return finalize(w, pos, res, shape, ref=ref)
 
 systems = {"car": car, "cea": cea, "air": air, "zea": zea }
 
-def build(pos, res=None, shape=None, rowmajor=False, system="cea"):
+def build(pos, res=None, shape=None, rowmajor=False, system="cea", ref=None):
 	"""Set up the WCS system named by the "system" argument.
 	pos can be either a [2] center position or a [{from,to},2]
 	bounding box. At least one of res or shape must be specified.
@@ -88,7 +88,7 @@ def build(pos, res=None, shape=None, rowmajor=False, system="cea"):
 	which the same resolution is used in each direction,
 	or [2]. If shape is specified, it must be [2]. All angles
 	are given in degrees."""
-	return systems[system.lower()](pos, res, shape, rowmajor)
+	return systems[system.lower()](pos, res, shape, rowmajor, ref=ref)
 
 def validate(pos, res, shape, rowmajor=False):
 	pos = np.asarray(pos)
@@ -133,12 +133,19 @@ def finalize(w, pos, res, shape, ref=None):
 		# Make pos[0] the corner of the (0,0) pixel
 		off = w.wcs_world2pix(pos[0,None],1)[0]+0.5
 		w.wcs.crpix -= off
-	#if ref is not None:
-	#	# Tweak wcs so that 
-	#	# Modify crpix to give the reference location an integer pixel number
-	#	ref = np.asarray(ref)
-	#	refpix = w.wcs_world2pix(pixref[:,None],1)
-	#	w.wcs.crpix -= refpix-np.round(refpix)
+	if ref is not None:
+		# Tweak wcs so that crval is an integer number of pixels
+		# away from ref. We do that by constructing a new wcs centered
+		# on ref, measuring the pixel coordinates of crval in this system
+		# and truncating it to a whole pixel number.
+		wtmp = w.deepcopy()
+		wtmp.wcs.crpix = (0,0)
+		wtmp.wcs.crval = ref
+		w.wcs.crval = wtmp.wcs_pix2world(np.round(wtmp.wcs_world2pix(w.wcs.crval[None],1)),1)[0]
+		# We can then simply round the crpix to the closest integer. Together with the
+		# previous operation, this will displace us by around 1 pixel, which is the
+		# cost one has to pay for this realignment.
+		w.wcs.crpix = np.round(w.wcs.crpix)
 	return w
 
 def describe(wcs):
