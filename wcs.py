@@ -80,7 +80,7 @@ def air(pos, res=None, shape=None, rowmajor=False, rad=None, ref=None):
 
 systems = {"car": car, "cea": cea, "air": air, "zea": zea }
 
-def build(pos, res=None, shape=None, rowmajor=False, system="cea", ref=None):
+def build(pos, res=None, shape=None, rowmajor=False, system="cea", ref=None, **kwargs):
 	"""Set up the WCS system named by the "system" argument.
 	pos can be either a [2] center position or a [{from,to},2]
 	bounding box. At least one of res or shape must be specified.
@@ -88,7 +88,7 @@ def build(pos, res=None, shape=None, rowmajor=False, system="cea", ref=None):
 	which the same resolution is used in each direction,
 	or [2]. If shape is specified, it must be [2]. All angles
 	are given in degrees."""
-	return systems[system.lower()](pos, res, shape, rowmajor, ref=ref)
+	return systems[system.lower()](pos, res, shape, rowmajor, ref=ref, **kwargs)
 
 def validate(pos, res, shape, rowmajor=False):
 	pos = np.asarray(pos)

@@ -393,7 +393,7 @@ def samewcs(arr, *args):
 # Use that to make everything that currently accepts shape, wcs
 # transparently accept geometry. This will free us from having
 # to drag around a shape, wcs pair all the time.
-def geometry(pos, res=None, shape=None, proj="cea"):
+def geometry(pos, res=None, shape=None, proj="cea", **kwargs):
 	"""Consruct a shape,wcs pair suitable for initializing enmaps.
 	pos can be either a [2] center position or a [{from,to},2]
 	bounding box. At least one of res or shape must be specified.
@@ -403,7 +403,7 @@ def geometry(pos, res=None, shape=None, proj="cea"):
 	are given in radians."""
 	pos = np.asarray(pos)*180/np.pi
 	if res is not None: res = np.asarray(res)*180/np.pi
-	wcs = enlib.wcs.build(pos, res, shape, rowmajor=True, system=proj)
+	wcs = enlib.wcs.build(pos, res, shape, rowmajor=True, system=proj, **kwargs)
 	if shape is None:
 		# Infer shape
 		corners = wcs.wcs_world2pix(pos[:,::-1],1)
