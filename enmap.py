@@ -387,6 +387,12 @@ def samewcs(arr, *args):
 		except AttributeError: pass
 	return arr
 
+# Idea: Make geometry a class with .shape and .wcs members.
+# Make a function that takes (foo,bar) and returns a geometry,
+# there (foo,bar) can either be (shape,wcs) or (geometry,None).
+# Use that to make everything that currently accepts shape, wcs
+# transparently accept geometry. This will free us from having
+# to drag around a shape, wcs pair all the time.
 def geometry(pos, res=None, shape=None, proj="cea"):
 	"""Consruct a shape,wcs pair suitable for initializing enmaps.
 	pos can be either a [2] center position or a [{from,to},2]
