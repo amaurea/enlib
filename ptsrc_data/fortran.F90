@@ -135,7 +135,6 @@ contains
 		real(_)    :: ivar(:), Q(:,:), y(size(Q,1))
 		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2))
 		integer(4) :: si, di, ri, nsrc, ndet, oi, i, j, i1, i2, n
-		real(_), allocatable :: x(:)
 		nsrc = size(offsets,2)
 		ndet = size(offsets,1)-1
 
@@ -149,7 +148,7 @@ contains
 			end do
 		end do
 
-		!$omp parallel do private(ri,i1,i2,n,x,i,y)
+		!$omp parallel do private(ri,i1,i2,n,i,y)
 		do ri = 1, size(ranges,2)
 			if(rangemask(ri) .eq. 0) cycle
 			i1 = ranges(1,ri)+1
@@ -157,7 +156,6 @@ contains
 			if(i2-i1 < 0) cycle
 			! Project out given vectors
 			n = i2-i1+1
-			x = tod(i1:i2)
 			! The Q we receive from python is [nmode,nsamp], which
 			! is the transpose of what we want here. So we must
 			! compute Q'Q rather than QQ'.
@@ -243,6 +241,7 @@ contains
 				if(all(p>0) .and. all(p<=n)) exit
 			end do
 			if(j > nmap) cycle
+      if(any(p<=0) .or. any(p>n)) p = 1
 			if(dir < 0) then
 				wmaps(p(2),p(1),:,j,id) = wmaps(p(2),p(1),:,j,id) + tod(i)*phase(1:ncomp,i)
 			else
