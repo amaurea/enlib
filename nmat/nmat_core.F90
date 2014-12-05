@@ -25,11 +25,11 @@ module nmat_core
 
 contains
 
-	subroutine nmat_detvecs(ftod, bins, iNu, V, E, vbins)
+	subroutine nmat_detvecs(ftod, bins, iNu, V, E, ebins)
 		implicit none
 		! Arguments
 		complex(_), intent(inout) :: ftod(:,:)
-		integer(4), intent(in)    :: bins(:,:), vbins(:,:)
+		integer(4), intent(in)    :: bins(:,:), ebins(:,:)
 		real(_),    intent(in)    :: iNu(:,:), V(:,:), E(:)
 		! Work
 		complex(_), allocatable   :: Q(:,:), Qd(:,:), orig(:,:), iNud(:,:)
@@ -43,7 +43,7 @@ contains
 		do bi = nbin, 1, -1
 			b1 = bins(1,bi)+1;   b2 = bins(2,bi)
 			b1 = min(b1, nfreq); b2 = min(b2,nfreq)
-			v1 = vbins(1,bi)+1;  v2 = vbins(2,bi)
+			v1 = ebins(1,bi)+1;  v2 = ebins(2,bi)
 			nf = b2-b1+1; nv = v2-v1+1
 			if(nf < 1) continue ! Skip empty bins
 			allocate(Q(ndet,nv))

@@ -94,19 +94,22 @@ class NmatBinned(NoiseMatrix):
 		return BinnedNmat(dets, bins, icovs)
 	def __mul__(self, a):
 		return NmatBinned(self.icovs/a, self.bins, self.dets)
+	def write(self, fname, group=None):
+		fields = [("type","binned"),("icovs",self.icovs),("bins",self.bins),("dets",self.dets)]
+		nmat_write_helper(fname, fields, group)
 
 class NmatDetvecs(NmatBinned):
 	"""A binned noise matrix where the inverse covariance matrix is stored and
 	used in a compressed form, as a set of eigenvectors and eigenvalues."""
-	def __init__(self, D, V, E, bins, vbins, dets=None):
+	def __init__(self, D, V, E, bins, ebins, dets=None):
 		"""Construct an NmatDetvecs.
 		dets[ndet]:
 		 the id of each detector described
 		bins[nbin,2]:
 		 the start and end point of each frequency bin in Hz
-		D[nbin,ndet], vbins[nbin,2], V[nvecs,ndet], E[nvecs]
+		D[nbin,ndet], ebins[nbin,2], V[nvecs,ndet], E[nvecs]
 		 these specify the covariance in the bins, such that
-		 cov[bin,d1,d2] = D[bin,d1]*delta(d1,d2)+sum(V[vs,d1]*V[vs,d2]*E[vs],vs=vbins[bin,0]:vbins[bin,1])
+		 cov[bin,d1,d2] = D[bin,d1]*delta(d1,d2)+sum(V[vs,d1]*V[vs,d2]*E[es],es=ebins[bin,0]:ebins[bin,1])
 		That is, for each bin, cov = diag(D) + V.T.dot(np.diag(E)).dot(V).
 
 		Note that D, V and E correspond to the normal covmat, *not* the inverse!
@@ -115,32 +118,34 @@ class NmatDetvecs(NmatBinned):
 		self.V    = np.ascontiguousarray(V)
 		self.E    = np.ascontiguousarray(E)
 		self.bins = np.ascontiguousarray(bins)
-		self.vbins= np.ascontiguousarray(vbins)
+		self.ebins= np.ascontiguousarray(ebins)
 		self.dets = np.ascontiguousarray(dets) if dets is not None else np.arange(self.D.shape[1])
 		# Compute corresponding parameters for the inverse
-		self.iD, self.iV, self.iE = woodbury_invert(self.D, self.V, self.E, self.vbins)
+		self.iD, self.iV, self.iE = self.calc_inverse()
 
 		# Compute white noise approximation
 		tdiag = np.zeros([len(self.dets)])
-		for d,b,vb in zip(self.iD, self.bins, self.vbins):
-			v, e = self.iV[vb[0]:vb[1]], self.iE[vb[0]:vb[1]]
+		for d,b,eb in zip(self.iD, self.bins, self.ebins):
+			v, e = self.iV[eb[0]:eb[1]], self.iE[eb[0]:eb[1]]
 			tdiag += (d + np.sum(v**2*e[:,None],0))*(b[1]-b[0])
 		tdiag /= np.sum(self.bins[:,1]-self.bins[:,0])
 
 		self.tdiag = tdiag
+	def calc_inverse(self):
+		return woodbury_invert(self.D, self.V, self.E, self.ebins)
 	@property
 	def icovs(self):
 		nbin, ndet = self.iD.shape
 		res = np.empty([nbin,ndet,ndet])
-		for bi,(d,vb) in enumerate(zip(self.iD, self.vbins)):
-			v, e = self.iV[vb[0]:vb[1]], self.iE[vb[0]:vb[1]]
+		for bi,(d,eb) in enumerate(zip(self.iD, self.ebins)):
+			v, e = self.iV[eb[0]:eb[1]], self.iE[eb[0]:eb[1]]
 			res[bi] = np.diag(d) + (v.T*e[None,:]).dot(v)
 		return res
 	def apply(self, tod):
 		ft = enlib.fft.rfft(tod)
 		fft_norm = tod.shape[1]
 		core = get_core(tod.dtype)
-		core.nmat_detvecs(ft.T, self.get_ibins(tod.shape[-1]).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.vbins.T)
+		core.nmat_detvecs(ft.T, self.get_ibins(tod.shape[-1]).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
 		enlib.fft.irfft(ft, tod)
 		return tod
 	def __getitem__(self, sel):
@@ -150,14 +155,62 @@ class NmatDetvecs(NmatBinned):
 		step = np.abs(sampslice.step or 1)
 		fmax = res.bins[-1,-1]/step
 		mask = res.bins[:,0] < fmax
-		bins, vbins = res.bins[mask], res.vbins[mask]
+		bins, ebins = res.bins[mask], res.ebins[mask]
 		bins[-1,-1] = fmax
 		# Slice covs, not icovs
-		return NmatDetvecs(res.D[mask][:,detslice], res.V[:,detslice], res.E, bins, vbins, dets)
+		return NmatDetvecs(res.D[mask][:,detslice], res.V[:,detslice], res.E, bins, ebins, dets)
 	def __mul__(self, a):
-		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.vbins, self.dets)
+		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.dets)
+	def write(self, fname, group=None):
+		fields = [("type","detvecs"),("D",self.D),("V",self.V),("E",self.E),("bins",self.bins),("ebins",self.ebins),("dets",self.dets)]
+		write_nmat_helper(fname, fields, group)
+
+class NmatSharedvecs(NmatDetvecs):
+	"""A binned noise matrix where the inverse covariance matrix is stored and
+	used in a compressed form, as a set of eigenvectors and eigenvalues. Compared
+	to NmatDetvecs, this format is significantly more compressed for some noise
+	patterns, by allowing eigenvectors to be shared between frequency bins.
+
+	This extra compression does not propagate to the inverse quantities that are used
+	internally, however, so this is only relevant for storing these matrices on disk.
+	"""
+	def __init__(self, D, V, E, bins, ebins, vbins, dets=None):
+		"""Construct an NmatDetvecs.
+		dets[ndet]:
+		 the id of each detector described
+		bins[nbin,2]:
+		 the start and end point of each frequency bin in Hz
+		D[nbin,ndet], ebins[nbin,2], vbins[nbin,2], V[nvecs,ndet], E[neigs]
+		 these specify the covariance in the bins, such that
+		 cov[bin,d1,d2] = D[bin,d1]*delta(d1,d2)+sum(V[vs,d1]*V[vs,d2]*E[es],es=ebins[bin,0]:ebins[bin,1],vs=vbins[bin,0]:vbins[bin,1]])
+		That is, for each bin, cov = diag(D) + V.T.dot(np.diag(E)).dot(V).
+
+		Note that D, V and E correspond to the normal covmat, *not* the inverse!
+		"""
+		self.vbins = np.ascontiguousarray(vbins)
+		NmatDetvecs.__init__(self, D, V, E, bins, ebins, dets=dets)
+	def calc_inverse(self):
+		return woodbury_invert(self.D, self.V, self.E, self.ebins, self.vbins)
+	def __getitem__(self, sel):
+		res, detslice, sampslice = self.getitem_helper(sel)
+		dets = res.dets[detslice]
+		# Reduce sample rate if necessary
+		step = np.abs(sampslice.step or 1)
+		fmax = res.bins[-1,-1]/step
+		mask = res.bins[:,0] < fmax
+		bins, ebins, vbins = res.bins[mask], res.ebins[mask], res.vbins[mask]
+		bins[-1,-1] = fmax
+		# Slice covs, not icovs
+		return NmatSharedvecs(res.D[mask][:,detslice], res.V[:,detslice], res.E, bins, ebins, vbins, dets)
+	def __mul__(self, a):
+		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.vbins, self.dets)
+	def write(self, fname, group=None):
+		fields = [("type","sharedvecs"),("D",self.D),("V",self.V),("E",self.E),("bins",self.bins),("ebins",self.ebins),("vbins",self.vbins),("dets",self.dets)]
+		write_nmat_helper(fname, fields, group)
 
 def read_nmat(fname, group=None):
+	"""Read a noise matrix from file, optionally from the named group
+	in the file."""
 	if isinstance(fname, basestring):
 		f = h5py.File(fname, "r")
 	else:
@@ -165,7 +218,10 @@ def read_nmat(fname, group=None):
 	g = f[group] if group else f
 	typ = np.array(g["type"])[...]
 	if typ == "detvecs":
-		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["vbins"].value, g["dets"].value)
+		ebins = g["ebins"].value if "ebins" in g else g["vbins"].value # compatibility with old format
+		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, ebins, g["dets"].value)
+	elif typ == "sharedvecs":
+		return NmatSharedvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["vbins"].value, g["dets"].value)
 	elif typ == "binned":
 		return NmatBinned(g["icovs"], g["bins"], g["dets"])
 	else:
@@ -174,25 +230,25 @@ def read_nmat(fname, group=None):
 		f.close()
 
 def write_nmat(fname, nmat, group=None):
+	"""Write noise matrix nmat to the named file, optionally
+	under the named group."""
+	nmat.write(fname, group=group)
+
+def write_nmat_helper(fname, fields, group=None):
 	if isinstance(fname, basestring):
 		f = h5py.File(fname, "w")
 	else:
 		f = fname
 	prefix = group + "/" if group else ""
-	if isinstance(nmat, NmatDetvecs):
-		for k,v in [("type","detvecs"),("D",nmat.D),("V",nmat.V),("E",nmat.E),("bins",nmat.bins),("vbins",nmat.vbins),("dets",nmat.dets)]:
-			f[prefix+k] = v
-	elif isinstance(nmat, NmatBinned):
-		for k,v in [("type","binned"),("icovs",nmat.icovs),("bins",nmat.bins),("dets",nmat.dets)]:
-			f[prefix+k] = v
-	if isinstance(fname, basestring):
-		f.close()
+	for k, v in fields:
+		f[prefix+k] = v
+	f.close()
 
-def woodbury_invert(D, V, E, vbins=None):
+def woodbury_invert(D, V, E, ebins=None, vbins=None):
 	"""Given a compressed representation C = D + V'EV, compute a
 	corresponding representation for inv(C) using the Woodbury
 	formula."""
-	if vbins is None:
+	if ebins is None:
 		iD, iE  = 1./D, 1./E
 		iD[~np.isfinite(iD)] = 0
 		iE[~np.isfinite(iE)] = 0
@@ -203,9 +259,11 @@ def woodbury_invert(D, V, E, vbins=None):
 		return iD, iV, np.zeros(len(E))-sign
 	else:
 		assert(D.ndim == 2)
-		iD, iV, iE = D.copy(), V.copy(), E.copy()
-		for b, vb in enumerate(vbins):
-			iD[b], iV[vb[0]:vb[1]], iE[vb[0]:vb[1]] = woodbury_invert(D[b], V[vb[0]:vb[1]], E[vb[0]:vb[1]])
+		iD, iE = D.copy(), E.copy()
+		iV = np.zeros([E.shape[0],V.shape[1]])
+		if vbins is None: vbins = ebins.copy()
+		for b, (eb,vb) in enumerate(zip(ebins,vbins)):
+			iD[b], iV[eb[0]:eb[1]], iE[eb[0]:eb[1]] = woodbury_invert(D[b], V[vb[0]:vb[1]], E[eb[0]:eb[1]])
 		return iD, iV, iE
 
 def sichol(A):

@@ -25,11 +25,11 @@ def rand_srcs(box, nsrc, amp, fwhm, rand_fwhm=False):
 
 def white_noise(ndet, nsamp, sigma):
 	bins  = linbin(1.0, 1)
-	vbins = np.array([[0,0]])
+	ebins = np.array([[0,0]])
 	D     = np.zeros([1,ndet])+sigma**2
 	V     = np.zeros([1,ndet])
 	E     = np.zeros([1])
-	return nmat.NmatDetvecs(D, V, E, bins, vbins)
+	return nmat.NmatDetvecs(D, V, E, bins, ebins)
 
 def oneoverf_noise(ndet, nsamp, sigma, fknee=0.2, alpha=1):
 	nbin  = 1000
@@ -38,8 +38,8 @@ def oneoverf_noise(ndet, nsamp, sigma, fknee=0.2, alpha=1):
 	Nu    = np.empty([nbin,ndet])
 	Nu[:,:] = ((1+(freq/fknee)**-alpha)*sigma**2)[:,None]
 	#Nu[:,:] = ((0+(freq/fknee)**-alpha)*sigma**2)[:,None]
-	vbins = np.zeros([nbin,2],dtype=int)
-	return nmat.NmatDetvecs(Nu, np.zeros([1,ndet]), np.zeros([1]), bins, vbins)
+	ebins = np.zeros([nbin,2],dtype=int)
+	return nmat.NmatDetvecs(Nu, np.zeros([1,ndet]), np.zeros([1]), bins, ebins)
 
 def oneoverf_detcorr_noise(ndet, nsamp, sigma, fknee=0.2, alpha=1):
 	# A single, atmospheric mode
@@ -49,8 +49,8 @@ def oneoverf_detcorr_noise(ndet, nsamp, sigma, fknee=0.2, alpha=1):
 	Nu    = np.zeros([nbin,ndet])+sigma**2
 	E     = (freq/fknee)**-alpha * sigma**2
 	V     = np.zeros([nbin,ndet])+1
-	vbins = linbin(nbin,nbin)
-	return nmat.NmatDetvecs(Nu, V, E, bins, vbins)
+	ebins = linbin(nbin,nbin)
+	return nmat.NmatDetvecs(Nu, V, E, bins, ebins)
 
 def scan_ceslike(nsamp, box, sys="equ", srate=100, azrate=0.123):
 	t = np.arange(nsamp,dtype=float)/srate

@@ -181,4 +181,16 @@ subroutine eigflip(A)
 	!$omp end parallel
 end subroutine
 
+subroutine measure_cov(d, cov)
+	implicit none
+	T(_), intent(in) :: d(:,:)
+	real(_), intent(inout) :: cov(:,:)
+	T(_), allocatable :: tcov(:,:)
+	T(_) :: norm
+	allocate(tcov(size(cov,1),size(cov,2)))
+	norm = ONE/size(d,1)
+	call C##gemm('C', 'N', size(d,2), size(d,2), size(d,1), norm, d, size(d,1), d, size(d,1), ZERO, tcov, size(tcov,1))
+	cov=tcov
+end subroutine
+
 end module

@@ -105,3 +105,9 @@ solve_masked = wrap_mm_m(**get_funcs("solve_masked"))
 condition_number_multi = gen_wrap1(**get_funcs("condition_number_multi"))
 eigpow = wrap_m_m(**get_funcs("eigpow"))
 eigflip = wrap_m_m(**get_funcs("eigflip"))
+
+def measure_cov(d):
+	cov = np.empty([d.shape[0],d.shape[0]],dtype=d.real.dtype)
+	fun = get_dtype_fun(get_funcs("measure_cov"), d.dtype)
+	fun(d.T,cov.T)
+	return cov
