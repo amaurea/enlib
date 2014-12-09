@@ -208,12 +208,10 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 	pix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(1,)))
 	if corner: pix += 0.5
 	if safe:
-		# Put the angle cut as far away from the map. We do this
-		# by computing the bounds in RA and putting the cut
-		# in the middle of the ra gap. This is equivalent to putting
-		# the reference point in the middle of the valid ra range.
-		ref = np.mean(box(shape, wcs),0)
-		refpix = np.asarray(wcs.wcs_world2pix(*tuple(ref[:,None])[::-1]+(1,)))[:,0]
+		# Put the angle cut as far away from the map as possible.
+		# We do this by putting the reference point in the middle
+		# of the map.
+		refpix = np.array(shape[-2:])/2
 		if corner: refpix += 0.5
 		for i in range(len(pix)):
 			n = np.abs(360./wcs.wcs.cdelt[i])
@@ -456,6 +454,24 @@ def downgrade(emap, factor):
 	tshape = emap.shape[-2:]/factor*factor
 	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),(-2,-1))
 	return ndmap(res, emap[...,::factor[0],::factor[1]].wcs)
+
+def upgrade(emap, factor):
+	"""Upgrade emap to a larger size using nearest neighbor interpolation,
+	returning the result. More advanced interpolation can be had using
+	enmap.interpolate."""
+	factor = np.atleast_1d(factor)
+	assert factor.ndim == 1, "Upgrade factor must be number or 1d list"
+	assert factor.size >= 1 and factor.size <= 2, "Upgrade factor must be number of len-2 list."
+	factor = np.tile(factor,(3-len(factor)))
+	res = np.tile(emap.copy().reshape(emap.shape[:-2]+(emap.shape[-2],1,emap.shape[-1],1)),(1,factor[0],1,factor[1]))
+	res = res.reshape(res.shape[:-4]+(np.product(res.shape[-4:-2]),np.product(res.shape[-2:])))
+	# Correct the WCS information
+	for j in range(2):
+		res.wcs.wcs.crpix[j] += 0.5
+		res.wcs.wcs.crpix[j] *= factor[1-j]
+		res.wcs.wcs.cdelt[j] /= factor[1-j]
+		res.wcs.wcs.crpix[j] -= 0.5
+	return res
 
 def pad(emap, pix, return_slice=False,wrap=False):
 	"""Pad enmap "emap", creating a larger map with zeros filled in on the sides.
