@@ -410,3 +410,10 @@ def read_lines(fname):
 	fname, fslice = toks[0], ":".join(toks[1:])
 	lines = [line.split()[0] for line in open(fname,"r") if line[0] != "#"]
 	return eval("lines"+fslice)
+
+def loadtxt(fname):
+	"""As numpy.loadtxt, but allows slice syntax."""
+	toks = fname.split(":")
+	fname, fslice = toks[0], ":".join(toks[1:])
+	a = np.loadtxt(fname)
+	return eval("a"+fslice)

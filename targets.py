@@ -9,8 +9,8 @@ class FixedPatch:
 		self.name   = name
 		self.center = center
 		self.size   = size
-	def match(self, point):
-		return self.distance(point) <= 0
+	def match(self, point, margin=0):
+		return self.distance(point) - margin <= 0
 	# What is the minimal separation between point
 	# the patch?
 	def distance(self, point):
@@ -30,8 +30,8 @@ class EphemObj:
 		self.name = name
 		self.eph  = eph[name.lower()]()
 		self.size = size
-	def match(self, point):
-		return self.distance(point) - self.size < 0
+	def match(self, point, margin=0):
+		return self.distance(point) - self.size - margin < 0
 	def distance(self, point):
 		mjd = point[0,0]
 		djd = mjd + 2400000.5 - 2415020
@@ -69,10 +69,10 @@ class TargetDB:
 	# but are guraanteed to have the property .name,
 	# which most users will be interested in.
 	# Point has shape [nsamp,{mjd,ra,dec}]
-	def match(self, point):
+	def match(self, point, margin=0):
 		matches = []
 		for pri, trg in zip(self.pris, self.targets):
-			if trg.match(point):
+			if trg.match(point, margin=margin):
 				matches.append([pri,trg])
 		if len(matches) == 0: return None
 		matches = sorted(matches)
