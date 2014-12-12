@@ -1,7 +1,7 @@
 export CPATH := .:$(CPATH)
 export LPATH := .:$(LPATH)
 
-all: iers.py _iers.so libiers.so tidy
+all: iers.py _iers.so libiers.so
 
 iers.py _iers.so: iers.i setup.py iers.c
 	swig -python $<
