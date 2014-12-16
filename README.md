@@ -34,7 +34,7 @@ Curved-sky maps
 ---------------
 * Primary modules: `curvedsky`, `lensing`
 * Internal dependencies: `sharp` + [flat-sky maps]
-* External dependencies: `libsharp`
+* External dependencies: [`libsharp`](http://sourceforge.net/projects/libsharp/), [`cython`](http://cython.org)
 * To build: `make sharp`
 
 Mapmaking
