@@ -406,7 +406,140 @@ def geometry(pos, res=None, shape=None, proj="cea", **kwargs):
 		# Infer shape
 		corners = wcs.wcs_world2pix(pos[:,::-1],1)
 		shape = tuple(np.ceil(np.abs(corners[1]-corners[0])).astype(int))[::-1]
-	return shape, wcs
+	return tuple(shape), wcs
+
+
+#class geometry:
+#	def __init__(self, shape=None, wcs=None, pos=None, res=None, proj=None, rad=True, **kwargs):
+#		"""Construct a new geometry using one of several formats:
+#		1. geometry(geometry)
+#		2. geometry(shape, wcs)
+#		3. geometry(pos=box, res=res)
+#		4. geometry(shape, pos=box)
+#		5. geometry(shape, pos=center, res=res)
+#		6. geometry() (constructs a 10x10 degree area centered on 0,0 with 1 arcmin res)
+#		box is [[dec_from,ra_from],[dec_to,ra_to]]
+#		center is [dec_center,ra_center]
+#		res = num or [res_dec,res_ra]
+#		All numbers are in radians unless rad=False is specdified, in which case
+#		pos is in degrees and res in minutes of arc."""
+#		if isinstance(shape, geometry):
+#			self.shape, self.wcs = tuple(shape.shape), shape.wcs.copy()
+#		elif shape is not None and wcs is not None:
+#			self.shape, self.wcs = tuple(shape), wcs.copy()
+#		else:
+#			pconv = 180/np.pi if args.rad else 1.0
+#			rconv = 180/np.pi if args.rad else 1.0/60
+#			if pos is None:
+#				pos = np.array([[-5,-5],[5,5]])
+#			else:
+#				pos = np.asarray(pos)*pconv
+#			if res is None and shape is None: res = 1.0/60
+#			if res is not None: res = np.asarray(res)*rconv
+#			if proj is None: proj = "cea"
+#			wcs = enlib.wcs.build(pos, res, shape, rowmajor=True, system=proj, **kwargs)
+#			if shape is None:
+#				# Infer shape
+#				corners = wcs.wcs_world2pix(pos[:,::-1],1)
+#				shape = tuple(np.ceil(np.abs(corners[1]-corners[0])).astype(int))[::-1]
+#			self.shape, self.wcs = tuple(shape), wcs
+#	def box(self, npoint=10):
+#		"""Compute a bounding box for the given geometry."""
+#		# Because of wcs's wrapping, we need to evaluate several
+#		# extra pixels to make our unwinding unambiguous
+#		pix = np.array([np.linspace(0,self.shape[-2],num=npoint,endpoint=True),
+#			np.linspace(0,self.shape[-1],num=npoint,endpoint=True)])-0.5
+#		coords = self.wcs.wcs_pix2world(pix[1],pix[0],1)[::-1]
+#		return enlib.utils.unwind(np.array(coords)*np.pi/180).T[[0,-1]]
+#	# Approximations to physical box size and area are needed
+#	# for transforming to l-space. We can do this by dividing
+#	# our map into a set of rectangles and computing the
+#	# coordinates of their corners. The rectangles are assumed
+#	# to be small, so cos(dec) is constant across them, letting
+#	# us rescale RA by cos(dec) inside each. We also assume each
+#	# rectangle to be .. a rectangle (:D), so area is given by
+#	# two side lengths.
+#	# The total length in each direction could be computed by
+#	# 1. Average of top and bottom length
+#	# 2. Mean of all row lengths
+#	# 3. Area-weighted mean of row lengths
+#	# 4. Some sort of compromise that makes length*height = area.
+#	# To construct the coarser system, slicing won't do, as it
+#	# shaves off some of our area. Instead, we must modify
+#	# cdelt to match our new pixels: cdelt /= nnew/nold
+#	def extent(self, nsub=0x10):
+#		"""Returns an estimate of the "physical" extent of the
+#		patch given by this geometry as [height,width] in
+#		radians. That is, if the patch were on a sphere with
+#		radius 1 m, then this function returns approximately how many meters
+#		tall and width the patch is. These are defined such that
+#		their product equals the physical area of the patch."""
+#		wcs = self.wcs.copy()
+#		step = (np.asfarray(self.shape[-2:])/nsub)[::-1]
+#		wcs.wcs.cdelt *= step
+#		wcs.wcs.crpix /= step
+#		# Get position of all the corners, including the far ones
+#		pos = posmap([nsub+1,nsub+1], wcs, corner=True)
+#		# Apply az scaling
+#		scale = np.zeros([2,nsub,nsub])
+#		scale[0] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
+#		scale[1] = 1
+#		ly = np.sum(((pos[:,1:,:-1]-pos[:,:-1,:-1])*scale)**2,0)**0.5
+#		lx = np.sum(((pos[:,:-1,1:]-pos[:,:-1,:-1])*scale)**2,0)**0.5
+#		areas = ly*lx
+#		# Compute approximate overall lengths
+#		Ay, Ax = np.sum(areas,0), np.sum(areas,1)
+#		Ly = np.sum(np.sum(ly,0)*Ay)/np.sum(Ay)
+#		Lx = np.sum(np.sum(lx,1)*Ax)/np.sum(Ax)
+#		return np.array([Ly,Lx])
+#	def area(self, nsub=0x10):
+#		"""Returns the area of a patch with this geometry, in steradians."""
+#		return np.prod(self.extent(nsub=nsub))
+#	def pix2sky(self, pix, safe=True, corner=False):
+#		"""Given an array of corner-based pixel coordinates [{y,x},...],
+#		return sky coordinates in the same ordering."""
+#		pix = np.asarray(pix).astype(float)
+#		if corner: pix -= 0.5
+#		pflat = pix.reshape(pix.shape[0], np.prod(pix.shape[1:]))
+#		coords = np.asarray(self.wcs.wcs_pix2world(*(tuple(pflat)[::-1]+(1,)))[::-1])*np.pi/180
+#		coords = coords.reshape(pix.shape)
+#		if safe: coords = enlib.utils.unwind(coords)
+#		return coords
+#	def sky2pix(self, coords, safe=True, corner=False):
+#		"""Given an array of coordinates [{ra,dec},...], return
+#		pixel coordinates with the same ordering. The corner argument
+#		specifies whether pixel coordinates start at pixel corners
+#		or pixel centers. This represents a shift of half a pixel.
+#		If corner is False, then the integer pixel closest to a position
+#		is round(sky2pix(...)). Otherwise, it is floor(sky2pix(...))."""
+#		coords = np.asarray(coords)*180/np.pi
+#		cflat  = coords.reshape(coords.shape[0], np.prod(coords.shape[1:]))
+#		# period of the system
+#		pix = np.asarray(self.wcs.wcs_world2pix(*tuple(cflat)[::-1]+(1,)))
+#		if corner: pix += 0.5
+#		if safe:
+#			# Put the angle cut as far away from the map as possible.
+#			# We do this by putting the reference point in the middle
+#			# of the map.
+#			refpix = np.array(self.shape[-2:])/2
+#			if corner: refpix += 0.5
+#			for i in range(len(pix)):
+#				n = np.abs(360./self.wcs.wcs.cdelt[i])
+#				pix[i] = enlib.utils.rewind(pix[i], refpix[i], n)
+#		return pix[::-1].reshape(coords.shape)
+#
+#def gwrap(shape=None, wcs=None):
+#	"""This function transparently accepts either a shape,wcs pair,
+#	both of which may be None in which case they remain None as the output,
+#	or a geometry object which is unpacked into a shape and wcs.
+#	The result is always a shape,wcs tuple."""
+#	try:
+#		return shape.shape, shape.wcs
+#	except AttributeError:
+#		return shape, wcs
+
+
+
 
 def create_wcs(shape, box=None, proj="cea"):
 	if box is None: box = np.array([[-1,-1],[1,1]])*0.5*10*np.pi/180
@@ -429,7 +562,7 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="nearest"):
 	The map m is independent of the units of harmonic space, and will be wrong unless
 	the spectrum is properly scaled. Since this scaling depends on the shape of
 	the map, this is the appropriate place to do so, ugly as it is."""
-	oshape= shape
+	oshape= tuple(shape)
 	if len(oshape) == 2: oshape = (1,)+oshape
 	ls  = np.sum(lmap(oshape, wcs)**2,0)**0.5
 	# Translate from steradians to pixels
