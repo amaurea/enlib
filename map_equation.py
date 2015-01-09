@@ -225,6 +225,7 @@ class PrecondBinned:
 		enmap.write_map(prefix + "hits.fits", self.hitmap)
 		enmap.write_map(prefix + "mask.fits", self.mask.astype(np.uint8))
 
+config.default("precon_cyc_npoint", 1, "Number of points to sample in cyclic preconditioner.")
 class PrecondCirculant:
 	"""This preconditioner approximates the A matrix as
 	SCS, where S is a position-dependent standard deviation,
@@ -240,10 +241,11 @@ class PrecondCirculant:
 		#N  = 2
 		#pix = [[h*(2*i+1)/N/2,w*(2*j+1)/N/2] for i in range(N) for j in range(0,N)]
 		#pix = np.array([[-1,-1],[1,1]])*10+np.array([h/2,w/2])[None,:]
-		pix = pick_ref_points(binned.div_map[0,0], 3)
+		npoint = config.get("precon_cyc_npoint")
+		pix = pick_ref_points(binned.div_map[0,0], npoint)
 		Arow = measure_corr_cyclic(mapeq, S, pix)
 		# Measure this fft, since we will perform it a lot
-		fft.ifft(fft.fft(Arow.copy(), axes=[-2,-1], flags=["FFTW_MEASURE"]),axes=[-2,-1], flags=["FFTW_MEASURE"])
+		#fft.ifft(fft.fft(Arow.copy(), axes=[-2,-1], flags=["FFTW_MEASURE"]),axes=[-2,-1], flags=["FFTW_MEASURE"])
 		iC = fft.fft(Arow, axes=[-2,-1])
 		C  = enmap.samewcs(array_ops.eigpow(iC,-1,axes=[0,1]), binned.div_map)
 
@@ -447,7 +449,8 @@ def measure_corr_cyclic(mapeq, S, pixels):
 	# we're not. Should investigate that. In the mean while,
 	# symmetrize so that conjugate gradients doesn't break down.
 	#return d
-	return sympos(d)
+	return d
+	#return sympos(d)
 
 def normalize(A):
 	# Normalize to unit diagonal
