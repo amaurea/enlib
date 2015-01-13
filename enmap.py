@@ -166,9 +166,9 @@ def enmap(arr, wcs=None, dtype=None, copy=True):
 	return ndmap(arr, wcs)
 
 def zeros(shape, wcs=None, dtype=None):
-	return enmap(np.zeros(shape), wcs, dtype=dtype)
+	return enmap(np.zeros(shape, dtype=dtype), wcs, copy=False)
 def empty(shape, wcs=None, dtype=None):
-	return enmap(np.empty(shape), wcs, dtype=dtype)
+	return enmap(np.empty(shape, dtype=dtype), wcs, copy=False)
 
 def posmap(shape, wcs, safe=True, corner=False):
 	"""Return an enmap where each entry is the coordinate of that entry,
