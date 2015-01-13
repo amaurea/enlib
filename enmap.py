@@ -204,19 +204,20 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 	is round(sky2pix(...)). Otherwise, it is floor(sky2pix(...))."""
 	coords = np.asarray(coords)*180/np.pi
 	cflat  = coords.reshape(coords.shape[0], np.prod(coords.shape[1:]))
-	# period of the system
-	pix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(1,)))
-	if corner: pix += 0.5
+	# Quantities with a w prefix are in wcs ordering (ra,dec)
+	wpix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(1,)))
+	wshape = shape[-2:][::-1]
+	if corner: wpix += 0.5
 	if safe:
 		# Put the angle cut as far away from the map as possible.
 		# We do this by putting the reference point in the middle
 		# of the map.
-		refpix = np.array(shape[-2:])/2
-		if corner: refpix += 0.5
-		for i in range(len(pix)):
-			n = np.abs(360./wcs.wcs.cdelt[i])
-			pix[i] = enlib.utils.rewind(pix[i], refpix[i], n)
-	return pix[::-1].reshape(coords.shape)
+		wrefpix = np.array(wshape)/2
+		if corner: wrefpix += 0.5
+		for i in range(len(wpix)):
+			wn = np.abs(360./wcs.wcs.cdelt[i])
+			wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
+	return wpix[::-1].reshape(coords.shape)
 
 def project(map, shape, wcs, order=3, mode="nearest"):
 	"""Project the map into a new map given by the specified
