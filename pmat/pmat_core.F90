@@ -73,7 +73,9 @@ contains
 					ipoint(:,j) = bore(:,si+j-1)+det_pos(:,di)
 				enddo
 				opoint(:,:nj) = lookup_grad(ipoint(:,:nj), x0, inv_dx, steps, ys)
-				pix(:,:nj)    = nint(opoint(1:2,:nj))+1 ! fortran index offset
+				! We use pixel-center coordinates, so [i-0.5:i+0.5] belongs to
+				! pixel i. Hence nint. The extra +1 is due to fortran's indexing.
+				pix(:,:nj)    = nint(opoint(1:2,:nj))+1
 				! Bounds check (<1% cost)
 				do j = 1, nj
 					pix(1,j) = min(size(map,2),max(1,pix(1,j)))
