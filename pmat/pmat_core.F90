@@ -307,6 +307,7 @@ contains
 				xind = floor(xrel)
 				xrel = xrel - xind ! order t,ra,dec
 				ig   = sum(xind*steps)+1
+				opoint(:,j) = ys(:,1,ig)
 				do i = 1, size(xrel)
 					opoint(:,j) = opoint(:,j) + xrel(i)*ys(:,i+1,ig)
 				end do
