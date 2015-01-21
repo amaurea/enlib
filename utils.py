@@ -409,6 +409,7 @@ def read_lines(fname, col=0):
 	toks = fname.split(":")
 	fname, fslice = toks[0], ":".join(toks[1:])
 	lines = [line.split()[col] for line in open(fname,"r") if line[0] != "#"]
+	n = len(lines)
 	return eval("lines"+fslice)
 
 def loadtxt(fname):

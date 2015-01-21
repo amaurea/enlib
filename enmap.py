@@ -61,6 +61,8 @@ class ndmap(np.ndarray):
 	def lmap(self): return lmap(self.shape, self.wcs)
 	def area(self): return area(self.shape, self.wcs)
 	def extent(self): return extent(self.shape, self.wcs)
+	@property
+	def npix(self): return np.product(self.shape[-2:])
 	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode)
 	def autocrop(self, method="plain", value=np.nan, margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def __getitem__(self, sel):
@@ -586,7 +588,7 @@ def downgrade(emap, factor):
 	factor = np.asarray(factor,dtype=int)
 	if factor.ndim == 0: factor = np.array([factor,factor],dtype=int)
 	tshape = emap.shape[-2:]/factor*factor
-	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),(-2,-1))
+	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),(-3,-1))
 	return ndmap(res, emap[...,::factor[0],::factor[1]].wcs)
 
 def upgrade(emap, factor):
