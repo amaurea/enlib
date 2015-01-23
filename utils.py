@@ -417,3 +417,10 @@ def loadtxt(fname):
 	fname, fslice = toks[0], ":".join(toks[1:])
 	a = np.loadtxt(fname)
 	return eval("a"+fslice)
+
+def atleast_3d(a):
+	a = np.asanyarray(a)
+	if a.ndim == 0: return a.reshape(1,1,1)
+	elif a.ndim == 1: return a.reshape(1,1,-1)
+	elif a.ndim == 2: return a.reshape((1,)+a.shape)
+	else: return a

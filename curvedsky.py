@@ -9,7 +9,7 @@ def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=
 	that it takes into account the curvature of the full sky. This makes it much
 	slower and more memory-intensive. The map should not cross the poles."""
 	# Ensure everything has the right dimensions and restrict to relevant dimensions
-	ps = np.atleast_3d(ps)
+	ps = utils.atleast_3d(ps)
 	assert ps.shape[0] == ps.shape[1], "ps must be [ncomp,ncomp,nl] or [nl]"
 	assert len(shape) == 2 or len(shape) == 3, "shape must be (ncomp,ny,nx) or (ny,nx)"
 	ncomp = 1 if len(shape) == 2 else shape[-2]

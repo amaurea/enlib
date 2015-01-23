@@ -12,6 +12,11 @@ from enlib import slice
 # have to be 1 rather than the 0 one would expect. For example,
 # if wcs is CAR(crval=(0,0),crpix=(0,0),cdelt=(1,1)), then
 # pix2world(0,0,1) is (0,0) while pix2world(0,0,0) is (-1,-1).
+#
+# No! the problem is that everythin in the fits header counts from 1,
+# so the default crpix should be (1,1), not (0,0). With
+# CAR(crval(0,0),crpix(1,1),cdelt(1,1)) we get
+# pix2world(1,1,1) = (0,0) and pix2world(0,0,0) = (0,0)
 
 # Useful stuff to be able to do:
 #  * Create a wcs from (point,res)
@@ -33,6 +38,19 @@ from enlib import slice
 
 deg2rad = np.pi/180
 rad2deg = 1/deg2rad
+
+def describe(wcs):
+	"""Since astropy.wcs.WCS objects do not have a useful
+	str implementation, this function provides a relpacement."""
+	sys  = wcs.wcs.ctype[0][-3:].lower()
+	n    = wcs.naxis
+	fields = ("cdelt:["+",".join(["%.3g"]*n)+"],crval:["+",".join(["%.3g"]*n)+"],crpix:["+",".join(["%.3g"]*n)+"]") % (tuple(wcs.wcs.cdelt) + tuple(wcs.wcs.crval) + tuple(wcs.wcs.crpix))
+	pv = wcs.wcs.get_pv()
+	for p in pv:
+		fields += ",pv[%d,%d]=%.3g" % p
+	return "%s:{%s}" % (sys, fields)
+# Add this to all WCSes in this class
+WCS.__repr__ = describe
 
 def car(pos, res=None, shape=None, rowmajor=False, ref=None):
 	"""Set up a plate carree system. See the build function for details."""
@@ -116,7 +134,7 @@ def validate(pos, res, shape, rowmajor=False):
 def finalize(w, pos, res, shape, ref=None):
 	"""Common logic for the various wcs builders. Fills in the reference
 	pixel and resolution."""
-	w.wcs.crpix = [0,0]
+	w.wcs.crpix = [1,1]
 	if res is None:
 		# Find the resolution that gives our box the required extent.
 		w.wcs.cdelt = [1,1]
@@ -128,10 +146,10 @@ def finalize(w, pos, res, shape, ref=None):
 	if pos.ndim == 1:
 		if shape is not None:
 			# Place pixel origin at corner of shape centered on crval
-			w.wcs.crpix = np.array(shape)/2-0.5
+			w.wcs.crpix = np.array(shape)/2.0+0.5
 	else:
-		# Make pos[0] the corner of the (0,0) pixel
-		off = w.wcs_world2pix(pos[0,None],1)[0]+0.5
+		# Make pos[0] the corner of the (0,0) pixel (counting from 0 for simplicity)
+		off = w.wcs_world2pix(pos[0,None],0)[0]+0.5
 		w.wcs.crpix -= off
 	if ref is not None:
 		# Tweak wcs so that crval is an integer number of pixels
@@ -139,7 +157,7 @@ def finalize(w, pos, res, shape, ref=None):
 		# on ref, measuring the pixel coordinates of crval in this system
 		# and truncating it to a whole pixel number.
 		wtmp = w.deepcopy()
-		wtmp.wcs.crpix = (0,0)
+		wtmp.wcs.crpix = (1,1)
 		wtmp.wcs.crval = ref
 		w.wcs.crval = wtmp.wcs_pix2world(np.round(wtmp.wcs_world2pix(w.wcs.crval[None],1)),1)[0]
 		# We can then simply round the crpix to the closest integer. Together with the
@@ -147,13 +165,6 @@ def finalize(w, pos, res, shape, ref=None):
 		# cost one has to pay for this realignment.
 		w.wcs.crpix = np.round(w.wcs.crpix)
 	return w
-
-def describe(wcs):
-	"""Since astropy.wcs.WCS objects do not have a useful
-	str implementation, this function provides a relpacement."""
-	sys  = wcs.wcs.ctype[0][-3:].lower()
-	n    = wcs.naxis
-	return ("%s:{cdelt:["+",".join(["%.3g"]*n)+"],crval:["+",".join(["%.3g"]*n)+"],crpix:["+",".join(["%.3g"]*n)+"]}") % ((sys,) + tuple(wcs.wcs.cdelt) + tuple(wcs.wcs.crval) + tuple(wcs.wcs.crpix))
 
 def angdist(lon1,lat1,lon2,lat2):
 	return np.arccos(np.cos(lat1)*np.cos(lat2)*(np.cos(lon1)*np.cos(lon2)+np.sin(lon1)*np.sin(lon2))+np.sin(lat1)*np.sin(lat2))
