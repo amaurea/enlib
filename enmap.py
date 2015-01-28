@@ -587,6 +587,7 @@ def downgrade(emap, factor):
 	(may be a list for each direction, or just a number) by averaging
 	inside pixels."""
 	factor = np.asarray(factor,dtype=int)
+	if np.all(factor==1): return emap
 	if factor.ndim == 0: factor = np.array([factor,factor],dtype=int)
 	tshape = emap.shape[-2:]/factor*factor
 	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),(-3,-1))
