@@ -18,6 +18,24 @@ def get_dtype_fun(funcs, dtype):
 	else:
 		raise NotImplementedError("Only dtypes " + ", ".join([key for key in funcs]) + " implemented")
 
+#def parallel_flatten(a, axes, comm=None):
+#	af = utils.partial_flatten(a, axes)
+#	if False and comm:
+#		i,n,N = comm.rank,comm.size,af.shape[0]
+#		af = af[i*N/n:(i+1)*N/n]
+#	return af
+#
+#def parallel_expand(af, shape, axes, comm=None):
+#	if True or comm is None or comm.size == 1:
+#		return utils.partial_expand(af, shape, axes)
+#	i,n = comm.rank, comm.size
+#	N = np.product([s for i,s in enumerate(shape) if i not in axes])
+#	aftot = np.zeros((N,)+af.shape[1:],af.dtype)
+#	aftot[i*N/n:(i+1)*N/n] = af
+#	out = aftot.copy()
+#	comm.Allreduce(aftot, out)
+#	return utils.partial_expand(out, shape, axes)
+
 def wrap_mm_m(vec2mat=False, **funcs):
 	"""Wrap a fortran subroutine which takes (n,n,m),(n,k,m) and overwrites
 	its second argument to a python function where the "n" axes can be

@@ -366,7 +366,7 @@ def range_union(a, mapping=False):
 		# loop through every unprocessed range in range
 		for j in range(i+1,n):
 			if rmap[inds[j]] >= 0: continue
-			if a[inds[j],0] >= end: break
+			if a[inds[j],0] > end: break
 			# This range overlaps, so register it and merge
 			rmap[inds[j]] = len(b)
 			end = max(end, a[inds[j],1])
@@ -425,3 +425,7 @@ def atleast_3d(a):
 	elif a.ndim == 1: return a.reshape(1,1,-1)
 	elif a.ndim == 2: return a.reshape((1,)+a.shape)
 	else: return a
+
+def between_angles(a, range, period=2*np.pi):
+	a = rewind(a, np.mean(range), period=period)
+	return (a>=range[0])&(a<range[1])

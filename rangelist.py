@@ -3,7 +3,7 @@ providing both a mask-like (numpy bool array) and list of from:to interface.
 It also provides a convenience class for handling multiple of these range lists."""
 import numpy as np
 from enlib.slice import expand_slice, split_slice
-from enlib.utils import mask2range, cumsum
+from enlib.utils import mask2range, cumsum, range_union
 
 class Rangelist:
 	def __init__(self, ranges, n=None, copy=True):
@@ -55,6 +55,11 @@ class Rangelist:
 		for r1,r2 in self.ranges: res[r1:r2] = True
 		return res
 	def clear(self): self.ranges = self.ranges[0:0]
+	def __add__(self, rlist):
+		if isinstance(rlist, Multirange):
+			return rlist + self
+		else:
+			return Rangelist(range_union(np.concatenate([self.ranges, Rangelist(rlist,self.n).ranges],0)), self.n)
 
 class Multirange:
 	"""Multirange makes it easier to work with large numbers of rangelists.
@@ -90,6 +95,10 @@ class Multirange:
 		getsum = np.vectorize(lambda x: x.sum(), 'i')
 		res = getsum(self.data)
 		return np.sum(res) if flat else res
+	@property
+	def shape(self): return self.data.shape + (self.data.reshape(-1)[0].n,)
+	@property
+	def size(self): return np.product(self.shape)
 	def copy(self): return Multirange(self.data, copy=True)
 	def invert(self):
 		return Multirange(np.vectorize(lambda x: x.invert(),'O')(self.data))
@@ -109,6 +118,11 @@ class Multirange:
 		return res.reshape(self.data.shape+(-1,))
 	def clear(self):
 		for d in self.data: d.clear()
+	def __add__(self, rlist):
+		if isinstance(rlist, Multirange):
+			return Multirange([a+b for a,b in zip(self.data, rlist.data)])
+		else:
+			return Multirange([a+rlist for a in self.data])
 
 def zeros(shape):
 	assert(len(shape)==2)

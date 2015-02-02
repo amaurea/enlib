@@ -210,7 +210,6 @@ class PrecondBinned:
 		self.div_map, self.div_junk = div_map, div_junk
 		self.hitmap = mapeq.hitcount()
 		self.mapeq  = mapeq
-
 		# Compute the pixel component masks, and use it to mask out the
 		# corresonding parts of the map preconditioner
 		self.mask = makemask(self.div_map)
