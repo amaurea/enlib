@@ -242,7 +242,8 @@ def write_nmat_helper(fname, fields, group=None):
 	prefix = group + "/" if group else ""
 	for k, v in fields:
 		f[prefix+k] = v
-	f.close()
+	if isinstance(fname, basestring):
+		f.close()
 
 def woodbury_invert(D, V, E, ebins=None, vbins=None):
 	"""Given a compressed representation C = D + V'EV, compute a
