@@ -22,9 +22,9 @@ class LinearSystem:
 
 # Abstract interface to the Map-making system.
 class LinearSystemMap(LinearSystem):
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin"):
+	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin", imap=None):
 		L.info("Building preconditioner")
-		self.mapeq  = MapEquation(scans, area, comm=comm)
+		self.mapeq  = MapEquation(scans, area, comm=comm, imap=None)
 		if precon == "bin":
 			self.precon = PrecondBinned(self.mapeq)
 		elif precon == "cyc":
@@ -120,7 +120,7 @@ class LinearSystemMap(LinearSystem):
 # is a general abstraction. Built from these.
 
 class MapEquation:
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None):
+	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None):
 		data = []
 		njunk = 0
 		for scan in scans:
@@ -131,20 +131,28 @@ class MapEquation:
 			d.cutrange = [njunk,njunk+d.pcut.njunk]
 			njunk = d.cutrange[1]
 			d.nmat = scan.noise
+			# Make maps from data projected from input map instead of real data
+			if imap: d.pmap_imap = pmat.PmatMap(scan imap.map, order=pmat_order, sys=imap.sys)
 			data.append(d)
 		self.area = area.copy()
 		self.njunk = njunk
 		self.dtype = area.dtype
 		self.comm  = comm
 		self.data  = data
+		self.imap  = imap
 	def b(self):
 		rhs_map  = enmap.zeros(self.area.shape, self.area.wcs, dtype=self.dtype)
 		rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
 		for d in self.data:
 			with bench.mark("meq_b_get"):
-				tod = d.scan.get_samples()
-				tod-= np.mean(tod,1)[:,None]
-				tod = tod.astype(self.dtype)
+				if self.imap is None:
+					tod = d.scan.get_samples()
+					tod-= np.mean(tod,1)[:,None]
+					tod = tod.astype(self.dtype)
+				else:
+					tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
+					d.pmap_imap.forward(tod, self.imap.map)
+					utils.deslope(tod, inplace=True)
 			with bench.mark("meq_b_N"):
 				d.nmat.apply(tod)
 			with bench.mark("meq_b_P'"):
