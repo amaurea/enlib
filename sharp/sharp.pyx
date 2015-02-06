@@ -63,7 +63,7 @@ def map_info_healpix(int nside, int stride=1, weights=None):
 	specifying weights."""
 	nring = 4*nside-1
 	if weights is None: weights = np.zeros(nring)+1
-	assert len(weights) < nring, "incorrect length of weights array. need 4*nside-1"
+	assert len(weights) >= nring, "incorrect length of weights array. need 4*nside-1"
 	cdef np.ndarray[np.float64_t,ndim=1] w = weights
 	cdef csharp.sharp_geom_info * geom
 	csharp.sharp_make_weighted_healpix_geom_info (nside, stride, &w[0], &geom)

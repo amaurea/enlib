@@ -65,7 +65,10 @@ def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128):
 
 def alm2map(alm, pos, ainfo=None, oversample=2.0, spin=2, deriv=False):
 	"""Projects the given alms (with layout) on the specified pixel positions.
-	alm[ncomp,nelem], pos[2,...] => res[ncomp,...]."""
+	alm[ncomp,nelem], pos[2,...] => res[ncomp,...]. It projects on a large
+	cylindrical grid and then interpolates to the actual pixels. This is the
+	general way of doing things, but not the fastest. Computing pos and
+	interpolating takes a significant amount of time."""
 	alm_full = np.atleast_2d(alm)
 	if ainfo is None: ainfo = sharp.alm_info(nalm=alm_full.shape[-1])
 	ashape, ncomp = alm_full.shape[:-2], alm_full.shape[-2]
