@@ -132,7 +132,7 @@ class MapEquation:
 			njunk = d.cutrange[1]
 			d.nmat = scan.noise
 			# Make maps from data projected from input map instead of real data
-			if imap: d.pmap_imap = pmat.PmatMap(scan imap.map, order=pmat_order, sys=imap.sys)
+			if imap: d.pmap_imap = pmat.PmatMap(scan, imap.map, order=pmat_order, sys=imap.sys)
 			data.append(d)
 		self.area = area.copy()
 		self.njunk = njunk

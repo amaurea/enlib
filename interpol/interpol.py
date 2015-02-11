@@ -1,6 +1,8 @@
 import numpy as np
 from enlib import utils
 
+import h5py
+
 def build(func, interpolator, box, errlim, maxdepth=None, *args, **kwargs):
 	"""Given a function func([nin,...]) => [nout,...] and
 	an interpolator class interpolator(box,[nout,...]),

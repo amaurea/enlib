@@ -372,6 +372,7 @@ def range_union(a, mapping=False):
 			end = max(end, a[inds[j],1])
 		b.append([start,end])
 	b = np.array(b)
+	if b.size == 0: b = b.reshape(0,2)
 	return (b,rmap) if mapping else b
 
 def compress_beam(sigma, phi):

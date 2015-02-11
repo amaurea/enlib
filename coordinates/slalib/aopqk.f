@@ -214,12 +214,14 @@
 *     Initialize loop (maximum of 10 iterations)
          I = 1
          DZD = 1D1
-         DO WHILE (ABS(DZD).GT.1D-10.AND.I.LE.10)
+*     Amaurea modified precision of refraction, since it was
+*     too slow, and I do not need that high precision.
+         DO WHILE (ABS(DZD).GT.1D-8.AND.I.LE.10)
 
 *        Compute refraction using current estimate of observed ZD
             CALL sla_REFRO(ZDOBS,AOPRMS(5),AOPRMS(6),AOPRMS(7),
      :                     AOPRMS(8),AOPRMS(9),AOPRMS(1),
-     :                     AOPRMS(10),1D-8,DREF)
+     :                     AOPRMS(10),1D-6,DREF)
 
 *        Remaining discrepancy
             DZD = ZDOBS+DREF-ZDT

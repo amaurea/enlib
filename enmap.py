@@ -407,9 +407,15 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, **kwargs):
 	if res is not None: res = np.asarray(res)*180/np.pi
 	wcs = enlib.wcs.build(pos, res, shape, rowmajor=True, system=proj, **kwargs)
 	if shape is None:
-		# Infer shape
-		corners = wcs.wcs_world2pix(pos[:,::-1],0)
-		shape = tuple(np.ceil(np.abs(corners[1]-corners[0])).astype(int))[::-1]
+		# Infer shape. WCS does not allow us to wrap around the
+		# sky, so shape mustn't be large enough to make that happen.
+		# Our relevant pixel coordinates go from (-0.5,-0.5) to
+		# shape-(0.5,0.5). We assume that wcs.build has already
+		# assured the former. Our job is to find shape that puts
+		# the top edge close to the requested value, while still
+		# being valied. If we always round down, we should be safe:
+		faredge = wcs.wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
+		shape = tuple(np.floor(faredge+0.5).astype(int))
 	return tuple(shape), wcs
 
 

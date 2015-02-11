@@ -83,6 +83,7 @@ def hor2cel(coord, time, site):
 	return res
 
 def cel2hor(coord, time, site):
+	# This is very slow for objects near the horizon!
 	coord  = np.asarray(coord)
 	info   = iers.lookup(time[0])
 	as2rad = np.pi/180/60/60
@@ -95,13 +96,16 @@ def cel2hor(coord, time, site):
 
 def rotmatrix(ang, axis, unit):
 	unit = getunit(unit)
+	ang  = np.asarray(ang)
 	axis = axis.lower()
 	if unit != u.rad: ang = ang * unit.in_units(u.rad)
 	c, s = np.cos(ang), np.sin(ang)
-	if axis == "x": return np.array([[ 1, 0, 0],[ 0, c,-s],[ 0, s, c]])
-	if axis == "y": return np.array([[ c, 0, s],[ 0, 1, 0],[-s, 0, c]])
-	if axis == "z": return np.array([[ c,-s, 0],[ s, c, 0],[ 0, 0, 1]])
-	raise ValueError("Axis %s not recognized" % axis)
+	R = np.zeros(ang.shape + (3,3))
+	if   axis == "x": R[...,0,0]=1;R[...,1,1]= c;R[...,1,2]=-s;R[...,2,1]= s;R[...,2,2]=c
+	elif axis == "y": R[...,0,0]=c;R[...,0,2]= s;R[...,1,1]= 1;R[...,2,0]=-s;R[...,2,2]=c
+	elif axis == "z": R[...,0,0]=c;R[...,0,1]=-s;R[...,1,0]= s;R[...,1,1]= c;R[...,2,2]=1
+	else: raise ValueError("Axis %s not recognized" % axis)
+	return R
 
 def euler_mat(euler_angles, kind="zyz", unit="rad"):
 	"""Defines the rotation matrix M for a ABC euler rotation,
@@ -112,7 +116,7 @@ def euler_mat(euler_angles, kind="zyz", unit="rad"):
 	R1 = rotmatrix(gamma, kind[2], unit)
 	R2 = rotmatrix(beta,  kind[1], unit)
 	R3 = rotmatrix(alpha, kind[0], unit)
-	return R3.dot(R2).dot(R1)
+	return np.einsum("...ij,...jk->...ik",np.einsum("...ij,...jk->...ik",R3,R2),R1)
 
 # Why do I have to define these myself?
 def ang2rect(angs, zenith=True):
@@ -135,7 +139,7 @@ def euler_rot(euler_angles, coords, kind="zyz", unit="rad"):
 	if unit != u.rad: co = co * unit.in_units(u.rad)
 	M      = euler_mat(euler_angles, kind, unit)
 	rect   = ang2rect(co, False)
-	rect   = M.dot(rect)
+	rect   = np.einsum("...ij,j...->i...",M,rect)
 	co     = rect2ang(rect, False)
 	if unit != u.rad: co = co / unit.in_units(u.rad)
 	return co.reshape(coords.shape)
@@ -143,14 +147,21 @@ def euler_rot(euler_angles, coords, kind="zyz", unit="rad"):
 def recenter(angs, center, unit="rad"):
 	"""Recenter coordinates "angs" (as ra,dec) on the location given by "center",
 	such that center moves to the north pole."""
+	# Performs the rotation E(0,-theta,-phi). Originally did
+	# E(phi,-theta,-phi), but that is wrong (at least for our
+	# purposes), as it does not preserve the relative orientation
+	# between the boresight and the sun. For example, if the boresight
+	# is at the same elevation as the sun but 10 degrees higher in az,
+	# then it shouldn't matter what az actually is, but with the previous
+	# method it would.
 	unit = getunit(unit)
 	ra0, dec0 = center
-	return euler_rot([ra0,dec0-90/unit.in_units(u.deg),-ra0], angs, kind="zyz", unit=unit)
+	return euler_rot([0,dec0-90/unit.in_units(u.deg),-ra0], angs, kind="zyz", unit=unit)
 def decenter(angs, center, unit="rad"):
 	"""Inverse operation of recenter."""
 	unit = getunit(unit)
 	ra0, dec0 = center
-	return euler_rot([ra0,90/unit.in_units(u.deg)-dec0,-ra0],  angs, kind="zyz", unit=unit)
+	return euler_rot([ra0,90/unit.in_units(u.deg)-dec0,0],  angs, kind="zyz", unit=unit)
 
 def nohor(sys): return sys if sys != c.AltAz else c.ICRS
 def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,basestring) else sys
@@ -197,10 +208,19 @@ def ephem_pos(name, mjd):
 	"""Given the name of an ephemeris object from pyephem and a
 	time in modified julian date, return its position in ra, dec
 	in radians in equatorial coordinates."""
+	mjd = np.asarray(mjd)
 	djd = mjd + 2400000.5 - 2415020
 	obj = getattr(ephem, name)()
-	obj.compute(djd)
-	return np.array([float(obj.ra), float(obj.dec)])
+	if mjd.ndim == 0:
+		obj.compute(djd)
+		return np.array([float(obj.ra), float(obj.dec)])
+	else:
+		res = np.empty((2,mjd.size))
+		for i, t in enumerate(mjd.reshape(-1)):
+			obj.compute(t)
+			res[0,i] = float(obj.ra)
+			res[1,i] = float(obj.dec)
+		return res.reshape((2,)+mjd.shape)
 
 def make_mapping(dict): return {value:key for key in dict for value in dict[key]}
 str2unit = make_mapping({

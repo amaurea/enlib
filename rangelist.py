@@ -149,6 +149,11 @@ def slice_helper(ranges, sel):
 	# bounds up.
 	res[:,0] /= sel.step
 	res[:,1] = (res[:,1]+sel.step-1)/sel.step
+	# However, avoid rounding beyond the new edge of the TOD
+	n_new = (sel.stop-sel.start)/sel.step
+	res[:,1] = np.minimum(res[:,1],n_new)
+	# Normalize ranges, merging overlapping ones
+	res = range_union(res)
 	# Prune empty ranges
 	res = res[res[:,1]-res[:,0]>0]
 	return res
