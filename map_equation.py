@@ -123,10 +123,14 @@ class MapEquation:
 	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None):
 		data = []
 		njunk = 0
-		for scan in scans:
+		for si, scan in enumerate(scans):
 			d = bunch.Bunch()
 			d.scan = scan
-			d.pmap = pmat.PmatMap(scan, area, order=pmat_order, sys=eqsys)
+			try:
+				d.pmap = pmat.PmatMap(scan, area, order=pmat_order, sys=eqsys)
+			except OverflowError:
+				L.debug("Failed to set up pointing interpolation for scan #%d. Skipping" % si)
+				continue
 			d.pcut = pmat.PmatCut(scan, cut_type)
 			d.cutrange = [njunk,njunk+d.pcut.njunk]
 			njunk = d.cutrange[1]
