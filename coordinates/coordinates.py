@@ -215,12 +215,12 @@ def ephem_pos(name, mjd):
 		obj.compute(djd)
 		return np.array([float(obj.ra), float(obj.dec)])
 	else:
-		res = np.empty((2,mjd.size))
-		for i, t in enumerate(mjd.reshape(-1)):
+		res = np.empty((2,djd.size))
+		for i, t in enumerate(djd.reshape(-1)):
 			obj.compute(t)
 			res[0,i] = float(obj.ra)
 			res[1,i] = float(obj.dec)
-		return res.reshape((2,)+mjd.shape)
+		return res.reshape((2,)+djd.shape)
 
 def make_mapping(dict): return {value:key for key in dict for value in dict[key]}
 str2unit = make_mapping({
