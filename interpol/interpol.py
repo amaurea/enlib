@@ -3,7 +3,7 @@ from enlib import utils
 
 import h5py
 
-def build(func, interpolator, box, errlim, maxdepth=None, *args, **kwargs):
+def build(func, interpolator, box, errlim, maxsize=None, *args, **kwargs):
 	"""Given a function func([nin,...]) => [nout,...] and
 	an interpolator class interpolator(box,[nout,...]),
 	(where the input array is regularly spaced in each direction),
@@ -25,8 +25,8 @@ def build(func, interpolator, box, errlim, maxdepth=None, *args, **kwargs):
 	# Refine until good enough
 	while True:
 		depth += 1
-		if maxdepth and depth > maxdepth:
-			raise OverflowError("Maximum refinement depth exceeded")
+		if maxsize and np.product(n) > maxsize:
+			raise OverflowError("Maximum refinement mesh size exceeded")
 		nok = 0
 		# Consider accuracy for each input parameter by tentatively doubling
 		# resolution for that parameter and checking how well the interpolator
