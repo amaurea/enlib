@@ -198,7 +198,7 @@ def pix2sky(shape, wcs, pix, safe=True, corner=False):
 	return coords
 
 def sky2pix(shape, wcs, coords, safe=True, corner=False):
-	"""Given an array of coordinates [{ra,dec},...], return
+	"""Given an array of coordinates [{dec,ra},...], return
 	pixel coordinates with the same ordering. The corner argument
 	specifies whether pixel coordinates start at pixel corners
 	or pixel centers. This represents a shift of half a pixel.
