@@ -81,7 +81,7 @@ def init(config_file=None):
 	it if necessary. It also updates the file, adding any new parameters
 	that were missing."""
 	if config_file is None:
-		config_file = "$HOME/.enlibrc"
+		config_file = "$HOME/.enkirc"
 	if not config_file: return
 	config_file = os.path.expandvars(config_file)
 	try:
