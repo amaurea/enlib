@@ -1,6 +1,6 @@
 """This module implements functions for drawing a coordinate grid and
 coordinate axes on an image, for example for use with enmap."""
-import numpy as np, time
+import numpy as np, time, os
 from PIL import Image, ImageDraw, ImageFont
 
 def calc_line_segs(pixs, steplim=10.):
@@ -100,7 +100,11 @@ def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%.0f", color="
 	# displace it left, right, up or down depending on which edge
 	# of the image it is at
 	col = tuple([int(color[i:i+2],16) for i in range(0,len(color),2)])
-	font = ImageFont.truetype(font=fname, size=fsize)
+	try:
+		font = ImageFont.truetype(font=fname, size=fsize)
+	except IOError:
+		# Load fallback font
+		font = ImageFont.truetype(font="arial.ttf", size=fsize, filename=os.path.join(os.path.dirname(__file__), "arial.ttf"))
 	labels = []
 	boxes  = []
 	for cval, x, y in label_pos:
