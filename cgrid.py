@@ -60,7 +60,7 @@ def calc_label_pos(linesegs, shape):
 		for seg in segs:
 			# Check if we cross 0
 			seg = np.array(seg)
-			edges = np.array(np.where((seg[1:]*seg[:-1] <= 0)|((seg[1:]-shape)*(seg[:-1]-shape) <= 0)))
+			edges = np.array(np.where((seg[1:]*seg[:-1] < 0)|((seg[1:]-shape)*(seg[:-1]-shape) < 0)))
 			# Mask those outside the image
 			ocoord = edges.copy(); ocoord[1] = 1-ocoord[1]
 			other = seg[tuple(ocoord)]
@@ -115,6 +115,7 @@ def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%.0f", color="
 		elif x == img.size[0]: box = np.array([pos-[0,lsize[1]/2],pos+[lsize[0],lsize[1]/2]])
 		elif y == 0:           box = np.array([pos-[lsize[0]/2,lsize[1]],pos+[lsize[0]/2,0]])
 		elif y == img.size[1]: box = np.array([pos-[lsize[0]/2,0],pos+[lsize[0]/2,lsize[1]]])
+		else: continue
 		labels.append(label)
 		boxes.append(box)
 	boxes  = np.array(boxes).astype(int)
