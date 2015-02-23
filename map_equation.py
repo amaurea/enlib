@@ -9,13 +9,78 @@ from mpi4py import MPI
 
 L = logging.getLogger(__name__)
 
+# Map parallelization
+# ===================
+# With the large patches, a significant fraction of the time
+# is being spent on even the simple preconditioner, and the maps
+# are also starting to take up a large amount of space. This
+# prevents us from scaling to larger clusters and larger patches.
+# We need to spread the pixels out, like we do with the samples.
+#
+# 1. Divide the full pixel space into blocks. Each block has a
+#    single mpi task as its owner, but each block will contain
+#    samples from multiple mpi tasks.
+#    a) Each task needs to know who owns the blocks it hits
+#    b) Each task needs to know who hits each of its blocks
+# 2. Because there is no 1-1 mapping from tods to pixels, each
+#    mpi tasks needs a local pixel workspace that is larger than
+#    the blocks it owns, and has room for all its TODs.
+#    Parts that fall outside its ownership must be communicated
+#    to the owner.
+# 3. Our local workspace should be as small as possible to avoid
+#    wasting memory, and to avoid random access slowness. Therefore
+#    the TODs each mpi task owns should be as close together as possible.
+# 4. We also want each mpi task to take the same time for each step,
+#    so they don't have to wait for each other.
+#
+# Given a set of bounding boxes, our task is basically to determine
+# a partitioning of those bounding boxes such that the maximum total
+# box is minimized. But we also want the total time difference to
+# be minimized too. This requires us to try for a compromise. Define
+# score(areas,times) = A*max(areas)+B*max(times). We wish to minimize
+# this score.
+#
+# How will a greedy algorithm perform here?  Start with N bins.
+# Sort each box by the score it would have in isolation, with the
+# highest scores first. For each box, sompute what score putting
+# it in each bin would reulst in. Then assign it to the bin that
+# minimizes that score. Repeat until done.
+#
+# This algorithm sounds pretty straighforward, and will probably give
+# pretty good results, though not optimal ones.
+#
+# After determininig which MPI task owns which TODs, determine the
+# task that owns the most tods in each block. Assign ownership to
+# that task.
+#
+# The overall cycle is then:
+#
+# A matrix
+#  1. transfer from blocks to workspaces (mpi communication)
+#  2. project from workspaces to tod
+#  3. apply noise matrix
+#  4. project from tod to workspaces
+#  5. coadd workspaces into blocks
+#
+# dot product
+#  1. compute dot of my blocks
+#  2. mpi reduce across tasks
+#
+# Binned preconditioner:
+#  1. apply to the blocks I own
+#
+# Cyclic preconditioner needs some thinking. We probably don't
+# want to apply it globally, since that would require enormous
+# FFTs, and data ownership for FFTs doesn't really mesh with
+# the blocks I want to use. Apply a limited-range version of a
+# reduced pixel space, and stitch? That failed before, but perhaps
+# I can get it to work.
+
 class LinearSystem:
 	def A(self): raise NotImplementedError
 	def M(self): raise NotImplementedError
 	def b(self): raise NotImplementedError
 	def dot(self, x, y): raise NotImplementedError
-	def expand(self, x): raise NotImplementedError
-	def flatten(self, params): raise NotImplementedError
 	def level(self): return 0
 	def up(self, x=None): raise NotImplementedError
 	def down(self): raise NotImplementedError
@@ -93,31 +158,6 @@ class LinearSystemMap(LinearSystem):
 		if self.comm.rank > 0: return
 		enmap.write_map(prefix + "rhs.fits", self.dof.unzip(self.b)[0])
 		self.precon.write(prefix)
-
-# FIXME: How should I get the noise matrix? As an argument?
-# Should it already be measured, or should it be measured internally?
-# If already measured, one would have to pass an array of nmats
-# of the same length as scans. That's probably best - we may
-# want to move to storing nmats in files at some point.
-# Perhaps the constructor should take a single array with
-# entries of [.scan, .pmap, .pcut, .nmat]. That would
-# free us up to make this more general, and would let us put
-# the part that creates the argument array in a part of the
-# code that is allowed to use enact stuff.
-#
-# Yes, let's plan for noise matrices being read from disk
-# and stored as an element in Scan. Then scan contains all
-# the information needed to initialize a MapSystem.
-#
-# There is a circular dependency the way I'm doing this here
-# M(x) depends on A(x), but the A(x) interpretation of the plain
-# array x depends on the mask derived from M(x).
-#
-# I think the solution is to seperate the plain array (x) stuff
-# (which needs masking, flattening and expanding) from the
-# underlying A(map,junk), M(map), M(junk), etc.
-# This lower layer will be tied to maps etc. while the upper level
-# is a general abstraction. Built from these.
 
 class MapEquation:
 	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None):
