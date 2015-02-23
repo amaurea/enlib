@@ -430,3 +430,44 @@ def atleast_3d(a):
 def between_angles(a, range, period=2*np.pi):
 	a = rewind(a, np.mean(range), period=period)
 	return (a>=range[0])&(a<range[1])
+
+def greedy_split(data, n=2, costfun=max, workfun=lambda w,x: x if w is None else x+w):
+	"""Given a list of elements data, return indices that would
+	split them it into n subsets such that cost is approximately
+	minimized. costfun specifies which cost to minimize, with
+	the default being the value of the data themselves. workfun
+	specifies how to combine multiple values. workfun(datum,workval)
+	=> workval. scorefun then operates on a list of the total workval
+	for each group score = scorefun([workval,workval,....]).
+	
+	Example: greedy_split(range(10)) => [[9,6,5,2,1,0],[8,7,4,3]]
+	         greedy_split([1,10,100]) => [[2],[1,0]]
+	         greedy_split("012345",costfun=lambda x:sum([xi**2 for xi in x]),
+	          workfun=lambda w,x:0 if x is None else int(x)+w)
+	          => [[5,2,1,0],[4,3]]
+	"""
+	# Sort data based on standalone costs
+	costs = []
+	nowork = workfun(None,None)
+	work = [nowork for i in range(n)]
+	for d in data:
+		work[0] = workfun(nowork,d)
+		costs.append(costfun(work))
+	order = np.argsort(costs)[::-1]
+	# Build groups using greedy algorithm
+	groups = [[] for i in range(n)]
+	work   = [nowork for i in range(n)]
+	cost   = costfun(work)
+	for di in order:
+		d = data[di]
+		# Try adding to each group
+		for i in range(n):
+			iwork = workfun(work[i],d)
+			icost = costfun(work[:i]+[iwork]+work[i+1:])
+			if i == 0 or icost < best[2]: best = (i,iwork,icost)
+		# Add it to the best group
+		i, iwork, icost = best
+		groups[i].append(di)
+		work[i] = iwork
+		cost = icost
+	return groups, cost, work
