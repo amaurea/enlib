@@ -430,3 +430,7 @@ def atleast_3d(a):
 def between_angles(a, range, period=2*np.pi):
 	a = rewind(a, np.mean(range), period=period)
 	return (a>=range[0])&(a<range[1])
+
+def logaxis(n, nsub=3, base=10):
+	return base**np.arange(n)/float(nsub)
+
