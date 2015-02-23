@@ -38,7 +38,8 @@ class PmatMap(PointingMatrix):
 		box[0] -= margin/2; box[1] += margin/2
 		acc  = config.get("pmat_accuracy")
 		ipmax= config.get("pmat_interpol_max")
-		ipol = interpol.build(pos2pix(scan,template,sys), interpol.ip_linear, box, np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*acc, maxsize=ipmax)
+		transform = pos2pix(scan,template,sys)
+		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*acc, maxsize=ipmax)
 		self.rbox = ipol.box
 		self.nbox = np.array(ipol.ys.shape[4:])
 		# ipol.ys has shape [2t,2az,2el,{ra,dec,cos,sin},t,az,el]
@@ -60,6 +61,8 @@ class PmatMap(PointingMatrix):
 			self.func = self.core.pmat_linear
 		else:
 			raise NotImplementedError("order > 1 is not implemented")
+		self.transform = transform
+		self.ipol = ipol
 	def forward(self, tod, m):
 		"""m -> tod"""
 		self.func( 1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
