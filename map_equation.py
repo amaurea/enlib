@@ -89,7 +89,7 @@ class LinearSystem:
 class LinearSystemMap(LinearSystem):
 	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin", imap=None):
 		L.info("Building preconditioner")
-		self.mapeq  = MapEquation(scans, area, comm=comm, imap=None)
+		self.mapeq  = MapEquation(scans, area, comm=comm, imap=imap)
 		if precon == "bin":
 			self.precon = PrecondBinned(self.mapeq)
 		elif precon == "cyc":
