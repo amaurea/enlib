@@ -1,9 +1,9 @@
-import numpy as np
+import numpy as np, time
 from enlib import utils
 
 import h5py
 
-def build(func, interpolator, box, errlim, maxsize=None, *args, **kwargs):
+def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, *args, **kwargs):
 	"""Given a function func([nin,...]) => [nout,...] and
 	an interpolator class interpolator(box,[nout,...]),
 	(where the input array is regularly spaced in each direction),
@@ -16,6 +16,8 @@ def build(func, interpolator, box, errlim, maxsize=None, *args, **kwargs):
 	idim    = box.shape[1]
 	n       = np.array([4]*idim) # starting mesh size
 	x       = utils.grid(box, n)
+
+	t0      = time.time()
 
 	# Set up initial interpolation
 	ip = interpolator(box, func(x), *args, **kwargs)
@@ -33,6 +35,8 @@ def build(func, interpolator, box, errlim, maxsize=None, *args, **kwargs):
 		# predicts the true values.
 		for i in range(idim):
 			if any(errs[i] > errlim):
+				if maxtime and time.time() - t0 > maxtime:
+					raise OverflowError("Maximum refinement time exceeded")
 				# Grid may not be good enough in this direction.
 				# Try doubling resolution
 				nnew   = n.copy()
