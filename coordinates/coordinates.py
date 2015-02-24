@@ -45,7 +45,7 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 		if ohand != 'L':
 			ocoord[2] = -ocoord[2]
 		return ocoord
-	if from_ref is None: coords = decenter(coords, from_ref, unit)
+	if from_ref is not None: coords = decenter(coords, from_ref, unit)
 	if from_sys != to_sys:
 		if from_sys == c.AltAz:
 			if unit != u.rad: coords = coords * unit.in_units(u.rad)
@@ -56,7 +56,7 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 			if unit != u.rad: coords = coords * unit.in_units(u.rad)
 			coords = cel2hor(coords, time, site)
 			if unit != u.rad: coords = coords / unit.in_units(u.rad)
-	if to_ref is None: coords = recenter(coords, to_ref, unit)
+	if to_ref is not None: coords = recenter(coords, to_ref, unit)
 	return coords
 
 def transform_astropy(from_sys, to_sys, coords, unit):
@@ -188,7 +188,7 @@ def getsys_full(sys, unit="deg", time=None, site=None):
 	if len(sys) < 3: sys += [None]*(3-len(sys))
 	base, ref, refsys = sys
 	base   = getsys(base)
-	refsys = getsys(refsys) if refsys is None else base
+	refsys = getsys(refsys) if refsys is not None else base
 	if ref is None: return [base, ref]
 	if isinstance(ref, basestring):
 		# In our first format, ref is a set of coordinates in degrees
@@ -200,7 +200,7 @@ def getsys_full(sys, unit="deg", time=None, site=None):
 			ref    = ephem_pos(ref, time)/unit.in_units(u.rad)
 			refsys = getsys("equ")
 	# Now rotate the reference point to our base system
-	if refsys is None:
+	if refsys is not None:
 		ref = transform(refsys, base, ref, unit=unit, time=time, site=site)
 	return [base, ref]
 
