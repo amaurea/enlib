@@ -592,28 +592,25 @@ def downgrade(emap, factor):
 	"""Returns enmap "emap" downgraded by the given integer factor
 	(may be a list for each direction, or just a number) by averaging
 	inside pixels."""
-	factor = np.asarray(factor,dtype=int)
-	if np.all(factor==1): return emap
-	if factor.ndim == 0: factor = np.array([factor,factor],dtype=int)
-	tshape = emap.shape[-2:]/factor*factor
-	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/factor[0],factor[0],tshape[1]/factor[1],factor[1])),(-3,-1))
-	return ndmap(res, emap[...,::factor[0],::factor[1]].wcs)
+	fact = np.full(2, 1).astype(int)
+	fact[:] = factor
+	tshape = emap.shape[-2:]/fact*fact
+	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/fact[0],fact[0],tshape[1]/fact[1],fact[1])),(-3,-1))
+	return ndmap(res, emap[...,::fact[0],::fact[1]].wcs)
 
 def upgrade(emap, factor):
 	"""Upgrade emap to a larger size using nearest neighbor interpolation,
 	returning the result. More advanced interpolation can be had using
 	enmap.interpolate."""
-	factor = np.atleast_1d(factor)
-	assert factor.ndim == 1, "Upgrade factor must be number or 1d list"
-	assert factor.size >= 1 and factor.size <= 2, "Upgrade factor must be number of len-2 list."
-	factor = np.tile(factor,(3-len(factor)))
-	res = np.tile(emap.copy().reshape(emap.shape[:-2]+(emap.shape[-2],1,emap.shape[-1],1)),(1,factor[0],1,factor[1]))
+	fact = np.full(2,1).astype(int)
+	fact[:] = factor
+	res = np.tile(emap.copy().reshape(emap.shape[:-2]+(emap.shape[-2],1,emap.shape[-1],1)),(1,fact[0],1,fact[1]))
 	res = res.reshape(res.shape[:-4]+(np.product(res.shape[-4:-2]),np.product(res.shape[-2:])))
 	# Correct the WCS information
 	for j in range(2):
 		res.wcs.wcs.crpix[j] -= 0.5
-		res.wcs.wcs.crpix[j] *= factor[1-j]
-		res.wcs.wcs.cdelt[j] /= factor[1-j]
+		res.wcs.wcs.crpix[j] *= fact[1-j]
+		res.wcs.wcs.cdelt[j] /= fact[1-j]
 		res.wcs.wcs.crpix[j] += 0.5
 	return res
 
