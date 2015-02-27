@@ -115,7 +115,7 @@ def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%.0f", color="
 		elif x == img.size[0]: box = np.array([pos-[0,lsize[1]/2],pos+[lsize[0],lsize[1]/2]])
 		elif y == 0:           box = np.array([pos-[lsize[0]/2,lsize[1]],pos+[lsize[0]/2,0]])
 		elif y == img.size[1]: box = np.array([pos-[lsize[0]/2,0],pos+[lsize[0]/2,lsize[1]]])
-		else: continue
+		else:                  box = np.array([pos-lsize/2,pos+lsize/2])
 		labels.append(label)
 		boxes.append(box)
 	boxes  = np.array(boxes).astype(int)
