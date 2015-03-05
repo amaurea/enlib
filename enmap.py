@@ -63,7 +63,7 @@ class ndmap(np.ndarray):
 	def extent(self): return extent(self.shape, self.wcs)
 	@property
 	def npix(self): return np.product(self.shape[-2:])
-	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode)
+	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode, cval=0)
 	def autocrop(self, method="plain", value=np.nan, margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
@@ -221,15 +221,15 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 			wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
 	return wpix[::-1].reshape(coords.shape)
 
-def project(map, shape, wcs, order=3, mode="nearest"):
+def project(map, shape, wcs, order=3, mode="nearest", cval=0.0):
 	"""Project the map into a new map given by the specified
 	shape and wcs, interpolating as necessary. Handles nan
 	regions in the map by masking them before interpolating.
 	This uses local interpolation, and will lose information
 	when downgrading compared to averaging down."""
 	map  = map.copy()
-	pix  = map.sky2pix(posmap(shape, wcs), corner=True)
-	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode)
+	pix  = map.sky2pix(posmap(shape, wcs))
+	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval)
 	return ndmap(pmap, wcs)
 
 def rand_map(shape, wcs, cov, scalar=False):
@@ -279,7 +279,8 @@ def extent(shape, wcs, nsub=0x10):
 	radians. That is, if the patch were on a sphere with
 	radius 1 m, then this function returns approximately how many meters
 	tall and wide the patch is. These are defined such that
-	their product equals the physical area of the patch."""
+	their product equals the physical area of the patch.
+	Obs: Has trouble with areas near poles."""
 	# Create a new wcs with (nsub,nsub) pixels
 	wcs = wcs.deepcopy()
 	step = (np.asfarray(shape[-2:])/nsub)[::-1]

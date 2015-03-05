@@ -28,7 +28,7 @@ def rand_alm_healpy(ps, lmax=None, seed=None, dtype=np.complex128):
 	ps = powspec.sym_compress(ps, scheme="diag")
 	return np.asarray(healpy.synalm(ps, lmax=lmax, new=True))
 
-def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128):
+def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128, m_major=True):
 	"""This is a replacement for healpy.synalm. It generates the random
 	numbers in l-major order before transposing to m-major order in order
 	to allow generation of low-res and high-res maps that agree on large
@@ -55,7 +55,7 @@ def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128):
 	for i in range(0, aflat.size, bsize):
 		aflat[i:i+bsize] = np.random.standard_normal(min(bsize,aflat.size-i))
 	# Transpose numbers to make them m-major.
-	ainfo.transpose_alm(alm,alm)
+	if m_major: ainfo.transpose_alm(alm,alm)
 	# Scale alms by spectrum, taking into account which alms are complex
 	ainfo.lmul(alm, (ps12/2**0.5).astype(rtype), alm)
 	alm[:,:ainfo.lmax].imag  = 0

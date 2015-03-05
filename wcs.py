@@ -73,7 +73,8 @@ def cea(pos, res=None, shape=None, rowmajor=False, lam=None, ref=None):
 
 def zea(pos, res=None, shape=None, rowmajor=False, ref=None):
 	"""Setups up an oblate Lambert's azimuthal equal area system.
-	See the build function for details."""
+	See the build function for details. Don't use this if you want
+	a polar projection."""
 	pos, res, shape, mid = validate(pos, res, shape, rowmajor)
 	w = WCS(naxis=2)
 	w.wcs.ctype = ["RA---ZEA", "DEC--ZEA"]

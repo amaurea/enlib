@@ -95,7 +95,7 @@ def expand_image(img, bounds):
 	res.paste(img, tuple(-bounds[0]))
 	return res
 
-def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%.0f", color="000000"):
+def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%g", color="000000"):
 	# For each label, determine the size the text would be, and
 	# displace it left, right, up or down depending on which edge
 	# of the image it is at
