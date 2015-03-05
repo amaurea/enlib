@@ -202,10 +202,10 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 	for i in range(fa.shape[0]):
 		fr[i] = scipy.ndimage.map_coordinates(fa[i], inds, order=order, mode=mode, cval=cval)
 	if mask_nan and np.sum(mask) > 0:
-		mask = np.empty(fr.shape,dtype=bool)
+		fmask = np.empty(fr.shape,dtype=bool)
 		for i in range(mask.shape[0]):
-			mask[i] = scipy.ndimage.map_coordinates(mask[i], inds, order=0, mode=mode, cval=cval)
-		fa[mask] = np.nan
+			fmask[i] = scipy.ndimage.map_coordinates(mask[i], inds, order=0, mode=mode, cval=cval)
+		fr[fmask] = np.nan
 	return res
 
 def grid(box, shape, endpoint=True, axis=0, flat=False):
