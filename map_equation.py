@@ -196,7 +196,7 @@ class MapEquation:
 		for d in self.data:
 			with bench.mark("meq_b_get"):
 				# Only read data if necessary, as it's a pretty heavy operation
-				if self.imap is None and (self.isrc is None or self.isrc.tmul == 0):
+				if self.imap is None and (self.isrc is None or self.isrc.tmul != 0):
 					tod = d.scan.get_samples()
 					# To avoid losing precision, we only reduce precision after subtracting
 					# the mean.
