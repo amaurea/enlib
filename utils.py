@@ -3,6 +3,7 @@ import numpy as np, scipy.ndimage, os, errno, scipy.optimize
 degree = np.pi/180
 arcmin = degree/60
 arcsec = arcmin/60
+fwhm   = 1.0/(8*np.log(2))**0.5
 T_cmb = 2.73
 c = 299792458.0
 h = 6.62606957e-34

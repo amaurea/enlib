@@ -229,7 +229,7 @@ class PmatCutRebin(PointingMatrix):
 
 config.default("pmat_ptsrc_rsigma", 5.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
 class PmatPtsrc(PointingMatrix):
-	def __init__(self, scan, params, sys=None):
+	def __init__(self, scan, params, sys=None, tmul=None, pmul=None):
 		sys   = config.get("map_eqsys", sys)
 		rmul  = config.get("pmat_ptsrc_rsigma")
 		self.dtype = params.dtype
@@ -239,7 +239,11 @@ class PmatPtsrc(PointingMatrix):
 		margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
 		box[0] -= margin/2; box[1] += margin/2
 		ref_phi = params[1,0]
-		ipol = interpol.build(pos2pix(scan,None,sys,ref_phi=ref_phi), interpol.ip_linear, box, [utils.arcsec,utils.arcsec,utils.arcsec,utils.arcsec])
+		acc  = config.get("pmat_accuracy")
+		ip_size= config.get("pmat_interpol_max_size")
+		ip_time= config.get("pmat_interpol_max_time")
+		transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
+		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*acc, maxsize=ip_size, maxtime=ip_time)
 		self.rbox = ipol.box
 		self.nbox = np.array(ipol.ys.shape[4:])
 		n = self.rbox.shape[1]
@@ -266,14 +270,18 @@ class PmatPtsrc(PointingMatrix):
 			ranges = np.zeros([nsrc,ndet,np.max(nrange),2],dtype=np.int32)
 			self.core.pmat_ptsrc_prepare(params, rhit, rmax, scan.noise.ivar, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
 
-		if np.sum(nrange) == 0: raise errors.DataMissing("No sources hit")
 		self.ranges, self.rangesets, self.offsets = compress_ranges(ranges, nrange, scan.cut, scan.nsamp)
 		self.src_ivars = src_ivars
 		self.nhit = np.sum(self.ranges[:,1]-self.ranges[:,0])
 
-	def forward(self, tod, params):
+		self.tmul = 0 if tmul is None else tmul
+		self.pmul = 1 if pmul is None else pmul
+
+	def forward(self, tod, params, tmul=None, pmul=None):
 		"""params -> tod"""
-		self.core.pmat_ptsrc(tod.T, params, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
+		if tmul is None: tmul = self.tmul
+		if pmul is None: pmul = self.pmul
+		self.core.pmat_ptsrc(tmul, pmul, tod.T, params, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
 
 	def extract(self, tod):
 		"""Extract precomputed pointing and phase information for the selected samples.
@@ -300,6 +308,13 @@ def compress_ranges(ranges, nrange, cut, nsamp):
 	ranges[nr,2], rangesets[nind], offsets[nsrc,ndet], where ranges now has
 	global sample ordering."""
 	nsrc, ndet = nrange.shape
+	# Special case: None hit. We represent this as a single range hitting no samples,
+	# which isn't used by any of the srcs.
+	if np.sum(nrange) == 0:
+		ranges  = np.array([[0,0]],dtype=np.int32)
+		rangesets = np.array([0],dtype=np.int32)
+		offsets = np.zeros([nsrc,ndet+1],dtype=np.int32)
+		return ranges, rangesets, offsets
 	# First collapse ranges,nrange to flat ranges and indices into it
 	flat_ranges = []
 	offsets = np.zeros([nsrc,ndet+1],dtype=np.int32)

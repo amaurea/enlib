@@ -624,7 +624,13 @@ contains
 
 	!!! Point source stuff !!!
 
+	! params(nparam,nsrc) takes the form [dec,ra,amps[namp],ibeam[3]]
+	! The beam is defined in the target coordinate system. This is appropriate
+	! if the beam is a physical property of each source (an elliptical galaxy
+	! for example), but it is not appropriate if the beam is a property of the
+	! telescope (as it usually is), unless the beam is circular.
 	subroutine pmat_ptsrc( &
+			tmul, pmul,                       &! Tod multiplier, src multiplier
 			tod, params,                      &! Main inputs/outpus
 			bore, det_pos, det_comps,  comps, &! Input pointing
 			rbox, nbox, ys,                   &! Coordinate transformation
@@ -633,6 +639,7 @@ contains
 		use omp_lib
 		implicit none
 		! Parameters
+		real(_),    intent(in)    :: tmul, pmul    ! multiply tod by tmul, then add pmul times ptsrcs
 		real(_),    intent(inout) :: tod(:,:)      ! (nsamp,ndet)
 		real(_),    intent(in)    :: params(:,:)   ! (nparam,nsrc)
 		real(_),    intent(in)    :: bore(:,:), ys(:,:,:)
@@ -640,7 +647,7 @@ contains
 		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:), ranges(:,:), rangesets(:)
 		! Work
 		integer(4), parameter :: bz = 321
-		integer(4) :: ndet, nsrc, di, ri, oi, si, s0, i, j, i1, i2, ic, nj, namp, nsamp
+		integer(4) :: ndet, nsrc, di, ri, oi, si, s0, i, j, i1, i2, ic, nj, namp, nsamp, nmin
 		integer(4) :: steps(size(rbox,1))
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1)), phase(size(comps),bz)
@@ -653,6 +660,7 @@ contains
 		nsrc  = size(params,2)
 		namp  = size(amps)
 		nsamp = size(tod,1)
+		nmin  = min(namp,size(comps))
 
 		steps(size(steps)) = 1
 		do ic = size(steps)-1, 1, -1
@@ -660,9 +668,11 @@ contains
 		end do
 		x0 = rbox(:,1); inv_dx = nbox/(rbox(:,2)-rbox(:,1))
 
-		!$omp parallel workshare
-		tod = 0
-		!$omp end parallel workshare
+		if(tmul .ne. 1) then
+			!$omp parallel workshare
+			tod = tod*tmul
+			!$omp end parallel workshare
+		end if
 
 		! Note: don't add collapse(2) here without handling tod-clobbering
 		!$omp parallel do private(si,di,oi,s0,ri,i1,i2,i,j,nj,ipoint,opoint,phase,ddec,dra,r2,dec,ra,amps,ibeam,cosdec)
@@ -670,7 +680,7 @@ contains
 			do di = 1, ndet
 				dec   = params(1,si)
 				ra    = params(2,si)
-				amps  = params(3:2+namp,si)
+				amps  = params(3:2+namp,si)*pmul
 				ibeam = params(3+namp:5+namp,si)
 				cosdec= cos(dec)
 				do oi = offsets(di,si)+1, offsets(di+1,si)
@@ -692,7 +702,7 @@ contains
 							dra  = (ra-opoint(2,j))*cosdec
 							r2   = ddec*(ibeam(1)*ddec+ibeam(3)*dra) + dra*(ibeam(2)*dra+ibeam(3)*ddec)
 							! And finally evaluate the model.
-							tod(i+j-1,di) = tod(i+j-1,di) + sum(amps*phase(:,j))*exp(-0.5*r2)
+							tod(i+j-1,di) = tod(i+j-1,di) + sum(amps(1:nmin)*phase(1:nmin,j))*exp(-0.5*r2)
 						end do
 					end do
 				end do

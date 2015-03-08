@@ -87,9 +87,9 @@ class LinearSystem:
 
 # Abstract interface to the Map-making system.
 class LinearSystemMap(LinearSystem):
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin", imap=None):
+	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin", imap=None, isrc=None):
 		L.info("Building preconditioner")
-		self.mapeq  = MapEquation(scans, area, comm=comm, imap=imap)
+		self.mapeq  = MapEquation(scans, area, comm=comm, imap=imap, isrc=isrc)
 		if precon == "bin":
 			self.precon = PrecondBinned(self.mapeq)
 		elif precon == "cyc":
@@ -115,6 +115,7 @@ class LinearSystemMap(LinearSystem):
 		L.info("Building right-hand side")
 		self.b      = self.dof.zip(*self.mapeq.b())
 		self.scans, self.area, self.comm = scans, area, comm
+		self.isrc   = isrc
 		# Store a copy of the next level, which
 		# we will use when going up and down in levels.
 		self._upsys = None
@@ -156,11 +157,14 @@ class LinearSystemMap(LinearSystem):
 		return self.dof.zip(hmap,hjunk)
 	def write(self, prefix=""):
 		if self.comm.rank > 0: return
-		enmap.write_map(prefix + "rhs.fits", self.dof.unzip(self.b)[0])
+		rhs = self.dof.unzip(self.b)[0]
+		enmap.write_map(prefix + "rhs.fits", rhs)
 		self.precon.write(prefix)
+		if self.isrc:
+			enmap.write_map(prefix + "srcs.fits", self.isrc.model.draw(rhs.shape, rhs.wcs, window=True))
 
 class MapEquation:
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None):
+	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None, isrc=None):
 		data = []
 		njunk = 0
 		for si, scan in enumerate(scans):
@@ -177,6 +181,7 @@ class MapEquation:
 			d.nmat = scan.noise
 			# Make maps from data projected from input map instead of real data
 			if imap: d.pmap_imap = pmat.PmatMap(scan, imap.map, order=pmat_order, sys=imap.sys)
+			if isrc: d.pmat_isrc = pmat.PmatPtsrc(scan, isrc.model.params.astype(area.dtype), sys=isrc.sys, tmul=isrc.tmul, pmul=isrc.pmul)
 			data.append(d)
 		self.area = area.copy()
 		self.njunk = njunk
@@ -184,19 +189,26 @@ class MapEquation:
 		self.comm  = comm
 		self.data  = data
 		self.imap  = imap
+		self.isrc  = isrc
 	def b(self):
 		rhs_map  = enmap.zeros(self.area.shape, self.area.wcs, dtype=self.dtype)
 		rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
 		for d in self.data:
 			with bench.mark("meq_b_get"):
-				if self.imap is None:
+				# Only read data if necessary, as it's a pretty heavy operation
+				if self.imap is None and (self.isrc is None or self.isrc.tmul == 0):
 					tod = d.scan.get_samples()
+					# To avoid losing precision, we only reduce precision after subtracting
+					# the mean.
 					tod-= np.mean(tod,1)[:,None]
 					tod = tod.astype(self.dtype)
 				else:
 					tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
+				if self.imap is not None:
 					d.pmap_imap.forward(tod, self.imap.map)
 					utils.deslope(tod, inplace=True)
+				if self.isrc is not None:
+					d.pmat_isrc.forward(tod, self.isrc.model.params)
 			with bench.mark("meq_b_N"):
 				d.nmat.apply(tod)
 			with bench.mark("meq_b_P'"):
@@ -344,6 +356,118 @@ def pick_ref_points(hitmap, npoint):
 		w *= mask
 	return np.array(pix)+1
 
+config.default("precond_condition_lim", 10., "Maximum allowed condition number in per-pixel polarization matrices.")
+def makemask(div):
+	condition = array_ops.condition_number_multi(div, [0,1])
+	tmask = div[0,0] > 0
+	lim   = config.get("precond_condition_lim")
+	pmask = (condition >= 1)*(condition < lim)
+	masks = enmap.zeros(div.shape[1:], div.wcs, dtype=bool)
+	masks[0]  = tmask
+	masks[1:] = pmask[None]
+	del condition
+	return masks
+
+def reduce(a, comm=MPI.COMM_WORLD):
+	res = a.copy()
+	comm.Allreduce(a, res)
+	return res
+
+def measure_corr_cyclic(mapeq, S, pixels):
+	# Measure the typical correlation pattern by using multiple
+	# pixels at the same time.
+	ncomp,h,w = mapeq.area.shape
+	d = enmap.zeros([ncomp,ncomp,h,w],mapeq.area.wcs, dtype=mapeq.area.dtype)
+	junk = np.zeros(mapeq.njunk, dtype=mapeq.area.dtype)
+	for p in pixels:
+		Arow = d*0
+		for ci in range(ncomp):
+			#Arow[ci,:,p[0],p[1]] = S[ci,:,p[0],p[1]]
+			Arow[ci,ci,p[0],p[1]] = 1
+			junk[...] = 0
+			Arow[ci,:],_ = mapeq.A(Arow[ci], junk)
+		Sref = S.copy(); S[...] = S[:,:,p[0],p[1]][:,:,None,None]
+		Arow = enmap.map_mul(Arow, S)
+		Arow = enmap.map_mul(Sref, Arow)
+		Arow = np.roll(Arow, -p[0], 2)
+		Arow = np.roll(Arow, -p[1], 3)
+		d += Arow
+	d /= len(pixels)
+	# We should be symmetric from the beginning, but it turns out
+	# we're not. Should investigate that. In the mean while,
+	# symmetrize so that conjugate gradients doesn't break down.
+	return d
+	#return sympos(d)
+
+def sympos(arow):
+	f = fft.fft(arow, axes=[-2,-1])
+	print "sympos A", np.min(f.real), np.min(f.imag), np.max(f.real), np.max(f.imag)
+	# Make us symmetric in real space by killing the imaginary part
+	f = f.real
+	# Make us symmetric in component space
+	f = 0.5*(f+np.rollaxis(f,1))
+	# Remove negative eigenvalues
+	f = array_ops.eigflip(f, axes=[0,1])
+	x = fft.ifft(f+0j, axes=[-2,-1], normalize=True).real
+	return x
+
+
+def normalize(A):
+	# Normalize to unit diagonal
+	D = np.maximum(1e-30,np.abs(np.diag(A)))**-0.5
+	A = A * D[:,None]
+	A *= D[None,:]
+	return A
+
+def checksym(A):
+	A = normalize(A)
+	n = len(A)
+	res = np.zeros(n)
+	for i in range(n):
+		res[i] = np.max(np.abs(A[:,i]-A[i,:]))
+	return res
+
+def checkeig(A):
+	A = normalize(A)
+	e,v = np.linalg.eig(A)
+	return e/np.max(e)
+
+def test_symmetry(mapeq, nmax=0, shuf=True, verbose=True, prec=None):
+	# Measure the typical correlation pattern by using multiple
+	# pixels at the same time.
+	mask = mapeq.area.astype(bool)+True
+	dof  = DOF(Arg(mask=mask),Arg(shape=(mapeq.njunk,),distributed=True))
+	a = np.random.standard_normal(dof.n).astype(mapeq.dtype)
+	mask = mapeq.A(*dof.unzip(a))[0] != 0
+	dof  = DOF(Arg(mask=mask),Arg(shape=(mapeq.njunk,),distributed=True))
+	fun = mapeq.A
+	if prec:
+		def fun(*args): return prec.apply(*mapeq.A(*mapeq.A(*prec.apply(*args))))
+		#def fun(*args): return prec.apply(*args)
+	if nmax == 0: nmax = dof.n-mapeq.njunk
+	rows = []
+	if shuf:
+		inds = np.random.permutation(dof.n-mapeq.njunk)[:nmax]
+		inds = mapeq.comm.bcast(inds)
+	else:
+		inds = np.arange(nmax)
+	for i, ind in enumerate(inds):
+		a = np.zeros(dof.n,dtype=mapeq.dtype); a[ind] = 1
+		rows.append(dof.zip(*fun(*dof.unzip(a))))
+		if verbose:
+			b = np.array(rows)[:,np.array(inds[:i+1])]
+			sym = checksym(b)
+			eig = checkeig(b)
+			print "sym %4d %15.7e %15.7e" % (i, np.max(sym), np.min(eig))
+	if mapeq.comm.rank == 0:
+		A = np.array(rows)[:,inds[:nmax]]
+		with h5py.File("A.hdf","w") as hfile:
+			hfile["data"] = A
+
+# Submap preconditioner stuff below here. I never got this to work,
+# but it's still an interesting idea.
+# =================================================================
+
 class PrecondSubmap:
 	"""This preconditioner splits the scans into
 	subsets with as similar properties as possible.
@@ -414,146 +538,6 @@ class PrecondSubmap:
 		# N"(f,d1,d2)= iU(f,d1) delta(d1,d2) - Q(f,d1,b)Q(f,d2,b)
 		# The interaction between phase and Q will ensure that the polarized
 		# noise ends up lower.
-
-config.default("precond_condition_lim", 10., "Maximum allowed condition number in per-pixel polarization matrices.")
-def makemask(div):
-	condition = array_ops.condition_number_multi(div, [0,1])
-	tmask = div[0,0] > 0
-	lim   = config.get("precond_condition_lim")
-	pmask = (condition >= 1)*(condition < lim)
-	masks = enmap.zeros(div.shape[1:], div.wcs, dtype=bool)
-	masks[0]  = tmask
-	masks[1:] = pmask[None]
-	del condition
-	return masks
-
-def reduce(a, comm=MPI.COMM_WORLD):
-	res = a.copy()
-	comm.Allreduce(a, res)
-	return res
-
-def measure_Arow(mapeq, pix):
-	ncomp,h,w = mapeq.area.shape
-	Arow = enmap.zeros([ncomp,ncomp,h,w],mapeq.area.wcs, dtype=mapeq.area.dtype)
-	junk = np.zeros(mapeq.njunk, dtype=mapeq.area.dtype)
-	for ci in range(ncomp):
-		Arow[ci,ci,pix[0],pix[1]] = 1
-		junk[...]         = 0
-		Arow[ci], _ = mapeq.A(Arow[ci], junk)
-	return Arow
-
-def cov2corr(iC, S, ref, beam):
-	Sref = S.copy(); S[...] = S[:,:,ref[0],ref[1]][:,:,None,None]
-	iC = array_ops.matmul(iC,    S, axes=[0,1])
-	iC = array_ops.matmul(Sref, iC, axes=[0,1])
-	# Shift the reference pixel to 0,0:
-	iC = np.roll(iC, -ref[0], 2)
-	iC = np.roll(iC, -ref[1], 3)
-	# Regularize by damping long-distance correlations
-	if beam > 0: apply_gaussian(iC, beam)
-	# And store in fourier domain
-	res = np.conj(fft.fft(iC, axes=[-2,-1]))
-	## Overnormalize in order to avoid later normalization
-	#res /= np.prod(iC.shape[-2:])**2
-	return res
-
-def apply_gaussian(fa, sigma):
-	flat  = fa.reshape(-1,fa.shape[-2],fa.shape[-1])
-	gauss = [np.exp(-0.5*(np.arange(n)/sigma)**2) for n in flat.shape[-2:]]
-	gauss = [g + g[::-1] for g in gauss]
-	flat *= gauss[0][None,:,None]
-	flat *= gauss[1][None,None,:]
-
-def sympos(arow):
-	f = fft.fft(arow, axes=[-2,-1])
-	print "sympos A", np.min(f.real), np.min(f.imag), np.max(f.real), np.max(f.imag)
-	# Make us symmetric in real space by killing the imaginary part
-	f = f.real
-	# Make us symmetric in component space
-	f = 0.5*(f+np.rollaxis(f,1))
-	# Remove negative eigenvalues
-	f = array_ops.eigflip(f, axes=[0,1])
-	x = fft.ifft(f+0j, axes=[-2,-1], normalize=True).real
-	return x
-
-def measure_corr_cyclic(mapeq, S, pixels):
-	# Measure the typical correlation pattern by using multiple
-	# pixels at the same time.
-	ncomp,h,w = mapeq.area.shape
-	d = enmap.zeros([ncomp,ncomp,h,w],mapeq.area.wcs, dtype=mapeq.area.dtype)
-	junk = np.zeros(mapeq.njunk, dtype=mapeq.area.dtype)
-	for p in pixels:
-		Arow = d*0
-		for ci in range(ncomp):
-			#Arow[ci,:,p[0],p[1]] = S[ci,:,p[0],p[1]]
-			Arow[ci,ci,p[0],p[1]] = 1
-			junk[...] = 0
-			Arow[ci,:],_ = mapeq.A(Arow[ci], junk)
-		Sref = S.copy(); S[...] = S[:,:,p[0],p[1]][:,:,None,None]
-		Arow = enmap.map_mul(Arow, S)
-		Arow = enmap.map_mul(Sref, Arow)
-		Arow = np.roll(Arow, -p[0], 2)
-		Arow = np.roll(Arow, -p[1], 3)
-		d += Arow
-	d /= len(pixels)
-	# We should be symmetric from the beginning, but it turns out
-	# we're not. Should investigate that. In the mean while,
-	# symmetrize so that conjugate gradients doesn't break down.
-	#return d
-	return d
-	#return sympos(d)
-
-def normalize(A):
-	# Normalize to unit diagonal
-	D = np.maximum(1e-30,np.abs(np.diag(A)))**-0.5
-	A = A * D[:,None]
-	A *= D[None,:]
-	return A
-
-def checksym(A):
-	A = normalize(A)
-	n = len(A)
-	res = np.zeros(n)
-	for i in range(n):
-		res[i] = np.max(np.abs(A[:,i]-A[i,:]))
-	return res
-
-def checkeig(A):
-	A = normalize(A)
-	e,v = np.linalg.eig(A)
-	return e/np.max(e)
-
-def test_symmetry(mapeq, nmax=0, shuf=True, verbose=True, prec=None):
-	# Measure the typical correlation pattern by using multiple
-	# pixels at the same time.
-	mask = mapeq.area.astype(bool)+True
-	dof  = DOF(Arg(mask=mask),Arg(shape=(mapeq.njunk,),distributed=True))
-	a = np.random.standard_normal(dof.n).astype(mapeq.dtype)
-	mask = mapeq.A(*dof.unzip(a))[0] != 0
-	dof  = DOF(Arg(mask=mask),Arg(shape=(mapeq.njunk,),distributed=True))
-	fun = mapeq.A
-	if prec:
-		def fun(*args): return prec.apply(*mapeq.A(*mapeq.A(*prec.apply(*args))))
-		#def fun(*args): return prec.apply(*args)
-	if nmax == 0: nmax = dof.n-mapeq.njunk
-	rows = []
-	if shuf:
-		inds = np.random.permutation(dof.n-mapeq.njunk)[:nmax]
-		inds = mapeq.comm.bcast(inds)
-	else:
-		inds = np.arange(nmax)
-	for i, ind in enumerate(inds):
-		a = np.zeros(dof.n,dtype=mapeq.dtype); a[ind] = 1
-		rows.append(dof.zip(*fun(*dof.unzip(a))))
-		if verbose:
-			b = np.array(rows)[:,np.array(inds[:i+1])]
-			sym = checksym(b)
-			eig = checkeig(b)
-			print "sym %4d %15.7e %15.7e" % (i, np.max(sym), np.min(eig))
-	if mapeq.comm.rank == 0:
-		A = np.array(rows)[:,inds[:nmax]]
-		with h5py.File("A.hdf","w") as hfile:
-			hfile["data"] = A
 
 def analyze_scan(d):
 	"""Computes bounding boxes for d.scan in both input and output
@@ -738,3 +722,4 @@ def build_effective_noise_model(group, nsamp):
 
 	# Build a dense binned noise model based on this
 	return nmat.NmatBinned(iC, bins)
+

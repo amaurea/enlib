@@ -382,6 +382,21 @@ def smooth_gauss(emap, sigma):
 	f *= np.exp(-l2*sigma**2)
 	return harm2map(f)
 
+def calc_window(shape):
+	"""Compute fourier-space window function. Like the other fourier-based
+	functions in this module, equi-spaced pixels are assumed. Since the
+	window function is separable, it is returned as an x and y part,
+	such that window = wy[:,None]*wx[None,:]."""
+	wy = np.sinc(np.fft.fftfreq(shape[-2]))
+	wx = np.sinc(np.fft.fftfreq(shape[-1]))
+	return wy, wx
+
+def apply_window(emap, pow=1.0):
+	"""Apply the pixel window function to the specified power to the map,
+	returning a modified copy. Use pow=-1 to unapply the pixel window."""
+	wy, wx = calc_window(emap.shape)
+	return ifft(fft(emap) * wy[:,None]**pow * wx[None,:]**pow).real
+
 def samewcs(arr, *args):
 	"""Returns arr with the same wcs information as the first enmap among args.
 	If no mathces are found, arr is returned as is."""
