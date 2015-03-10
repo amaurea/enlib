@@ -19,7 +19,7 @@ def get_core(dtype):
 config.default("pmat_map_order",      0, "The interpolation order of the map pointing matrix.")
 config.default("pmat_cut_type",  "full", "The cut sample representation used. 'full' uses one degree of freedom for each cut sample. 'bin:N' uses one degree of freedom for every N samples. 'exp' used one degree of freedom for the first sample, then one for the next two, one for the next 4, and so on, giving high resoultion at the edges of each cut range, and low resolution in the middle.")
 config.default("map_eqsys",       "equ", "The coordinate system of the maps. Can be eg. 'hor', 'equ' or 'gal'.")
-config.default("pmat_accuracy",     1.0, "Factor by which to lower accuracy requirement in pointing interpolation. 1.0 corresponds to 1e-2 pixels and 1 arc minute in polangle")
+config.default("pmat_accuracy",     1.0, "Factor by which to lower accuracy requirement in pointing interpolation. 1.0 corresponds to 1e-3 pixels and 0.1 arc minute in polangle")
 config.default("pmat_interpol_max_size", 100000, "Maximum mesh size in pointing interpolation. Worst-case time and memory scale at most proportionally with this.")
 config.default("pmat_interpol_max_time", 50, "Maximum time to spend in pointing interpolation constructor. Actual time spent may be up to twice this.")
 
@@ -41,7 +41,7 @@ class PmatMap(PointingMatrix):
 		ip_size= config.get("pmat_interpol_max_size")
 		ip_time= config.get("pmat_interpol_max_time")
 		transform = pos2pix(scan,template,sys)
-		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*acc, maxsize=ip_size, maxtime=ip_time)
+		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
 		self.rbox = ipol.box
 		self.nbox = np.array(ipol.ys.shape[4:])
 		# ipol.ys has shape [2t,2az,2el,{ra,dec,cos,sin},t,az,el]
@@ -243,7 +243,7 @@ class PmatPtsrc(PointingMatrix):
 		ip_size= config.get("pmat_interpol_max_size")
 		ip_time= config.get("pmat_interpol_max_time")
 		transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
-		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*acc, maxsize=ip_size, maxtime=ip_time)
+		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
 		self.rbox = ipol.box
 		self.nbox = np.array(ipol.ys.shape[4:])
 		n = self.rbox.shape[1]
