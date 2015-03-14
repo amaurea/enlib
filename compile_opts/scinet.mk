@@ -1,4 +1,4 @@
-export LAPACK_LINK = -L$(MKLPATH) -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -lpthread
+export LAPACK_LINK = -L$(MKLPATH) -lmkl_rt -lpthread -lm
 export OMP_LINK    = -liomp5
 export FFLAGS      = -openmp -Ofast -fPIC
 export FSAFE       = -openmp -O3 -fPIC
