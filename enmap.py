@@ -284,8 +284,10 @@ def extent(shape, wcs, nsub=0x10):
 	# Create a new wcs with (nsub,nsub) pixels
 	wcs = wcs.deepcopy()
 	step = (np.asfarray(shape[-2:])/nsub)[::-1]
+	wcs.wcs.crpix -= 0.5
 	wcs.wcs.cdelt *= step
 	wcs.wcs.crpix /= step
+	wcs.wcs.crpix += 0.5
 	# Get position of all the corners, including the far ones
 	pos = posmap([nsub+1,nsub+1], wcs, corner=True)
 	# Apply az scaling

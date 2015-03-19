@@ -109,13 +109,14 @@ def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	# First find the theta range of the pixels, with a 10% margin
 	decrange = np.array([np.max(pos[0]),np.min(pos[0])])
 	decrange = (decrange-np.mean(decrange))*1.1+np.mean(decrange)
-	decrange = np.array([max(0,decrange[0]),min(np.pi,decrange[1])])
+	decrange = np.array([min(np.pi/2,decrange[0]),max(-np.pi/2,decrange[1])])
 	# The shortest wavelength in the alm is about 2pi/lmax. We need at least
 	# two samples per mode.
 	step = np.pi/lmax/oversample
-	# Set up an intermediate coordinate system for the SHT
+	# Set up an intermediate coordinate system for the SHT. We will use
+	# CAR coordinates conformal on the quator.
 	tbox = np.array([[decrange[0],-np.pi],[decrange[1],np.pi]])
-	shape, wcs = enmap.geometry(pos=tbox, res=step)
+	shape, wcs = enmap.geometry(pos=tbox, res=step, proj="car")
 	tmap = enmap.zeros(dims+shape, wcs, dtype=dtype)
 	return tmap
 
