@@ -95,6 +95,14 @@ class DOF:
 			return np.sum(res)
 		else:
 			return res[0] + self.comm.allreduce(res[1])
+	def reduce(self, x):
+		"""Sum up the shared parts of x as passed from different processes, leaving the
+		unshared parts untourched"""
+		res = x.copy()
+		for info, r in zip(self.info, self.r):
+			if info.distributed and self.comm is not None:
+				self.comm.Allreduce(x[r[0]:r[1]], res[r[0]:r[1]])
+		return res
 	def __repr__(self):
 		return "DOF("+",".join([str(info) for info in self.info])+"){n="+str(self.n)+"}"
 

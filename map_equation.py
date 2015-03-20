@@ -85,6 +85,55 @@ class LinearSystem:
 	def up(self, x=None): raise NotImplementedError
 	def down(self): raise NotImplementedError
 
+# In general we want to be able to
+#  1. Solve for a list of signals in paralell
+#  2. Subtract from the TOD when building RHS, or replace it with something else.
+#  3. Don't make any unnecessary overhead. Make no
+#     more passes through the data than necessary.
+# I suggest an interface something like this:
+#   eq = LinearSystemScans(scans, signals=[sky, cuts, azbin], data=[raw,srcsub])
+# sky, cuts, azbin etc. are objects containing enough informatino to solve for
+# these components. They should each have members
+#  .name # Name for identifying this component
+#  .dof  # DOF object representing its degrees of freedom
+#  .hits # hitcount map per degree of freedom. Can be expanded using dof
+#  .div  # white noise estimate
+#  .b    # right-hand size. Empty before being built
+#  .M(x) # preconditioner, approximate solution of system
+#  .P (s, x, tod) # project from signal to tod for scan s
+#  .PT(s, tod, x) # project from tod to signal for scan s
+#  .init(scans) # Perform any initialization needed. Pass in all scans
+#
+# These objects should construct the preconditioner internally. But how to do
+# that? The binned preconditioner needs P'NdiagP, which is relatively cheap,
+# while the cyclic one needs P'NP. For all the other stuff, these objects
+# have not needed to care about N at all, that was the job of the LinearSystemScan
+# itself. But for the preconditioner N matters.
+#
+# Now, technically N *is* available as part of scan. So perhaps this isn't
+# a problem. The job of LinearSystemScan is to do all the fancy joint, subtracted
+# solving in a CG-friendly manner. That doesn't mean that internal stuff can't
+# do extra full loops the scans when building the preconditioner. But when should
+# this happen? Easiest thing: .init(scans), which sets up the preconditinoer as needed.
+#
+# Building the right-hand side:
+#
+# for scan in scans:
+# 	tod = zeros
+# 	for dsource in data:
+# 		dsource(scan, tod)
+# 	nmat.apply(tod)
+# 	for signal in signals:
+# 		signal.PT(scan, tod, signal.b)
+# for signal in signals:
+# 	signal.b = signal.dof.reduce(signal.b)
+# b = tot_dof.zip(*sum([signal.dof.unzip(signal.b) for signal in signals]))
+#
+# The sources are objects that need to provide __call__(scan, tod) and modifies
+# tod. For example:
+# def raw(scan, tod): tod[...] = scan.get_samples()
+
+
 # Abstract interface to the Map-making system.
 class LinearSystemMap(LinearSystem):
 	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin", imap=None, isrc=None):
