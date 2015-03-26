@@ -154,14 +154,19 @@ def recenter(angs, center, unit="rad"):
 	# is at the same elevation as the sun but 10 degrees higher in az,
 	# then it shouldn't matter what az actually is, but with the previous
 	# method it would.
+	#
+	# Now supports specifying where to recenter by specifying center as
+	# lon_from,lat_from,lon_to,lat_to
 	unit = getunit(unit)
-	ra0, dec0 = center
-	return euler_rot([0,dec0-90/unit.in_units(u.deg),-ra0], angs, kind="zyz", unit=unit)
+	if len(center) == 4: ra0, dec0, ra1, dec1 = center
+	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], 0, 90/unit.in_units(u.deg)
+	return euler_rot([0,dec0-dec1,ra1-ra0], angs, kind="zyz", unit=unit)
 def decenter(angs, center, unit="rad"):
 	"""Inverse operation of recenter."""
 	unit = getunit(unit)
-	ra0, dec0 = center
-	return euler_rot([ra0,90/unit.in_units(u.deg)-dec0,0],  angs, kind="zyz", unit=unit)
+	if len(center) == 4: ra0, dec0, ra1, dec1 = center
+	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], 0, 90/unit.in_units(u.deg)
+	return euler_rot([ra0-ra1,dec1-dec0,0],  angs, kind="zyz", unit=unit)
 
 def nohor(sys): return sys if sys != c.AltAz else c.ICRS
 def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,basestring) else sys
@@ -191,17 +196,24 @@ def getsys_full(sys, unit="deg", time=None, site=None):
 	refsys = getsys(refsys) if refsys is not None else base
 	if ref is None: return [base, ref]
 	if isinstance(ref, basestring):
-		# In our first format, ref is a set of coordinates in degrees
-		try:
-			ref = np.asfarray(ref.split(","))
-			assert(ref.ndim == 1 and len(ref) == 2)
-		except ValueError:
-			# Otherwise, treat as an ephemeris object
-			ref    = ephem_pos(ref, time)/unit.in_units(u.rad)
-			refsys = getsys("equ")
-	# Now rotate the reference point to our base system
-	if refsys is not None:
-		ref = transform(refsys, base, ref, unit=unit, time=time, site=site)
+		# The general formt here is from[/to], where from and to
+		# each are either an object name or a position in the format
+		# lat_lon. comma would have been preferable, but we reserve that
+		# for from_sys,to_sys uses for backwards compatibility with
+		# existing programs.
+		ref_expanded = []
+		for r in ref.split("/"):
+			# In our first format, ref is a set of coordinates in degrees
+			try:
+				r = np.asfarray(r.split("_"))*unit.in_units(u.deg)
+				assert(r.ndim == 1 and len(r) == 2)
+				r = transform(refsys, base, r, unit=unit, time=time, site=site)
+			except ValueError:
+				# Otherwise, treat as an ephemeris object
+				r = ephem_pos(r, time)/unit.in_units(u.rad)
+				r = transform("equ", base, r, unit=unit, time=time, site=site)
+			ref_expanded += list(r)
+		ref = np.array(ref_expanded)
 	return [base, ref]
 
 def ephem_pos(name, mjd):
