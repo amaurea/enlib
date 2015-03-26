@@ -129,10 +129,19 @@ class LinearSystem:
 # 	signal.b = signal.dof.reduce(signal.b)
 # b = tot_dof.zip(*sum([signal.dof.unzip(signal.b) for signal in signals]))
 #
+# Memory overhead. The scheme above stores the map redundantly, both as part of
+# global array and as part of a local one for one of the signals. This wastes a bit
+# of memory, up to a few hundred megabytes for a boss map.
+#
 # The sources are objects that need to provide __call__(scan, tod) and modifies
 # tod. For example:
 # def raw(scan, tod): tod[...] = scan.get_samples()
-
+#
+# PROBLEMS WITH THIS SCHEME:
+#  * Cuts should be taken into account in preconditioner and hitcount map for
+#    each signal, but should only correspond to a single signal itself
+#  * Preconditioners need to access each signal as a full equation system, so
+#    must define full A for the signals and pass them to precon.
 
 # Abstract interface to the Map-making system.
 class LinearSystemMap(LinearSystem):
@@ -512,6 +521,9 @@ def test_symmetry(mapeq, nmax=0, shuf=True, verbose=True, prec=None):
 		A = np.array(rows)[:,inds[:nmax]]
 		with h5py.File("A.hdf","w") as hfile:
 			hfile["data"] = A
+
+
+
 
 # Submap preconditioner stuff below here. I never got this to work,
 # but it's still an interesting idea.
