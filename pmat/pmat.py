@@ -42,16 +42,7 @@ class PmatMap(PointingMatrix):
 		ip_time= config.get("pmat_interpol_max_time")
 		transform = pos2pix(scan,template,sys)
 		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
-		self.rbox = ipol.box
-		self.nbox = np.array(ipol.ys.shape[4:])
-		# ipol.ys has shape [2t,2az,2el,{ra,dec,cos,sin},t,az,el]
-		# fortran expects [{ra,dec,cos,sin},{y,dy/dt,dy/daz,dy,del,...},pix]
-		# This format allows us to avoid hard-coding the number of input dimensions,
-		# and is forward compatible for higher order interpolation later.
-		# The disadvantage is that the ordering becomes awkard at higher order.
-		n = self.rbox.shape[1]
-		self.ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
-		self.ys = np.rollaxis(self.ys.reshape(self.ys.shape[:2]+(-1,)),-1).astype(template.dtype)
+		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol)
 		self.comps= np.arange(template.shape[0])
 		self.scan  = scan
 		self.order = order
@@ -244,11 +235,7 @@ class PmatPtsrc(PointingMatrix):
 		ip_time= config.get("pmat_interpol_max_time")
 		transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
 		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
-		self.rbox = ipol.box
-		self.nbox = np.array(ipol.ys.shape[4:])
-		n = self.rbox.shape[1]
-		self.ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
-		self.ys = np.rollaxis(self.ys.reshape(self.ys.shape[:2]+(-1,)),-1).astype(self.dtype)
+		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol)
 		self.comps = np.arange(params.shape[0]-5)
 		self.scan  = scan
 		self.core = pmat_core_32.pmat_core if self.dtype == np.float32 else pmat_core_64.pmat_core
@@ -334,3 +321,19 @@ def compress_ranges(ranges, nrange, cut, nsamp):
 	# does. offsets, which used to be indices into ranges, are now
 	# indices into map instead.
 	return ranges, map, offsets
+
+def extract_interpol_params(ipol):
+	"""Extracts flattend interpolation parameters from an Interpolator object
+	in a form suitable for passing to fortran. Returns rbox[{from,to},nparam],
+	nbox[nparam] (grid size along each input parameter), ys[nout,{cval,dx,dy,dz,...},gridsize]."""
+	rbox = ipol.box
+	nbox = np.array(ipol.ys.shape[4:])
+	# ipol.ys has shape [2t,2az,2el,{ra,dec,cos,sin},t,az,el]
+	# fortran expects [{ra,dec,cos,sin},{y,dy/dt,dy/daz,dy,del,...},pix]
+	# This format allows us to avoid hard-coding the number of input dimensions,
+	# and is forward compatible for higher order interpolation later.
+	# The disadvantage is that the ordering becomes awkard at higher order.
+	n = rbox.shape[1]
+	ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
+	ys = np.rollaxis(ys.reshape(ys.shape[:2]+(-1,)),-1).astype(template.dtype)
+	return rbox, nbox, ys
