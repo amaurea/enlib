@@ -202,6 +202,42 @@ class pos2pix:
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)
 
+config.default("pmat_scan_mode", "azimuth", "The coodinate basis to use for scan mode projection. Can be 'azimuth' or 'phase'. Default is azimuth.")
+class PmatScan(PointingMatrix):
+	"""Project tods to and from azimuth phase coordinates, which are
+	appropriate for modelling magnetic pickup and similar. We support
+	two modes: "azimuth" and "phase". These differ by how they handle
+	the left and right sweeps.
+		azimuth: the range min(az), max(az) is divided into npix pixels.
+		phase: samples where az increases are mapped to [0:npix/2], while
+		       samples where az decreases are mapped to [npix/2:npix]."""
+	def __init__(self, scan, ncomp, npix, mode=None):
+		mode = config.get("pmat_scan_mode", mode)
+		# Compute our sample -> basis mapping for this scan
+		az  = scan.boresight[:,1]
+		box = np.array([np.min(az),np.max(az)])
+		raz = (az-box[0])/(box[1]-box[0])
+		if mode == "azimuth":
+			# Simple azimuth mapping
+			inds = raz*npix
+		elif mode == "phase":
+			# Scan phase mapping
+			increasing = az[1:]-az[:-1] >= 0
+			increasing = np.concatenate([increasing,increasing[-1:]])
+			inds = np.where(increasing, raz, 2-raz)*npix/2
+		inds = np.floor(inds).astype(np.int32)
+		inds = np.minimum(npix-1,inds)
+		
+		self.inds  = inds
+		self.comps = np.arange(self.ncomp)
+		self.scan  = scan
+		self.mode  = mode
+		self.npix  = npix
+	def forward (self, tod, model):
+		get_core(tod.dtype).pmat_scan( 1, tod.T, model.T, self.inds, self.scan.comps.T, self.comps)
+	def backward(self, tod, model):
+		get_core(tod.dtype).pmat_scan(-1, tod.T, model.T, self.inds, self.scan.comps.T, self.comps)
+
 class PmatMapRebin(PointingMatrix):
 	"""Fortran-accelerated rebinning of maps."""
 	def forward (self, mhigh, mlow):

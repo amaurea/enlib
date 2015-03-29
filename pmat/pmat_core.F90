@@ -228,7 +228,7 @@ contains
 		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
 		! Work
 		integer(4), parameter :: bz = 321
-		integer(4) :: ndet, nsamp, di, si, id, ic, j, l, nj
+		integer(4) :: ndet, nsamp, di, si, id, ic, j, nj
 		integer(4) :: steps(size(rbox,1))
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
@@ -548,6 +548,60 @@ contains
 		mean = sum(a)/size(a)
 	end function
 
+  !!! Azimuth binning stuff !!!
+	subroutine pmat_scan(dir, tod, model, inds, det_comps, comps)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, inds(:)
+		real(_),    intent(inout) :: tod(:,:), model(:,:)
+		real(_),    intent(in)    :: det_comps(:,:)
+		integer(4), intent(in)    :: comps(:)
+		! Work
+		integer(4) :: ndet, nsamp, ncomp, npix, si, di, ci, nproc, id, i
+		real(_), allocatable :: wmodel(:,:,:)
+
+		! This is meant to be called together with pmat_tod, so it doesn't
+		! overwrite the tod, but instead adds to it.
+		nsamp = size(tod,1)
+		ndet  = size(tod,2)
+		npix  = size(model,1)
+		ncomp = size(model,2)
+
+		if(dir < 0) then
+			nproc = omp_get_max_threads()
+			allocate(wmodel(size(model,1),size(model,2),nproc))
+			!$omp parallel workshare
+			wmodel = 0
+			!$omp end parallel workshare
+			!$omp parallel private(di,si,ci,id)
+			id = omp_get_thread_num()+1
+			!$omp do collapse(2)
+			do di = 1, ndet
+				do ci = 1, ncomp
+					do si = 1, nsamp
+						wmodel(inds(si)+1,ci,id) = wmodel(inds(si)+1,ci,id) + tod(si,di)*det_comps(comps(ci),di)
+					end do
+				end do
+			end do
+			!$omp end parallel
+			!$omp parallel do collapse(2) private(ci,i)
+			do ci = 1, ncomp
+				do i = 1, npix
+					model(i,ci) = sum(wmodel(i,ci,:))
+				end do
+			end do
+		else
+			!$omp parallel do collapse(2) private(di,si,ci)
+			do di = 1, ndet
+				do si = 1, nsamp
+					do ci = 1, ncomp
+						tod(si,di) = tod(si,di) + model(inds(si)+1,ci)*det_comps(comps(ci),di)
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
 	subroutine pmat_map_rebin(dir, map_high, map_low)
 		use omp_lib
 		implicit none
@@ -599,7 +653,7 @@ contains
 		real(_), allocatable :: ibuf(:), obuf(:)
 		! Assume that the high-res and low-res cuts have the same number of entries
 		! and come in the same order.
-		!$omp parallel do default(private) shared(junk_high,junk_low,cut_high,cut_low)
+		!$omp parallel do default(private) shared(junk_high,junk_low,cut_high,cut_low,dir)
 		do ci = 1, size(cut_high,2)
 			gl1 = cut_low (gstart,ci)+1; gl2 = gl1+cut_low (glen,ci)-1
 			gh1 = cut_high(gstart,ci)+1; gh2 = gh1+cut_high(glen,ci)-1
@@ -859,7 +913,7 @@ contains
 		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:), rangesets(:), ranges(:,:)
 		! Work
 		integer(4), parameter :: bz = 321
-		integer(4) :: ndet, nsrc, di, ri, si, s0, oi, i, j, k, i1, i2, ic, nj, n, nsamp
+		integer(4) :: ndet, nsrc, di, ri, si, s0, oi, i, j, k, i1, i2, ic, nj, nsamp
 		integer(4) :: r2det(size(ranges,2)), srcoff(size(ranges,2)+1)
 		integer(4) :: steps(size(rbox,1))
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
