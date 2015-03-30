@@ -145,9 +145,9 @@ class LinearSystem:
 
 # Abstract interface to the Map-making system.
 class LinearSystemMap(LinearSystem):
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin", imap=None, isrc=None):
+	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin", imap=None, isrc=None, azmap=None):
 		L.info("Building preconditioner")
-		self.mapeq  = MapEquation(scans, area, comm=comm, imap=imap, isrc=isrc)
+		self.mapeq  = MapEquation(scans, area, comm=comm, imap=imap, isrc=isrc, azmap=azmap)
 		if precon == "bin":
 			self.precon = PrecondBinned(self.mapeq)
 		elif precon == "cyc":
@@ -169,7 +169,10 @@ class LinearSystemMap(LinearSystem):
 			test_symmetry(self.mapeq, 0, verbose=False, shuf=False)
 			sys.exit(0)
 		self.mask   = self.precon.mask
-		self.dof    = DOF(Arg(mask=self.mask),Arg(shape=(self.mapeq.njunk,),distributed=True))
+		if azmap:
+			self.dof    = DOF(Arg(mask=self.mask),Arg(shape=(self.mapeq.njunk,),distributed=True),Arg(shape=self.mapeq.azshape,distributed=not azmap.shared))
+		else:
+			self.dof    = DOF(Arg(mask=self.mask),Arg(shape=(self.mapeq.njunk,),distributed=True))
 		L.info("Building right-hand side")
 		self.b      = self.dof.zip(*self.mapeq.b())
 		self.scans, self.area, self.comm = scans, area, comm
@@ -222,7 +225,11 @@ class LinearSystemMap(LinearSystem):
 			enmap.write_map(prefix + "srcs.fits", self.isrc.model.draw(rhs.shape, rhs.wcs, window=True))
 
 class MapEquation:
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None, isrc=None):
+	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None, isrc=None, azmap=None):
+		# Adding ad-hoc simultaneous solving for an azimuth signal. This should really be done
+		# in a more ordely fashion, which mapmaking.py will do. But I'm adding it here first
+		# as a quick test. azmap should have the following members if present:
+		# .npix (int), .shared (bool), .mode ("azimuth", "phase" or None for default)
 		data = []
 		njunk = 0
 		for si, scan in enumerate(scans):
@@ -238,8 +245,9 @@ class MapEquation:
 			njunk = d.cutrange[1]
 			d.nmat = scan.noise
 			# Make maps from data projected from input map instead of real data
-			if imap: d.pmap_imap = pmat.PmatMap(scan, imap.map, order=pmat_order, sys=imap.sys)
+			if imap: d.pmat_imap = pmat.PmatMap(scan, imap.map, order=pmat_order, sys=imap.sys)
 			if isrc: d.pmat_isrc = pmat.PmatPtsrc(scan, isrc.model.params.astype(area.dtype), sys=isrc.sys, tmul=isrc.tmul, pmul=isrc.pmul)
+			if azmap: d.pmat_azmap = pmat.PmatScan(scan, area.shape[0], azmap.npix, mode=azmap.mode)
 			data.append(d)
 		self.area = area.copy()
 		self.njunk = njunk
@@ -248,10 +256,18 @@ class MapEquation:
 		self.data  = data
 		self.imap  = imap
 		self.isrc  = isrc
+
+		self.azmap = azmap
+		if self.azmap:
+			npre = 1 if azmap.shared else len(scans)
+			self.azshape = (npre, area.shape[0], azmap.npix)
 	def b(self):
 		rhs_map  = enmap.zeros(self.area.shape, self.area.wcs, dtype=self.dtype)
 		rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
-		for d in self.data:
+		if self.azmap:
+			rhs_azmap= np.zeros(self.azshape, dtype=self.dtype)
+		for di, d in enumerate(self.data):
+			azdi = 0 if not self.azmap or len(rhs_azmap) <= 1 else di
 			with bench.mark("meq_b_get"):
 				# Only read data if necessary, as it's a pretty heavy operation
 				if self.imap is None and (self.isrc is None or self.isrc.tmul != 0):
@@ -263,7 +279,7 @@ class MapEquation:
 				else:
 					tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
 				if self.imap is not None:
-					d.pmap_imap.forward(tod, self.imap.map)
+					d.pmat_imap.forward(tod, self.imap.map)
 					utils.deslope(tod, inplace=True)
 				if self.isrc is not None:
 					d.pmat_isrc.forward(tod, self.isrc.model.params)
@@ -271,20 +287,31 @@ class MapEquation:
 				d.nmat.apply(tod)
 			with bench.mark("meq_b_P'"):
 				d.pmap.backward(tod,rhs_map)
+				if self.azmap: d.pmat_azmap.backward(tod, rhs_azmap[azdi])
 				d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["meq_b_get","meq_b_N","meq_b_P'"]]
 			L.debug("meq b get %5.1f N %4.1f P' %4.1f" % tuple(times))
 		with bench.mark("meq_b_red"):
 			rhs_map = reduce(rhs_map, self.comm)
-		return rhs_map, rhs_junk
-	def A(self, map, junk, white=False):
+			if self.azmap and self.azmap.shared:
+				rhs_azmap = reduce(rhs_azmap, self.comm)
+		if self.azmap:
+			return rhs_map, rhs_junk, rhs_azmap
+		else:
+			return rhs_map, rhs_junk
+	def A(self, map, junk, azmap=None, white=False):
 		map, junk = map.copy(), junk.copy()
 		omap, ojunk = map*0, junk*0
-		for d in self.data:
+		if self.azmap:
+			azmap = azmap.copy()
+			oazmap = azmap*0
+		for di, d in enumerate(self.data):
+			azdi = 0 if azmap is not None and len(azmap) <= 1 else di
 			with bench.mark("meq_A_P"):
 				tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
 				d.pmap.forward(tod,map)
+				if self.azmap: d.pmat_azmap.forward(tod,azmap[azdi])
 				d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
 			with bench.mark("meq_A_N"):
 				if white:
@@ -293,15 +320,21 @@ class MapEquation:
 					d.nmat.apply(tod)
 			with bench.mark("meq_A_P'"):
 				d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
+				if self.azmap: d.pmat_azmap.backward(tod,oazmap[azdi])
 				d.pmap.backward(tod,omap)
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["meq_A_P","meq_A_N","meq_A_P'"]]
 			L.debug("meq A P %4.1f N %4.1f P' %4.1f" % tuple(times))
 		with bench.mark("meq_A_red"):
 			omap = reduce(omap, self.comm)
-		return omap, ojunk
-	def white(self, map, junk):
-		return self.A(map, junk, white=True)
+			if self.azmap and self.azmap.shared:
+				oazmap = reduce(oazmap, self.comm)
+		if self.azmap:
+			return omap, ojunk, oazmap
+		else:
+			return omap, ojunk
+	def white(self, map, junk, azmap=None):
+		return self.A(map, junk, azmap=azmap, white=True)
 	def hitcount(self):
 		hitmap = enmap.zeros(self.area.shape, self.area.wcs, self.dtype)
 		junk   = np.zeros(self.njunk, self.dtype)
@@ -323,10 +356,18 @@ class PrecondBinned:
 		# Compute the per pixel approximate inverse covmat
 		div_map   = enmap.zeros((ncomp,ncomp)+mapeq.area.shape[1:],mapeq.area.wcs, mapeq.area.dtype)
 		div_junk  = np.zeros(mapeq.njunk, dtype=mapeq.area.dtype)
+		if mapeq.azmap:
+			div_azmap = np.zeros((ncomp,)+mapeq.azshape, dtype=mapeq.area.dtype)
 		for ci in range(ncomp):
 			div_map[ci,ci] = 1
 			div_junk[...]  = 1
-			div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
+			# Don't set azmap to one here. We get our one value from map.
+			# All these special cases are very ugly, and will be handled better
+			# in mapmaking.py later.
+			if mapeq.azmap:
+				div_map[ci], div_junk, div_azmap[ci] = mapeq.white(div_map[ci], div_junk, div_azmap[ci])
+			else:
+				div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
 		# Make sure we're symmetric in the TQU-direction
 		div_map = 0.5*(div_map+np.rollaxis(div_map,1))
 		self.div_map, self.div_junk = div_map, div_junk
@@ -336,9 +377,19 @@ class PrecondBinned:
 		# corresonding parts of the map preconditioner
 		self.mask = makemask(self.div_map)
 		self.div_map *= self.mask[None,:]*self.mask[:,None]
-	def apply(self, map, junk):
+		if mapeq.azmap:
+			# Reshape div_azmap to sensible shape
+			div_azmap = np.rollaxis(div_azmap, 2)
+			div_azmap = 0.5*(div_azmap+np.rollaxis(div_azmap,1))
+			azmask = makemask(div_azmap)
+			div_azmap *= azmask[None,:]*azmask[:,None]
+			self.div_azmap = np.rollaxis(div_azmap, 2)
+	def apply(self, map, junk, azmap=None):
 		with bench.mark("prec_bin"):
-			res = array_ops.solve_masked(self.div_map, map, [0,1]), junk/self.div_junk
+			if azmap is not None:
+				res = array_ops.solve_masked(self.div_map, map, [0,1]), junk/self.div_junk, array_ops.solve_masked(self.div_azmap, azmap, [1,2])
+			else:
+				res = array_ops.solve_masked(self.div_map, map, [0,1]), junk/self.div_junk
 		return res
 	def write(self, prefix=""):
 		if self.mapeq.comm.rank > 0: return
@@ -420,11 +471,11 @@ def makemask(div):
 	tmask = div[0,0] > 0
 	lim   = config.get("precond_condition_lim")
 	pmask = (condition >= 1)*(condition < lim)
-	masks = enmap.zeros(div.shape[1:], div.wcs, dtype=bool)
+	masks = np.zeros(div.shape[1:], dtype=bool)
 	masks[0]  = tmask
 	masks[1:] = pmask[None]
 	del condition
-	return masks
+	return enmap.samewcs(masks, div)
 
 def reduce(a, comm=MPI.COMM_WORLD):
 	res = a.copy()

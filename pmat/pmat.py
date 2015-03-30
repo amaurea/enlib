@@ -42,7 +42,7 @@ class PmatMap(PointingMatrix):
 		ip_time= config.get("pmat_interpol_max_time")
 		transform = pos2pix(scan,template,sys)
 		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
-		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol)
+		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, template.dtype)
 		self.comps= np.arange(template.shape[0])
 		self.scan  = scan
 		self.order = order
@@ -229,7 +229,7 @@ class PmatScan(PointingMatrix):
 		inds = np.minimum(npix-1,inds)
 		
 		self.inds  = inds
-		self.comps = np.arange(self.ncomp)
+		self.comps = np.arange(ncomp)
 		self.scan  = scan
 		self.mode  = mode
 		self.npix  = npix
@@ -271,7 +271,7 @@ class PmatPtsrc(PointingMatrix):
 		ip_time= config.get("pmat_interpol_max_time")
 		transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
 		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
-		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol)
+		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, self.dtype)
 		self.comps = np.arange(params.shape[0]-5)
 		self.scan  = scan
 		self.core = pmat_core_32.pmat_core if self.dtype == np.float32 else pmat_core_64.pmat_core
@@ -358,7 +358,7 @@ def compress_ranges(ranges, nrange, cut, nsamp):
 	# indices into map instead.
 	return ranges, map, offsets
 
-def extract_interpol_params(ipol):
+def extract_interpol_params(ipol, dtype):
 	"""Extracts flattend interpolation parameters from an Interpolator object
 	in a form suitable for passing to fortran. Returns rbox[{from,to},nparam],
 	nbox[nparam] (grid size along each input parameter), ys[nout,{cval,dx,dy,dz,...},gridsize]."""
@@ -371,5 +371,5 @@ def extract_interpol_params(ipol):
 	# The disadvantage is that the ordering becomes awkard at higher order.
 	n = rbox.shape[1]
 	ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
-	ys = np.rollaxis(ys.reshape(ys.shape[:2]+(-1,)),-1).astype(template.dtype)
+	ys = np.rollaxis(ys.reshape(ys.shape[:2]+(-1,)),-1).astype(dtype)
 	return rbox, nbox, ys

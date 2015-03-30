@@ -579,7 +579,7 @@ contains
 			do di = 1, ndet
 				do ci = 1, ncomp
 					do si = 1, nsamp
-						wmodel(inds(si)+1,ci,id) = wmodel(inds(si)+1,ci,id) + tod(si,di)*det_comps(comps(ci),di)
+						wmodel(inds(si)+1,ci,id) = wmodel(inds(si)+1,ci,id) + tod(si,di)*det_comps(comps(ci)+1,di)
 					end do
 				end do
 			end do
@@ -595,7 +595,7 @@ contains
 			do di = 1, ndet
 				do si = 1, nsamp
 					do ci = 1, ncomp
-						tod(si,di) = tod(si,di) + model(inds(si)+1,ci)*det_comps(comps(ci),di)
+						tod(si,di) = tod(si,di) + model(inds(si)+1,ci)*det_comps(comps(ci)+1,di)
 					end do
 				end do
 			end do
