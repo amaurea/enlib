@@ -41,8 +41,15 @@ class PmatMap(PointingMatrix):
 		ip_size= config.get("pmat_interpol_max_size")
 		ip_time= config.get("pmat_interpol_max_time")
 		transform = pos2pix(scan,template,sys)
-		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
+
+		# Build pointing interpolator
+		ipol, obox = interpol.build(transform, interpol.ip_linear, box, np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time, return_obox=True)
 		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, template.dtype)
+		# Use obox to extract a pixel bounding box for this scan.
+		# These are the only pixels pmat needs to concern itself with.
+		# Reducing the number of pixels makes us more memory efficient
+		self.pixbox = build_pixbox(obox[:,:2], template.shape[-2:])
+
 		self.comps= np.arange(template.shape[0])
 		self.scan  = scan
 		self.order = order
@@ -58,10 +65,10 @@ class PmatMap(PointingMatrix):
 		self.ipol = ipol
 	def forward(self, tod, m):
 		"""m -> tod"""
-		self.func( 1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
+		self.func( 1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
 	def backward(self, tod, m):
 		"""tod -> m"""
-		self.func(-1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
+		self.func(-1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -373,3 +380,8 @@ def extract_interpol_params(ipol, dtype):
 	ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
 	ys = np.rollaxis(ys.reshape(ys.shape[:2]+(-1,)),-1).astype(dtype)
 	return rbox, nbox, ys
+
+def build_pixbox(obox, n, margin=10):
+	return np.array([np.maximum(0,np.floor(obox[0]-margin)),np.minimum(n,np.floor(obox[1]+margin))]).astype(np.int32)
+
+

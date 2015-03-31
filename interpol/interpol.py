@@ -3,7 +3,7 @@ from enlib import utils
 
 import h5py
 
-def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, *args, **kwargs):
+def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_obox=False, *args, **kwargs):
 	"""Given a function func([nin,...]) => [nout,...] and
 	an interpolator class interpolator(box,[nout,...]),
 	(where the input array is regularly spaced in each direction),
@@ -16,6 +16,7 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, *args, **
 	idim    = box.shape[1]
 	n       = np.array([4]*idim) # starting mesh size
 	x       = utils.grid(box, n)
+	obox    = [np.inf,-np.inf]
 
 	t0      = time.time()
 
@@ -53,9 +54,12 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, *args, **
 					n  = nnew
 				else: nok += 1
 				errs[i] = err
+				# update output box
+				obox[0] = np.minimum(obox[0], np.min(ytrue.reshape(ytrue.shape[0],-1),1))
+				obox[1] = np.maximum(obox[0], np.max(ytrue.reshape(ytrue.shape[0],-1),1))
 			else: nok += 1
 		if nok >= idim: break
-	return ip
+	return ip if not return_obox else ip, np.array(obox)
 
 class Interpolator:
 	def __init__(self, box, y, *args, **kwargs):

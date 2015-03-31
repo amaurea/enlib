@@ -27,25 +27,26 @@ contains
 			dir,                              &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
 			tod, map,                         &! Main inputs/outpus
 			bore, det_pos, det_comps,  comps, &! Input pointing
-			rbox, nbox, ys                    &! Coordinate transformation
+			rbox, nbox, ys, pbox              &! Coordinate transformation
 		)
 		use omp_lib
 		implicit none
 		! Parameters
-		integer(4), intent(in)    :: dir, comps(:), nbox(:)
+		integer(4), intent(in)    :: dir, comps(:), nbox(:), pbox(:,:)
 		real(_),    intent(in)    :: bore(:,:), ys(:,:,:) ! comp, derivs, pix
 		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
 		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
 		! Work
 		integer(4), parameter :: bz = 321
 		integer(4) :: ndet, nsamp, di, si, nproc, id, ic, i, j, k, l, nj
-		integer(4) :: steps(size(rbox,1)), pix(2,bz)
+		integer(4) :: steps(size(rbox,1)), pix(2,bz), psize(2)
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1)), phase(size(map,3),bz)
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
 		real(_), allocatable :: wmap(:,:,:,:)
 
 		nsamp   = size(tod, 1)
 		ndet    = size(tod, 2)
+		psize   = pbox(:,2)-pbox(:,1)
 
 		! In C order, ys has pixel axes t,ra,dec, so nbox = [nt,nra,ndec]
 		! Index mapping is therefore given by [nra*ndec,ndec,1]
@@ -57,9 +58,15 @@ contains
 
 		if(dir < 0) then
 			nproc = omp_get_max_threads()
-			allocate(wmap(size(map,1),size(map,2),size(map,3),nproc))
+			allocate(wmap(psize(2),psize(1),size(map,3),nproc))
+			!allocate(wmap(size(map,1),size(map,2),size(map,3),nproc))
 			!$omp parallel workshare
 			wmap = 0
+			!$omp end parallel workshare
+		else
+			allocate(wmap(psize(2),psize(1),size(map,3),1))
+			!$omp parallel workshare
+			wmap(:,:,:,1) = map(pbox(2,1)+1:pbox(2,2),pbox(1,1)+1:pbox(1,2),:)
 			!$omp end parallel workshare
 		end if
 
@@ -76,10 +83,12 @@ contains
 				! We use pixel-center coordinates, so [i-0.5:i+0.5] belongs to
 				! pixel i. Hence nint. The extra +1 is due to fortran's indexing.
 				pix(:,:nj)    = nint(opoint(1:2,:nj))+1
-				! Bounds check (<1% cost)
 				do j = 1, nj
-					pix(1,j) = min(size(map,2),max(1,pix(1,j)))
-					pix(2,j) = min(size(map,1),max(1,pix(2,j)))
+					! Transform from global to workspace pixels
+					pix(:,j) = pix(:,j)-pbox(:,1)
+					! Bounds check (<1% cost)
+					pix(1,j) = min(psize(1),max(1,pix(1,j)))
+					pix(2,j) = min(psize(2),max(1,pix(2,j)))
 				end do
 				phase(:,:nj)  = get_phase(comps, det_comps(:,di), opoint(3:,:nj))
 				if(dir < 0) then
@@ -88,20 +97,21 @@ contains
 					end do
 				else
 					do j = 1, nj
-						tod(si+j-1,di) = sum(map(pix(2,j),pix(1,j),:)*phase(:,j))
+						tod(si+j-1,di) = sum(wmap(pix(2,j),pix(1,j),:,1)*phase(:,j))
 					end do
 				end if
 			end do
 		end do
 		!$omp end parallel
 
+		! Go back to full pixel space
 		if(dir < 0) then
 			!$omp parallel do collapse(3)
 			do j = 1, size(wmap, 3)
 				do k = 1, size(wmap, 2)
 					do l = 1, size(wmap, 1)
 						do i = 1, size(wmap,4)
-							map(l,k,j) = map(l,k,j) + wmap(l,k,j,i)
+							map(l+pbox(2,1),k+pbox(1,1),j) = map(l+pbox(2,1),k+pbox(1,1),j) + wmap(l,k,j,i)
 						end do
 					end do
 				end do
