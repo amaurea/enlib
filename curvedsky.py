@@ -101,7 +101,7 @@ def alm2map(alm, pos, ainfo=None, oversample=2.0, spin=2, deriv=False):
 
 	# Project down on our final pixels. This will result in a slight smoothing
 	pix = tmap.sky2pix(pos[:2])
-	return enmap.samewcs(utils.interpol(tmap, pix), pos)
+	return enmap.samewcs(utils.interpol(tmap, pix, mode="wrap"), pos)
 
 def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	"""Make a map suitable as an intermediate step in projecting alms up to

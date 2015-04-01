@@ -160,13 +160,13 @@ def recenter(angs, center, unit="rad"):
 	unit = getunit(unit)
 	if len(center) == 4: ra0, dec0, ra1, dec1 = center
 	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], 0, 90/unit.in_units(u.deg)
-	return euler_rot([0,dec0-dec1,ra1-ra0], angs, kind="zyz", unit=unit)
+	return euler_rot([ra1,dec0-dec1,-ra0], angs, kind="zyz", unit=unit)
 def decenter(angs, center, unit="rad"):
 	"""Inverse operation of recenter."""
 	unit = getunit(unit)
 	if len(center) == 4: ra0, dec0, ra1, dec1 = center
 	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], 0, 90/unit.in_units(u.deg)
-	return euler_rot([ra0-ra1,dec1-dec0,0],  angs, kind="zyz", unit=unit)
+	return euler_rot([ra0,dec1-dec0,-ra1],  angs, kind="zyz", unit=unit)
 
 def nohor(sys): return sys if sys != c.AltAz else c.ICRS
 def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,basestring) else sys
@@ -205,7 +205,7 @@ def getsys_full(sys, unit="deg", time=None, site=None):
 		for r in ref.split("/"):
 			# In our first format, ref is a set of coordinates in degrees
 			try:
-				r = np.asfarray(r.split("_"))*unit.in_units(u.deg)
+				r = np.asfarray(r.split("_"))/unit.in_units(u.deg)
 				assert(r.ndim == 1 and len(r) == 2)
 				r = transform(refsys, base, r, unit=unit, time=time, site=site)
 			except ValueError:

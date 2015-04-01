@@ -311,11 +311,17 @@ def area(shape, wcs, nsub=0x10):
 def lmap(shape, wcs):
 	"""Return a map of all the wavenumbers in the fourier transform
 	of a map with the given shape and wcs."""
-	step = extent(shape, wcs)/shape[-2:]
+	ly, lx = laxes(shape, wcs)
 	data = np.empty([2]+list(shape[-2:]))
-	data[0] = np.fft.fftfreq(shape[-2], step[0])[:,None]
-	data[1] = np.fft.fftfreq(shape[-1], step[1])[None,:]
-	return ndmap(data, wcs)*2*np.pi
+	data[0] = ly[:,None]
+	data[1] = lx[None,:]
+	return ndmap(data, wcs)
+
+def laxes(shape, wcs):
+	step = extent(shape, wcs)/shape[-2:]
+	ly = np.fft.fftfreq(shape[-2], step[0])*2*np.pi
+	lx = np.fft.fftfreq(shape[-1], step[1])*2*np.pi
+	return ly, lx
 
 def lrmap(shape, wcs):
 	"""Return a map of all the wavenumbers in the fourier transform
