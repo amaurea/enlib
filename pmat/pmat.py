@@ -41,17 +41,15 @@ class PmatMap(PointingMatrix):
 		ip_size= config.get("pmat_interpol_max_size")
 		ip_time= config.get("pmat_interpol_max_time")
 		transform = pos2pix(scan,template,sys)
-		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
-		self.rbox = ipol.box
-		self.nbox = np.array(ipol.ys.shape[4:])
-		# ipol.ys has shape [2t,2az,2el,{ra,dec,cos,sin},t,az,el]
-		# fortran expects [{ra,dec,cos,sin},{y,dy/dt,dy/daz,dy,del,...},pix]
-		# This format allows us to avoid hard-coding the number of input dimensions,
-		# and is forward compatible for higher order interpolation later.
-		# The disadvantage is that the ordering becomes awkard at higher order.
-		n = self.rbox.shape[1]
-		self.ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
-		self.ys = np.rollaxis(self.ys.reshape(self.ys.shape[:2]+(-1,)),-1).astype(template.dtype)
+
+		# Build pointing interpolator
+		ipol, obox = interpol.build(transform, interpol.ip_linear, box, np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time, return_obox=True)
+		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, template.dtype)
+		# Use obox to extract a pixel bounding box for this scan.
+		# These are the only pixels pmat needs to concern itself with.
+		# Reducing the number of pixels makes us more memory efficient
+		self.pixbox = build_pixbox(obox[:,:2], template.shape[-2:])
+
 		self.comps= np.arange(template.shape[0])
 		self.scan  = scan
 		self.order = order
@@ -67,10 +65,10 @@ class PmatMap(PointingMatrix):
 		self.ipol = ipol
 	def forward(self, tod, m):
 		"""m -> tod"""
-		self.func( 1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
+		self.func( 1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
 	def backward(self, tod, m):
 		"""tod -> m"""
-		self.func(-1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
+		self.func(-1, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -211,6 +209,42 @@ class pos2pix:
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)
 
+config.default("pmat_scan_mode", "azimuth", "The coodinate basis to use for scan mode projection. Can be 'azimuth' or 'phase'. Default is azimuth.")
+class PmatScan(PointingMatrix):
+	"""Project tods to and from azimuth phase coordinates, which are
+	appropriate for modelling magnetic pickup and similar. We support
+	two modes: "azimuth" and "phase". These differ by how they handle
+	the left and right sweeps.
+		azimuth: the range min(az), max(az) is divided into npix pixels.
+		phase: samples where az increases are mapped to [0:npix/2], while
+		       samples where az decreases are mapped to [npix/2:npix]."""
+	def __init__(self, scan, ncomp, npix, mode=None):
+		mode = config.get("pmat_scan_mode", mode)
+		# Compute our sample -> basis mapping for this scan
+		az  = scan.boresight[:,1]
+		box = np.array([np.min(az),np.max(az)])
+		raz = (az-box[0])/(box[1]-box[0])
+		if mode == "azimuth":
+			# Simple azimuth mapping
+			inds = raz*npix
+		elif mode == "phase":
+			# Scan phase mapping
+			increasing = az[1:]-az[:-1] >= 0
+			increasing = np.concatenate([increasing,increasing[-1:]])
+			inds = np.where(increasing, raz, 2-raz)*npix/2
+		inds = np.floor(inds).astype(np.int32)
+		inds = np.minimum(npix-1,inds)
+		
+		self.inds  = inds
+		self.comps = np.arange(ncomp)
+		self.scan  = scan
+		self.mode  = mode
+		self.npix  = npix
+	def forward (self, tod, model):
+		get_core(tod.dtype).pmat_scan( 1, tod.T, model.T, self.inds, self.scan.comps.T, self.comps)
+	def backward(self, tod, model):
+		get_core(tod.dtype).pmat_scan(-1, tod.T, model.T, self.inds, self.scan.comps.T, self.comps)
+
 class PmatMapRebin(PointingMatrix):
 	"""Fortran-accelerated rebinning of maps."""
 	def forward (self, mhigh, mlow):
@@ -244,11 +278,7 @@ class PmatPtsrc(PointingMatrix):
 		ip_time= config.get("pmat_interpol_max_time")
 		transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
 		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
-		self.rbox = ipol.box
-		self.nbox = np.array(ipol.ys.shape[4:])
-		n = self.rbox.shape[1]
-		self.ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
-		self.ys = np.rollaxis(self.ys.reshape(self.ys.shape[:2]+(-1,)),-1).astype(self.dtype)
+		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, self.dtype)
 		self.comps = np.arange(params.shape[0]-5)
 		self.scan  = scan
 		self.core = pmat_core_32.pmat_core if self.dtype == np.float32 else pmat_core_64.pmat_core
@@ -334,3 +364,24 @@ def compress_ranges(ranges, nrange, cut, nsamp):
 	# does. offsets, which used to be indices into ranges, are now
 	# indices into map instead.
 	return ranges, map, offsets
+
+def extract_interpol_params(ipol, dtype):
+	"""Extracts flattend interpolation parameters from an Interpolator object
+	in a form suitable for passing to fortran. Returns rbox[{from,to},nparam],
+	nbox[nparam] (grid size along each input parameter), ys[nout,{cval,dx,dy,dz,...},gridsize]."""
+	rbox = ipol.box
+	nbox = np.array(ipol.ys.shape[4:])
+	# ipol.ys has shape [2t,2az,2el,{ra,dec,cos,sin},t,az,el]
+	# fortran expects [{ra,dec,cos,sin},{y,dy/dt,dy/daz,dy,del,...},pix]
+	# This format allows us to avoid hard-coding the number of input dimensions,
+	# and is forward compatible for higher order interpolation later.
+	# The disadvantage is that the ordering becomes awkard at higher order.
+	n = rbox.shape[1]
+	ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
+	ys = np.rollaxis(ys.reshape(ys.shape[:2]+(-1,)),-1).astype(dtype)
+	return rbox, nbox, ys
+
+def build_pixbox(obox, n, margin=10):
+	return np.array([np.maximum(0,np.floor(obox[0]-margin)),np.minimum(n,np.floor(obox[1]+margin))]).astype(np.int32)
+
+

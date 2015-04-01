@@ -27,25 +27,26 @@ contains
 			dir,                              &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
 			tod, map,                         &! Main inputs/outpus
 			bore, det_pos, det_comps,  comps, &! Input pointing
-			rbox, nbox, ys                    &! Coordinate transformation
+			rbox, nbox, ys, pbox              &! Coordinate transformation
 		)
 		use omp_lib
 		implicit none
 		! Parameters
-		integer(4), intent(in)    :: dir, comps(:), nbox(:)
+		integer(4), intent(in)    :: dir, comps(:), nbox(:), pbox(:,:)
 		real(_),    intent(in)    :: bore(:,:), ys(:,:,:) ! comp, derivs, pix
 		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
 		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
 		! Work
 		integer(4), parameter :: bz = 321
 		integer(4) :: ndet, nsamp, di, si, nproc, id, ic, i, j, k, l, nj
-		integer(4) :: steps(size(rbox,1)), pix(2,bz)
+		integer(4) :: steps(size(rbox,1)), pix(2,bz), psize(2)
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1)), phase(size(map,3),bz)
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
 		real(_), allocatable :: wmap(:,:,:,:)
 
 		nsamp   = size(tod, 1)
 		ndet    = size(tod, 2)
+		psize   = pbox(:,2)-pbox(:,1)
 
 		! In C order, ys has pixel axes t,ra,dec, so nbox = [nt,nra,ndec]
 		! Index mapping is therefore given by [nra*ndec,ndec,1]
@@ -57,9 +58,15 @@ contains
 
 		if(dir < 0) then
 			nproc = omp_get_max_threads()
-			allocate(wmap(size(map,1),size(map,2),size(map,3),nproc))
+			allocate(wmap(psize(2),psize(1),size(map,3),nproc))
+			!allocate(wmap(size(map,1),size(map,2),size(map,3),nproc))
 			!$omp parallel workshare
 			wmap = 0
+			!$omp end parallel workshare
+		else
+			allocate(wmap(psize(2),psize(1),size(map,3),1))
+			!$omp parallel workshare
+			wmap(:,:,:,1) = map(pbox(2,1)+1:pbox(2,2),pbox(1,1)+1:pbox(1,2),:)
 			!$omp end parallel workshare
 		end if
 
@@ -76,10 +83,12 @@ contains
 				! We use pixel-center coordinates, so [i-0.5:i+0.5] belongs to
 				! pixel i. Hence nint. The extra +1 is due to fortran's indexing.
 				pix(:,:nj)    = nint(opoint(1:2,:nj))+1
-				! Bounds check (<1% cost)
 				do j = 1, nj
-					pix(1,j) = min(size(map,2),max(1,pix(1,j)))
-					pix(2,j) = min(size(map,1),max(1,pix(2,j)))
+					! Transform from global to workspace pixels
+					pix(:,j) = pix(:,j)-pbox(:,1)
+					! Bounds check (<1% cost)
+					pix(1,j) = min(psize(1),max(1,pix(1,j)))
+					pix(2,j) = min(psize(2),max(1,pix(2,j)))
 				end do
 				phase(:,:nj)  = get_phase(comps, det_comps(:,di), opoint(3:,:nj))
 				if(dir < 0) then
@@ -88,20 +97,21 @@ contains
 					end do
 				else
 					do j = 1, nj
-						tod(si+j-1,di) = sum(map(pix(2,j),pix(1,j),:)*phase(:,j))
+						tod(si+j-1,di) = sum(wmap(pix(2,j),pix(1,j),:,1)*phase(:,j))
 					end do
 				end if
 			end do
 		end do
 		!$omp end parallel
 
+		! Go back to full pixel space
 		if(dir < 0) then
 			!$omp parallel do collapse(3)
 			do j = 1, size(wmap, 3)
 				do k = 1, size(wmap, 2)
 					do l = 1, size(wmap, 1)
 						do i = 1, size(wmap,4)
-							map(l,k,j) = map(l,k,j) + wmap(l,k,j,i)
+							map(l+pbox(2,1),k+pbox(1,1),j) = map(l+pbox(2,1),k+pbox(1,1),j) + wmap(l,k,j,i)
 						end do
 					end do
 				end do
@@ -228,7 +238,7 @@ contains
 		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
 		! Work
 		integer(4), parameter :: bz = 321
-		integer(4) :: ndet, nsamp, di, si, id, ic, j, l, nj
+		integer(4) :: ndet, nsamp, di, si, id, ic, j, nj
 		integer(4) :: steps(size(rbox,1))
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
@@ -548,6 +558,60 @@ contains
 		mean = sum(a)/size(a)
 	end function
 
+  !!! Azimuth binning stuff !!!
+	subroutine pmat_scan(dir, tod, model, inds, det_comps, comps)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, inds(:)
+		real(_),    intent(inout) :: tod(:,:), model(:,:)
+		real(_),    intent(in)    :: det_comps(:,:)
+		integer(4), intent(in)    :: comps(:)
+		! Work
+		integer(4) :: ndet, nsamp, ncomp, npix, si, di, ci, nproc, id, i
+		real(_), allocatable :: wmodel(:,:,:)
+
+		! This is meant to be called together with pmat_tod, so it doesn't
+		! overwrite the tod, but instead adds to it.
+		nsamp = size(tod,1)
+		ndet  = size(tod,2)
+		npix  = size(model,1)
+		ncomp = size(model,2)
+
+		if(dir < 0) then
+			nproc = omp_get_max_threads()
+			allocate(wmodel(size(model,1),size(model,2),nproc))
+			!$omp parallel workshare
+			wmodel = 0
+			!$omp end parallel workshare
+			!$omp parallel private(di,si,ci,id)
+			id = omp_get_thread_num()+1
+			!$omp do collapse(2)
+			do di = 1, ndet
+				do ci = 1, ncomp
+					do si = 1, nsamp
+						wmodel(inds(si)+1,ci,id) = wmodel(inds(si)+1,ci,id) + tod(si,di)*det_comps(comps(ci)+1,di)
+					end do
+				end do
+			end do
+			!$omp end parallel
+			!$omp parallel do collapse(2) private(ci,i)
+			do ci = 1, ncomp
+				do i = 1, npix
+					model(i,ci) = sum(wmodel(i,ci,:))
+				end do
+			end do
+		else
+			!$omp parallel do collapse(2) private(di,si,ci)
+			do di = 1, ndet
+				do si = 1, nsamp
+					do ci = 1, ncomp
+						tod(si,di) = tod(si,di) + model(inds(si)+1,ci)*det_comps(comps(ci)+1,di)
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
 	subroutine pmat_map_rebin(dir, map_high, map_low)
 		use omp_lib
 		implicit none
@@ -599,7 +663,7 @@ contains
 		real(_), allocatable :: ibuf(:), obuf(:)
 		! Assume that the high-res and low-res cuts have the same number of entries
 		! and come in the same order.
-		!$omp parallel do default(private) shared(junk_high,junk_low,cut_high,cut_low)
+		!$omp parallel do default(private) shared(junk_high,junk_low,cut_high,cut_low,dir)
 		do ci = 1, size(cut_high,2)
 			gl1 = cut_low (gstart,ci)+1; gl2 = gl1+cut_low (glen,ci)-1
 			gh1 = cut_high(gstart,ci)+1; gh2 = gh1+cut_high(glen,ci)-1
@@ -859,7 +923,7 @@ contains
 		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:), rangesets(:), ranges(:,:)
 		! Work
 		integer(4), parameter :: bz = 321
-		integer(4) :: ndet, nsrc, di, ri, si, s0, oi, i, j, k, i1, i2, ic, nj, n, nsamp
+		integer(4) :: ndet, nsrc, di, ri, si, s0, oi, i, j, k, i1, i2, ic, nj, nsamp
 		integer(4) :: r2det(size(ranges,2)), srcoff(size(ranges,2)+1)
 		integer(4) :: steps(size(rbox,1))
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
