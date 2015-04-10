@@ -134,13 +134,9 @@ class NmatDetvecs(NmatBinned):
 	def calc_inverse(self):
 		return woodbury_invert(self.D, self.V, self.E, self.ebins)
 	@property
-	def icovs(self):
-		nbin, ndet = self.iD.shape
-		res = np.empty([nbin,ndet,ndet])
-		for bi,(d,eb) in enumerate(zip(self.iD, self.ebins)):
-			v, e = self.iV[eb[0]:eb[1]], self.iE[eb[0]:eb[1]]
-			res[bi] = np.diag(d) + (v.T*e[None,:]).dot(v)
-		return res
+	def icovs(self): return expand_detvecs(self.iD, self.iE, self.iV, self.ebins)
+	@property
+	def covs(self): return expand_detvecs(self.D, self.E, self.V, self.ebins)
 	def apply(self, tod):
 		ft = enlib.fft.rfft(tod)
 		fft_norm = tod.shape[1]
@@ -191,6 +187,8 @@ class NmatSharedvecs(NmatDetvecs):
 		NmatDetvecs.__init__(self, D, V, E, bins, ebins, dets=dets)
 	def calc_inverse(self):
 		return woodbury_invert(self.D, self.V, self.E, self.ebins, self.vbins)
+	@property
+	def covs(self): return expand_detvecs(self.D, self.E, self.V, self.ebins, self.vbins)
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
 		dets = res.dets[detslice]
@@ -273,3 +271,12 @@ def sichol(A):
 		return np.linalg.cholesky(iA), 1
 	except np.linalg.LinAlgError:
 		return np.linalg.cholesky(-iA), -1
+
+def expand_detvecs(D, E, V, ebins, vbins=None):
+	nbin, ndet = D.shape
+	res = np.empty([nbin,ndet,ndet])
+	if vbins is None: vbins = ebins
+	for bi,(d,eb,vb) in enumerate(zip(D, ebins, vbins)):
+		v, e = V[vb[0]:vb[1]], E[eb[0]:eb[1]]
+		res[bi] = np.diag(d) + (v.T*e[None,:]).dot(v)
+	return res
