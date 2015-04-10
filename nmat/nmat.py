@@ -3,8 +3,9 @@ Individual experiments can inherit from this - other functions
 in enlib will work as long as this interface is followed.
 For performance and memory reasons, the noise matrix
 overwrites its input array."""
-import numpy as np, enlib.fft, copy, enlib.slice, enlib.array_ops, h5py
+import numpy as np, enlib.fft, copy, enlib.slice, enlib.array_ops, enlib.utils, h5py
 import nmat_core_32, nmat_core_64
+from scipy.optimize import minimize
 
 def get_core(dtype):
 	if dtype == np.float32:
@@ -280,3 +281,73 @@ def expand_detvecs(D, E, V, ebins, vbins=None):
 		v, e = V[vb[0]:vb[1]], E[eb[0]:eb[1]]
 		res[bi] = np.diag(d) + (v.T*e[None,:]).dot(v)
 	return res
+
+def decomp_DVEV(cov, nmax=15, mineig=0, maxeval=1000, tol=1e-2, _mode_ratios=False):
+	"""Decompose covariance matrix cov[n,n] into
+	D[n,n] + V[n,m] E[m,m] V'[m,n], where D and E
+	are diagonal and positive and V is orthogonal.
+	The number of columns in V will be nmax. If
+	mineig is specified, then modes with lower
+	amplitude than mineig*(max(E),max(sum(D**2)))
+	will be pruned. D,E,V are then recomputed from
+	scratch with this lower number of modes.
+
+	Returns D, E, V."""
+	# We will work on the correlation matrix, as that gives all row and cols
+	# equal weight.
+	if nmax == 0: return np.diag(cov), np.zeros([0]), np.zeros([len(cov),0])
+	if mineig > 0:
+		# If mineig is specified, then we will automatically trim the number
+		# of modes to those larger than mineig times the largest mode.
+		ratios = decomp_DVEV(cov, nmax, mineig=0, _mode_ratios=True)
+		nbig   = np.sum(ratios>mineig)
+		return decomp_DVEV(cov, nbig, mineig=0)
+	C, std = enlib.utils.cov2corr(cov)
+	Q = enlib.utils.eigsort(C, nmax=nmax, merged=True)
+	def dvev_chisq(x, shape, esc):
+		Q = x.reshape(shape)
+		D = np.diag(C)-np.einsum("ia,ia->i",Q,Q)
+		if np.any(D<=0):
+			return np.inf
+		Ce = Q.dot(Q.T)
+		R = enlib.utils.nodiag(C-Ce)
+		chi = np.sum(R**2)
+		esc(chi, x)
+		return np.sum(R**2)
+	def dvev_jac(x, shape, esc):
+		Q = x.reshape(shape)
+		Ce = Q.dot(Q.T)
+		R = enlib.utils.nodiag(C-Ce)
+		dchi = -4*R.T.dot(Q)
+		esc()
+		return dchi.reshape(-1)
+	try:
+		sol = minimize(dvev_chisq, Q.reshape(-1), method="newton-cg", jac=dvev_jac, tol=tol, args=(Q.shape,MinimizeEscape(maxeval)))
+		Q = sol.x.reshape(Q.shape)
+	except MinimizeEscape as e:
+		Q = e.bval.reshape(Q.shape)
+	# Orthogonalize our vectors
+	e,v = enlib.utils.eigsort(Q.dot(Q.T), nmax=nmax)
+	if _mode_ratios:
+		# Helper mode: Only return the relative contribution of each mode
+		d = np.diag(C)-np.einsum("ia,ia->i",Q,Q)
+		scale = max(np.max(e), np.sum(d**2))
+		return e/scale
+	# Rescale to full cov equivalent
+	Q = np.einsum("ia,a,i->ia",v,e**0.5,std)
+	# And expand into full D+VEV' model
+	E  = np.sum(Q**2,0)
+	V  = Q*E[None]**-0.5
+	D  = np.diag(cov)-np.einsum("ia,ia->i",Q,Q)
+	return D,E,V
+
+class MinimizeEscape:
+	def __init__(self, maxeval):
+		self.i, self.n = 0, maxeval
+		self.bchi, self.bval = np.inf, None
+	def __call__(self, chi=None, val=None):
+		if chi is not None and chi < self.bchi:
+			self.bchi = chi
+			self.bval = np.array(val)
+		self.i += 1
+		if self.i > self.n: raise self

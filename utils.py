@@ -536,8 +536,32 @@ def greedy_split(data, n=2, costfun=max, workfun=lambda w,x: x if w is None else
 		cost = icost
 	return groups, cost, work
 
+def cov2corr(C):
+	"""Scale rows and columns of C such that its diagonal becomes one.
+	This produces a correlation matrix from a covariance matrix. Returns
+	the scaled matrix and the square root of the original diagonal."""
+	std  = np.diag(C)**0.5
+	istd = 1/std
+	return np.einsum("ij,i,j->ij",C,istd,istd), std
+def corr2cov(corr,std):
+	"""Given a matrix "corr" and an array "std", return a version
+	of corr with each row and column scaled by the corresponding entry
+	in std. This is the reverse of cov2corr."""
+	return np.einsum("ij,i,j->ij",corr,std,std)
+
+def eigsort(A, nmax=None, merged=False):
+	"""Return the eigenvalue decomposition of the real, symmetric matrix A.
+	The eigenvalues will be sorted from largest to smallest. If nmax is
+	specified, only the nmax largest eigenvalues (and corresponding vectors)
+	will be returned. If merged is specified, E and V will not be returned
+	separately. Instead, Q=VE**0.5 will be returned, such that QQ' = VEV'."""
+	E,V  = np.linalg.eigh(A)
+	inds = np.argsort(E)[::-1][:nmax]
+	if merged: return V[:,inds]*E[inds][None]**0.5
+	else:      return E[inds],V[:,inds]
+
 def nodiag(A):
-	"""Return a copy of A with its diagonal set to zero."""
+	"""Returns matrix A with its diagonal set to zero."""
 	A = np.array(A)
 	np.fill_diagonal(A,0)
 	return A
