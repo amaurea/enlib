@@ -189,6 +189,11 @@ def delaxes(a, axes):
 	for ax in axes: inds[ax] = 0
 	return a[inds]
 
+def dedup(a):
+	"""Removes consecutive equal values from a 1d array, returning the result.
+	The original is not modified."""
+	return np.concatenate([a[a[1:]!=a[:-1]],a[-1:]])
+
 def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 	"""Given an array a[{x},{y}] and a list of
 	float indices into a, inds[len(y),{z}],
@@ -322,32 +327,90 @@ def equal_split(weights, nbin):
 		bw[j] += weights[i]
 	return bins
 
-def range_sub(a,b):
+def range_sub(a,b, mapping=False):
 	"""Given a set of ranges a[:,{from,to}] and b[:,{from,to}],
 	return a new set of ranges c[:,{from,to}] which corresponds to
 	the ranges in a with those in b removed. This might split individual
-	ranges into multiple ones."""
-	a = np.sort(a)
-	b = np.sort(b)
+	ranges into multiple ones. If mapping=True, two extra objects are
+	returned. The first is a mapping from each output range to the
+	position in a it comes from. The second is a corresponding mapping
+	from the set of cut a and b range to indices into a and b, with
+	b indices being encoded as -i-1. a and b are assumed
+	to be internally non-overlapping.
+	
+	Example: utils.range_sub([[0,100],[200,1000]], [[1,2],[3,4],[8,999]], mapping=True)
+	(array([[   0,    1],
+	        [   2,    3],
+	        [   4,    8],
+	        [ 999, 1000]]),
+	array([0, 0, 0, 1]),
+	array([ 0, -1,  1, -2,  2, -3,  3]))
+	
+	The last array can be interpreted as: Moving along the number line,
+	we first encounter [0,1], which is a part of range 0 in c. We then
+	encounter range 0 in b ([1,2]), before we hit [2,3] which is
+	part of range 1 in c. Then comes range 1 in b ([3,4]) followed by
+	[4,8] which is part of range 2 in c, followed by range 2 in b
+	([8,999]) and finally [999,1000] which is part of range 3 in c.
+
+	The same call without mapping: utils.range_sub([[0,100],[200,1000]], [[1,2],[3,4],[8,999]])
+	array([[   0,    1],
+	       [   2,    3],
+	       [   4,    8],
+	       [ 999, 1000]])
+	"""
+	def fixshape(a):
+		a = np.asarray(a)
+		if a.size == 0: a = np.zeros([0,2],dtype=int)
+		return a
+	a     = fixshape(a)
+	b     = fixshape(b)
+	ainds = np.argsort(a[:,0])
+	binds = np.argsort(b[:,0])
+	rainds= np.arange(len(a))[ainds]
+	rbinds= np.arange(len(b))[binds]
+	a = a[ainds]
+	b = b[binds]
 	ai,bi = 0,0
-	def ap(c,r1,r2):
-		if r2-r1 > 0: c.append([r1,r2])
 	c = []
+	abmap = []
+	rmap  = []
 	while ai < len(a):
 		# Iterate b until it ends past the start of a
-		while bi < len(b) and b[bi,1] <= a[ai,0]: bi += 1
+		while bi < len(b) and b[bi,1] <= a[ai,0]:
+			abmap.append(-rbinds[bi]-1)
+			bi += 1
 		# Now handle each b until the start of b is past the end of a
 		pstart = a[ai,0]
-		bi2 = bi
-		while bi2 < len(b) and b[bi2,0] <= a[ai,1]:
-			ap(c,pstart,min(a[ai,1],b[bi2,0]))
-			pstart = b[bi2,1]
-			bi2 += 1
+		while bi < len(b) and b[bi,0] <= a[ai,1]:
+			r=(pstart,min(a[ai,1],b[bi,0]))
+			if r[1]-r[0] > 0:
+				abmap.append(len(c))
+				rmap.append(rainds[ai])
+				c.append(r)
+			abmap.append(-rbinds[bi]-1)
+			pstart = b[bi,1]
+			bi += 1
 		# Then append what remains
-		ap(c,pstart,a[ai,1])
+		r=(pstart,a[ai,1])
+		if r[1]>r[0]:
+			abmap.append(len(c))
+			rmap.append(rainds[ai])
+			c.append(r)
+		else:
+			# If b extended beyond the end of a, then
+			# we need to consider it again for the next a,
+			# so undo the previous increment. This may lead to
+			# the same b being added twice. We will handle that
+			# by removing duplicates at the end.
+			bi -= 1
 		# And advance to the next range in a
 		ai += 1
-	return np.array(c)
+	c = np.array(c)
+	# Remove duplicates if necessary
+	abmap=dedup(np.array(abmap))
+	rmap = np.array(rmap)
+	return (c, rmap, abmap) if mapping else c
 
 def range_union(a, mapping=False):
 	"""Given a set of ranges a[:,{from,to}], return a new set where all
@@ -472,3 +535,9 @@ def greedy_split(data, n=2, costfun=max, workfun=lambda w,x: x if w is None else
 		work[i] = iwork
 		cost = icost
 	return groups, cost, work
+
+def nodiag(A):
+	"""Return a copy of A with its diagonal set to zero."""
+	A = np.array(A)
+	np.fill_diagonal(A,0)
+	return A
