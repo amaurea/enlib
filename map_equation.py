@@ -2,7 +2,7 @@
 At this level of abstraction, we still deal mostly with maps and cuts etc.
 directly."""
 import numpy as np, bunch, time, h5py, copy, logging, sys
-from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim, bench
+from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim, bench, todfilter
 from enlib.degrees_of_freedom import DOF, Arg
 from scipy import ndimage
 from mpi4py import MPI
@@ -145,9 +145,9 @@ class LinearSystem:
 
 # Abstract interface to the Map-making system.
 class LinearSystemMap(LinearSystem):
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin", imap=None, isrc=None, azmap=None):
+	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin", imap=None, isrc=None, azmap=None, azfilter=None):
 		L.info("Building preconditioner")
-		self.mapeq  = MapEquation(scans, area, comm=comm, imap=imap, isrc=isrc, azmap=azmap)
+		self.mapeq  = MapEquation(scans, area, comm=comm, imap=imap, isrc=isrc, azmap=azmap, azfilter=azfilter)
 		if precon == "bin":
 			self.precon = PrecondBinned(self.mapeq)
 		elif precon == "cyc":
@@ -225,7 +225,7 @@ class LinearSystemMap(LinearSystem):
 			enmap.write_map(prefix + "srcs.fits", self.isrc.model.draw(rhs.shape, rhs.wcs, window=True))
 
 class MapEquation:
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None, isrc=None, azmap=None):
+	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None, isrc=None, azmap=None, azfilter=None):
 		# Adding ad-hoc simultaneous solving for an azimuth signal. This should really be done
 		# in a more ordely fashion, which mapmaking.py will do. But I'm adding it here first
 		# as a quick test. azmap should have the following members if present:
@@ -257,6 +257,7 @@ class MapEquation:
 		self.imap  = imap
 		self.isrc  = isrc
 
+		self.azfilter = azfilter
 		self.azmap = azmap
 		if self.azmap:
 			npre = 1 if azmap.shared else len(scans)
@@ -283,6 +284,9 @@ class MapEquation:
 					utils.deslope(tod, inplace=True)
 				if self.isrc is not None:
 					d.pmat_isrc.forward(tod, self.isrc.model.params)
+				# Optional azimuth filter
+				if self.azfilter is not None:
+					todfilter.filter_poly_jon(tod, d.scan.boresight[:,1], naz=self.azfilter.naz, nt=self.azfilter.nt, deslope=True)
 			with bench.mark("meq_b_N"):
 				d.nmat.apply(tod)
 			with bench.mark("meq_b_P'"):
@@ -344,7 +348,27 @@ class MapEquation:
 			d.pmap.backward(tod,hitmap)
 		hitmap = reduce(hitmap[0].astype(np.int32),self.comm)
 		return hitmap
-
+	def postprocess(self, map, div):
+		"""Prepare map for output. Add back things that have been temporarily
+		subtracted, and finish any pending filtering operations."""
+		omap = map.copy()
+		if self.azfilter:
+			omap[...] = 0
+			rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
+			for di, d in enumerate(self.data):
+				tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
+				d.pmap.forward(tod,map)
+				todfilter.filter_poly_jon(tod, d.scan.boresight[:,1], naz=self.azfilter.naz, nt=self.azfilter.nt, deslope=False)
+				d.nmat.white(tod)
+				# We don't care about cuts, but there were used in div, so we must remove them here too
+				d.pcut.backward(tod,rhs_junk)
+				d.pmap.backward(tod,omap)
+				del tod
+			omap = reduce(omap, self.comm)
+			omap = array_ops.solve_masked(div, omap, [0,1])
+		if self.isrc and self.isrc.tmul != 0:
+			omap += self.isrc.model.draw(map.shape, map.wcs, window=True)
+		return omap
 
 class PrecondBinned:
 	"""This class implements a simple "binned" preconditioner, which
@@ -424,6 +448,7 @@ class PrecondCirculant:
 		self.Arow = enmap.samewcs(Arow, binned.div_map)
 		self.S, self.C = S, C
 		self.div_junk = binned.div_junk
+		self.div_map  = binned.div_map
 		self.mask = binned.mask
 		self.binned = binned
 		self.mapeq = mapeq
