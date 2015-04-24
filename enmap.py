@@ -135,6 +135,9 @@ def slice_wcs(shape, wcs, sel):
 		oshape[i] = (oshape[i]+s.step-1)/s.step
 	return tuple(oshape), wcs
 
+def scale_wcs(wcs, factor):
+	return enlib.wcs.scale(wcs, factor, rowmajor=True)
+
 def box(shape, wcs, npoint=10):
 	"""Compute a bounding box for the given geometry."""
 	# Because of wcs's wrapping, we need to evaluate several
