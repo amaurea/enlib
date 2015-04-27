@@ -189,7 +189,7 @@ subroutine measure_cov(d, cov)
 	T(_) :: norm
 	allocate(tcov(size(cov,1),size(cov,2)))
 	norm = ONE/size(d,1)
-	call C##gemm('C', 'N', size(d,2), size(d,2), size(d,1), norm, d, size(d,1), d, size(d,1), ZERO, tcov, size(tcov,1))
+	call C##gemm('c', 'n', size(d,2), size(d,2), size(d,1), norm, d, size(d,1), d, size(d,1), ZERO, tcov, size(tcov,1))
 	cov=tcov
 end subroutine
 

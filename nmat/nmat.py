@@ -293,8 +293,6 @@ def decomp_DVEV(cov, nmax=15, mineig=0, maxeval=1000, tol=1e-2, _mode_ratios=Fal
 	scratch with this lower number of modes.
 
 	Returns D, E, V."""
-	# We will work on the correlation matrix, as that gives all row and cols
-	# equal weight.
 	if nmax == 0: return np.diag(cov), np.zeros([0]), np.zeros([len(cov),0])
 	if mineig > 0:
 		# If mineig is specified, then we will automatically trim the number
@@ -302,13 +300,15 @@ def decomp_DVEV(cov, nmax=15, mineig=0, maxeval=1000, tol=1e-2, _mode_ratios=Fal
 		ratios = decomp_DVEV(cov, nmax, mineig=0, _mode_ratios=True)
 		nbig   = np.sum(ratios>mineig)
 		return decomp_DVEV(cov, nbig, mineig=0)
+	# We will work on the correlation matrix, as that gives all row and cols
+	# equal weight.
 	C, std = enlib.utils.cov2corr(cov)
 	Q = enlib.utils.eigsort(C, nmax=nmax, merged=True)
 	def dvev_chisq(x, shape, esc):
+		if np.any(~np.isfinite(x)): return np.inf
 		Q = x.reshape(shape)
 		D = np.diag(C)-np.einsum("ia,ia->i",Q,Q)
-		if np.any(D<=0):
-			return np.inf
+		if np.any(D<=0): return np.inf
 		Ce = Q.dot(Q.T)
 		R = enlib.utils.nodiag(C-Ce)
 		chi = np.sum(R**2)
@@ -326,19 +326,17 @@ def decomp_DVEV(cov, nmax=15, mineig=0, maxeval=1000, tol=1e-2, _mode_ratios=Fal
 		Q = sol.x.reshape(Q.shape)
 	except MinimizeEscape as e:
 		Q = e.bval.reshape(Q.shape)
-	# Orthogonalize our vectors
-	e,v = enlib.utils.eigsort(Q.dot(Q.T), nmax=nmax)
 	if _mode_ratios:
 		# Helper mode: Only return the relative contribution of each mode
+		e,v = enlib.utils.eigsort(Q.dot(Q.T), nmax=nmax)
 		d = np.diag(C)-np.einsum("ia,ia->i",Q,Q)
 		scale = max(np.max(e), np.sum(d**2))
 		return e/scale
-	# Rescale to full cov equivalent
-	Q = np.einsum("ia,a,i->ia",v,e**0.5,std)
-	# And expand into full D+VEV' model
-	E  = np.sum(Q**2,0)
-	V  = Q*E[None]**-0.5
-	D  = np.diag(cov)-np.einsum("ia,ia->i",Q,Q)
+	# Rescale from corr to cov
+	Q *= std[:,None]
+	# And split into VEV
+	E, V = enlib.utils.eigsort(Q.dot(Q.T), nmax=nmax)
+	D  = np.diag(cov)-np.einsum("ia,a,ia->i",V,E,V)
 	return D,E,V
 
 class MinimizeEscape:
