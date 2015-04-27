@@ -152,6 +152,7 @@ class FormatDB(Basedb):
 		Basedb.__init__(self, file=file, data=data)
 	def load(self, data, funcs={}):
 		self.rules = []
+		self.static = bunch.Bunch()
 		for line in data.splitlines():
 			if len(line) < 1 or line[0] == "#": continue
 			toks = pre_split(line)
@@ -159,6 +160,7 @@ class FormatDB(Basedb):
 			assert len(toks)==2
 			name, format   = toks[0], toks[1]
 			self.rules.append({"name":name, "format": format})
+			self.static[name] = format
 	def __getitem__(self, id):
 		info = {name: fun(id) for name, fun in self.funcs}
 		res = bunch.Bunch()

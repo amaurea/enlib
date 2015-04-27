@@ -277,7 +277,7 @@ class PmatPtsrc(PointingMatrix):
 		ip_size= config.get("pmat_interpol_max_size")
 		ip_time= config.get("pmat_interpol_max_time")
 		transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
-		ipol = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
+		ipol, obox = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
 		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, self.dtype)
 		self.comps = np.arange(params.shape[0]-5)
 		self.scan  = scan
@@ -347,15 +347,20 @@ def compress_ranges(ranges, nrange, cut, nsamp):
 		return ranges, rangesets, offsets
 	# First collapse ranges,nrange to flat ranges and indices into it
 	flat_ranges = []
+	nflat = 0
 	offsets = np.zeros([nsrc,ndet+1],dtype=np.int32)
-	for si in range(nsrc):
-		for di in range(ndet):
+	for si in xrange(nsrc):
+		for di in xrange(ndet):
 			s0 = di*nsamp
-			offsets[si,di] = len(flat_ranges)
-			current_ranges = ranges[si,di,:nrange[si,di]]
-			cutsplit_ranges = utils.range_sub(current_ranges, cut[di].ranges)
-			flat_ranges += list(cutsplit_ranges+s0)
-			offsets[si,di+1] = len(flat_ranges)
+			offsets[si,di] = nflat
+			if nrange[si,di] > 0:
+				current_ranges = ranges[si,di,:nrange[si,di]]
+				cutsplit_ranges = utils.range_sub(current_ranges, cut[di].ranges)
+				nflat += len(cutsplit_ranges)
+				if len(cutsplit_ranges) > 0:
+					flat_ranges.append(cutsplit_ranges+s0)
+			offsets[si,di+1] = nflat
+	flat_ranges = np.concatenate(flat_ranges)
 	flat_ranges = np.atleast_2d(flat_ranges)
 	# Then merge overlapping ranges and produce our final output format.
 	ranges, map = utils.range_union(flat_ranges, mapping=True)
