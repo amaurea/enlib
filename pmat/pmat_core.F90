@@ -708,7 +708,7 @@ contains
 		real(_),    intent(in)    :: params(:,:)   ! (nparam,nsrc)
 		real(_),    intent(in)    :: bore(:,:), ys(:,:,:)
 		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
-		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:), ranges(:,:), rangesets(:)
+		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:,:), ranges(:,:), rangesets(:)
 		! Work
 		integer(4), parameter :: bz = 321
 		integer(4) :: ndet, nsrc, di, ri, oi, si, s0, i, j, i1, i2, ic, nj, namp, nsamp, nmin
@@ -747,7 +747,7 @@ contains
 				amps  = params(3:2+namp,si)*pmul
 				ibeam = params(3+namp:5+namp,si)
 				cosdec= cos(dec)
-				do oi = offsets(di,si)+1, offsets(di+1,si)
+				do oi = offsets(1,di,si)+1, offsets(2,di,si)
 					ri = rangesets(oi)+1
 					s0 = ranges(1,ri)/nsamp*nsamp
 					i1=ranges(1,ri)-s0+1; i2 = ranges(2,ri)-s0
@@ -920,7 +920,7 @@ contains
 		real(_),    intent(in)    :: bore(:,:), ys(:,:,:)
 		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
 		integer(4), intent(inout) :: oranges(:,:)
-		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:), rangesets(:), ranges(:,:)
+		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:,:), rangesets(:), ranges(:,:)
 		! Work
 		integer(4), parameter :: bz = 321
 		integer(4) :: ndet, nsrc, di, ri, si, s0, oi, i, j, k, i1, i2, ic, nj, nsamp
@@ -930,7 +930,7 @@ contains
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
 
 		ndet  = size(tod,2)
-		nsrc  = size(offsets,2)
+		nsrc  = size(offsets,3)
 		nsamp = size(tod,1)
 
 		steps(size(steps)) = 1
@@ -942,7 +942,7 @@ contains
 		! For each range we need to know which detector that range belongs to
 		do si = 1, nsrc
 			do di = 1, ndet
-				do oi = offsets(di,si)+1, offsets(di+1,si)
+				do oi = offsets(1,di,si)+1, offsets(2,di,si)
 					ri = rangesets(oi)+1
 					r2det(ri) = di
 				end do

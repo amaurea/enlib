@@ -316,7 +316,7 @@ class PmatPtsrc(PointingMatrix):
 	def extract(self, tod):
 		"""Extract precomputed pointing and phase information for the selected samples.
 		These are stored in a compressed format, where sample I of range R of detector D
-		of source S has index ranges[offsets[S,D]+R,0]+I.
+		of source S has index ranges[offsets[S,D,0]+R,0]+I.
 
 		Ideally the ranges should cover the data once and no more, to avoid double-counting
 		and unsubtracted sources when several sources are near each other. In that case,
@@ -335,40 +335,54 @@ class PmatPtsrc(PointingMatrix):
 def compress_ranges(ranges, nrange, cut, nsamp):
 	"""Given ranges[nsrc,ndet,nmax,2], nrange[nsrc,ndet] where ranges has
 	det-local numbering, return the same information in a compressed format
-	ranges[nr,2], rangesets[nind], offsets[nsrc,ndet], where ranges now has
-	global sample ordering."""
+	ranges[nr,2], rangesets[nind], offsets[nsrc,ndet,2], where ranges still has
+	per-detector ordering. It used to be in global sample ordering, but I always
+	ended up converting back afterwards."""
 	nsrc, ndet = nrange.shape
 	# Special case: None hit. We represent this as a single range hitting no samples,
 	# which isn't used by any of the srcs.
 	if np.sum(nrange) == 0:
 		ranges  = np.array([[0,0]],dtype=np.int32)
 		rangesets = np.array([0],dtype=np.int32)
-		offsets = np.zeros([nsrc,ndet+1],dtype=np.int32)
+		offsets = np.zeros([nsrc,ndet,2],dtype=np.int32)
 		return ranges, rangesets, offsets
 	# First collapse ranges,nrange to flat ranges and indices into it
-	flat_ranges = []
-	nflat = 0
-	offsets = np.zeros([nsrc,ndet+1],dtype=np.int32)
-	for si in xrange(nsrc):
-		for di in xrange(ndet):
-			s0 = di*nsamp
-			offsets[si,di] = nflat
+	det_ranges = []
+	maps       = []
+	nflat      = 0
+	offsets    = np.zeros([nsrc,ndet,2],dtype=np.int32)
+	for di in xrange(ndet):
+		# Collect the sample ranges for all the sources for a given detector
+		src_ranges = []
+		for si in xrange(nsrc):
+			# Offsets holds the indices to the first and last+1 range for each
+			# source and detector. We get this simply by counting how many ranges
+			# we have processed so far. After merging, these will be indices into
+			# the map array instead.
+			offsets[si,di,0] = nflat
 			if nrange[si,di] > 0:
-				current_ranges = ranges[si,di,:nrange[si,di]]
+				current_ranges  = ranges[si,di,:nrange[si,di]]
 				cutsplit_ranges = utils.range_sub(current_ranges, cut[di].ranges)
 				nflat += len(cutsplit_ranges)
 				if len(cutsplit_ranges) > 0:
-					flat_ranges.append(cutsplit_ranges+s0)
-			offsets[si,di+1] = nflat
-	flat_ranges = np.concatenate(flat_ranges)
-	flat_ranges = np.atleast_2d(flat_ranges)
-	# Then merge overlapping ranges and produce our final output format.
-	ranges, map = utils.range_union(flat_ranges, mapping=True)
-	# Because some ranges are shared now, we need a list of which
-	# range indices belongs to which src,det. That is what map
-	# does. offsets, which used to be indices into ranges, are now
-	# indices into map instead.
-	return ranges, map, offsets
+					src_ranges.append(cutsplit_ranges)
+			offsets[si,di,1] = nflat
+		if len(src_ranges) > 0:
+			src_ranges = np.concatenate(src_ranges)
+			# Merge overlapping ranges for this detector. Map maps from
+			# indices into the unmerged array to indices into the merged array.
+			# We merge at this step rather than at the end to avoid merging
+			# samples from one detector with samples from the next.
+			src_merged, map = utils.range_union(src_ranges, mapping=True)
+			det_ranges.append(src_merged)
+			maps.append(map)
+	# Concatenate the detector ranges into one long list. We know that
+	# there will be at least one range due to the check at the top.
+	# We have already added the necessary offsets to maps.
+	oranges = np.concatenate(det_ranges)
+	moffs   = utils.cumsum([len(r) for r in det_ranges])
+	map     = np.concatenate([m+o for m,o in zip(maps,moffs)])
+	return oranges, map, offsets
 
 def extract_interpol_params(ipol, dtype):
 	"""Extracts flattend interpolation parameters from an Interpolator object

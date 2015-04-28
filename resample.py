@@ -61,6 +61,8 @@ def resample_fft(d, factors=[0.5], axes=None):
 	assert len(factors) <= d.ndim
 	if axes is None: axes = np.arange(-len(factors),0)
 	assert len(axes) == len(factors)
+	if d.ndim == 2 and len(factors) == 1 and factors[0] < 1:
+		return downsample_fft_simple(d, factors[0])
 	fd = fft.fft(d, axes=axes)
 	# Frequencies are 0 1 2 ... N/2 (-N)/2 (-N)/2+1 .. -1
 	# Ex 0* 1 2* -1 for n=4 and 0* 1 2 -2 -1 for n=5
@@ -87,3 +89,19 @@ def resample_fft(d, factors=[0.5], axes=None):
 	del fd
 	res *= np.product(factors)
 	return res if np.issubdtype(d.dtype, np.complexfloating) else res.real
+
+def downsample_fft_simple(d, factor=0.5, ngroup=100):
+	"""Resample 2d numpy array d via fourier-reshaping along
+	last axis."""
+	if factor == 1: return d
+	nold = d.shape[1]
+	nnew = int(nold*factor)
+	res  = np.zeros([d.shape[0],nnew],dtype=d.dtype)
+	dn   = nnew-nold
+	for di in range(0, d.shape[0], ngroup):
+		fd = fft.fft(d[di:di+ngroup])
+		fd = np.concatenate([fd[:,:nnew/2],fd[:,nnew/2-dn:]],1)
+		res[di:di+ngroup] = fft.ifft(fd, normalize=True).real
+	del fd
+	res *= factor
+	return res

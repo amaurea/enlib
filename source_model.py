@@ -14,8 +14,8 @@ class SourceModel:
 		self.amps   = np.array(amps)[:3] # [T,Q,U]
 		self.amps   = np.pad(self.amps, ((0,3-len(self.amps)),(0,0)), mode="constant")
 		# Mask unworthy sources if necessary
-		amp_lim   = np.atleast_1d(amp_lim)
-		amp_lim   = np.pad(amp_lim, (0,3-len(amp_lim)), mode="constant")
+		amp_lim   = np.atleast_1d(amp_lim).astype(np.float)
+		amp_lim   = np.pad(amp_lim, ((0,3-len(amp_lim)),), mode="edge")
 		mask      = np.any((np.abs(self.amps).T >= amp_lim.T).T,0)
 		# Extract relevant part of each
 		self.amps   = self.amps[:,mask]

@@ -420,7 +420,7 @@ def range_union(a, mapping=False):
 	a    = np.asarray(a)
 	n    = len(a)
 	inds = np.argsort(a[:,0])
-	rmap = np.zeros(n)-1
+	rmap = np.zeros(n,dtype=int)-1
 	b    = []
 	# i will point at the first unprocessed range
 	for i in xrange(n):
@@ -438,6 +438,11 @@ def range_union(a, mapping=False):
 	b = np.array(b)
 	if b.size == 0: b = b.reshape(0,2)
 	return (b,rmap) if mapping else b
+
+def range_cut(a, c):
+	"""Cut range list a at positions given by c. For example
+	range_cut([[0,10],[20,100]],[0,2,7,30,200]) -> [[0,2],[2,7],[7,10],[20,30],[30,100]]."""
+	return range_sub(a,np.dstack([c,c])[0])
 
 def compress_beam(sigma, phi):
 	sigma = np.asarray(sigma,dtype=float)
