@@ -570,3 +570,24 @@ def nodiag(A):
 	A = np.array(A)
 	np.fill_diagonal(A,0)
 	return A
+
+def bounding_box(boxes):
+	"""Compute bounding box for a set of boxes [...,2,2]."""
+	boxes = np.asarray(boxes)
+	fbox  = boxes.reshape(-1,2,2)
+	bbox  = np.array([np.minimum(boxes[:,0,:],0),np.maximum(boxes[:,1,:])])
+	return bbox
+
+def box_overlap(a, b):
+	"""Given two boxes/boxarrays, compute the overlap of each box with each other
+	box, returning the area of the overlaps. If a is [2,2] and b is [2,2], the
+	result will be a single number. if a is [n,2,2] and b is [2,2], the result
+	will be a shape [n] array. If a is [n,2,2] and b is [m,2,2], the result will'
+	be [n,m] areas."""
+	a  = np.asarray(a)
+	b  = np.asarray(b)
+	fa = a.reshape(-1,2,2)
+	fb = b.reshape(-1,2,2)
+	widths = np.maximum(0,np.minimum(fa[:,None,1],fb[None,:,1])-np.maximum(fa[:,None,0],fb[None,:,0]))
+	area = np.product(widths,-1)
+	return area.reshape(a.shape[:-2]+b.shape[:-2])
