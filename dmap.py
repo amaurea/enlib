@@ -68,7 +68,7 @@ class Dmap:
 		tiles = []
 		for tb in tbox[ownsership==comm.rank]:
 			tshape, twcs = enmap.slice_wcs(shape[-2:], wcs, (slice(tb[0,0],tb[1,0]),slice(tb[0,1],tb[1,1])))
-			tiles.append(enmap.zeros(shape[:-2]+tshape, twcs, dtype=dtype)
+			tiles.append(enmap.zeros(shape[:-2]+tshape, twcs, dtype=dtype))
 		# 6. Define mapping between work<->wbuf and tiles<->tbuf
 		wbufinfo  = np.zeros([2,comm.size],dtype=int)
 		tbufinfo  = np.zeros([2,comm.size],dtype=int)
@@ -93,7 +93,10 @@ class Dmap:
 				toff += tlen
 			wbufinfo[0,id] = wlen-wbufinfo[1,id]
 			tbufinfo[0,id] = tlen-tbufinfo[1,id]
-		# 7. Store necessary info
+		# 7. Create mpi buffers
+		self.wbuf = np.zeros(wlen,dtype=dtype)
+		self.tbuf = np.zeros(tlen,dtype=dtype)
+		# 8. Store necessary info
 		self.dtype = work.dtype
 		self.shape, self.wcs  = shape, wcs
 		self.ibox,  self.bbox = ibox,  bbox
@@ -103,23 +106,22 @@ class Dmap:
 		self.tbufinfo, self.tinfo   = tbufinfo, tinfo
 		self.work  = work
 		self.tiles = tiles
-
-		## Here's what alltoall will look like
-		#for ws, bs in winfo:
-		#	wbuf[bs] = work[...,ws]
-		#comm.Alltoallv((wbuf, (wlens, woffs), dtype), (tbuf, (tlens, toffs), dtype))
-		#for lti, ts, bs in tinfo:
-		#	tiles[lti][...,ts] = tbuf[bs]
-
-
-
-
-
-
-		# 6. Build alltoallv structures:
-		#    a) workspace,winfo <-> data,id_lens
-		#    b) mytiles,tinfo <-> data,id_lens
-		# 7. Implement alltoallv call
+	def work2tile(self):
+		"""Project from local workspaces into the distributed tiles. Multiple workspaces
+		may overlap with a single tile. The contribution from each workspace is summed."""
+		for ws, bs in self.winfo:
+			self.wbuf[bs] = self.work[ws].reshape(-1)
+		comm.Alltoallv((self.wbuf, self.wbufinfo, self.dtype), (self.tbuf, self.tbufinfo), self.dtype)
+		for tile in self.tiles: tile[...] = 0
+		for ti, ts, bs in self.tinfo:
+			self.tiles[ti][ts].reshape(-1)[...] += self.tbuf[bs]
+	def tile2work(self):
+		"""Project from tiles into the local workspaces."""
+		for ti, ts, bs in self.tinfo:
+			self.tbuf[bs] = self.tiles[ti][ts].reshape(-1)[...]
+		comm.Alltoallv((self.tbuf, self.tbufinfo, self.dtype), (self.wbuf, self.wbufinfo), self.dtype)
+		for ws, bs in self.winfo:
+			self.work[ws].reshape(-1)[...] = self.wbuf[bs]
 
 def box2pix(shape, wcs, box):
 	"""Convert one or several bounding boxes of shape [2,2] or [n,2,2]
