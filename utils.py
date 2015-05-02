@@ -578,16 +578,26 @@ def bounding_box(boxes):
 	bbox  = np.array([np.minimum(boxes[:,0,:],0),np.maximum(boxes[:,1,:])])
 	return bbox
 
-def box_overlap(a, b):
-	"""Given two boxes/boxarrays, compute the overlap of each box with each other
-	box, returning the area of the overlaps. If a is [2,2] and b is [2,2], the
-	result will be a single number. if a is [n,2,2] and b is [2,2], the result
-	will be a shape [n] array. If a is [n,2,2] and b is [m,2,2], the result will'
-	be [n,m] areas."""
+def box_slice(a, b):
+	"""Given two boxes/boxarrays of shape [{from,to},dims] or [:,{from,to},dims],
+	compute the bounds of the part of each b that overlaps with each a, relative
+	to the corner of a. For example box_slice([[2,5],[10,10]],[[0,0],[5,7]]) ->
+	[[0,0],[3,2]]."""
 	a  = np.asarray(a)
 	b  = np.asarray(b)
-	fa = a.reshape(-1,2,2)
-	fb = b.reshape(-1,2,2)
-	widths = np.maximum(0,np.minimum(fa[:,None,1],fb[None,:,1])-np.maximum(fa[:,None,0],fb[None,:,0]))
-	area = np.product(widths,-1)
-	return area.reshape(a.shape[:-2]+b.shape[:-2])
+	fa = a.reshape(-1,2,a.shape[-1])
+	fb = b.reshape(-1,2,b.shape[-1])
+	s  = np.minimum(np.maximum(0,fb[:,None]-fa[None,:,0,None]),fa[None,:,1,None])
+	return s.reshape(a.shape[:-2]+b.shape[:-2]+(2,2))
+
+def box_area(a):
+	"""Compute the area of a [{from,to},ndim] box, or an array of such boxes."""
+	return np.product(a[...,1,:]-a[...,0,:],-1)
+
+def box_overlap(a, b):
+	"""Given two boxes/boxarrays, compute the overlap of each box with each other
+	box, returning the area of the overlaps. If a is [2,ndim] and b is [2,ndim], the
+	result will be a single number. if a is [n,2,ndim] and b is [2,ndim], the result
+	will be a shape [n] array. If a is [n,2,ndim] and b is [m,2,ndim], the result will'
+	be [n,m] areas."""
+	return box_area(box_slice(a,b))

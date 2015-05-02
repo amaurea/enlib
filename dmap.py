@@ -41,6 +41,8 @@ class Dmap:
 		if comm is None: comm = mpi4py.MPI.COMM_WORLD
 		shape = tuple(shape)
 		tshape= tuple(tshape[-2:])
+		pre   = tuple(shape[:-2])
+		prelen= np.product(pre)
 		# 0. Translate boxes to pixels
 		boxes = np.asarray(boxes)
 		ibox  = box2pix(shape, wcs, boxes)
@@ -58,11 +60,62 @@ class Dmap:
 		#    workspace. Tiles are given in rounds to ensure as equal memory use as possible.
 		#    Each round the task with the highest overlap clams its highest overlap tile,
 		#    and so on.
-		my_overlaps = utils.box_overlap(tbox, bbox)
-		overlaps = np.zeros([comm.size,ntile],dtype=int)
-		comm.Allgather(my_overlaps, overlaps)
-		ownership = assign_cols_round_robin(overlap)
-		# 5. Define tile-worspace send slices and receive slices
+		wslices = gather(utils.box_slice(bbox, tbox)) # slices into work
+		tslices = gather(utils.box_slice(tbox, bbox)) # slices into tiles
+		overlaps    = utils.box_area(wslices)
+		ownership   = assign_cols_round_robin(overlap)
+		# 5. Define tiles
+		tiles = []
+		for tb in tbox[ownsership==comm.rank]:
+			tshape, twcs = enmap.slice_wcs(shape[-2:], wcs, (slice(tb[0,0],tb[1,0]),slice(tb[0,1],tb[1,1])))
+			tiles.append(enmap.zeros(shape[:-2]+tshape, twcs, dtype=dtype)
+		# 6. Define mapping between work<->wbuf and tiles<->tbuf
+		wbufinfo  = np.zeros([2,comm.size],dtype=int)
+		tbufinfo  = np.zeros([2,comm.size],dtype=int)
+		winfo, tinfo = [], []
+		woff, toff = 0, 0
+		for id in xrange(comm.size):
+			## Buffer info to send to alltoallv
+			wbufinfo[1,id] = woff
+			tbufinfo[1,id] = toff
+			# Slices for transfering to and from w buffer
+			for ws in wslices[comm.rank,ownership==id]:
+				wlen = utils.box_area(ws)*prelen
+				work_slice = (Ellipsis,slice(ws[0,0],ws[1,0]),slice(ws[0,1],ws[1,1]))
+				wbuf_slice = slice(woff,woff+wlen)
+				winfo.append((work_slice,wbuf_slice))
+				woff += wlen
+			for ti, ts in enumerate(tslices[id,ownership==comm.rank]):
+				tlen += utils.box_area(ts)*prelen
+				tile_slice = (Ellipsis,slice(ts[0,0],ts[1,0]),slice(ts[0,1],ts[1,1]))
+				tbuf_slice = slice(toff,toff+tlen)
+				tinfo.append((ti,tile_slice,tbuf_slice))
+				toff += tlen
+			wbufinfo[0,id] = wlen-wbufinfo[1,id]
+			tbufinfo[0,id] = tlen-tbufinfo[1,id]
+		# 7. Store necessary info
+		self.dtype = work.dtype
+		self.shape, self.wcs  = shape, wcs
+		self.ibox,  self.bbox = ibox,  bbox
+		self.tbox,  self.overlaps = tbox, overlaps
+		self.wslices,  self.tslices = wslices, tslices
+		self.wbufinfo, self.winfo   = wbufinfo, winfo
+		self.tbufinfo, self.tinfo   = tbufinfo, tinfo
+		self.work  = work
+		self.tiles = tiles
+
+		## Here's what alltoall will look like
+		#for ws, bs in winfo:
+		#	wbuf[bs] = work[...,ws]
+		#comm.Alltoallv((wbuf, (wlens, woffs), dtype), (tbuf, (tlens, toffs), dtype))
+		#for lti, ts, bs in tinfo:
+		#	tiles[lti][...,ts] = tbuf[bs]
+
+
+
+
+
+
 		# 6. Build alltoallv structures:
 		#    a) workspace,winfo <-> data,id_lens
 		#    b) mytiles,tinfo <-> data,id_lens
@@ -116,3 +169,8 @@ def assign_cols_round_robin(scores):
 			cmask[ci] = False
 		if free[1] == 0: break
 	return ownership
+
+def gather(a, comm):
+	res = np.zeros((comm.size,)+a.shape,dtype=a.dtype)
+	comm.Allgather(a, res)
+	return res
