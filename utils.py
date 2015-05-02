@@ -575,7 +575,7 @@ def bounding_box(boxes):
 	"""Compute bounding box for a set of boxes [...,2,2]."""
 	boxes = np.asarray(boxes)
 	fbox  = boxes.reshape(-1,2,2)
-	bbox  = np.array([np.minimum(boxes[:,0,:],0),np.maximum(boxes[:,1,:])])
+	bbox  = np.array([np.min(boxes[:,0,:],0),np.max(boxes[:,1,:],0)])
 	return bbox
 
 def box_slice(a, b):
@@ -587,7 +587,7 @@ def box_slice(a, b):
 	b  = np.asarray(b)
 	fa = a.reshape(-1,2,a.shape[-1])
 	fb = b.reshape(-1,2,b.shape[-1])
-	s  = np.minimum(np.maximum(0,fb[:,None]-fa[None,:,0,None]),fa[None,:,1,None])
+	s  = np.minimum(np.maximum(0,fb[:,None]-fa[None,:,0,None]),fa[None,:,1,None]-fa[None,:,0,None])
 	return s.reshape(a.shape[:-2]+b.shape[:-2]+(2,2))
 
 def box_area(a):

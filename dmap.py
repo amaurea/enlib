@@ -35,9 +35,10 @@ The easiest way to do this is via alltoallv, which requires the use of
 flattened arrays.
 """
 import numpy as np, mpi4py.MPI
+from enlib import enmap, utils
 
 class Dmap:
-	def __init__(self, shape, wcs, boxes, tshape=(240.240), dtype=None, comm=None):
+	def __init__(self, shape, wcs, boxes, tshape=(240,240), dtype=None, comm=None):
 		if comm is None: comm = mpi4py.MPI.COMM_WORLD
 		shape = tuple(shape)
 		tshape= tuple(tshape[-2:])
@@ -60,15 +61,16 @@ class Dmap:
 		#    workspace. Tiles are given in rounds to ensure as equal memory use as possible.
 		#    Each round the task with the highest overlap clams its highest overlap tile,
 		#    and so on.
-		wslices = gather(utils.box_slice(bbox, tbox)) # slices into work
-		tslices = gather(utils.box_slice(tbox, bbox)) # slices into tiles
+		wslices = gather(utils.box_slice(bbox, tbox),comm) # slices into work
+		tslices = gather(utils.box_slice(tbox, bbox),comm) # slices into tiles
 		overlaps    = utils.box_area(wslices)
-		ownership   = assign_cols_round_robin(overlap)
+		ownership   = assign_cols_round_robin(overlaps)
+		print ownership
 		# 5. Define tiles
 		tiles = []
-		for tb in tbox[ownsership==comm.rank]:
+		for tb in tbox[ownership==comm.rank]:
 			tshape, twcs = enmap.slice_wcs(shape[-2:], wcs, (slice(tb[0,0],tb[1,0]),slice(tb[0,1],tb[1,1])))
-			tiles.append(enmap.zeros(shape[:-2]+tshape, twcs, dtype=dtype))
+			tiles.append(enmap.zeros(shape[:-2]+tuple(tb[1]-tb[0]), twcs, dtype=dtype))
 		# 6. Define mapping between work<->wbuf and tiles<->tbuf
 		wbufinfo  = np.zeros([2,comm.size],dtype=int)
 		tbufinfo  = np.zeros([2,comm.size],dtype=int)
@@ -86,18 +88,20 @@ class Dmap:
 				winfo.append((work_slice,wbuf_slice))
 				woff += wlen
 			for ti, ts in enumerate(tslices[id,ownership==comm.rank]):
-				tlen += utils.box_area(ts)*prelen
+				tlen = utils.box_area(ts)*prelen
 				tile_slice = (Ellipsis,slice(ts[0,0],ts[1,0]),slice(ts[0,1],ts[1,1]))
 				tbuf_slice = slice(toff,toff+tlen)
 				tinfo.append((ti,tile_slice,tbuf_slice))
 				toff += tlen
-			wbufinfo[0,id] = wlen-wbufinfo[1,id]
-			tbufinfo[0,id] = tlen-tbufinfo[1,id]
+			wbufinfo[0,id] = woff-wbufinfo[1,id]
+			tbufinfo[0,id] = toff-tbufinfo[1,id]
+		wbufinfo, tbufinfo = tuple(wbufinfo), tuple(tbufinfo)
 		# 7. Create mpi buffers
-		self.wbuf = np.zeros(wlen,dtype=dtype)
-		self.tbuf = np.zeros(tlen,dtype=dtype)
+		self.wbuf = np.zeros(woff,dtype=dtype)
+		self.tbuf = np.zeros(toff,dtype=dtype)
 		# 8. Store necessary info
 		self.dtype = work.dtype
+		self.comm  = comm
 		self.shape, self.wcs  = shape, wcs
 		self.ibox,  self.bbox = ibox,  bbox
 		self.tbox,  self.overlaps = tbox, overlaps
@@ -111,17 +115,17 @@ class Dmap:
 		may overlap with a single tile. The contribution from each workspace is summed."""
 		for ws, bs in self.winfo:
 			self.wbuf[bs] = self.work[ws].reshape(-1)
-		comm.Alltoallv((self.wbuf, self.wbufinfo, self.dtype), (self.tbuf, self.tbufinfo), self.dtype)
+		self.comm.Alltoallv((self.wbuf, self.wbufinfo), (self.tbuf, self.tbufinfo))
 		for tile in self.tiles: tile[...] = 0
 		for ti, ts, bs in self.tinfo:
-			self.tiles[ti][ts].reshape(-1)[...] += self.tbuf[bs]
+			self.tiles[ti][ts] += self.tbuf[bs].reshape(self.tiles[ti][ts].shape)
 	def tile2work(self):
 		"""Project from tiles into the local workspaces."""
 		for ti, ts, bs in self.tinfo:
-			self.tbuf[bs] = self.tiles[ti][ts].reshape(-1)[...]
-		comm.Alltoallv((self.tbuf, self.tbufinfo, self.dtype), (self.wbuf, self.wbufinfo), self.dtype)
+			self.tbuf[bs] = self.tiles[ti][ts].reshape(-1)
+		self.comm.Alltoallv((self.tbuf, self.tbufinfo), (self.wbuf, self.wbufinfo))
 		for ws, bs in self.winfo:
-			self.work[ws].reshape(-1)[...] = self.wbuf[bs]
+			self.work[ws] = self.wbuf[bs].reshape(self.work[ws].shape)
 
 def box2pix(shape, wcs, box):
 	"""Convert one or several bounding boxes of shape [2,2] or [n,2,2]
@@ -132,7 +136,7 @@ def box2pix(shape, wcs, box):
 	ibox = enmap.sky2pix(shape, wcs, np.rollaxis(fbox,1), corner=True)
 	ibox = np.array([np.floor(ibox[0]),np.ceil(ibox[1])]).astype(int)
 	ibox = np.rollaxis(ibox, 1)
-	return ibox.reshape(box)
+	return ibox.reshape(box.shape)
 
 def build_tiles(shape, tshape):
 	"""Given a bounding shape and the target shape of each tile, returns
@@ -140,8 +144,8 @@ def build_tiles(shape, tshape):
 	sa, ta = np.array(shape[-2:]), np.array(tshape)
 	ntile = (sa+ta-1)/ta
 	tbox  = np.zeros(tuple(ntile)+(2,2),dtype=int)
-	y = np.maximum(shape[0],np.arange(ntile[0]+1)*tshape[0])
-	x = np.maximum(shape[1],np.arange(ntile[1]+1)*tshape[1])
+	y = np.minimum(sa[0],np.arange(ntile[0]+1)*ta[0])
+	x = np.minimum(sa[1],np.arange(ntile[1]+1)*ta[1])
 	tbox[:,:,0,0] = y[:-1,None]
 	tbox[:,:,1,0] = y[ 1:,None]
 	tbox[:,:,0,1] = x[None,:-1]
