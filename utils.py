@@ -587,7 +587,7 @@ def box_slice(a, b):
 	b  = np.asarray(b)
 	fa = a.reshape(-1,2,a.shape[-1])
 	fb = b.reshape(-1,2,b.shape[-1])
-	s  = np.minimum(np.maximum(0,fb[:,None]-fa[None,:,0,None]),fa[None,:,1,None]-fa[None,:,0,None])
+	s  = np.minimum(np.maximum(0,fb[None,:]-fa[:,None,0,None]),fa[:,None,1,None]-fa[:,None,0,None])
 	return s.reshape(a.shape[:-2]+b.shape[:-2]+(2,2))
 
 def box_area(a):
@@ -601,3 +601,12 @@ def box_overlap(a, b):
 	will be a shape [n] array. If a is [n,2,ndim] and b is [m,2,ndim], the result will'
 	be [n,m] areas."""
 	return box_area(box_slice(a,b))
+
+def sum_by_id(a, ids, axis=0):
+	ra = moveaxis(a, axis, 0)
+	fa = ra.reshape(ra.shape[0],-1)
+	fb = np.zeros((np.max(ids)+1,fa.shape[1]),fa.dtype)
+	for i,id in enumerate(ids):
+		fb[id] += fa[i]
+	rb = fb.reshape((fb.shape[0],)+ra.shape[1:])
+	return moveaxis(rb, 0, axis)
