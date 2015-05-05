@@ -34,10 +34,18 @@ The complication is that sends and receives have to happen at the same time.
 The easiest way to do this is via alltoallv, which requires the use of
 flattened arrays.
 """
-import numpy as np, mpi4py.MPI
-from enlib import enmap, utils, array_ops
+import numpy as np, mpi4py.MPI, copy
+from enlib import enmap, utils
 
 class Dmap:
+	"""Dmap - distributed enmap. After construction, its relevant members
+	are:
+		.work:  list of local workspace data. Each workspace is an enmap
+		.tiles: list of tile data owned by this task. Each tile is an enmap.
+		.work2tile(): sums contribution from all workspaces into tiles
+		.tile2work(): projects from tiles to workspaces
+		.shape, .wcs: geometry of distributed map
+		.dtype: dtype of all maps."""
 	def __init__(self, shape, wcs, bbox, tshape=(240,240), dtype=None, comm=None):
 		"""Construct a distributed map structure for the geometry specified by
 		shape and wcs.
@@ -152,6 +160,8 @@ class Dmap:
 		self.comm.Alltoallv((self.tbuf, self.tbufinfo), (self.wbuf, self.wbufinfo))
 		for wi, ws, bs in self.winfo:
 			self.work[wi][ws] = self.wbuf[bs].reshape(self.work[wi][ws].shape)
+	def copy(self):
+		return copy.deepcopy(self)
 
 def box2pix(shape, wcs, box):
 	"""Convert one or several bounding boxes of shape [2,2] or [n,2,2]
@@ -223,3 +233,64 @@ def gatherv(a, comm, axis=0):
 	comm.Allgatherv(ra, (rb, (n*N,o*N)))
 	fb = rb.reshape((rb.shape[0],)+fa.shape[1:])
 	return utils.moveaxis(fb, 0, axis)
+
+def split_boxes_rimwise(boxes, weights, nsplit):
+	"""Given a list of bounding boxes[nbox,{from,to},ndim] and
+	an array of weights[nbox], compute how to split the boxes
+	into nsplit subsets such that the total weights for each
+	split is reasonably even while the bounding box for each
+	group is relatively small. Returns nsplit lists lists of
+	indices into boxes, where each sublist should be treated
+	given a separate bounding box (though this function
+	always returns only a single list per split).
+
+	The algorithm used is a greedy one which repeatedly picks
+	the box futherst from the center and builds a group based
+	on its nearest point. For a box distribution without
+	large holes in it, this should result in a somewhat even
+	distribution, but it is definitely not optimal.
+	"""
+	# Divide boxes into N groups with as equal weight as possible,
+	# and as small bbox as possible
+	n = len(boxes)
+	groups = []
+	# Compute distance of every point from center. We will
+	# start consuming points from edges
+	centers    = np.mean(boxes,1)
+	center_tot = np.mean(centers,0)
+	cdist      = calc_dist2(centers, center_tot[None])
+	totweight  = np.sum(weights)
+	# We keep track of which boxes have already been
+	# processed via a mask.
+	mask = np.full(n, True, dtype=np.bool)
+	cumweight  = 0
+	for gi in xrange(nsplit):
+		# Compute the target weight for this group.
+		# On average this should simply be totweight/nsplit,
+		# but we adjust it on the fly to compensate for any
+		# groups that end up deviating from this.
+		targweight = (totweight-cumweight)/(nsplit-gi)
+		p = unmask(np.argmax(cdist[mask]),mask)
+		mask[p] = False
+		# Find distance of every point to this point. Ouch, this
+		# makes the algorithm O(N^2) if one doesn't introduce gridding
+		pdist = calc_dist2(centers[mask], centers[p,None])
+		dinds = unmask(np.argsort(pdist),mask)
+		cumw  = np.cumsum(weights[dinds])
+		# We will use as many of the closest points as
+		# needed to reach the target weight, but not
+		# so many that there aren't enough points left
+		# for at least one per remaining mpi task.
+		if gi == nsplit-1:
+			nsel = None
+		else:
+			nsel = len(np.where(cumw < targweight)[0])
+			nsel = max(0,min(nsel, np.sum(mask)-(nsplit-gi)))
+		group = np.concatenate([[p],dinds[:nsel]])
+		groups.append([group])
+		mask[group] = False
+		cumweight += np.sum(weights[group])
+	return groups
+
+def calc_dist2(a,b): return np.sum((a-b)**2,1)
+def unmask(inds, mask): return np.where(mask)[0][inds]
