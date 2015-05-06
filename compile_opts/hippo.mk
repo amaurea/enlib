@@ -5,3 +5,6 @@ export FSAFE       = -fopenmp -O3 -fPIC -ffree-line-length-none
 export FC          = gfortran
 export F2PY        = f2py
 export F2PYCOMP    = gfortran
+export PYTHON      = python
+export SED         = sed
+export CC          = gcc

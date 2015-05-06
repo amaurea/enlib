@@ -2,6 +2,13 @@ import numpy as np
 from enlib import utils
 import fortran_32, fortran_64, fortran_c64, fortran_c128
 
+def get_core(dtype):
+	if   dtype == np.float32:    return fortran_32.array_ops
+	elif dtype == np.float64:    return fortran_64.array_ops
+	elif dtype == np.complex64:  return fortran_c64.array_ops
+	elif dtype == np.complex128: return fortran_c128.array_ops
+	raise ValueError("Unsupported data type: %s" % str(dtype))
+
 def get_f(c):
 	if   c == 'f': return fortran_32.array_ops
 	elif c == 'd': return fortran_64.array_ops
