@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, os, errno, scipy.optimize
+import numpy as np, scipy.ndimage, os, errno, scipy.optimize, time
 
 degree = np.pi/180
 arcmin = degree/60
@@ -67,7 +67,7 @@ def rewind(a, ref=0, period=2*np.pi):
 	that they all lie within the same period. The ref argument
 	specifies the angle furthest away from the cut, i.e. the
 	period cut will be at ref+period/2."""
-	return ref + (a-ref+period/2)%period - period/2
+	return ref + (a-ref+period/2.)%period - period/2
 
 def cumsplit(sizes, capacities):
 	"""Given a set of sizes (of files for example) and a set of capacities
@@ -570,3 +570,8 @@ def nodiag(A):
 	A = np.array(A)
 	np.fill_diagonal(A,0)
 	return A
+
+def date2ctime(dstr):
+	import dateutil.parser
+	d = dateutil.parser.parse(dstr, ignoretz=True, tzinfos=0)
+	return time.mktime(d.timetuple())

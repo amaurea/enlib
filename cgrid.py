@@ -2,6 +2,7 @@
 coordinate axes on an image, for example for use with enmap."""
 import numpy as np, time, os
 from PIL import Image, ImageDraw, ImageFont
+from enlib import utils
 
 def calc_line_segs(pixs, steplim=10.):
 	# Split on huge jumps
@@ -28,7 +29,7 @@ def calc_gridinfo(shape, wcs, steps=[2,2], nstep=[200,200]):
 	# Draw lines of longitude
 	for phi in np.arange(nphi)*steps[1]:
 		pixs = np.array(wcs.wcs_world2pix(phi, np.linspace(-90,90,nstep[0],endpoint=True), 0)).T.astype(int)
-		gridinfo.lon.append((phi,calc_line_segs(pixs)))
+		gridinfo.lon.append((utils.rewind(phi,0,360),calc_line_segs(pixs)))
 
 	# Draw lines of latitude
 	for theta in np.arange(ntheta)*steps[0]-90:
