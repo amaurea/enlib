@@ -25,6 +25,7 @@ contains
 
 	subroutine pmat_nearest( &
 			dir,                              &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			tmul, mmul,                       &! Constants to multiply tod and map by during the projection. for dir<0, mmul has no effect
 			tod, map,                         &! Main inputs/outpus
 			bore, det_pos, det_comps,  comps, &! Input pointing
 			rbox, nbox, ys, pbox              &! Coordinate transformation
@@ -34,7 +35,7 @@ contains
 		! Parameters
 		integer(4), intent(in)    :: dir, comps(:), nbox(:), pbox(:,:)
 		real(_),    intent(in)    :: bore(:,:), ys(:,:,:) ! comp, derivs, pix
-		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
+		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:), tmul, mmul
 		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
 		! Work
 		integer(4), parameter :: bz = 321
@@ -42,6 +43,7 @@ contains
 		integer(4) :: steps(size(rbox,1)), pix(2,bz), psize(2)
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1)), phase(size(map,3),bz)
 		real(_)    :: ipoint(size(bore,1),bz), opoint(size(ys,1),bz)
+		real(_)    :: phase_mul
 		real(_), allocatable :: wmap(:,:,:,:)
 
 		nsamp   = size(tod, 1)
@@ -63,11 +65,13 @@ contains
 			!$omp parallel workshare
 			wmap = 0
 			!$omp end parallel workshare
+			phase_mul = tmul
 		else
 			allocate(wmap(psize(2),psize(1),size(map,3),1))
 			!$omp parallel workshare
 			wmap(:,:,:,1) = map(pbox(2,1)+1:pbox(2,2),pbox(1,1)+1:pbox(1,2),:)
 			!$omp end parallel workshare
+			phase_mul = mmul
 		end if
 
 		!$omp parallel private(di,si,nj,j,ipoint,opoint,phase,pix,id)
@@ -90,15 +94,21 @@ contains
 					pix(1,j) = min(psize(1),max(1,pix(1,j)))
 					pix(2,j) = min(psize(2),max(1,pix(2,j)))
 				end do
-				phase(:,:nj)  = get_phase(comps, det_comps(:,di), opoint(3:,:nj))
+				phase(:,:nj)  = get_phase(comps, det_comps(:,di)*phase_mul, opoint(3:,:nj))
 				if(dir < 0) then
 					do j = 1, nj
 						wmap(pix(2,j),pix(1,j),:,id) = wmap(pix(2,j),pix(1,j),:,id) + tod(si+j-1,di)*phase(:,j)
 					end do
 				else
-					do j = 1, nj
-						tod(si+j-1,di) = sum(wmap(pix(2,j),pix(1,j),:,1)*phase(:,j))
-					end do
+					if(tmul==0) then
+						do j = 1, nj
+							tod(si+j-1,di) = sum(wmap(pix(2,j),pix(1,j),:,1)*phase(:,j))
+						end do
+					else
+						do j = 1, nj
+							tod(si+j-1,di) = tod(si+j-1,di)*tmul + sum(wmap(pix(2,j),pix(1,j),:,1)*phase(:,j))
+						end do
+					end if
 				end if
 			end do
 		end do

@@ -7,4 +7,4 @@ export F2PY        = f2py
 export F2PYCOMP    = intelem
 export PYTHON      = python
 export SED         = sed
-export CC          = gcc
+export CC          = icc

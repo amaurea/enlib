@@ -271,7 +271,7 @@ class MapEquation:
 			azdi = 0 if not self.azmap or len(rhs_azmap) <= 1 else di
 			with bench.mark("meq_b_get"):
 				# Only read data if necessary, as it's a pretty heavy operation
-				if self.imap is None and (self.isrc is None or self.isrc.tmul != 0):
+				if (self.imap is None or self.imap.tmul != 0) and (self.isrc is None or self.isrc.tmul != 0):
 					tod = d.scan.get_samples()
 					# To avoid losing precision, we only reduce precision after subtracting
 					# the mean.
@@ -280,7 +280,7 @@ class MapEquation:
 				else:
 					tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
 				if self.imap is not None:
-					d.pmat_imap.forward(tod, self.imap.map)
+					d.pmat_imap.forward(tod, self.imap.map, tmul=self.imap.tmul, mmul=self.imap.mmul)
 					utils.deslope(tod, inplace=True)
 				if self.isrc is not None:
 					d.pmat_isrc.forward(tod, self.isrc.model.params)
@@ -295,7 +295,7 @@ class MapEquation:
 				d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["meq_b_get","meq_b_N","meq_b_P'"]]
-			L.debug("meq b get %5.1f N %4.1f P' %4.1f" % tuple(times))
+			L.debug("meq b get %5.1f N %5.3f P' %5.3f" % tuple(times))
 		with bench.mark("meq_b_red"):
 			rhs_map = reduce(rhs_map, self.comm)
 			if self.azmap and self.azmap.shared:
@@ -328,7 +328,7 @@ class MapEquation:
 				d.pmap.backward(tod,omap)
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["meq_A_P","meq_A_N","meq_A_P'"]]
-			L.debug("meq A P %4.1f N %4.1f P' %4.1f" % tuple(times))
+			L.debug("meq A P %5.3f N %5.3f P' %5.3f" % tuple(times))
 		with bench.mark("meq_A_red"):
 			omap = reduce(omap, self.comm)
 			if self.azmap and self.azmap.shared:
