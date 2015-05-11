@@ -767,7 +767,7 @@ def write_fits(fname, emap):
 	header = emap.wcs.to_header()
 	# Add our map headers
 	header['NAXIS'] = emap.ndim
-	for i,n in enumerate(emap.shape[:-1]):
+	for i,n in enumerate(emap.shape[::-1]):
 		header['NAXIS%d'%(i+1)] = n
 	hdus   = astropy.io.fits.HDUList([astropy.io.fits.PrimaryHDU(emap, header)])
 	with warnings.catch_warnings():

@@ -79,8 +79,11 @@ class Dmap:
 		# 3. Define tiling. Each tile has shape tshape, starting from the (0,0) corner
 		#    of the full map. Tiles at the edge are clipped, as pixels beyond the edge
 		#    of the full map may have undefined wcs positions.
-		tbox  = build_tiles(shape, tshape).reshape(-1,2,2)
-		ntile = len(tbox)
+		tbox   = build_tiles(shape, tshape)
+		bshape = tbox.shape[:2]
+		tbox   = tbox.reshape(-1,2,2)
+		ntile  = len(tbox)
+		bcoord = np.array([np.arange(ntile)/bshape[1],np.arange(ntile)%bshape[1]]).T
 		# 4. Define tile ownership.
 		# a) For each task compute the overlap of each tile with its workspaces, and
 		#    concatenate across tasks to form a [nworktot,ntile] array.
@@ -91,6 +94,12 @@ class Dmap:
 		overlaps    = utils.box_area(wslices)
 		overlaps    = utils.sum_by_id(overlaps, wown, 0)
 		town        = assign_cols_round_robin(overlaps)
+		# Map tile indices from local to global and back
+		tgmap = [[] for i in range(comm.size)]
+		tlmap = np.zeros(ntile,dtype=int)
+		for ti, id in enumerate(town):
+			tlmap[ti] = len(tgmap[id]) # glob 2 loc
+			tgmap[id].append(ti)       # loc  2 glob
 		# 5. Define tiles
 		tiles = []
 		for tb in tbox[town==comm.rank]:
@@ -136,14 +145,20 @@ class Dmap:
 		# 8. Store necessary info
 		self.dtype = np.dtype(dtype)
 		self.comm  = comm
+		self.pre   = pre
 		self.bbox,  self.tbox       = bbox, tbox
 		self.shape, self.wcs        = shape, wcs
 		self.wown,  self.town       = wown, town
+		self.tlmap, self.tgmap      = tlmap, tgmap
+		self.tshape,   self.bshape  = tshape,  bshape
 		self.wslices,  self.tslices = wslices, tslices
 		self.wbufinfo, self.winfo   = wbufinfo, winfo
 		self.tbufinfo, self.tinfo   = tbufinfo, tinfo
+		self.bcoord = bcoord
+		self.ntile  = ntile
 		self.work  = work
 		self.tiles = tiles
+
 	def work2tile(self):
 		"""Project from local workspaces into the distributed tiles. Multiple workspaces
 		may overlap with a single tile. The contribution from each workspace is summed."""
@@ -162,6 +177,34 @@ class Dmap:
 			self.work[wi][ws] = self.wbuf[bs].reshape(self.work[wi][ws].shape)
 	def copy(self):
 		return copy.deepcopy(self)
+	def write(self, name, merged=True, ext="fits"):
+		if not merged:
+			# Write as individual tiles in directory of the specified name
+			utils.mkdir(name)
+			for id, tile in zip(self.tgmap[self.comm.rank],self.tiles):
+				coords = self.bcoord[id]
+				enmap.write_map(name + "/tile%03d_%03d.%s" % (tuple(coords)+(ext,)), tile)
+		else:
+			# Write to a single file. This currently creates the full map
+			# in memory while writing. It is unclear how to avoid this
+			# without bypassing pyfits or becoming super-slow.
+			if self.comm.rank == 0:
+				canvas = enmap.zeros(self.shape, self.wcs, self.dtype)
+			for ti in range(self.ntile):
+				id  = self.town[ti]
+				loc = self.tlmap[ti]
+				box = self.tbox[ti]
+				if self.comm.rank == 0 and id == 0:
+					data = self.tiles[loc]
+				elif self.comm.rank == 0:
+					data = np.zeros(self.pre+tuple(box[1]-box[0]), dtype=self.dtype)
+					self.comm.Recv(data, source=id, tag=loc)
+				elif self.comm.rank == id:
+					self.comm.Send(self.tiles[loc], dest=0, tag=loc)
+				if self.comm.rank == 0:
+					canvas[...,box[0,0]:box[1,0],box[0,1]:box[1,1]] = data
+			if self.comm.rank == 0:
+				enmap.write_map(name, canvas)
 
 def box2pix(shape, wcs, box):
 	"""Convert one or several bounding boxes of shape [2,2] or [n,2,2]
