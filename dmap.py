@@ -74,7 +74,7 @@ class Dmap:
 			wshape, wwcs = enmap.slice_wcs(shape[-2:], wcs, (slice(b[0,0],b[1,0]),slice(b[0,1],b[1,1])))
 			work.append(enmap.zeros(shape[:-2]+wshape, wwcs, dtype=dtype))
 		# 3. Define global workspace ownership
-		nwork = gather([len(bbox)],comm)
+		nwork = utils.allgather([len(bbox)],comm)
 		wown  = np.concatenate([np.full(n,i,dtype=int) for i,n in enumerate(nwork)])
 		# 3. Define tiling. Each tile has shape tshape, starting from the (0,0) corner
 		#    of the full map. Tiles at the edge are clipped, as pixels beyond the edge
@@ -87,8 +87,8 @@ class Dmap:
 		# 4. Define tile ownership.
 		# a) For each task compute the overlap of each tile with its workspaces, and
 		#    concatenate across tasks to form a [nworktot,ntile] array.
-		wslices = gatherv(utils.box_slice(bbox, tbox),comm, axis=0) # slices into work
-		tslices = gatherv(utils.box_slice(tbox, bbox),comm, axis=1) # slices into tiles
+		wslices = utils.allgatherv(utils.box_slice(bbox, tbox),comm, axis=0) # slices into work
+		tslices = utils.allgatherv(utils.box_slice(tbox, bbox),comm, axis=1) # slices into tiles
 		# b) Compute the total overlap each mpi task has with each tile, and use this
 		# to decide who should get which tiles
 		overlaps    = utils.box_area(wslices)
@@ -254,28 +254,6 @@ def assign_cols_round_robin(scores):
 			cmask[ci] = False
 		if free[1] == 0: break
 	return ownership
-
-def gather(a, comm):
-	a   = np.asarray(a)
-	res = np.zeros((comm.size,)+a.shape,dtype=a.dtype)
-	comm.Allgather(a, res)
-	return res
-
-def gatherv(a, comm, axis=0):
-	"""Perform an mpi allgatherv along the specified axis of the array
-	a, returning an array with the individual process arrays concatenated
-	along that dimension. For example gatherv([[1,2]],comm) on one task
-	and gatherv([[3,4],[5,6]],comm) on another task results in
-	[[1,2],[3,4],[5,6]] for both tasks."""
-	fa = utils.moveaxis(a, axis, 0)
-	ra = fa.reshape(fa.shape[0],-1)
-	N  = ra.shape[1]
-	n  = gather([len(ra)],comm)
-	o  = utils.cumsum(n)
-	rb = np.zeros((np.sum(n),N),dtype=ra.dtype)
-	comm.Allgatherv(ra, (rb, (n*N,o*N)))
-	fb = rb.reshape((rb.shape[0],)+fa.shape[1:])
-	return utils.moveaxis(fb, 0, axis)
 
 def split_boxes_rimwise(boxes, weights, nsplit):
 	"""Given a list of bounding boxes[nbox,{from,to},ndim] and

@@ -615,3 +615,33 @@ def sum_by_id(a, ids, axis=0):
 		fb[id] += fa[i]
 	rb = fb.reshape((fb.shape[0],)+ra.shape[1:])
 	return moveaxis(rb, 0, axis)
+
+def allgather(a, comm):
+	a   = np.asarray(a)
+	res = np.zeros((comm.size,)+a.shape,dtype=a.dtype)
+	comm.Allgather(a, res)
+	return res
+
+def allgatherv(a, comm, axis=0):
+	"""Perform an mpi allgatherv along the specified axis of the array
+	a, returning an array with the individual process arrays concatenated
+	along that dimension. For example gatherv([[1,2]],comm) on one task
+	and gatherv([[3,4],[5,6]],comm) on another task results in
+	[[1,2],[3,4],[5,6]] for both tasks."""
+	a  = np.asarray(a)
+	fa = moveaxis(a, axis, 0)
+	ra = fa.reshape(fa.shape[0],-1)
+	N  = ra.shape[1]
+	n  = allgather([len(ra)],comm)
+	o  = cumsum(n)
+	rb = np.zeros((np.sum(n),N),dtype=ra.dtype)
+	comm.Allgatherv(ra, (rb, (n*N,o*N)))
+	fb = rb.reshape((rb.shape[0],)+fa.shape[1:])
+	return moveaxis(fb, 0, axis)
+
+def uncat(a, lens):
+	"""Undo a concatenation operation. If a = np.concatenate(b)
+	and lens = [len(x) for x in b], then uncat(a,lens) returns
+	b."""
+	cum = cumsum(lens, endpoint=True)
+	return [a[cum[i]:cum[i+1]] for i in xrange(len(lens))]
