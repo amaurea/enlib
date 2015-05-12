@@ -216,13 +216,13 @@ class LinearSystemMap(LinearSystem):
 			rebin = pmat.PmatCutRebin(hdata.pcut, ldata.pcut)
 			rebin.backward(hjunk[hdata.cutrange[0]:hdata.cutrange[1]], ljunk[ldata.cutrange[0]:ldata.cutrange[1]])
 		return self.dof.zip(hmap,hjunk)
-	def write(self, prefix=""):
+	def write(self, prefix="", ext="fits"):
 		if self.comm.rank > 0: return
 		rhs = self.dof.unzip(self.b)[0]
-		enmap.write_map(prefix + "rhs.fits", rhs)
-		self.precon.write(prefix)
+		enmap.write_map(prefix + "rhs." + ext, rhs)
+		self.precon.write(prefix, ext=ext)
 		if self.isrc:
-			enmap.write_map(prefix + "srcs.fits", self.isrc.model.draw(rhs.shape, rhs.wcs, window=True))
+			enmap.write_map(prefix + "srcs." + ext, self.isrc.model.draw(rhs.shape, rhs.wcs, window=True))
 
 class MapEquation:
 	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None, isrc=None, azmap=None, azfilter=None):
@@ -415,11 +415,11 @@ class PrecondBinned:
 			else:
 				res = array_ops.solve_masked(self.div_map, map, [0,1]), junk/self.div_junk
 		return res
-	def write(self, prefix=""):
+	def write(self, prefix="", ext="fits"):
 		if self.mapeq.comm.rank > 0: return
-		enmap.write_map(prefix + "div.fits", self.div_map)
-		enmap.write_map(prefix + "hits.fits", self.hitmap)
-		enmap.write_map(prefix + "mask.fits", self.mask.astype(np.uint8))
+		enmap.write_map(prefix + "div." + ext, self.div_map)
+		enmap.write_map(prefix + "hits." + ext, self.hitmap)
+		enmap.write_map(prefix + "mask." + ext, self.mask.astype(np.uint8))
 
 config.default("precon_cyc_npoint", 1, "Number of points to sample in cyclic preconditioner.")
 class PrecondCirculant:
@@ -462,10 +462,10 @@ class PrecondCirculant:
 			m  = fft.ifft(mf, axes=[-2,-1], normalize=True).real
 			m  = enmap.map_mul(self.S, m)
 		return m, junk/self.div_junk
-	def write(self, prefix=""):
+	def write(self, prefix="", ext="fits"):
 		if self.mapeq.comm.rank > 0: return
-		enmap.write_map(prefix + "arow.fits", self.Arow)
-		self.binned.write(prefix)
+		enmap.write_map(prefix + "arow." + ext, self.Arow)
+		self.binned.write(prefix, ext=ext)
 
 def pick_ref_points(hitmap, npoint):
 	pix = []
@@ -653,8 +653,8 @@ class PrecondSubmap:
 			#enmap.write_map("sub%03d.hdf" % solver.i, map)
 		map, _ = eq.dof.unzip(solver.x)
 		return map, junk
-	def write(self, prefix=""):
-		self.binned.write(prefix)
+	def write(self, prefix="", ext="fits"):
+		self.binned.write(prefix, ext=ext)
 
 		# 1. Solve the equation sum_sub(A_sub) x = sum_sub b_sub
 		# by reading off the pixels from each, unapplying the noise

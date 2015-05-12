@@ -629,8 +629,9 @@ def allgatherv(a, comm, axis=0):
 	and gatherv([[3,4],[5,6]],comm) on another task results in
 	[[1,2],[3,4],[5,6]] for both tasks."""
 	a  = np.asarray(a)
+	print a.shape
 	fa = moveaxis(a, axis, 0)
-	ra = fa.reshape(fa.shape[0],-1)
+	ra = fa.reshape(fa.shape[0],-1) if fa.size > 0 else fa.reshape(0,1)
 	N  = ra.shape[1]
 	n  = allgather([len(ra)],comm)
 	o  = cumsum(n)
