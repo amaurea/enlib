@@ -34,8 +34,9 @@ The complication is that sends and receives have to happen at the same time.
 The easiest way to do this is via alltoallv, which requires the use of
 flattened arrays.
 """
-import numpy as np, mpi4py.MPI, copy
+import numpy as np, mpi4py.MPI, copy, os, re
 from enlib import enmap, utils
+from astropy.wcs import WCS
 
 class Dmap:
 	"""Dmap - distributed enmap. After construction, its relevant members
@@ -46,7 +47,7 @@ class Dmap:
 		.tile2work(): projects from tiles to workspaces
 		.shape, .wcs: geometry of distributed map
 		.dtype: dtype of all maps."""
-	def __init__(self, shape, wcs, bbox, tshape=(240,240), dtype=None, comm=None):
+	def __init__(self, shape, wcs, bbox, tshape=None, dtype=None, comm=None):
 		"""Construct a distributed map structure for the geometry specified by
 		shape and wcs.
 
@@ -61,6 +62,7 @@ class Dmap:
 		in a distributed fashion between mpi tasks based on the degree of overlap
 		with their workspaces."""
 		if comm is None: comm = mpi4py.MPI.COMM_WORLD
+		if tshape is None: tshape = (240,240)
 		shape = tuple(shape)
 		tshape= tuple(tshape[-2:])
 		pre   = tuple(shape[:-2])
@@ -177,34 +179,93 @@ class Dmap:
 			self.work[wi][ws] = self.wbuf[bs].reshape(self.work[wi][ws].shape)
 	def copy(self):
 		return copy.deepcopy(self)
-	def write(self, name, merged=True, ext="fits"):
-		if not merged:
-			# Write as individual tiles in directory of the specified name
-			utils.mkdir(name)
-			for id, tile in zip(self.tgmap[self.comm.rank],self.tiles):
-				coords = self.bcoord[id]
-				enmap.write_map(name + "/tile%03d_%03d.%s" % (tuple(coords)+(ext,)), tile)
+
+def write_map(name, map, ext="fits", merged=True):
+	if not merged:
+		# Write as individual tiles in directory of the specified name
+		utils.mkdir(name)
+		for id, tile in zip(map.tgmap[map.comm.rank],map.tiles):
+			coords = map.bcoord[id]
+			enmap.write_map(name + "/tile%03d_%03d.%s" % (tuple(coords)+(ext,)), tile)
+	else:
+		# Write to a single file. This currently creates the full map
+		# in memory while writing. It is unclear how to avoid this
+		# without bypassing pyfits or becoming super-slow.
+		if map.comm.rank == 0:
+			canvas = enmap.zeros(map.shape, map.wcs, map.dtype)
+		for ti in range(map.ntile):
+			id  = map.town[ti]
+			loc = map.tlmap[ti]
+			box = map.tbox[ti]
+			if map.comm.rank == 0 and id == 0:
+				data = map.tiles[loc]
+			elif map.comm.rank == 0:
+				data = np.zeros(map.pre+tuple(box[1]-box[0]), dtype=map.dtype)
+				map.comm.Recv(data, source=id, tag=loc)
+			elif map.comm.rank == id:
+				map.comm.Send(map.tiles[loc], dest=0, tag=loc)
+			if map.comm.rank == 0:
+				canvas[...,box[0,0]:box[1,0],box[0,1]:box[1,1]] = data
+		if map.comm.rank == 0:
+			enmap.write_map(name, canvas)
+
+def read_map(name, bbox, tshape=None, comm=None):
+	if comm is None: comm = mpi4py.MPI.COMM_WORLD
+	if os.path.isdir(name):
+		# Find the number of tiles in the map
+		entries = os.listdir(name)
+		nrow, ncol = 0,0
+		for entry in entries:
+			match = re.search(r'^tile(\d+)_(\d+).([^.]+)$', entry)
+			if match:
+				nrow = max(nrow,1+int(match.group(1)))
+				ncol = max(ncol,1+int(match.group(2)))
+				ndig = len(group(1))
+				ext  = match.group(3)
+		# Build the list of tile files
+		tfiles = [["" for c in range(ncol)] for r in range(nrow)]
+		for entry in entries:
+			match = re.search(r'^tile(\d+)_(\d+).([^.]+)$', entry)
+			if match: tfiles[int(match.group(1))][int(match.group(2))] = entry
+		if nrow == 0: raise IOError("'%s' is not a valid dmap file" % name)
+		# Find the tile size and map extent
+		tile1 = enmap.read_map(tfiles[0][0])
+		tile2 = enmap.read_map(tfiles[-1][-1])
+		npre, tshape = tile1.shape[:-2], tile1.shape[-2:]
+		wcs = tile1.wcs
+		shape = npre + (tile1.shape[-2]*(nrow-1)+tile2.shape[-2],tile1.shape[-1]*(ncol-1)+tile2.shape[-1])
+		dtype = tile1.dtype
+		# Construct our dmap and read our tiles
+		map = Dmap(shape, wcs, bbox, tshape=tshape, dtype=dtype, comm=comm)
+		for id, tile in zip(map.tgmap[map.comm.rank],map.tiles):
+			coords = map.bcoord[id]
+			tile[:] = enmap.read_map(tfiles[coords[0]][coords[1]])
+	else:
+		# Map is in a single file. Get map info
+		if comm.rank == 0:
+			canvas = enmap.read_map(name)
+			shape = comm.bcast(canvas.shape)
+			wcs   = WCS(comm.bcast(canvas.wcs.to_header_string()))
+			dtype = comm.bcast(canvas.dtype)
 		else:
-			# Write to a single file. This currently creates the full map
-			# in memory while writing. It is unclear how to avoid this
-			# without bypassing pyfits or becoming super-slow.
-			if self.comm.rank == 0:
-				canvas = enmap.zeros(self.shape, self.wcs, self.dtype)
-			for ti in range(self.ntile):
-				id  = self.town[ti]
-				loc = self.tlmap[ti]
-				box = self.tbox[ti]
-				if self.comm.rank == 0 and id == 0:
-					data = self.tiles[loc]
-				elif self.comm.rank == 0:
-					data = np.zeros(self.pre+tuple(box[1]-box[0]), dtype=self.dtype)
-					self.comm.Recv(data, source=id, tag=loc)
-				elif self.comm.rank == id:
-					self.comm.Send(self.tiles[loc], dest=0, tag=loc)
-				if self.comm.rank == 0:
-					canvas[...,box[0,0]:box[1,0],box[0,1]:box[1,1]] = data
-			if self.comm.rank == 0:
-				enmap.write_map(name, canvas)
+			shape = comm.bcast(None)
+			wcs   = WCS(comm.bcast(None))
+			dtype = comm.bcast(None)
+		map = Dmap(shape, wcs, bbox, tshape=tshape, dtype=dtype, comm=comm)
+		# And send data to the tiles
+		for ti in range(map.ntile):
+			id  = map.town[ti]
+			loc = map.tlmap[ti]
+			box = map.tbox[ti]
+			if map.comm.rank == 0:
+				data = canvas[...,box[0,0]:box[1,0],box[0,1]:box[1,1]]
+			if map.comm.rank == 0 and id == 0:
+				map.tiles[loc] = data
+			elif map.comm.rank == 0:
+				map.comm.Send(data, dest=id, tag=loc)
+			elif map.comm.rank == id:
+				map.comm.Recv(map.tiles[loc], source=0, tag=loc)
+	return map
 
 def box2pix(shape, wcs, box):
 	"""Convert one or several bounding boxes of shape [2,2] or [n,2,2]

@@ -77,3 +77,5 @@ class TargetDB:
 		if len(matches) == 0: return None
 		matches = sorted(matches)
 		return matches[-1][1]
+	def distance(self, point):
+		return [t.distance(point) for t in self.targets]
