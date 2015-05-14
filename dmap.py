@@ -220,7 +220,6 @@ def read_map(name, bbox, tshape=None, comm=None):
 			if match:
 				nrow = max(nrow,1+int(match.group(1)))
 				ncol = max(ncol,1+int(match.group(2)))
-				ndig = len(group(1))
 				ext  = match.group(3)
 		# Build the list of tile files
 		tfiles = [["" for c in range(ncol)] for r in range(nrow)]
@@ -229,8 +228,8 @@ def read_map(name, bbox, tshape=None, comm=None):
 			if match: tfiles[int(match.group(1))][int(match.group(2))] = entry
 		if nrow == 0: raise IOError("'%s' is not a valid dmap file" % name)
 		# Find the tile size and map extent
-		tile1 = enmap.read_map(tfiles[0][0])
-		tile2 = enmap.read_map(tfiles[-1][-1])
+		tile1 = enmap.read_map(name+"/"+tfiles[0][0])
+		tile2 = enmap.read_map(name+"/"+tfiles[-1][-1])
 		npre, tshape = tile1.shape[:-2], tile1.shape[-2:]
 		wcs = tile1.wcs
 		shape = npre + (tile1.shape[-2]*(nrow-1)+tile2.shape[-2],tile1.shape[-1]*(ncol-1)+tile2.shape[-1])
@@ -239,7 +238,7 @@ def read_map(name, bbox, tshape=None, comm=None):
 		map = Dmap(shape, wcs, bbox, tshape=tshape, dtype=dtype, comm=comm)
 		for id, tile in zip(map.tgmap[map.comm.rank],map.tiles):
 			coords = map.bcoord[id]
-			tile[:] = enmap.read_map(tfiles[coords[0]][coords[1]])
+			tile[:] = enmap.read_map(name+"/"+tfiles[coords[0]][coords[1]])
 	else:
 		# Map is in a single file. Get map info
 		if comm.rank == 0:
@@ -247,6 +246,9 @@ def read_map(name, bbox, tshape=None, comm=None):
 			shape = comm.bcast(canvas.shape)
 			wcs   = WCS(comm.bcast(canvas.wcs.to_header_string()))
 			dtype = comm.bcast(canvas.dtype)
+			# Hack: Pickling changes the dtype from < to =, both of which are
+			# equivalent. But mpi has problems with the former.
+			canvas.dtype = dtype
 		else:
 			shape = comm.bcast(None)
 			wcs   = WCS(comm.bcast(None))
@@ -258,7 +260,7 @@ def read_map(name, bbox, tshape=None, comm=None):
 			loc = map.tlmap[ti]
 			box = map.tbox[ti]
 			if map.comm.rank == 0:
-				data = canvas[...,box[0,0]:box[1,0],box[0,1]:box[1,1]]
+				data = np.ascontiguousarray(canvas[...,box[0,0]:box[1,0],box[0,1]:box[1,1]])
 			if map.comm.rank == 0 and id == 0:
 				map.tiles[loc] = data
 			elif map.comm.rank == 0:
