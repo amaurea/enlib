@@ -35,7 +35,7 @@ The easiest way to do this is via alltoallv, which requires the use of
 flattened arrays.
 """
 import numpy as np, mpi4py.MPI, copy, os, re
-from enlib import enmap, utils
+from enlib import enmap, utils, zipper
 from astropy.wcs import WCS
 
 class Dmap:
@@ -376,3 +376,28 @@ def split_boxes_rimwise(boxes, weights, nsplit):
 
 def calc_dist2(a,b): return np.sum((a-b)**2,1)
 def unmask(inds, mask): return np.where(mask)[0][inds]
+
+class DmapZipper(zipper.ArrayZipper):
+	"""Zips and unzips Dmap objects. Only the tile data is
+	zipped. A Dmap is always assumed to be distributed, so there is no
+	"shared" argument."""
+	def __init__(self, template, mask=None, comm=None):
+		zipper.SingleZipper.__init__(self, False, comm)
+		self.template, self.mask = template, mask
+		if self.mask is None:
+			cum = utils.cumsum([t.size for t in self.template.tiles], endpoint=True)
+		else:
+			cum = utils.cumsum([np.sum(m) for m in self.mask.tiles], endpoint=True)
+		self.n = cum[-1]
+		self.bins = np.array([cum[:-1],cum[1:]]).T
+	def zip(self, a):
+		if self.mask is None: return np.concatenate([t.reshape(-1) for t in a.tiles])
+		else: return np.concatenate([t[m] for t,m in zip(a.tiles,self.mask.tiles)])
+	def unzip(self, x):
+		if self.mask is None:
+			for b,t in zip(self.bins, self.template.tiles):
+				t[...] = x[b[0]:b[1]].reshape(t.shape)
+		else:
+			for b,t,m in zip(self.bins, self.template.tiles, self.mask.tiles):
+				t[m] = x[b[0]:b[1]]
+		return self.template
