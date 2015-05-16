@@ -132,6 +132,7 @@ def slice_wcs(shape, wcs, sel):
 		wcs.wcs.crpix[j] /= s.step
 		wcs.wcs.cdelt[j] *= s.step
 		wcs.wcs.crpix[j] += 0.5
+		oshape[i] = s.stop-s.start
 		oshape[i] = (oshape[i]+s.step-1)/s.step
 	return tuple(oshape), wcs
 

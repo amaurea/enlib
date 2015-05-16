@@ -34,9 +34,11 @@ class SourceModel:
 	def draw(self, shape, wcs, window=False, nsigma=10):
 		m = enmap.zeros((3,)+shape[-2:], wcs)
 		# For each source, select an area around it and add a gaussian there
-		for i, (pos, amp, width, ibeam) in enumerate(zip(self.pos.T, self.amps.T, self.widths.T, self.ibeam.T)):
+		ipos = enmap.sky2pix(shape, wcs, self.pos, corner=True, safe=True)
+		for i, (pos, ipos, amp, width, ibeam) in enumerate(zip(self.pos.T, ipos.T, self.amps.T, self.widths.T, self.ibeam.T)):
 			# Find necessary bounding box
 			w = max(width)*nsigma
+			if np.any(ipos-w<0) or np.any(ipos+w>=shape[-2:]): continue
 			sub = m.submap([pos-w,pos+w])
 			if sub.size == 0: continue
 			add_gauss(sub, pos, amp, ibeam)

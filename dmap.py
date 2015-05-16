@@ -34,9 +34,10 @@ The complication is that sends and receives have to happen at the same time.
 The easiest way to do this is via alltoallv, which requires the use of
 flattened arrays.
 """
-import numpy as np, mpi4py.MPI, copy, os, re
+import numpy as np, mpi4py.MPI, copy, os, re, enlib.slice, logging
 from enlib import enmap, utils, zipper
 from astropy.wcs import WCS
+L = logging.getLogger(__name__)
 
 class Dmap:
 	"""Dmap - distributed enmap. After construction, its relevant members
@@ -47,12 +48,13 @@ class Dmap:
 		.tile2work(): projects from tiles to workspaces
 		.shape, .wcs: geometry of distributed map
 		.dtype: dtype of all maps."""
-	def __init__(self, shape, wcs, bbox, tshape=None, dtype=None, comm=None):
+	def __init__(self, shape, wcs, bbpix=None, bbox=None, tshape=None, dtype=None, comm=None):
 		"""Construct a distributed map structure for the geometry specified by
 		shape and wcs.
 
 		bbox indicates the bounds [{from,to},{lat,lon}] of the area of the map of
 		interest to each mpi task, and will in general be different for each task.
+		bbpix is the same as bbox, but expressed in units of pixels.
 		It is allowed to pass a list of bounding boxes, in which case each mpi task
 		will have multiple work spaces.
 
@@ -68,15 +70,27 @@ class Dmap:
 		pre   = tuple(shape[:-2])
 		prelen= np.product(pre)
 		# 1. Compute local box
-		bbox  = box2pix(shape, wcs, bbox)
-		bbox  = bbox.reshape((-1,)+bbox.shape[-2:])
+		print "full shape", shape
+		print "full box", enmap.box(shape, wcs)*180/np.pi
+		if bbpix is None:
+			print "bbox", np.array(bbox)*180/np.pi
+			bbpix = box2pix(shape, wcs, bbox)
+		bbpix = np.sort(bbpix, 1)
+		print "consistency", enmap.sky2pix(shape, wcs, enmap.box(shape,wcs).T).T
+		print "bbpix", bbpix
+		bbpix  = bbpix.reshape((-1,)+bbpix.shape[-2:])
 		# 2. Set up local workspace(s)
 		work  = []
-		for b in bbox:
+		print "What?"
+		for b in bbpix:
+			print "A", b
+			print "B", enmap.pix2sky(shape, wcs, b)*180/np.pi
 			wshape, wwcs = enmap.slice_wcs(shape[-2:], wcs, (slice(b[0,0],b[1,0]),slice(b[0,1],b[1,1])))
+			print "C", wshape, wwcs
+			print "D", enmap.box(wshape, wwcs)*180/np.pi
 			work.append(enmap.zeros(shape[:-2]+wshape, wwcs, dtype=dtype))
 		# 3. Define global workspace ownership
-		nwork = utils.allgather([len(bbox)],comm)
+		nwork = utils.allgather([len(bbpix)],comm)
 		wown  = np.concatenate([np.full(n,i,dtype=int) for i,n in enumerate(nwork)])
 		# 3. Define tiling. Each tile has shape tshape, starting from the (0,0) corner
 		#    of the full map. Tiles at the edge are clipped, as pixels beyond the edge
@@ -89,8 +103,8 @@ class Dmap:
 		# 4. Define tile ownership.
 		# a) For each task compute the overlap of each tile with its workspaces, and
 		#    concatenate across tasks to form a [nworktot,ntile] array.
-		wslices = utils.allgatherv(utils.box_slice(bbox, tbox),comm, axis=0) # slices into work
-		tslices = utils.allgatherv(utils.box_slice(tbox, bbox),comm, axis=1) # slices into tiles
+		wslices = utils.allgatherv(utils.box_slice(bbpix, tbox),comm, axis=0) # slices into work
+		tslices = utils.allgatherv(utils.box_slice(tbox, bbpix),comm, axis=1) # slices into tiles
 		# b) Compute the total overlap each mpi task has with each tile, and use this
 		# to decide who should get which tiles
 		overlaps    = utils.box_area(wslices)
@@ -105,7 +119,7 @@ class Dmap:
 		# 5. Define tiles
 		tiles = []
 		for tb in tbox[town==comm.rank]:
-			tshape, twcs = enmap.slice_wcs(shape[-2:], wcs, (slice(tb[0,0],tb[1,0]),slice(tb[0,1],tb[1,1])))
+			_, twcs = enmap.slice_wcs(shape[-2:], wcs, (slice(tb[0,0],tb[1,0]),slice(tb[0,1],tb[1,1])))
 			tiles.append(enmap.zeros(shape[:-2]+tuple(tb[1]-tb[0]), twcs, dtype=dtype))
 		# 6. Define mapping between work<->wbuf and tiles<->tbuf
 		wbufinfo  = np.zeros([2,comm.size],dtype=int)
@@ -148,7 +162,7 @@ class Dmap:
 		self.dtype = np.dtype(dtype)
 		self.comm  = comm
 		self.pre   = pre
-		self.bbox,  self.tbox       = bbox, tbox
+		self.bbpix,  self.tbox      = bbpix, tbox
 		self.shape, self.wcs        = shape, wcs
 		self.wown,  self.town       = wown, town
 		self.tlmap, self.tgmap      = tlmap, tgmap
@@ -160,7 +174,6 @@ class Dmap:
 		self.ntile  = ntile
 		self.work  = work
 		self.tiles = tiles
-
 	def work2tile(self):
 		"""Project from local workspaces into the distributed tiles. Multiple workspaces
 		may overlap with a single tile. The contribution from each workspace is summed."""
@@ -175,10 +188,59 @@ class Dmap:
 		for ti, ts, bs in self.tinfo:
 			self.tbuf[bs] = self.tiles[ti][ts].reshape(-1)
 		self.comm.Alltoallv((self.tbuf, self.tbufinfo), (self.wbuf, self.wbufinfo))
-		for wi, ws, bs in self.winfo:
+		for i, (wi, ws, bs) in enumerate(self.winfo):
 			self.work[wi][ws] = self.wbuf[bs].reshape(self.work[wi][ws].shape)
 	def copy(self):
-		return copy.deepcopy(self)
+		res = copy.deepcopy(self)
+		res.comm = self.comm
+		return res
+	@property
+	def ndim(self): return len(self.shape)
+	@property
+	def npix(self): return np.product(self.shape[-2:])
+	def astype(self, dtype):
+		if dtype == self.dtype: return self
+		else:
+			res = self.copy()
+			res.tiles = [t.astype(dtype) for t in self.tiles]
+			res.work  = [w.astype(dtype) for w in self.work]
+			return res
+	def fill(self, val):
+		for t in self.tiles: t[:] = val
+		for w in self.work:  w[:] = val
+		return self
+	def __getitem__(self, sel):
+		# Split sel into normal and wcs parts.
+		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
+		if len(sel2) > 0:
+			raise NotImplementedError("Pixel slicing of dmaps not implemented")
+		res = self.copy()
+		# Tiles, work and buffers are affected by slicing. All collapsed indices must
+		# be divided by the change in overall size
+		res.pre= np.zeros(self.pre)[sel].shape
+		prelen = np.product(res.pre)
+		oldlen = np.product(self.pre)
+		res.shape = res.pre + self.shape[-2:]
+		res.wbufinfo = tuple(np.array(res.wbufinfo)*prelen/oldlen)
+		res.tbufinfo = tuple(np.array(res.tbufinfo)*prelen/oldlen)
+		res.wbuf = res.wbuf[:res.wbuf.size*prelen/oldlen]
+		res.tbuf = res.tbuf[:res.tbuf.size*prelen/oldlen]
+		res.winfo = [(a[0],a[1],slice(a[2].start*prelen/oldlen,a[2].stop*prelen/oldlen)) for a in self.winfo]
+		res.tinfo = [(a[0],a[1],slice(a[2].start*prelen/oldlen,a[2].stop*prelen/oldlen)) for a in self.tinfo]
+		for ti, oldtile in enumerate(self.tiles): res.tiles[ti] = oldtile[sel]
+		for wi, oldwork in enumerate(self.work):  res.work[wi]  = oldwork[sel]
+		return res
+	def __setitem__(self, sel, val):
+		# Split sel into normal and wcs parts.
+		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
+		if len(sel2) > 0:
+			raise NotImplementedError("Pixel slicing of dmaps not implemented")
+		try:
+			for tile, vtile in zip(self.tiles, val.tiles): tile[sel] = vtile
+			for work, vwork in zip(self.work,  val.work):  work[sel] = vwork
+		except AttributeError:
+			for tile in self.tiles: tile[sel] = val
+			for work in self.work:  work[sel] = val
 
 def write_map(name, map, ext="fits", merged=True):
 	if not merged:
@@ -209,7 +271,7 @@ def write_map(name, map, ext="fits", merged=True):
 		if map.comm.rank == 0:
 			enmap.write_map(name, canvas)
 
-def read_map(name, bbox, tshape=None, comm=None):
+def read_map(name, bbpix=None, bbox=None, tshape=None, comm=None):
 	if comm is None: comm = mpi4py.MPI.COMM_WORLD
 	if os.path.isdir(name):
 		# Find the number of tiles in the map
@@ -235,7 +297,7 @@ def read_map(name, bbox, tshape=None, comm=None):
 		shape = npre + (tile1.shape[-2]*(nrow-1)+tile2.shape[-2],tile1.shape[-1]*(ncol-1)+tile2.shape[-1])
 		dtype = tile1.dtype
 		# Construct our dmap and read our tiles
-		map = Dmap(shape, wcs, bbox, tshape=tshape, dtype=dtype, comm=comm)
+		map = Dmap(shape, wcs, bbpix=bbpix, bbox=bbox, tshape=tshape, dtype=dtype, comm=comm)
 		for id, tile in zip(map.tgmap[map.comm.rank],map.tiles):
 			coords = map.bcoord[id]
 			tile[:] = enmap.read_map(name+"/"+tfiles[coords[0]][coords[1]])
@@ -253,7 +315,7 @@ def read_map(name, bbox, tshape=None, comm=None):
 			shape = comm.bcast(None)
 			wcs   = WCS(comm.bcast(None))
 			dtype = comm.bcast(None)
-		map = Dmap(shape, wcs, bbox, tshape=tshape, dtype=dtype, comm=comm)
+		map = Dmap(shape, wcs, bbpix=bbpix, bbox=bbox, tshape=tshape, dtype=dtype, comm=comm)
 		# And send data to the tiles
 		for ti in range(map.ntile):
 			id  = map.town[ti]
@@ -275,9 +337,12 @@ def box2pix(shape, wcs, box):
 	box  = np.asarray(box)
 	fbox = box.reshape(-1,2,2)
 	# Must rollaxis because sky2pix expects [{dec,ra},...]
-	ibox = enmap.sky2pix(shape, wcs, np.rollaxis(fbox,1), corner=True)
+	print "box2pix A", fbox*180/np.pi
+	print "box2pix B", np.rollaxis(fbox,1)*180/np.pi
+	ibox = enmap.sky2pix(shape, wcs, utils.moveaxis(fbox,2,0), corner=True)
+	print "box2pix C", ibox
 	ibox = np.array([np.floor(ibox[0]),np.ceil(ibox[1])]).astype(int)
-	ibox = np.rollaxis(ibox, 1)
+	ibox = utils.moveaxis(ibox, 0, 2)
 	return ibox.reshape(box.shape)
 
 def build_tiles(shape, tshape):
@@ -323,7 +388,7 @@ def split_boxes_rimwise(boxes, weights, nsplit):
 	an array of weights[nbox], compute how to split the boxes
 	into nsplit subsets such that the total weights for each
 	split is reasonably even while the bounding box for each
-	group is relatively small. Returns nsplit lists lists of
+	group is relatively small. Returns nsplit lists of
 	indices into boxes, where each sublist should be treated
 	given a separate bounding box (though this function
 	always returns only a single list per split).
@@ -334,6 +399,7 @@ def split_boxes_rimwise(boxes, weights, nsplit):
 	large holes in it, this should result in a somewhat even
 	distribution, but it is definitely not optimal.
 	"""
+	weights = np.asarray(weights)
 	# Divide boxes into N groups with as equal weight as possible,
 	# and as small bbox as possible
 	n = len(boxes)
@@ -383,8 +449,8 @@ class DmapZipper(zipper.ArrayZipper):
 	"""Zips and unzips Dmap objects. Only the tile data is
 	zipped. A Dmap is always assumed to be distributed, so there is no
 	"shared" argument."""
-	def __init__(self, template, mask=None, comm=None):
-		zipper.SingleZipper.__init__(self, False, comm)
+	def __init__(self, template, mask=None):
+		zipper.SingleZipper.__init__(self, False, template.comm)
 		self.template, self.mask = template, mask
 		if self.mask is None:
 			cum = utils.cumsum([t.size for t in self.template.tiles], endpoint=True)
@@ -393,8 +459,10 @@ class DmapZipper(zipper.ArrayZipper):
 		self.n = cum[-1]
 		self.bins = np.array([cum[:-1],cum[1:]]).T
 	def zip(self, a):
-		if self.mask is None: return np.concatenate([t.reshape(-1) for t in a.tiles])
-		else: return np.concatenate([t[m] for t,m in zip(a.tiles,self.mask.tiles)])
+		if self.mask is None:
+			return np.concatenate([t.reshape(-1) for t in a.tiles])
+		else:
+			return np.concatenate([t[m] for t,m in zip(a.tiles,self.mask.tiles)])
 	def unzip(self, x):
 		if self.mask is None:
 			for b,t in zip(self.bins, self.template.tiles):

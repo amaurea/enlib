@@ -597,7 +597,7 @@ def box_slice(a, b):
 
 def box_area(a):
 	"""Compute the area of a [{from,to},ndim] box, or an array of such boxes."""
-	return np.product(a[...,1,:]-a[...,0,:],-1)
+	return np.abs(np.product(a[...,1,:]-a[...,0,:],-1))
 
 def box_overlap(a, b):
 	"""Given two boxes/boxarrays, compute the overlap of each box with each other

@@ -65,5 +65,5 @@ class MultiZipper:
 		s = [0,0]
 		for z,b in zip(self.zippers, self.bins):
 			s[z.shared] += np.sum(x[b[0]:b[1]])
-		return comm.allreduce(s[0]) + s[1]
+		return self.comm.allreduce(s[0]) + s[1]
 	def dot(self, x, y): return self.sum(x*y)
