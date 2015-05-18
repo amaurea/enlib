@@ -577,11 +577,21 @@ def date2ctime(dstr):
 	return time.mktime(d.timetuple())
 
 def bounding_box(boxes):
-	"""Compute bounding box for a set of boxes [...,2,2]."""
+	"""Compute bounding box for a set of boxes [:,2,:]."""
 	boxes = np.asarray(boxes)
-	fbox  = boxes.reshape(-1,2,2)
-	bbox  = np.array([np.min(boxes[:,0,:],0),np.max(boxes[:,1,:],0)])
-	return bbox
+	if boxes.ndim == 2:
+		return np.array([np.min(boxes,0),np.max(boxes,0)])
+	else:
+		return np.array([np.min(boxes[:,0,:],0),np.max(boxes[:,1,:],0)])
+
+def unpackbits(a): return np.unpackbits(np.atleast_1d(a).view(np.uint8)[::-1])[::-1]
+
+def box2corners(box):
+	"""Given a [{from,to},:] bounding box, returns [nocorner,:] coordinates
+	of of all its corners."""
+	box = np.asarray(box)
+	ndim= box.shape[1]
+	return np.array([[box[b,bi] for bi,b in enumerate(unpackbits(i)[:ndim])] for i in range(2**ndim)])
 
 def box_slice(a, b):
 	"""Given two boxes/boxarrays of shape [{from,to},dims] or [:,{from,to},dims],
