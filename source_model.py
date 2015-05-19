@@ -31,19 +31,34 @@ class SourceModel:
 	@property
 	def params(self): return np.concatenate([self.pos, self.amps, self.ibeam])
 	def __repr__(self): return "SourceModel(nsrc=%d)" % self.nsrc
-	def draw(self, shape, wcs, window=False, nsigma=10):
+	def draw(self, shape, wcs, window=False, nsigma=10, pad=False):
 		m = enmap.zeros((3,)+shape[-2:], wcs)
-		# For each source, select an area around it and add a gaussian there
-		ipos = enmap.sky2pix(shape, wcs, self.pos, corner=True, safe=True)
-		for i, (pos, ipos, amp, width, ibeam) in enumerate(zip(self.pos.T, ipos.T, self.amps.T, self.widths.T, self.ibeam.T)):
+		w = np.max(self.widths)*nsigma
+		# Find all sources that enter even partially into our area
+		ipos = np.array([
+			enmap.sky2pix(shape, wcs, self.pos-w, corner=True, safe=True),
+			enmap.sky2pix(shape, wcs, self.pos+w, corner=True, safe=True)]).astype(int)
+		ipos = np.sort(ipos,0)
+		ashape = np.array(shape[-2:])
+		mask = np.all(ipos[1]>=0,0) & np.all(ipos[0]<ashape[:,None],0) & np.all(ipos[1]-ipos[0]<ashape[:,None],0)
+		nmask= np.sum(mask)
+		if nmask == 0: return m
+		if pad:
+			# We will include enough pixels on each side that we avoid
+			# truncating any part of the source
+			ipos2 = np.array([
+				enmap.sky2pix(shape, wcs, self.pos[:,mask]-w*2, corner=True, safe=True),
+				enmap.sky2pix(shape, wcs, self.pos[:,mask]+w*2, corner=True, safe=True)]).astype(int)
+			npad  = np.maximum(0,[-np.min(ipos2,(0,2)),np.max(ipos2,(0,2))-ashape])
+			m, mslice = enmap.pad(m, npad, return_slice=True)
+		for i, (pos, amp, width, ibeam) in enumerate(zip(self.pos.T[mask], self.amps.T[mask], self.widths.T[mask], self.ibeam.T[mask])):
 			# Find necessary bounding box
-			w = max(width)*nsigma
-			if np.any(ipos-w<0) or np.any(ipos+w>=shape[-2:]): continue
 			sub = m.submap([pos-w,pos+w])
 			if sub.size == 0: continue
 			add_gauss(sub, pos, amp, ibeam)
 		# Optinally apply window function
 		if window: m = enmap.apply_window(m)
+		if pad: m = m[mslice]
 		return m
 
 def add_gauss(m, pos, amp, ibeam):

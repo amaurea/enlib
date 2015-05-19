@@ -70,24 +70,14 @@ class Dmap:
 		pre   = tuple(shape[:-2])
 		prelen= np.product(pre)
 		# 1. Compute local box
-		print "full shape", shape
-		print "full box", enmap.box(shape, wcs)*180/np.pi
 		if bbpix is None:
-			print "bbox", np.array(bbox)*180/np.pi
 			bbpix = box2pix(shape, wcs, bbox)
 		bbpix = np.sort(bbpix, 1)
-		print "consistency", enmap.sky2pix(shape, wcs, enmap.box(shape,wcs).T).T
-		print "bbpix", bbpix
-		bbpix  = bbpix.reshape((-1,)+bbpix.shape[-2:])
+		bbpix = bbpix.reshape((-1,)+bbpix.shape[-2:])
 		# 2. Set up local workspace(s)
 		work  = []
-		print "What?"
 		for b in bbpix:
-			print "A", b
-			print "B", enmap.pix2sky(shape, wcs, b)*180/np.pi
 			wshape, wwcs = enmap.slice_wcs(shape[-2:], wcs, (slice(b[0,0],b[1,0]),slice(b[0,1],b[1,1])))
-			print "C", wshape, wwcs
-			print "D", enmap.box(wshape, wwcs)*180/np.pi
 			work.append(enmap.zeros(shape[:-2]+wshape, wwcs, dtype=dtype))
 		# 3. Define global workspace ownership
 		nwork = utils.allgather([len(bbpix)],comm)
@@ -255,19 +245,9 @@ def write_map(name, map, ext="fits", merged=True):
 		# without bypassing pyfits or becoming super-slow.
 		if map.comm.rank == 0:
 			canvas = enmap.zeros(map.shape, map.wcs, map.dtype)
-		for ti in range(map.ntile):
-			id  = map.town[ti]
-			loc = map.tlmap[ti]
-			box = map.tbox[ti]
-			if map.comm.rank == 0 and id == 0:
-				data = map.tiles[loc]
-			elif map.comm.rank == 0:
-				data = np.zeros(map.pre+tuple(box[1]-box[0]), dtype=map.dtype)
-				map.comm.Recv(data, source=id, tag=loc)
-			elif map.comm.rank == id:
-				map.comm.Send(map.tiles[loc], dest=0, tag=loc)
-			if map.comm.rank == 0:
-				canvas[...,box[0,0]:box[1,0],box[0,1]:box[1,1]] = data
+		else:
+			canvas = None
+		dmap2enmap(map, canvas)
 		if map.comm.rank == 0:
 			enmap.write_map(name, canvas)
 
@@ -315,21 +295,43 @@ def read_map(name, bbpix=None, bbox=None, tshape=None, comm=None):
 			shape = comm.bcast(None)
 			wcs   = WCS(comm.bcast(None))
 			dtype = comm.bcast(None)
+			canvas= None
 		map = Dmap(shape, wcs, bbpix=bbpix, bbox=bbox, tshape=tshape, dtype=dtype, comm=comm)
 		# And send data to the tiles
-		for ti in range(map.ntile):
-			id  = map.town[ti]
-			loc = map.tlmap[ti]
-			box = map.tbox[ti]
-			if map.comm.rank == 0:
-				data = np.ascontiguousarray(canvas[...,box[0,0]:box[1,0],box[0,1]:box[1,1]])
-			if map.comm.rank == 0 and id == 0:
-				map.tiles[loc] = data
-			elif map.comm.rank == 0:
-				map.comm.Send(data, dest=id, tag=loc)
-			elif map.comm.rank == id:
-				map.comm.Recv(map.tiles[loc], source=0, tag=loc)
+		enmap2dmap(canvas, map)
 	return map
+
+def enmap2dmap(emap, dmap, root=0):
+	"""Import data from an enmap into a dmap."""
+	for ti in range(dmap.ntile):
+		id  = dmap.town[ti]
+		loc = dmap.tlmap[ti]
+		box = dmap.tbox[ti]
+		if dmap.comm.rank == root:
+			data = np.ascontiguousarray(emap[...,box[0,0]:box[1,0],box[0,1]:box[1,1]])
+		if dmap.comm.rank == root and id == root:
+			dmap.tiles[loc] = data
+		elif dmap.comm.rank == root:
+			dmap.comm.Send(data, dest=id, tag=loc)
+		elif dmap.comm.rank == id:
+			dmap.comm.Recv(dmap.tiles[loc], source=root, tag=loc)
+
+def dmap2enmap(dmap, emap, root=0):
+	"""Transfer data from a a dmap to a full enmap hosted on
+	the mpi task with id given by root."""
+	for ti in range(dmap.ntile):
+		id  = dmap.town[ti]
+		loc = dmap.tlmap[ti]
+		box = dmap.tbox[ti]
+		if dmap.comm.rank == root and id == root:
+			data = dmap.tiles[loc]
+		elif dmap.comm.rank == root:
+			data = np.zeros(dmap.pre+tuple(box[1]-box[0]), dtype=dmap.dtype)
+			dmap.comm.Recv(data, source=id, tag=loc)
+		elif dmap.comm.rank == id:
+			dmap.comm.Send(dmap.tiles[loc], dest=root, tag=loc)
+		if dmap.comm.rank == root:
+			emap[...,box[0,0]:box[1,0],box[0,1]:box[1,1]] = data
 
 def box2pix(shape, wcs, box):
 	"""Convert one or several bounding boxes of shape [2,2] or [n,2,2]
@@ -337,10 +339,7 @@ def box2pix(shape, wcs, box):
 	box  = np.asarray(box)
 	fbox = box.reshape(-1,2,2)
 	# Must rollaxis because sky2pix expects [{dec,ra},...]
-	print "box2pix A", fbox*180/np.pi
-	print "box2pix B", np.rollaxis(fbox,1)*180/np.pi
 	ibox = enmap.sky2pix(shape, wcs, utils.moveaxis(fbox,2,0), corner=True)
-	print "box2pix C", ibox
 	ibox = np.array([np.floor(ibox[0]),np.ceil(ibox[1])]).astype(int)
 	ibox = utils.moveaxis(ibox, 0, 2)
 	return ibox.reshape(box.shape)

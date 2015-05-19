@@ -240,7 +240,6 @@ class MapEquation:
 			# Subinds indicates which local workspace to use for this scan
 			d.sub = 0 if subinds is None else subinds[si]
 			try:
-				print "A", area.work[d.sub].box()*180/np.pi
 				d.pmap = pmat.PmatMap(scan, area.work[d.sub], order=pmat_order, sys=eqsys)
 			except OverflowError:
 				L.debug("Failed to set up pointing interpolation for scan #%d. Skipping" % si)
