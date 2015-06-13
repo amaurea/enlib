@@ -66,9 +66,9 @@ class PmatMap(PointingMatrix):
 	def forward(self, tod, m, tmul=0, mmul=1):
 		"""m -> tod"""
 		self.func( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
-	def backward(self, tod, m):
+	def backward(self, tod, m, tmul=1, mmul=1):
 		"""tod -> m"""
-		self.func(-1, 1, 0, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
+		self.func(-1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""

@@ -18,6 +18,8 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 	with the same shape as the input. The coordinates are in ra,dec-ordering."""
 	# Make ourselves case insensitive, and look up the corresponding objects
 	unit = getunit(unit)
+	coords = np.asarray(coords)
+	if time is not None: time = np.asarray(time)
 	(from_sys,from_ref), (to_sys,to_ref) = getsys_full(from_sys,unit,time,site), getsys_full(to_sys,unit,time,site)
 	# Handle polarization by calling ourselves twice wtih slightly differing positions.
 	if pol is None: pol = len(coords) == 3
@@ -72,12 +74,13 @@ def transform_astropy(from_sys, to_sys, coords, unit):
 
 def hor2cel(coord, time, site):
 	coord  = np.asarray(coord)
-	info   = iers.lookup(time[0])
+	trepr  = time[len(time)/2]
+	info   = iers.lookup(trepr)
 	as2rad = np.pi/180/60/60
-	ao = slalib.sla_aoppa(time[0], info.dUT, site.lon*np.pi/180, site.lat*np.pi/180, site.alt,
+	ao = slalib.sla_aoppa(trepr, info.dUT, site.lon*np.pi/180, site.lat*np.pi/180, site.alt,
 		info.pmx*as2rad, info.pmy*as2rad, site.T, site.P, site.hum,
-		299792.458/site.freq, 0.0065)
-	am = slalib.sla_mappa(2000.0, time[0])
+		299792.458/site.freq, site.lapse)
+	am = slalib.sla_mappa(2000.0, trepr)
 	# This involves a transpose operation, which is not optimal
 	res = pyfsla.aomulti(time, coord, ao, am)
 	return res
@@ -85,12 +88,13 @@ def hor2cel(coord, time, site):
 def cel2hor(coord, time, site):
 	# This is very slow for objects near the horizon!
 	coord  = np.asarray(coord)
-	info   = iers.lookup(time[0])
+	trepr  = time[len(time)/2]
+	info   = iers.lookup(trepr)
 	as2rad = np.pi/180/60/60
-	ao = slalib.sla_aoppa(time[0], info.dUT, site.lon*np.pi/180, site.lat*np.pi/180, site.alt,
+	ao = slalib.sla_aoppa(trepr, info.dUT, site.lon*np.pi/180, site.lat*np.pi/180, site.alt,
 		info.pmx*as2rad, info.pmy*as2rad, site.T, site.P, site.hum,
-		299792.458/site.freq, 0.0065)
-	am = slalib.sla_mappa(2000.0, time[0])
+		299792.458/site.freq, site.lapse)
+	am = slalib.sla_mappa(2000.0, trepr)
 	# This involves a transpose operation, which is not optimal
 	return pyfsla.oamulti(time, coord, ao, am)
 
