@@ -106,7 +106,8 @@ contains
 				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
 				do di = 1, ndet
 					do si = 1, nsamp
-						! Compute interpolated pointing
+						! Compute interpolated pointing. This used to be done via a function
+						! call, but that proved too costly.
 						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
 						xind = floor(xrel)
 						xrel = xrel - xind
@@ -649,7 +650,8 @@ contains
 		integer(4), intent(in),  optional :: ilen
 		integer(4), intent(out), optional :: olen
 		real(_),    intent(inout) :: junk(:), tod(:)
-		integer(4) :: si, w, bi, si2, si3, n, ol
+		integer(4) :: si, w, bi, si2, si3, n, ol, i
+		real(_), allocatable :: x(:), Pa(:), Pb(:), Pc(:)
 		n = size(tod)
 		if(present(ilen)) n = ilen
 		ol = 0
@@ -667,31 +669,38 @@ contains
 			ol = n
 		case(2)
 			! Downgraded cuts. Cut area stored in bins of constant width.
+			! Warning: Don't use this. It results in a step-function-like
+			! TOD with lots of sharp edges. This gives lare spurious modes
+			! in the solved map.
 			w = cuttype(2)
 			do bi = 1, (n-1)/w
 				ol = ol+1
 				if(dir < 0) then
-					junk(ol) = mean(tod((bi-1)*w+1:bi*w))
+					junk(ol) = sum(tod((bi-1)*w+1:bi*w))
 				elseif(dir > 0) then
 					tod((bi-1)*w+1:bi*w) = junk(ol)
 				end if
 			end do
 			ol = ol+1
 			if(dir < 0) then
-				junk(ol) = mean(tod((bi-1)*w+1:n))
+				junk(ol) = sum(tod((bi-1)*w+1:n))
 			elseif(dir < 0) then
 				tod((bi-1)*w+1:n) = junk(ol)
 			end if
 		case(3)
 			! Exponential cuts. Full resolution near edges, low in the middle,
 			! with bin size doubling with distance to edge.
+			! Warning: Don't use this. It results in a step-function-like
+			! TOD with lots of sharp edges. This gives lare spurious modes
+			! in the solved map.
+
 			! Left edge
 			w  = 1
 			si = 1
 			do while(si+w < (n+1)/2)
 				ol = ol+1
 				if(dir < 0) then
-					junk(ol) = mean(tod(si:si+w-1))
+					junk(ol) = sum(tod(si:si+w-1))
 				elseif(dir > 0) then
 					tod(si:si+w-1) = junk(ol)
 				end if
@@ -705,7 +714,7 @@ contains
 				ol  = ol+1
 				si3 = n-si2+1
 				if(dir < 0) then
-					junk(ol) = mean(tod(si3-w+1:si3))
+					junk(ol) = sum(tod(si3-w+1:si3))
 				elseif(dir > 0) then
 					tod(si3-w+1:si3) = junk(ol)
 				end if
@@ -716,9 +725,43 @@ contains
 			si3 = n-si2+1
 			! Middle
 			if(dir < 0) then
-				junk(ol)   = mean(tod(si:si3))
+				junk(ol)   = sum(tod(si:si3))
 			elseif(dir > 0) then
 				tod(si:si3) = junk(ol)
+			end if
+		case(4)
+			! Legendre polynomial projection
+			w = min(n,4+n/cuttype(2))
+			if(w <= 1) then
+				if(dir > 0) then
+					tod = junk(1)
+				elseif(dir < 0) then
+					junk(1) = sum(tod)
+				end if
+				ol = 1
+			else
+				if(dir > 0) tod = 0
+				! This approach, with vectors for xv etc. Was several
+				! times faster than the scalar version due to greater
+				! parallelism.
+				allocate(x(n),Pa(n),Pb(n),Pc(n))
+				do si = 1, n
+					x(si) = -1d0 + 2d0*(si-1)/(n-1)
+				end do
+				ol = 0
+				do i = 0, w-1
+					ol = ol + 1
+					select case(i)
+						case(0); Pa = 1
+						case(1); Pb = 1; Pa = x
+						case default; Pc = Pb; Pb = Pa; Pa = ((2*i+1)*x*Pb-i*Pc)/(i+1)
+					end select
+					if(dir < 0) then
+						junk(ol) = sum(Pa*tod)
+					else
+						tod = tod + junk(ol) * Pa
+					end if
+				end do
 			end if
 		end select
 		! These samples have been handled, so remove them so that

@@ -185,7 +185,7 @@ class PmatCut(PointingMatrix):
 		toks = params.split(":")
 		kind = toks[0]
 		args = tuple([int(s) for s in toks[1].split(",")]) if len(toks) > 1 else ()
-		return ({"none":0,"full":1,"bin":2,"exp":3}[toks[0]],)+args
+		return ({"none":0,"full":1,"bin":2,"exp":3,"poly":4}[toks[0]],)+args
 
 class pos2pix:
 	"""Transforms from scan coordintaes to pixel-center coordinates."""
