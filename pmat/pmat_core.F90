@@ -758,7 +758,7 @@ contains
 					end select
 					if(dir < 0) then
 						junk(ol) = sum(Pa*tod)
-					else
+					elseif(dir > 0) then
 						tod = tod + junk(ol) * Pa
 					end if
 				end do
@@ -804,7 +804,7 @@ contains
 			!$omp end parallel workshare
 			!$omp parallel private(di,si,ci,id)
 			id = omp_get_thread_num()+1
-			!$omp do collapse(2)
+			!$omp do
 			do di = 1, ndet
 				do ci = 1, ncomp
 					do si = 1, nsamp
@@ -820,7 +820,7 @@ contains
 				end do
 			end do
 		else
-			!$omp parallel do collapse(2) private(di,si,ci)
+			!$omp parallel do private(di,si,ci)
 			do di = 1, ndet
 				do si = 1, nsamp
 					do ci = 1, ncomp

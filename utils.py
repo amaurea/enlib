@@ -67,6 +67,8 @@ def rewind(a, ref=0, period=2*np.pi):
 	that they all lie within the same period. The ref argument
 	specifies the angle furthest away from the cut, i.e. the
 	period cut will be at ref+period/2."""
+	if ref == "auto": ref = np.median(a)
+	a = np.asanyarray(a)
 	return ref + (a-ref+period/2.)%period - period/2
 
 def cumsplit(sizes, capacities):

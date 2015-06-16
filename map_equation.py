@@ -308,13 +308,14 @@ class MapEquation:
 		else:
 			return rhs_map, rhs_junk
 	def A(self, map, junk, azmap=None, white=False):
-		map, junk = map.copy(), junk.copy()
-		omap, ojunk = map.copy().fill(0), junk*0
-		# Project map tiles down to local workspaces
-		map.tile2work()
-		if self.azmap:
-			azmap = azmap.copy()
-			oazmap = azmap*0
+		with bench.mark("meq_A_expand"):
+			map, junk = map.copy(), junk.copy()
+			omap, ojunk = map.copy().fill(0), junk*0
+			# Project map tiles down to local workspaces
+			map.tile2work()
+			if self.azmap:
+				azmap = azmap.copy()
+				oazmap = azmap*0
 		for di, d in enumerate(self.data):
 			azdi = 0 if azmap is not None and len(azmap) <= 1 else di
 			with bench.mark("meq_A_P"):

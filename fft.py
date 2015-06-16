@@ -93,7 +93,7 @@ def redft00(a, b=None, nthread=0, normalize=False, flags=None):
 	if b is None: b = empty(a.shape, a.dtype)
 	n = a.shape[-1]
 	tshape = a.shape[:-1] + (2*(n-1),)
-	itmp = _empty(tshape, a.dtype)
+	itmp = empty(tshape, a.dtype)
 	itmp[...,:n] = a[...,:n]
 	itmp[...,n:] = a[...,-2:0:-1]
 	otmp = rfft(itmp, axes=[-1], nthread=nthread, flags=flags)
