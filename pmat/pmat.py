@@ -22,6 +22,7 @@ config.default("map_eqsys",       "equ", "The coordinate system of the maps. Can
 config.default("pmat_accuracy",     1.0, "Factor by which to lower accuracy requirement in pointing interpolation. 1.0 corresponds to 1e-3 pixels and 0.1 arc minute in polangle")
 config.default("pmat_interpol_max_size", 100000, "Maximum mesh size in pointing interpolation. Worst-case time and memory scale at most proportionally with this.")
 config.default("pmat_interpol_max_time", 50, "Maximum time to spend in pointing interpolation constructor. Actual time spent may be up to twice this.")
+config.default("tod_window",        5.0, "Seconds by which to window each end of the TOD.")
 
 class PointingMatrix:
 	def forward(self, tod, m): raise NotImplementedError
@@ -82,6 +83,90 @@ class PmatMap(PointingMatrix):
 		phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
 		self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 		return pix, phase
+
+def get_moby_pointing(entry, bore, dets, downgrade=1):
+	# Set up moby2
+	import moby2
+	moby2.pointing.set_bulletin_A()
+	params = {
+		"detector_offsets": {
+			"format": "fp_file",
+			"filename": entry.point_template },
+		"pol_source": {
+			"source": "file",
+			"filename": entry.polangle,
+			"format": "ascii",
+			"fail_value": -1 },
+		"shift_generator": {
+			"source": "file",
+			"filename": entry.point_offsets,
+			"rescale_degrees": 1/60. }
+		}
+	fplane = moby2.scripting.get_focal_plane(params, det_uid=dets, tod=entry.id)
+	bore   = bore[::downgrade].T
+	#return np.array(moby2.pointing.get_coords(bore[0], bore[1], bore[2], fields=['ra','dec','cos_2gamma','sin_2gamma']))
+	return np.array(fplane.get_coords(bore[0], bore[1], bore[2], fields=['ra','dec','cos_2gamma','sin_2gamma']))
+
+downsamp = config.default("pmat_moby_downsamp", 20, "How much to downsample pointing by in pmat moby when fitting model")
+class PmatMoby(PointingMatrix):
+	def __init__(self, scan, template, sys=None):
+		sys      = config.get("map_eqsys",      sys)
+		downsamp = config.get("pmat_moby_downsamp", 20)
+
+		opoint = get_moby_pointing(scan.entry, scan.boresight, scan.dets, downsamp)
+
+
+
+
+		box = np.array(scan.box)
+		margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
+		box[0] -= margin/2; box[1] += margin/2
+		acc  = config.get("pmat_accuracy")
+		ip_size= config.get("pmat_interpol_max_size")
+		ip_time= config.get("pmat_interpol_max_time")
+		transform = pos2pix(scan,template,sys)
+
+		# Build pointing interpolator
+		ipol, obox = interpol.build(transform, interpol.ip_linear, box, np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time, return_obox=True)
+		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, template.dtype)
+		# Use obox to extract a pixel bounding box for this scan.
+		# These are the only pixels pmat needs to concern itself with.
+		# Reducing the number of pixels makes us more memory efficient
+		self.pixbox = build_pixbox(obox[:,:2], template.shape[-2:])
+
+		self.comps= np.arange(template.shape[0])
+		self.scan  = scan
+		self.order = order
+		self.dtype = template.dtype
+		self.core = get_core(self.dtype)
+		if order == 0:
+			self.func = self.core.pmat_nearest
+		elif order == 1:
+			self.func = self.core.pmat_linear
+		else:
+			raise NotImplementedError("order > 1 is not implemented")
+		self.transform = transform
+		self.ipol = ipol
+	def forward(self, tod, m, tmul=0, mmul=1):
+		"""m -> tod"""
+		self.func( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
+	def backward(self, tod, m, tmul=1, mmul=1):
+		"""tod -> m"""
+		self.func(-1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
+	def translate(self, bore=None, offs=None, comps=None):
+		"""Perform the coordinate transformation used in the pointing matrix without
+		actually projecting TOD values to a map."""
+		if bore  is None: bore  = self.scan.boresight
+		if offs  is None: offs  = self.scan.offsets[:1]*0
+		if comps is None: comps = self.scan.comps[:self.scan.offsets.shape[0]]*0
+		bore, offs, comps = np.asarray(bore), np.asarray(offs), np.asarray(comps)
+		nsamp, ndet, ncomp = bore.shape[0], offs.shape[0], comps.shape[1]
+		dtype = self.dtype
+		pix   = np.empty([ndet,nsamp,2],dtype=dtype)
+		phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
+		self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
+		return pix, phase
+
 
 # Neither this approach nor time-domain linear interpolation works at the moment.
 # In theory, they would help with the subpixel bias issue. In practice, they
@@ -208,6 +293,13 @@ class pos2pix:
 		opix[2]  = np.cos(2*opos[2])
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)
+
+def apply_window(tod, width):
+	"""Apply tapering window on width samples at each side of the tod.
+	For example, apply_window(tod, 5*srate) would apply a 5-second window
+	at each edge of the tod."""
+	core = get_core(tod.dtype)
+	core.pmat_window(tod.T, int(width))
 
 config.default("pmat_scan_mode", "azimuth", "The coodinate basis to use for scan mode projection. Can be 'azimuth' or 'phase'. Default is azimuth.")
 class PmatScan(PointingMatrix):

@@ -82,7 +82,7 @@ class Dmap:
 		# Some scans may extend partially beyond the end of our map. We must therefore
 		# truncate the bounding box.
 		bbpix[:,0,:] = np.maximum(bbpix[:,0,:],0)
-		bbpix[:,1,:] = np.maximum(bbpix[:,1,:],shape[-2:])
+		bbpix[:,1,:] = np.minimum(bbpix[:,1,:],shape[-2:])
 		# 2. Set up local workspace(s)
 		work  = []
 		for b in bbpix:

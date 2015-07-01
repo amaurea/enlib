@@ -248,6 +248,7 @@ class MapEquation:
 			d.cutrange = [njunk,njunk+d.pcut.njunk]
 			njunk = d.cutrange[1]
 			d.nmat = scan.noise
+			d.window = int(d.scan.srate * config.get("tod_window"))
 			# Make maps from data projected from input map instead of real data
 			if imap: d.pmat_imap = pmat.PmatMap(scan, imap.work[d.sub], order=pmat_order, sys=imap.sys)
 			if isrc: d.pmat_isrc = pmat.PmatPtsrc(scan, isrc.model.params.astype(area.dtype), sys=isrc.sys, tmul=isrc.tmul, pmul=isrc.pmul)
@@ -287,9 +288,12 @@ class MapEquation:
 					utils.deslope(tod, inplace=True)
 				if self.isrc is not None:
 					d.pmat_isrc.forward(tod, self.isrc.model.params)
-				# Optional azimuth filter
+				# Optional azimuth filter. This should probably happen in enact.data.calibrate,
+				# as it should happend before the noise estimation. It might be best to make a
+				# new function that handles all these extra things.
 				if self.azfilter is not None:
 					todfilter.filter_poly_jon(tod, d.scan.boresight[:,1], naz=self.azfilter.naz, nt=self.azfilter.nt, deslope=True)
+				pmat.apply_window(tod, d.window)
 			with bench.mark("meq_b_N"):
 				d.nmat.apply(tod)
 			with bench.mark("meq_b_P'"):
@@ -323,12 +327,14 @@ class MapEquation:
 				d.pmap.forward(tod,map.work[d.sub])
 				if self.azmap: d.pmat_azmap.forward(tod,azmap[azdi])
 				d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
+				pmat.apply_window(tod, d.window)
 			with bench.mark("meq_A_N"):
 				if white:
 					d.nmat.white(tod)
 				else:
 					d.nmat.apply(tod)
 			with bench.mark("meq_A_P'"):
+				pmat.apply_window(tod, d.window)
 				d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
 				if self.azmap: d.pmat_azmap.backward(tod,oazmap[azdi])
 				d.pmap.backward(tod,omap.work[d.sub])
@@ -346,6 +352,9 @@ class MapEquation:
 	def white(self, map, junk, azmap=None):
 		return self.A(map, junk, azmap=azmap, white=True)
 	def hitcount(self):
+		"""Compute the number of samples that hit each pixel. Note that
+		this will be smaller if downsampling is used, so take care if
+		comparing with other hitcount maps."""
 		hitmap = self.area.copy()
 		junk   = np.zeros(self.njunk, self.dtype)
 		for d in self.data:
@@ -366,9 +375,11 @@ class MapEquation:
 			for di, d in enumerate(self.data):
 				tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
 				d.pmap.forward(tod,map.work[d.sub])
+				pmat.apply_window(tod, d.window)
 				todfilter.filter_poly_jon(tod, d.scan.boresight[:,1], naz=self.azfilter.naz, nt=self.azfilter.nt, deslope=False)
 				d.nmat.white(tod)
-				# We don't care about cuts, but there were used in div, so we must remove them here too
+				pmat.apply_window(tod, d.window)
+				# We don't care about cuts, but they were used in div, so we must remove them here too
 				d.pcut.backward(tod,rhs_junk)
 				d.pmap.backward(tod,omap.work[d.sub])
 				del tod
