@@ -297,9 +297,9 @@ class MapEquation:
 			with bench.mark("meq_b_N"):
 				d.nmat.apply(tod)
 			with bench.mark("meq_b_P'"):
-				d.pmap.backward(tod,rhs_map.work[d.sub])
-				if self.azmap: d.pmat_azmap.backward(tod, rhs_azmap[azdi])
 				d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
+				if self.azmap: d.pmat_azmap.backward(tod, rhs_azmap[azdi])
+				d.pmap.backward(tod,rhs_map.work[d.sub])
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["meq_b_get","meq_b_N","meq_b_P'"]]
 			L.debug("meq b get %5.1f N %5.3f P' %5.3f" % tuple(times))
@@ -424,29 +424,36 @@ class PrecondBinned:
 		# Compute the pixel component masks, and use it to mask out the
 		# corresonding parts of the map preconditioner
 		self.mask = makemask(self.div_map)
-		for dtile, mtile in zip(self.div_map.tiles, self.mask.tiles):
-			dtile *= mtile[None,:]*mtile[:,None]
+		if self.mask is not None:
+			for dtile, mtile in zip(self.div_map.tiles, self.mask.tiles):
+				dtile *= mtile[None,:]*mtile[:,None]
+		self.idiv_map = self.div_map.copy()
+		for dtile in self.idiv_map.tiles:
+			dtile[:] = array_ops.eigpow(dtile, -1, axes=[0,1])
 		if mapeq.azmap:
 			# Reshape div_azmap to sensible shape
 			div_azmap = np.rollaxis(div_azmap, 2)
 			div_azmap = 0.5*(div_azmap+np.rollaxis(div_azmap,1))
 			azmask = makemask(div_azmap)
-			div_azmap *= azmask[None,:]*azmask[:,None]
+			if azmask is not None:
+				div_azmap *= azmask[None,:]*azmask[:,None]
 			self.div_azmap = np.rollaxis(div_azmap, 2)
+			self.idiv_azmap = array_ops.matmul(self.div_azmap, -1, axes=[0,1])
 	def apply(self, map, junk, azmap=None):
 		with bench.mark("prec_bin"):
 			rmap = map.copy()
-			for rtile, dtile, mtile in zip(rmap.tiles, self.div_map.tiles, map.tiles):
-				rtile[:] = array_ops.solve_masked(dtile, mtile, [0,1])
+			for rtile, idtile, mtile in zip(rmap.tiles, self.idiv_map.tiles, map.tiles):
+				rtile[:] = array_ops.matmul(idtile, mtile, axes=[0,1])
 			if azmap is not None:
-				res = rmap, junk/self.div_junk, array_ops.solve_masked(self.div_azmap, azmap, [1,2])
+				res = rmap, junk/self.div_junk, array_ops.matmul(self.idiv_azmap, azmap, axes=[1,2])
 			else:
 				res = rmap, junk/self.div_junk
 		return res
 	def write(self, prefix="", ext="fits"):
 		dmap.write_map(prefix + "div." + ext, self.div_map)
 		dmap.write_map(prefix + "hits." + ext, self.hitmap)
-		dmap.write_map(prefix + "mask." + ext, self.mask.astype(np.uint8))
+		if self.mask is not None:
+			dmap.write_map(prefix + "mask." + ext, self.mask.astype(np.uint8))
 
 config.default("precon_cyc_npoint", 1, "Number of points to sample in cyclic preconditioner.")
 class PrecondCirculant:
@@ -518,10 +525,11 @@ def pick_ref_points(hitmap, npoint):
 		w *= mask
 	return np.array(pix)+1
 
-config.default("precond_condition_lim", 10., "Maximum allowed condition number in per-pixel polarization matrices.")
+config.default("precond_condition_lim", 0, "Maximum allowed condition number in per-pixel polarization matrices.")
 def makemask(div):
-	masks = div[0].copy().astype(bool)
 	lim  = config.get("precond_condition_lim")
+	if lim == 0: return None
+	masks = div[0].copy().astype(bool)
 	for dtile, mtile in zip(div.tiles, masks.tiles):
 		condition = array_ops.condition_number_multi(dtile, [0,1])
 		tmask = dtile[0,0] > 0
