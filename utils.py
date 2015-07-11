@@ -67,8 +67,8 @@ def rewind(a, ref=0, period=2*np.pi):
 	that they all lie within the same period. The ref argument
 	specifies the angle furthest away from the cut, i.e. the
 	period cut will be at ref+period/2."""
-	if ref == "auto": ref = np.sort(a.reshape(-1))[a.size/2]
 	a = np.asanyarray(a)
+	if ref == "auto": ref = np.sort(a.reshape(-1))[a.size/2]
 	return ref + (a-ref+period/2.)%period - period/2
 
 def cumsplit(sizes, capacities):
@@ -112,6 +112,9 @@ def deslope(d, w=1, inplace=False):
 def ctime2mjd(ctime):
 	"""Converts from unix time to modified julian date."""
 	return np.asarray(ctime)/86400. + 40587.0
+def mjd2ctime(mjd):
+	"""Converts from modified julian date to unix time."""
+	return (np.asarray(mjd)-40587.0)*86400
 day2sec = 86400.
 
 def mjd2ctime(mjd):

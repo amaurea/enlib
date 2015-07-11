@@ -189,6 +189,148 @@ contains
 		end if
 	end subroutine
 
+	subroutine pmat_ninkasi( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			bore, box, pbox,           &! Input pointing
+			posfit, polfit             &! Ninkasi pointing model
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, pbox(:,:)
+		real(_),    intent(in)    :: bore(:,:)
+		real(_),    intent(in)    :: tmul, mmul, posfit(:,:,:), polfit(:,:,:), box(:,:)
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		! Work
+		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic, i, j, k, iy, ix, pix(2), psize(2)
+		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
+		real(_)    :: point(2), phase(3), tazel(3), boff(3), bscale(3)
+
+		nsamp   = size(tod, 1)
+		ndet    = size(tod, 2)
+		ncomp   = size(map, 3)
+
+		! Our model is pos[{y,x},det,samp] = posfit[{y,x},det,bi] * basis[bi,samp]
+		! pol[{cos,sin},det,samp] = polfit[{cos,sin},det,bi] * polbasis[bi,samp]
+		! basis[bi] = [az**4, az**3, az**2, az**1, az**0, el**2, el, t**2, t, t*az]
+
+		psize   = pbox(:,2)-pbox(:,1)
+		boff    = box(:,1)
+		bscale  = 2/(box(:,2)-box(:,1))
+		nproc   = omp_get_max_threads()
+		if(dir > 0) then
+			! Forward transform - no worry of clobbering, so we can use a
+			! single work map
+			allocate(wmap3(3,psize(2),psize(1)))
+			!$omp parallel do collapse(2)
+			do iy = 1, size(wmap3,3)
+				do ix = 1, size(wmap3,2)
+					wmap3(1:ncomp,ix,iy) = map(ix+pbox(2,1),iy+pbox(1,1),1:ncomp)
+					wmap3(ncomp+1:3,ix,iy) = 0
+				end do
+			end do
+			if(mmul .ne. 1) then
+				!$omp parallel workshare
+				wmap3 = wmap3 * mmul
+				!$omp end parallel workshare
+			end if
+			if(tmul .eq. 0) then
+				!$omp parallel do private(di, si, tazel, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						! Set up our basis for this sample
+						tazel = (bore(:,si)-boff)*bscale-1
+						point = tazel(2)**4*posfit(:,di,1) + tazel(2)**3*posfit(:,di,2) + &
+						        tazel(2)**2*posfit(:,di,3) + tazel(2)**1*posfit(:,di,4) + &
+						        tazel(2)**0*posfit(:,di,5) + tazel(3)**2*posfit(:,di,6) + &
+						        tazel(3)**1*posfit(:,di,7) + tazel(1)**2*posfit(:,di,8) + &
+						        tazel(1)**1*posfit(:,di,9) + tazel(1)*tazel(2)*posfit(:,di,10)
+						pix = nint(point)+1-pbox(:,1)
+						! Bounds checking. Costs 2% performance. Worth it
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						! Compute signal polarization projection parameters.
+						phase(1) = 1
+						phase(2:3) = tazel(2)**0*polfit(:,di,1) + tazel(2)**1*polfit(:,di,2) + &
+						             tazel(2)**2*polfit(:,di,3) + tazel(2)**3*polfit(:,di,4) + &
+						             tazel(1)**1*polfit(:,di,5)
+						tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
+			else
+				!$omp parallel do private(di, si, tazel, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						! Set up our basis for this sample
+						tazel = (bore(:,si)-boff)*bscale-1
+						point = tazel(2)**4*posfit(:,di,1) + tazel(2)**3*posfit(:,di,2) + &
+						        tazel(2)**2*posfit(:,di,3) + tazel(2)**1*posfit(:,di,4) + &
+						        tazel(2)**0*posfit(:,di,5) + tazel(3)**2*posfit(:,di,6) + &
+						        tazel(3)**1*posfit(:,di,7) + tazel(1)**2*posfit(:,di,8) + &
+						        tazel(1)**1*posfit(:,di,9) + tazel(1)*tazel(2)*posfit(:,di,10)
+						pix = nint(point)+1-pbox(:,1)
+						! Bounds checking. Costs 2% performance. Worth it
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						! Compute signal polarization projection parameters.
+						phase(1) = 1
+						phase(2:3) = tazel(2)**0*polfit(:,di,1) + tazel(2)**1*polfit(:,di,2) + &
+						             tazel(2)**2*polfit(:,di,3) + tazel(2)**3*polfit(:,di,4) + &
+						             tazel(1)**1*polfit(:,di,5)
+						tod(si,di) = tod(si,di) + sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
+			end if
+			deallocate(wmap3)
+		else
+			! Backwards transform. Here there is a risk of multiple
+			! threads clobbering each other, so we either need separate
+			! work spaces or critical sections.
+			allocate(wmap4(3,psize(2),psize(1),nproc))
+			!$omp parallel private(di, si, tazel, point, pix, phase,id)
+			id = omp_get_thread_num()+1
+			!$omp workshare
+			wmap4 = 0
+			!$omp end workshare
+			!$omp do
+			do di = 1, ndet
+				do si = 1, nsamp
+						! Set up our basis for this sample
+						tazel = (bore(:,si)-boff)*bscale-1
+						point = tazel(2)**4*posfit(:,di,1) + tazel(2)**3*posfit(:,di,2) + &
+						        tazel(2)**2*posfit(:,di,3) + tazel(2)**1*posfit(:,di,4) + &
+						        tazel(2)**0*posfit(:,di,5) + tazel(3)**2*posfit(:,di,6) + &
+						        tazel(3)**1*posfit(:,di,7) + tazel(1)**2*posfit(:,di,8) + &
+						        tazel(1)**1*posfit(:,di,9) + tazel(1)*tazel(2)*posfit(:,di,10)
+						pix = nint(point)+1-pbox(:,1)
+						! Bounds checking. Costs 2% performance. Worth it
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						! Compute signal polarization projection parameters.
+						phase(1) = 1
+						phase(2:3) = tazel(2)**0*polfit(:,di,1) + tazel(2)**1*polfit(:,di,2) + &
+						             tazel(2)**2*polfit(:,di,3) + tazel(2)**3*polfit(:,di,4) + &
+						             tazel(1)**1*polfit(:,di,5)
+					wmap4(:,pix(2),pix(1),id) = wmap4(:,pix(2),pix(1),id) + tod(si,di)*phase
+				end do
+			end do
+			!$omp end parallel
+			! Copy out result. Applying mmul and tmul here costs 1%
+			!$omp parallel do collapse(1) private(iy,ix,ic)
+			do iy = 1, size(wmap4,3)
+				do ix = 1, size(wmap4,2)
+					do ic = 1, ncomp
+						map(ix+pbox(2,1),iy+pbox(1,1),ic) = map(ix+pbox(2,1),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
+					end do
+				end do
+			end do
+			deallocate(wmap4)
+		end if
+	end subroutine
+
+
 	subroutine pmat_nearest_old( &
 			dir,                              &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
 			tmul, mmul,                       &! Constants to multiply tod and map by during the projection. for dir<0, mmul has no effect
@@ -798,7 +940,7 @@ contains
 		do di = 1, ndet
 			! Apply window on each end
 			tod(1:width,di) = tod(1:width,di)*window
-			tod(nsamp-width+1:nsamp,di) = tod(nsamp-width+1,di) * window(width:1:-1)
+			tod(nsamp-width+1:nsamp,di) = tod(nsamp-width+1:nsamp,di) * window(width:1:-1)
 		end do
 	end subroutine
 
