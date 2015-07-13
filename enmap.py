@@ -389,6 +389,7 @@ def map_mul(mat, vec):
 def smooth_gauss(emap, sigma):
 	"""Smooth the map given as the first argument with a gaussian beam
 	with the given standard deviation in radians."""
+	if sigma == 0: return emap.copy()
 	f  = map2harm(emap)
 	l2 = np.sum(emap.lmap()**2,0)
 	f *= np.exp(-l2*sigma**2)
