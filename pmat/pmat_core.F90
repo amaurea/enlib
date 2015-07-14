@@ -1171,6 +1171,8 @@ contains
 	! maxrange must be large enough to hold all the discovered ranges. Otherwise,
 	! the last ranges will be lost. Nrange holds the actual number of discovered
 	! ranges. ranges has units of det-local samples.
+	! The distance measure used here is only approximate, suitable for small
+	! distances on the sky. So for very large sources something else must be used.
 	subroutine pmat_ptsrc_prepare( &
 			pos, rhit, rmax, det_ivars, src_ivars, ranges, nrange, &
 			bore, det_pos,  &! Input pointing

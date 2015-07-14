@@ -193,4 +193,21 @@ subroutine measure_cov(d, cov)
 	cov=tcov
 end subroutine
 
+subroutine ang2rect(ang, rect)
+	implicit none
+	T(_), intent(in)    :: ang(:,:)
+	T(_), intent(inout) :: rect(:,:)
+	T(_) :: st,ct,sp,cp
+	integer :: i
+	!$omp parallel do private(i,st,ct,sp,cp)
+	do i = 1, size(ang,2)
+		sp = sin(ang(1,i)); cp = cos(ang(1,i))
+		st = sin(ang(2,i)); cp = cos(ang(2,i))
+		rect(1,i) = cp*ct
+		rect(2,i) = sp*ct
+		rect(3,i) = st
+	end do
+end subroutine
+
+
 end module

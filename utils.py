@@ -665,3 +665,16 @@ def uncat(a, lens):
 	b."""
 	cum = cumsum(lens, endpoint=True)
 	return [a[cum[i]:cum[i+1]] for i in xrange(len(lens))]
+
+def ang2rect(angs, zenith=True):
+	phi, theta = angs
+	ct, st, cp, sp = np.cos(theta), np.sin(theta), np.cos(phi), np.sin(phi)
+	if zenith: return np.array([st*cp,st*sp,ct])
+	else:      return np.array([ct*cp,ct*sp,st])
+def rect2ang(rect, zenith=True):
+	x,y,z = rect
+	r     = (x**2+y**2)**0.5
+	phi   = np.arctan2(y,x)
+	if zenith: theta = np.arctan2(r,z)
+	else:      theta = np.arctan2(z,r)
+	return np.array([phi,theta])

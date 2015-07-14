@@ -40,6 +40,9 @@ class Rangelist:
 			i = np.searchsorted(self.ranges[:,0], sel, side="right")
 			if i == 0: return False
 			return self.ranges[i-1,0] <= sel and self.ranges[i-1,1] > sel
+	@staticmethod
+	def empty(nsamp):
+		return Rangelist(np.zeros([0,2],dtype=int),n=nsamp,copy=False)
 	def sum(self): return np.sum(self.ranges[:,1]-self.ranges[:,0])
 	def __len__(self): return self.n
 	def __repr__(self): return "Rangelist("+str(self.ranges)+",n="+repr(self.n)+")"
@@ -83,7 +86,7 @@ class Multirange:
 	def __getitem__(self, sel):
 		sel1, sel2 = split_slice(sel, [self.data.ndim,1])
 		res = self.data[sel1]
-		if isinstance(res, Rangelist): return res
+		if isinstance(res, Rangelist): return res[sel2]
 		res = res.copy()
 		rflat = res.reshape(res.size)
 		for i in xrange(rflat.size):
@@ -91,6 +94,9 @@ class Multirange:
 		if rflat.size > 0 and not isinstance(rflat[0], Rangelist):
 			return res.astype(bool)
 		return Multirange(res, copy=False)
+	@staticmethod
+	def empty(ndet, nsamp):
+		return Multirange([Rangelist.empty(nsamp) for det in xrange(ndet)])
 	def sum(self, flat=True):
 		getsum = np.vectorize(lambda x: x.sum(), 'i')
 		res = getsum(self.data)

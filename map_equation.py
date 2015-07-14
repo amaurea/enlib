@@ -361,8 +361,8 @@ class MapEquation:
 			tod = np.full([d.scan.ndet,d.scan.nsamp],1,dtype=self.dtype)
 			d.pcut.backward(tod,junk)
 			d.pmap.backward(tod,hitmap.work[d.sub])
-		hitmap = hitmap[0].astype(np.int32)
 		hitmap.work2tile()
+		hitmap = hitmap[0].astype(np.int32)
 		return hitmap
 	def postprocess(self, map, div):
 		"""Prepare map for output. Add back things that have been temporarily

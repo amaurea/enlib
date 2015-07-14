@@ -35,9 +35,9 @@ class PmatMap(PointingMatrix):
 		sys   = config.get("map_eqsys",      sys)
 		order = config.get("pmat_map_order", order)
 
-		box = np.array(scan.box)
-		margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
-		box[0] -= margin/2; box[1] += margin/2
+		# We widen the bounding box slightly to avoid samples falling outside it
+		# due to rounding errors.
+		box = utils.widen_box(np.array(scan.box), 1e-3)
 		acc  = config.get("pmat_accuracy")
 		ip_size= config.get("pmat_interpol_max_size")
 		ip_time= config.get("pmat_interpol_max_time")
@@ -282,7 +282,7 @@ class PmatCut(PointingMatrix):
 		return ({"none":0,"full":1,"bin":2,"exp":3,"poly":4}[toks[0]],)+args
 
 class pos2pix:
-	"""Transforms from scan coordintaes to pixel-center coordinates."""
+	"""Transforms from scan coordinates to pixel-center coordinates."""
 	def __init__(self, scan, template, sys, ref_phi=0):
 		self.scan, self.template, self.sys = scan, template, sys
 		self.ref_phi = ref_phi

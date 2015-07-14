@@ -4,6 +4,7 @@ module. For now, it is used as a part of the implementation."""
 import numpy as np, pyfsla
 import astropy.coordinates as c, astropy.units as u, ephem
 from enlib import iers, utils
+from enlib.utils import ang2rect, rect2ang
 try:
 	from pyslalib import slalib
 except ImportError:
@@ -122,20 +123,6 @@ def euler_mat(euler_angles, kind="zyz", unit="rad"):
 	R3 = rotmatrix(alpha, kind[0], unit)
 	return np.einsum("...ij,...jk->...ik",np.einsum("...ij,...jk->...ik",R3,R2),R1)
 
-# Why do I have to define these myself?
-def ang2rect(angs, zenith=True):
-	phi, theta = angs
-	ct, st, cp, sp = np.cos(theta), np.sin(theta), np.cos(phi), np.sin(phi)
-	if zenith: return np.array([st*cp,st*sp,ct])
-	else:      return np.array([ct*cp,ct*sp,st])
-def rect2ang(rect, zenith=True):
-	x,y,z = rect
-	r     = (x**2+y**2)**0.5
-	phi   = np.arctan2(y,x)
-	if zenith: theta = np.arctan2(r,z)
-	else:      theta = np.arctan2(z,r)
-	return np.array([phi,theta])
-
 def euler_rot(euler_angles, coords, kind="zyz", unit="rad"):
 	unit   = getunit(unit)
 	coords = np.asarray(coords)
@@ -238,17 +225,23 @@ def ephem_pos(name, mjd):
 			res[1,i] = float(obj.dec)
 		return res.reshape((2,)+djd.shape)
 
-def ephem_interpol(name, mjd, sys="cel", site=None, dt=10):
-	"""Given the name of an ephemeris object, compute
-	its position in the specified coordinate system for
+def interpol_pos(from_sys, to_sys, name_or_pos, mjd, site=None, dt=10):
+	"""Given the name of an ephemeris object or a [ra,dec]-type position
+	in radians in from_sys, compute its position in the specified coordinate system for
 	each mjd. The mjds are assumed to cover a short
 	enough range that positions can be effectively
 	interpolated."""
 	box  = utils.widen_box([np.min(mjd),np.max(mjd)], 1e-2)
 	sub_nsamp = max(3,int((box[1]-box[0])*24.*3600/dt))
 	sub_mjd = np.linspace(box[0], box[1], sub_nsamp, endpoint=True)
-	sub_cel = ephem_pos(name, sub_mjd)
-	sub_pos = transform("cel", sys, sub_cel, time=sub_mjd, site=site)
+	if isinstance(name_or_pos, basestring):
+		sub_from = ephem_pos(name_or_pos, sub_mjd)
+	else:
+		pos = np.asarray(name_or_pos)
+		assert pos.ndim == 1
+		sub_from = np.zeros([2,sub_nsamp])
+		sub_from[:] = np.asarray(name_or_pos)[:,None]
+	sub_pos = transform(from_sys, to_sys, sub_from, time=sub_mjd, site=site)
 	sub_pos[1] = utils.rewind(sub_pos[1], ref="auto")
 	inds = (mjd-box[0])*(sub_nsamp-1)/(box[1]-box[0])
 	full_pos= utils.interpol(sub_pos, inds[None], order=3)
