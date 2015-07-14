@@ -238,6 +238,22 @@ def ephem_pos(name, mjd):
 			res[1,i] = float(obj.dec)
 		return res.reshape((2,)+djd.shape)
 
+def ephem_interpol(name, mjd, sys="cel", site=None, dt=10):
+	"""Given the name of an ephemeris object, compute
+	its position in the specified coordinate system for
+	each mjd. The mjds are assumed to cover a short
+	enough range that positions can be effectively
+	interpolated."""
+	box  = utils.widen_box([np.min(mjd),np.max(mjd)], 1e-2)
+	sub_nsamp = max(3,int((box[1]-box[0])*24.*3600/dt))
+	sub_mjd = np.linspace(box[0], box[1], sub_nsamp, endpoint=True)
+	sub_cel = ephem_pos(name, sub_mjd)
+	sub_pos = transform("cel", sys, sub_cel, time=sub_mjd, site=site)
+	sub_pos[1] = utils.rewind(sub_pos[1], ref="auto")
+	inds = (mjd-box[0])*(sub_nsamp-1)/(box[1]-box[0])
+	full_pos= utils.interpol(sub_pos, inds[None], order=3)
+	return full_pos
+
 def make_mapping(dict): return {value:key for key in dict for value in dict[key]}
 str2unit = make_mapping({
 	u.radian: ["rad", "radian", "radians"],
