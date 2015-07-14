@@ -622,6 +622,11 @@ def box_overlap(a, b):
 	be [n,m] areas."""
 	return box_area(box_slice(a,b))
 
+def widen_box(box, margin=1e-3, relative=True):
+	box = np.asarray(box)
+	if relative: margin = (box[1]-box[0])*margin
+	return np.array([box[0]-margin/2, box[1]+margin/2])
+
 def sum_by_id(a, ids, axis=0):
 	ra = moveaxis(a, axis, 0)
 	fa = ra.reshape(ra.shape[0],-1)
