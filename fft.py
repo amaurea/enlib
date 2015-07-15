@@ -1,12 +1,25 @@
 """This is a convenience wrapper of pyfftw."""
-import numpy as np, pyfftw, multiprocessing, os, enlib.utils
-
+import numpy as np, multiprocessing, os, enlib.utils
+engines = {}
+try:
+	import pyfftw
+	engines["fftw"] = pyfftw
+	engine = "fftw"
+except ImportError: pass
+try:
+	import pyfftw_intel as intel
+	engines["intel"] = intel
+	engine = "intel"
+except ImportError: pass
+if len(engines) == 0:
+	raise ImportError("Could not find any fftw implementations!")
 try:
 	nthread_fft = int(os.environ['OMP_NUM_THREADS'])
 except KeyError, ValueError:
 	nthread_fft=multiprocessing.cpu_count()
 nthread_ifft=nthread_fft
 default_flags=['FFTW_ESTIMATE']
+alignment = 32
 
 def fft(tod, ft=None, nthread=0, axes=[-1], flags=None):
 	"""Compute discrete fourier transform of tod, and store it in ft. What
@@ -22,9 +35,9 @@ def fft(tod, ft=None, nthread=0, axes=[-1], flags=None):
 	if flags is None: flags = default_flags
 	if ft is None:
 		otype = np.result_type(tod.dtype,0j)
-		ft  = np.empty(tod.shape, otype)
+		ft  = empty(tod.shape, otype)
 		tod = tod.astype(otype, copy=False)
-	plan = pyfftw.FFTW(tod, ft, flags=flags, threads=nt, axes=axes)
+	plan = engines[engine].FFTW(tod, ft, flags=flags, threads=nt, axes=axes)
 	plan()
 	return ft
 
@@ -42,8 +55,8 @@ def ifft(ft, tod=None, nthread=0, normalize=False, axes=[-1],flags=None):
 	if ft.size == 0: return
 	nt = nthread or nthread_ifft
 	if flags is None: flags = default_flags
-	if tod is None: tod = np.empty(ft.shape, ft.dtype)
-	plan = pyfftw.FFTW(ft, tod, flags=flags, direction='FFTW_BACKWARD', threads=nt, axes=axes)
+	if tod is None: tod = empty(ft.shape, ft.dtype)
+	plan = engines[engine].FFTW(ft, tod, flags=flags, direction='FFTW_BACKWARD', threads=nt, axes=axes)
 	plan(normalise_idft=normalize)
 	return tod
 
@@ -55,7 +68,7 @@ def rfft(tod, ft=None, nthread=0, axes=[-1], flags=None):
 		oshape = list(tod.shape)
 		oshape[axes[-1]] = oshape[axes[-1]]/2+1
 		dtype = np.result_type(tod.dtype,0j)
-		ft = np.empty(oshape, dtype)
+		ft = empty(oshape, dtype)
 	return fft(tod, ft, nthread, axes, flags=flags)
 
 def irfft(ft, tod=None, n=None, nthread=0, normalize=False, axes=[-1], flags=None):
@@ -69,7 +82,7 @@ def irfft(ft, tod=None, n=None, nthread=0, normalize=False, axes=[-1], flags=Non
 		oshape = list(ft.shape)
 		oshape[axes[-1]] = n or (oshape[axes[-1]]-1)*2
 		dtype = np.zeros([],ft.dtype).real.dtype
-		tod = np.empty(oshape, dtype)
+		tod = empty(oshape, dtype)
 	return ifft(ft, tod, nthread, normalize, axes, flags=flags)
 
 def redft00(a, b=None, nthread=0, normalize=False, flags=None):
@@ -77,10 +90,10 @@ def redft00(a, b=None, nthread=0, normalize=False, flags=None):
 	It's not very fast, sadly - about 5 times slower than an rfft.
 	Transforms along the last axis."""
 	a = asfcarray(a)
-	if b is None: b = np.empty(a.shape, a.dtype)
+	if b is None: b = empty(a.shape, a.dtype)
 	n = a.shape[-1]
 	tshape = a.shape[:-1] + (2*(n-1),)
-	itmp = np.empty(tshape, a.dtype)
+	itmp = empty(tshape, a.dtype)
 	itmp[...,:n] = a[...,:n]
 	itmp[...,n:] = a[...,-2:0:-1]
 	otmp = rfft(itmp, axes=[-1], nthread=nthread, flags=flags)
@@ -108,3 +121,6 @@ def fft_len(n, direction="below", factors=None):
 def asfcarray(a):
 	a = np.asarray(a)
 	return np.asarray(a, np.result_type(a,0.0))
+
+def empty(shape, dtype):
+	return engines[engine].n_byte_align_empty(shape, alignment, dtype)

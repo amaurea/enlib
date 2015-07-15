@@ -248,6 +248,7 @@ class MapEquation:
 			d.cutrange = [njunk,njunk+d.pcut.njunk]
 			njunk = d.cutrange[1]
 			d.nmat = scan.noise
+			d.window = int(d.scan.srate * config.get("tod_window"))
 			# Make maps from data projected from input map instead of real data
 			if imap: d.pmat_imap = pmat.PmatMap(scan, imap.work[d.sub], order=pmat_order, sys=imap.sys)
 			if isrc: d.pmat_isrc = pmat.PmatPtsrc(scan, isrc.model.params.astype(area.dtype), sys=isrc.sys, tmul=isrc.tmul, pmul=isrc.pmul)
@@ -287,15 +288,18 @@ class MapEquation:
 					utils.deslope(tod, inplace=True)
 				if self.isrc is not None:
 					d.pmat_isrc.forward(tod, self.isrc.model.params)
-				# Optional azimuth filter
+				# Optional azimuth filter. This should probably happen in enact.data.calibrate,
+				# as it should happend before the noise estimation. It might be best to make a
+				# new function that handles all these extra things.
 				if self.azfilter is not None:
 					todfilter.filter_poly_jon(tod, d.scan.boresight[:,1], naz=self.azfilter.naz, nt=self.azfilter.nt, deslope=True)
+				pmat.apply_window(tod, d.window)
 			with bench.mark("meq_b_N"):
 				d.nmat.apply(tod)
 			with bench.mark("meq_b_P'"):
-				d.pmap.backward(tod,rhs_map.work[d.sub])
-				if self.azmap: d.pmat_azmap.backward(tod, rhs_azmap[azdi])
 				d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
+				if self.azmap: d.pmat_azmap.backward(tod, rhs_azmap[azdi])
+				d.pmap.backward(tod,rhs_map.work[d.sub])
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["meq_b_get","meq_b_N","meq_b_P'"]]
 			L.debug("meq b get %5.1f N %5.3f P' %5.3f" % tuple(times))
@@ -308,13 +312,14 @@ class MapEquation:
 		else:
 			return rhs_map, rhs_junk
 	def A(self, map, junk, azmap=None, white=False):
-		map, junk = map.copy(), junk.copy()
-		omap, ojunk = map.copy().fill(0), junk*0
-		# Project map tiles down to local workspaces
-		map.tile2work()
-		if self.azmap:
-			azmap = azmap.copy()
-			oazmap = azmap*0
+		with bench.mark("meq_A_expand"):
+			map, junk = map.copy(), junk.copy()
+			omap, ojunk = map.copy().fill(0), junk*0
+			# Project map tiles down to local workspaces
+			map.tile2work()
+			if self.azmap:
+				azmap = azmap.copy()
+				oazmap = azmap*0
 		for di, d in enumerate(self.data):
 			azdi = 0 if azmap is not None and len(azmap) <= 1 else di
 			with bench.mark("meq_A_P"):
@@ -322,12 +327,14 @@ class MapEquation:
 				d.pmap.forward(tod,map.work[d.sub])
 				if self.azmap: d.pmat_azmap.forward(tod,azmap[azdi])
 				d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
+				pmat.apply_window(tod, d.window)
 			with bench.mark("meq_A_N"):
 				if white:
 					d.nmat.white(tod)
 				else:
 					d.nmat.apply(tod)
 			with bench.mark("meq_A_P'"):
+				pmat.apply_window(tod, d.window)
 				d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
 				if self.azmap: d.pmat_azmap.backward(tod,oazmap[azdi])
 				d.pmap.backward(tod,omap.work[d.sub])
@@ -345,14 +352,17 @@ class MapEquation:
 	def white(self, map, junk, azmap=None):
 		return self.A(map, junk, azmap=azmap, white=True)
 	def hitcount(self):
+		"""Compute the number of samples that hit each pixel. Note that
+		this will be smaller if downsampling is used, so take care if
+		comparing with other hitcount maps."""
 		hitmap = self.area.copy()
 		junk   = np.zeros(self.njunk, self.dtype)
 		for d in self.data:
 			tod = np.full([d.scan.ndet,d.scan.nsamp],1,dtype=self.dtype)
 			d.pcut.backward(tod,junk)
 			d.pmap.backward(tod,hitmap.work[d.sub])
-		hitmap = hitmap[0].astype(np.int32)
 		hitmap.work2tile()
+		hitmap = hitmap[0].astype(np.int32)
 		return hitmap
 	def postprocess(self, map, div):
 		"""Prepare map for output. Add back things that have been temporarily
@@ -365,9 +375,11 @@ class MapEquation:
 			for di, d in enumerate(self.data):
 				tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
 				d.pmap.forward(tod,map.work[d.sub])
+				pmat.apply_window(tod, d.window)
 				todfilter.filter_poly_jon(tod, d.scan.boresight[:,1], naz=self.azfilter.naz, nt=self.azfilter.nt, deslope=False)
 				d.nmat.white(tod)
-				# We don't care about cuts, but there were used in div, so we must remove them here too
+				pmat.apply_window(tod, d.window)
+				# We don't care about cuts, but they were used in div, so we must remove them here too
 				d.pcut.backward(tod,rhs_junk)
 				d.pmap.backward(tod,omap.work[d.sub])
 				del tod
@@ -412,29 +424,36 @@ class PrecondBinned:
 		# Compute the pixel component masks, and use it to mask out the
 		# corresonding parts of the map preconditioner
 		self.mask = makemask(self.div_map)
-		for dtile, mtile in zip(self.div_map.tiles, self.mask.tiles):
-			dtile *= mtile[None,:]*mtile[:,None]
+		if self.mask is not None:
+			for dtile, mtile in zip(self.div_map.tiles, self.mask.tiles):
+				dtile *= mtile[None,:]*mtile[:,None]
+		self.idiv_map = self.div_map.copy()
+		for dtile in self.idiv_map.tiles:
+			dtile[:] = array_ops.eigpow(dtile, -1, axes=[0,1])
 		if mapeq.azmap:
 			# Reshape div_azmap to sensible shape
 			div_azmap = np.rollaxis(div_azmap, 2)
 			div_azmap = 0.5*(div_azmap+np.rollaxis(div_azmap,1))
 			azmask = makemask(div_azmap)
-			div_azmap *= azmask[None,:]*azmask[:,None]
+			if azmask is not None:
+				div_azmap *= azmask[None,:]*azmask[:,None]
 			self.div_azmap = np.rollaxis(div_azmap, 2)
+			self.idiv_azmap = array_ops.matmul(self.div_azmap, -1, axes=[0,1])
 	def apply(self, map, junk, azmap=None):
 		with bench.mark("prec_bin"):
 			rmap = map.copy()
-			for rtile, dtile, mtile in zip(rmap.tiles, self.div_map.tiles, map.tiles):
-				rtile[:] = array_ops.solve_masked(dtile, mtile, [0,1])
+			for rtile, idtile, mtile in zip(rmap.tiles, self.idiv_map.tiles, map.tiles):
+				rtile[:] = array_ops.matmul(idtile, mtile, axes=[0,1])
 			if azmap is not None:
-				res = rmap, junk/self.div_junk, array_ops.solve_masked(self.div_azmap, azmap, [1,2])
+				res = rmap, junk/self.div_junk, array_ops.matmul(self.idiv_azmap, azmap, axes=[1,2])
 			else:
 				res = rmap, junk/self.div_junk
 		return res
 	def write(self, prefix="", ext="fits"):
 		dmap.write_map(prefix + "div." + ext, self.div_map)
 		dmap.write_map(prefix + "hits." + ext, self.hitmap)
-		dmap.write_map(prefix + "mask." + ext, self.mask.astype(np.uint8))
+		if self.mask is not None:
+			dmap.write_map(prefix + "mask." + ext, self.mask.astype(np.uint8))
 
 config.default("precon_cyc_npoint", 1, "Number of points to sample in cyclic preconditioner.")
 class PrecondCirculant:
@@ -506,10 +525,11 @@ def pick_ref_points(hitmap, npoint):
 		w *= mask
 	return np.array(pix)+1
 
-config.default("precond_condition_lim", 10., "Maximum allowed condition number in per-pixel polarization matrices.")
+config.default("precond_condition_lim", 0, "Maximum allowed condition number in per-pixel polarization matrices.")
 def makemask(div):
-	masks = div[0].copy().astype(bool)
 	lim  = config.get("precond_condition_lim")
+	if lim == 0: return None
+	masks = div[0].copy().astype(bool)
 	for dtile, mtile in zip(div.tiles, masks.tiles):
 		condition = array_ops.condition_number_multi(dtile, [0,1])
 		tmask = dtile[0,0] > 0

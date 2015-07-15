@@ -23,7 +23,315 @@ contains
 !
 ! nint is 5% slower than floor
 
+	! Implements projection from tod to map and vice versa.
+	! Please forgive all the repeated code in it. If statements
+	! in the loops proved too expensive, as did function calls.
+	! But the logic is actually pretty simple. We reorder the
+	! maps for better memory locality, and then loop over each
+	! tod sample, computing its pixel and polarization information
+	! on the fly.
+	!
+	! For my last benchmark [602,262144] tod on scinet, this one took
+	!  1.05  1.20 s @ dp 16 cores gfortran
+	!  1.33  1.48 s @ dp  8 cores gfortran
+	!  2.67  3.18 s @ dp  4 cores gfortran
+	! 10.31 11.03 s @ dp  1 core  gfortran
+	!  0.96  1.11 s @ sp 16 cores gfortran
+	!  1.15  1.35 s @ sp  8 cores gfortran
+	!  2.31  2.60 s @ sp  4 cores gfortran
+	!  8.82  9.36 s @ sp  1 core  gfortran
+	!  0.83  1.30 s @ dp 16 cores ifort after adding --noopt to f2py
+	!  0.66  1.12 s @ dp 16 cores ifort after removing collapse statements
+	!  0.63  0.90 s @ sp 16 cores
+	!  --------------------------
+	!  1.77  1.07 s @ dp 16 cores ninkasi
+	! Since precision does not save much on speed, probably due to the majority
+	! of the logic here being in pointing, which isn't affected. But it does
+	! save on memory, of course. Scaling is quite good. We get a bit more than
+	! half the max possible speedup when going from 1 to 16 cores. We are slightly
+	! faster than ninkasi here, but not much: 2.25 s vs. 2.84 s (26% faster)
 	subroutine pmat_nearest( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			bore, det_pos, det_comps,  &! Input pointing
+			comps,                     &! Ignored. Supporting arbitrary component ordering was too expensive
+			rbox, nbox, ys, pbox       &! Coordinate transformation
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), comps(:)
+		real(_),    intent(in)    :: bore(:,:), ys(:,:,:)
+		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:), tmul, mmul
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		! Work
+		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic, i, j, k
+		integer(4) :: steps(size(rbox,1)), psize(2)
+		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
+		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
+		real(_)    :: xrel(3), point(4), phase(3)
+		integer(4) :: xind(3), ig, pix(2), ix, iy
+
+		nsamp   = size(tod, 1)
+		ndet    = size(tod, 2)
+		ncomp   = size(map, 3)
+		psize   = pbox(:,2)-pbox(:,1)
+		nproc   = omp_get_max_threads()
+		! In C order, ys has pixel axes t,ra,dec, so nbox = [nt,nra,ndec]
+		! Index mapping is therefore given by [nra*ndec,ndec,1]
+		steps(size(steps)) = 1
+		do ic = size(steps)-1, 1, -1
+			steps(ic) = steps(ic+1)*nbox(ic+1)
+		end do
+		x0 = rbox(:,1); inv_dx = nbox/(rbox(:,2)-rbox(:,1))
+
+		if(dir > 0) then
+			! Forward transform - no worry of clobbering, so we can use a
+			! single work map
+			allocate(wmap3(3,psize(2),psize(1)))
+			!$omp parallel do collapse(2)
+			do iy = 1, size(wmap3,3)
+				do ix = 1, size(wmap3,2)
+					wmap3(1:ncomp,ix,iy) = map(ix+pbox(2,1),iy+pbox(1,1),1:ncomp)
+					wmap3(ncomp+1:3,ix,iy) = 0
+				end do
+			end do
+			if(mmul .ne. 1) then
+				!$omp parallel workshare
+				wmap3 = wmap3 * mmul
+				!$omp end parallel workshare
+			end if
+			if(tmul .eq. 0) then
+				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						! Compute interpolated pointing. This used to be done via a function
+						! call, but that proved too costly.
+						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+						xind = floor(xrel)
+						xrel = xrel - xind
+						ig   = sum(xind*steps)+1
+						point = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
+						pix = nint(point(1:2))+1 - pbox(:,1)
+						! Bounds checking. Costs 2% performance. Worth it
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						! Compute signal polarization projection parameters.
+						! Checking which components to compute takes 17% longer than just computing
+						! all of them, which takes about the same time as computing one.
+						phase(1) = det_comps(1,di)
+						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+						! If tests are not free, despite branch prediction. Adding a test
+						! for dir here takes the time from 0.85 to 1.15, a 35% increase!
+						tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
+			else
+				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+						xind = floor(xrel)
+						xrel = xrel - xind
+						ig   = sum(xind*steps)+1
+						point = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
+						pix = nint(point(1:2))+1 - pbox(:,1)
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						phase(1) = det_comps(1,di)
+						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+						tod(si,di) = tod(si,di) + sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
+			end if
+			deallocate(wmap3)
+		else
+			! Backwards transform. Here there is a risk of multiple
+			! threads clobbering each other, so we either need separate
+			! work spaces or critical sections.
+			allocate(wmap4(3,psize(2),psize(1),nproc))
+			!$omp parallel private(di, si, xrel, xind, ig, point, pix, phase,id)
+			id = omp_get_thread_num()+1
+			!$omp workshare
+			wmap4 = 0
+			!$omp end workshare
+			!$omp do
+			do di = 1, ndet
+				do si = 1, nsamp
+					xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+					xind = floor(xrel)
+					xrel = xrel - xind
+					ig   = sum(xind*steps)+1
+					point = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
+					pix = nint(point(1:2))+1 - pbox(:,1)
+					pix(1) = min(psize(1),max(1,pix(1)))
+					pix(2) = min(psize(2),max(1,pix(2)))
+					phase(1) = det_comps(1,di)
+					phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+					phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+					wmap4(:,pix(2),pix(1),id) = wmap4(:,pix(2),pix(1),id) + tod(si,di)*phase
+				end do
+			end do
+			!$omp end parallel
+			! Copy out result. Applying mmul and tmul here costs 1%
+			!$omp parallel do collapse(1) private(iy,ix,ic)
+			do iy = 1, size(wmap4,3)
+				do ix = 1, size(wmap4,2)
+					do ic = 1, ncomp
+						map(ix+pbox(2,1),iy+pbox(1,1),ic) = map(ix+pbox(2,1),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
+					end do
+				end do
+			end do
+			deallocate(wmap4)
+		end if
+	end subroutine
+
+	subroutine pmat_ninkasi( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			bore, box, pbox,           &! Input pointing
+			posfit, polfit             &! Ninkasi pointing model
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, pbox(:,:)
+		real(_),    intent(in)    :: bore(:,:)
+		real(_),    intent(in)    :: tmul, mmul, posfit(:,:,:), polfit(:,:,:), box(:,:)
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		! Work
+		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic, i, j, k, iy, ix, pix(2), psize(2)
+		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
+		real(_)    :: point(2), phase(3), tazel(3), boff(3), bscale(3)
+
+		nsamp   = size(tod, 1)
+		ndet    = size(tod, 2)
+		ncomp   = size(map, 3)
+
+		! Our model is pos[{y,x},det,samp] = posfit[{y,x},det,bi] * basis[bi,samp]
+		! pol[{cos,sin},det,samp] = polfit[{cos,sin},det,bi] * polbasis[bi,samp]
+		! basis[bi] = [az**4, az**3, az**2, az**1, az**0, el**2, el, t**2, t, t*az]
+
+		psize   = pbox(:,2)-pbox(:,1)
+		boff    = box(:,1)
+		bscale  = 2/(box(:,2)-box(:,1))
+		nproc   = omp_get_max_threads()
+		if(dir > 0) then
+			! Forward transform - no worry of clobbering, so we can use a
+			! single work map
+			allocate(wmap3(3,psize(2),psize(1)))
+			!$omp parallel do collapse(2)
+			do iy = 1, size(wmap3,3)
+				do ix = 1, size(wmap3,2)
+					wmap3(1:ncomp,ix,iy) = map(ix+pbox(2,1),iy+pbox(1,1),1:ncomp)
+					wmap3(ncomp+1:3,ix,iy) = 0
+				end do
+			end do
+			if(mmul .ne. 1) then
+				!$omp parallel workshare
+				wmap3 = wmap3 * mmul
+				!$omp end parallel workshare
+			end if
+			if(tmul .eq. 0) then
+				!$omp parallel do private(di, si, tazel, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						! Set up our basis for this sample
+						tazel = (bore(:,si)-boff)*bscale-1
+						point = tazel(2)**4*posfit(:,di,1) + tazel(2)**3*posfit(:,di,2) + &
+						        tazel(2)**2*posfit(:,di,3) + tazel(2)**1*posfit(:,di,4) + &
+						        tazel(2)**0*posfit(:,di,5) + tazel(3)**2*posfit(:,di,6) + &
+						        tazel(3)**1*posfit(:,di,7) + tazel(1)**2*posfit(:,di,8) + &
+						        tazel(1)**1*posfit(:,di,9) + tazel(1)*tazel(2)*posfit(:,di,10)
+						pix = nint(point)+1-pbox(:,1)
+						! Bounds checking. Costs 2% performance. Worth it
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						! Compute signal polarization projection parameters.
+						phase(1) = 1
+						phase(2:3) = tazel(2)**0*polfit(:,di,1) + tazel(2)**1*polfit(:,di,2) + &
+						             tazel(2)**2*polfit(:,di,3) + tazel(2)**3*polfit(:,di,4) + &
+						             tazel(1)**1*polfit(:,di,5)
+						tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
+			else
+				!$omp parallel do private(di, si, tazel, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						! Set up our basis for this sample
+						tazel = (bore(:,si)-boff)*bscale-1
+						point = tazel(2)**4*posfit(:,di,1) + tazel(2)**3*posfit(:,di,2) + &
+						        tazel(2)**2*posfit(:,di,3) + tazel(2)**1*posfit(:,di,4) + &
+						        tazel(2)**0*posfit(:,di,5) + tazel(3)**2*posfit(:,di,6) + &
+						        tazel(3)**1*posfit(:,di,7) + tazel(1)**2*posfit(:,di,8) + &
+						        tazel(1)**1*posfit(:,di,9) + tazel(1)*tazel(2)*posfit(:,di,10)
+						pix = nint(point)+1-pbox(:,1)
+						! Bounds checking. Costs 2% performance. Worth it
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						! Compute signal polarization projection parameters.
+						phase(1) = 1
+						phase(2:3) = tazel(2)**0*polfit(:,di,1) + tazel(2)**1*polfit(:,di,2) + &
+						             tazel(2)**2*polfit(:,di,3) + tazel(2)**3*polfit(:,di,4) + &
+						             tazel(1)**1*polfit(:,di,5)
+						tod(si,di) = tod(si,di) + sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
+			end if
+			deallocate(wmap3)
+		else
+			! Backwards transform. Here there is a risk of multiple
+			! threads clobbering each other, so we either need separate
+			! work spaces or critical sections.
+			allocate(wmap4(3,psize(2),psize(1),nproc))
+			!$omp parallel private(di, si, tazel, point, pix, phase,id)
+			id = omp_get_thread_num()+1
+			!$omp workshare
+			wmap4 = 0
+			!$omp end workshare
+			!$omp do
+			do di = 1, ndet
+				do si = 1, nsamp
+						! Set up our basis for this sample
+						tazel = (bore(:,si)-boff)*bscale-1
+						point = tazel(2)**4*posfit(:,di,1) + tazel(2)**3*posfit(:,di,2) + &
+						        tazel(2)**2*posfit(:,di,3) + tazel(2)**1*posfit(:,di,4) + &
+						        tazel(2)**0*posfit(:,di,5) + tazel(3)**2*posfit(:,di,6) + &
+						        tazel(3)**1*posfit(:,di,7) + tazel(1)**2*posfit(:,di,8) + &
+						        tazel(1)**1*posfit(:,di,9) + tazel(1)*tazel(2)*posfit(:,di,10)
+						pix = nint(point)+1-pbox(:,1)
+						! Bounds checking. Costs 2% performance. Worth it
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						! Compute signal polarization projection parameters.
+						phase(1) = 1
+						phase(2:3) = tazel(2)**0*polfit(:,di,1) + tazel(2)**1*polfit(:,di,2) + &
+						             tazel(2)**2*polfit(:,di,3) + tazel(2)**3*polfit(:,di,4) + &
+						             tazel(1)**1*polfit(:,di,5)
+					wmap4(:,pix(2),pix(1),id) = wmap4(:,pix(2),pix(1),id) + tod(si,di)*phase
+				end do
+			end do
+			!$omp end parallel
+			! Copy out result. Applying mmul and tmul here costs 1%
+			!$omp parallel do collapse(1) private(iy,ix,ic)
+			do iy = 1, size(wmap4,3)
+				do ix = 1, size(wmap4,2)
+					do ic = 1, ncomp
+						map(ix+pbox(2,1),iy+pbox(1,1),ic) = map(ix+pbox(2,1),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
+					end do
+				end do
+			end do
+			deallocate(wmap4)
+		end if
+	end subroutine
+
+
+	subroutine pmat_nearest_old( &
 			dir,                              &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
 			tmul, mmul,                       &! Constants to multiply tod and map by during the projection. for dir<0, mmul has no effect
 			tod, map,                         &! Main inputs/outpus
@@ -128,6 +436,7 @@ contains
 			end do
 		end if
 	end subroutine
+
 
 	subroutine pmat_linear( &
 			dir,                              &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
@@ -483,7 +792,8 @@ contains
 		integer(4), intent(in),  optional :: ilen
 		integer(4), intent(out), optional :: olen
 		real(_),    intent(inout) :: junk(:), tod(:)
-		integer(4) :: si, w, bi, si2, si3, n, ol
+		integer(4) :: si, w, bi, si2, si3, n, ol, i
+		real(_), allocatable :: x(:), Pa(:), Pb(:), Pc(:)
 		n = size(tod)
 		if(present(ilen)) n = ilen
 		ol = 0
@@ -501,31 +811,38 @@ contains
 			ol = n
 		case(2)
 			! Downgraded cuts. Cut area stored in bins of constant width.
+			! Warning: Don't use this. It results in a step-function-like
+			! TOD with lots of sharp edges. This gives lare spurious modes
+			! in the solved map.
 			w = cuttype(2)
 			do bi = 1, (n-1)/w
 				ol = ol+1
 				if(dir < 0) then
-					junk(ol) = mean(tod((bi-1)*w+1:bi*w))
+					junk(ol) = sum(tod((bi-1)*w+1:bi*w))
 				elseif(dir > 0) then
 					tod((bi-1)*w+1:bi*w) = junk(ol)
 				end if
 			end do
 			ol = ol+1
 			if(dir < 0) then
-				junk(ol) = mean(tod((bi-1)*w+1:n))
+				junk(ol) = sum(tod((bi-1)*w+1:n))
 			elseif(dir < 0) then
 				tod((bi-1)*w+1:n) = junk(ol)
 			end if
 		case(3)
 			! Exponential cuts. Full resolution near edges, low in the middle,
 			! with bin size doubling with distance to edge.
+			! Warning: Don't use this. It results in a step-function-like
+			! TOD with lots of sharp edges. This gives lare spurious modes
+			! in the solved map.
+
 			! Left edge
 			w  = 1
 			si = 1
 			do while(si+w < (n+1)/2)
 				ol = ol+1
 				if(dir < 0) then
-					junk(ol) = mean(tod(si:si+w-1))
+					junk(ol) = sum(tod(si:si+w-1))
 				elseif(dir > 0) then
 					tod(si:si+w-1) = junk(ol)
 				end if
@@ -539,7 +856,7 @@ contains
 				ol  = ol+1
 				si3 = n-si2+1
 				if(dir < 0) then
-					junk(ol) = mean(tod(si3-w+1:si3))
+					junk(ol) = sum(tod(si3-w+1:si3))
 				elseif(dir > 0) then
 					tod(si3-w+1:si3) = junk(ol)
 				end if
@@ -550,9 +867,43 @@ contains
 			si3 = n-si2+1
 			! Middle
 			if(dir < 0) then
-				junk(ol)   = mean(tod(si:si3))
+				junk(ol)   = sum(tod(si:si3))
 			elseif(dir > 0) then
 				tod(si:si3) = junk(ol)
+			end if
+		case(4)
+			! Legendre polynomial projection
+			w = min(n,4+n/cuttype(2))
+			if(w <= 1) then
+				if(dir > 0) then
+					tod = junk(1)
+				elseif(dir < 0) then
+					junk(1) = sum(tod)
+				end if
+				ol = 1
+			else
+				if(dir > 0) tod = 0
+				! This approach, with vectors for xv etc. Was several
+				! times faster than the scalar version due to greater
+				! parallelism.
+				allocate(x(n),Pa(n),Pb(n),Pc(n))
+				do si = 1, n
+					x(si) = -1d0 + 2d0*(si-1)/(n-1)
+				end do
+				ol = 0
+				do i = 0, w-1
+					ol = ol + 1
+					select case(i)
+						case(0); Pa = 1
+						case(1); Pb = 1; Pa = x
+						case default; Pc = Pb; Pb = Pa; Pa = ((2*i+1)*x*Pb-i*Pc)/(i+1)
+					end select
+					if(dir < 0) then
+						junk(ol) = sum(Pa*tod)
+					elseif(dir > 0) then
+						tod = tod + junk(ol) * Pa
+					end if
+				end do
 			end if
 		end select
 		! These samples have been handled, so remove them so that
@@ -567,6 +918,31 @@ contains
 		real(_)              :: mean
 		mean = sum(a)/size(a)
 	end function
+
+	!!! Windowing stuff !!!
+	subroutine pmat_window(tod, width)
+		implicit none
+		real(_),    intent(inout) :: tod(:,:)
+		integer(4), intent(in)    :: width
+		real(_),    allocatable   :: window(:)
+		real(_),    parameter     :: pi = 3.14159265358979323846d0
+		integer(4) :: nsamp, ndet, di, si
+		if(width < 1) return
+		nsamp = size(tod,1)
+		ndet  = size(tod,2)
+		! First build window
+		allocate(window(width))
+		!$omp parallel do
+		do si = 1, width
+			window(si) = 0.5-0.5*cos(pi*(si-1)/width)
+		end do
+		!$omp parallel do
+		do di = 1, ndet
+			! Apply window on each end
+			tod(1:width,di) = tod(1:width,di)*window
+			tod(nsamp-width+1:nsamp,di) = tod(nsamp-width+1:nsamp,di) * window(width:1:-1)
+		end do
+	end subroutine
 
   !!! Azimuth binning stuff !!!
 	subroutine pmat_scan(dir, tod, model, inds, det_comps, comps)
@@ -595,7 +971,7 @@ contains
 			!$omp end parallel workshare
 			!$omp parallel private(di,si,ci,id)
 			id = omp_get_thread_num()+1
-			!$omp do collapse(2)
+			!$omp do
 			do di = 1, ndet
 				do ci = 1, ncomp
 					do si = 1, nsamp
@@ -611,7 +987,7 @@ contains
 				end do
 			end do
 		else
-			!$omp parallel do collapse(2) private(di,si,ci)
+			!$omp parallel do private(di,si,ci)
 			do di = 1, ndet
 				do si = 1, nsamp
 					do ci = 1, ncomp
@@ -795,6 +1171,8 @@ contains
 	! maxrange must be large enough to hold all the discovered ranges. Otherwise,
 	! the last ranges will be lost. Nrange holds the actual number of discovered
 	! ranges. ranges has units of det-local samples.
+	! The distance measure used here is only approximate, suitable for small
+	! distances on the sky. So for very large sources something else must be used.
 	subroutine pmat_ptsrc_prepare( &
 			pos, rhit, rmax, det_ivars, src_ivars, ranges, nrange, &
 			bore, det_pos,  &! Input pointing

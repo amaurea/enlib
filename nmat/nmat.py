@@ -69,7 +69,7 @@ class NmatBinned(NoiseMatrix):
 		fft_norm = tod.shape[1]
 		core = get_core(tod.dtype)
 		core.nmat_covs(ft.T, self.get_ibins(tod.shape[1]).T, self.icovs.T/fft_norm)
-		enlib.fft.irfft(ft, tod)
+		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
 	def white(self, tod):
 		tod *= self.tdiag[:,None]
@@ -113,6 +113,10 @@ class NmatDetvecs(NmatBinned):
 		 cov[bin,d1,d2] = D[bin,d1]*delta(d1,d2)+sum(V[vs,d1]*V[vs,d2]*E[es],es=ebins[bin,0]:ebins[bin,1])
 		That is, for each bin, cov = diag(D) + V.T.dot(np.diag(E)).dot(V).
 
+		The units of D and E should be variance for each fourier mode, not sum
+		for each fourier mode. I.e. a longer tod should not yield larger D and E
+		values. Hence, they should have the same units as fft(d)**2/nsamp.
+
 		Note that D, V and E correspond to the normal covmat, *not* the inverse!
 		"""
 		self.D    = np.ascontiguousarray(D)
@@ -143,7 +147,7 @@ class NmatDetvecs(NmatBinned):
 		fft_norm = tod.shape[1]
 		core = get_core(tod.dtype)
 		core.nmat_detvecs(ft.T, self.get_ibins(tod.shape[-1]).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
-		enlib.fft.irfft(ft, tod)
+		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)

@@ -67,6 +67,8 @@ def rewind(a, ref=0, period=2*np.pi):
 	that they all lie within the same period. The ref argument
 	specifies the angle furthest away from the cut, i.e. the
 	period cut will be at ref+period/2."""
+	a = np.asanyarray(a)
+	if ref == "auto": ref = np.sort(a.reshape(-1))[a.size/2]
 	return ref + (a-ref+period/2.)%period - period/2
 
 def cumsplit(sizes, capacities):
@@ -109,12 +111,15 @@ def deslope(d, w=1, inplace=False):
 
 def ctime2mjd(ctime):
 	"""Converts from unix time to modified julian date."""
-	return ctime/86400 + 40587.0
+	return np.asarray(ctime)/86400. + 40587.0
+def mjd2ctime(mjd):
+	"""Converts from modified julian date to unix time."""
+	return (np.asarray(mjd)-40587.0)*86400
 day2sec = 86400.
 
 def mjd2ctime(mjd):
 	"""Converts from modified julian date to unix time"""
-	return (mjd-40587.0)*86400
+	return (np.asarray(mjd)-40587.0)*86400
 
 def medmean(x, frac=0.5):
 	x = np.sort(x)
@@ -617,6 +622,11 @@ def box_overlap(a, b):
 	be [n,m] areas."""
 	return box_area(box_slice(a,b))
 
+def widen_box(box, margin=1e-3, relative=True):
+	box = np.asarray(box)
+	if relative: margin = (box[1]-box[0])*margin
+	return np.array([box[0]-margin/2, box[1]+margin/2])
+
 def sum_by_id(a, ids, axis=0):
 	ra = moveaxis(a, axis, 0)
 	fa = ra.reshape(ra.shape[0],-1)
@@ -655,3 +665,16 @@ def uncat(a, lens):
 	b."""
 	cum = cumsum(lens, endpoint=True)
 	return [a[cum[i]:cum[i+1]] for i in xrange(len(lens))]
+
+def ang2rect(angs, zenith=True):
+	phi, theta = angs
+	ct, st, cp, sp = np.cos(theta), np.sin(theta), np.cos(phi), np.sin(phi)
+	if zenith: return np.array([st*cp,st*sp,ct])
+	else:      return np.array([ct*cp,ct*sp,st])
+def rect2ang(rect, zenith=True):
+	x,y,z = rect
+	r     = (x**2+y**2)**0.5
+	phi   = np.arctan2(y,x)
+	if zenith: theta = np.arctan2(r,z)
+	else:      theta = np.arctan2(z,r)
+	return np.array([phi,theta])

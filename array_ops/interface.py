@@ -136,3 +136,9 @@ def measure_cov(d):
 	fun = get_dtype_fun(get_funcs("measure_cov"), d.dtype)
 	fun(d.T,cov.T)
 	return cov
+
+def ang2rect(a):
+	core = get_core(a.dtype)
+	res = np.zeros([len(a),3],dtype=a.dtype)
+	core.ang2rect(a.T,res.T)
+	return res

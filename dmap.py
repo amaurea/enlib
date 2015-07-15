@@ -39,6 +39,8 @@ from enlib import enmap, utils, zipper
 from astropy.wcs import WCS
 L = logging.getLogger(__name__)
 
+import h5py
+
 class Dmap:
 	"""Dmap - distributed enmap. After construction, its relevant members
 	are:
@@ -72,9 +74,15 @@ class Dmap:
 		# 1. Compute local box
 		if bbpix is None:
 			bbpix = box2pix(shape, wcs, bbox)
-		bbpix = np.sort(bbpix, 1)
+		# For slicing, we need the first bound to be lower than the second bound.
+		# It might not be, as Ra and x have opposite ordering. So sort along the
+		# from-to axis. bbpix has 3 dims [scan,fromto,radec]
 		bbpix = bbpix.reshape((-1,)+bbpix.shape[-2:])
-		bbpix = np.minimum(shape[-2:],np.maximum(0,bbpix))
+		bbpix = np.sort(bbpix, 1)
+		# Some scans may extend partially beyond the end of our map. We must therefore
+		# truncate the bounding box.
+		bbpix[:,0,:] = np.maximum(bbpix[:,0,:],0)
+		bbpix[:,1,:] = np.minimum(bbpix[:,1,:],shape[-2:])
 		# 2. Set up local workspace(s)
 		work  = []
 		for b in bbpix:

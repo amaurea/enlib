@@ -4,6 +4,7 @@ module. For now, it is used as a part of the implementation."""
 import numpy as np, pyfsla
 import astropy.coordinates as c, astropy.units as u, ephem
 from enlib import iers, utils
+from enlib.utils import ang2rect, rect2ang
 try:
 	from pyslalib import slalib
 except ImportError:
@@ -18,6 +19,8 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 	with the same shape as the input. The coordinates are in ra,dec-ordering."""
 	# Make ourselves case insensitive, and look up the corresponding objects
 	unit = getunit(unit)
+	coords = np.asarray(coords)
+	if time is not None: time = np.asarray(time)
 	(from_sys,from_ref), (to_sys,to_ref) = getsys_full(from_sys,unit,time,site), getsys_full(to_sys,unit,time,site)
 	# Handle polarization by calling ourselves twice wtih slightly differing positions.
 	if pol is None: pol = len(coords) == 3
@@ -72,12 +75,13 @@ def transform_astropy(from_sys, to_sys, coords, unit):
 
 def hor2cel(coord, time, site):
 	coord  = np.asarray(coord)
-	info   = iers.lookup(time[0])
+	trepr  = time[len(time)/2]
+	info   = iers.lookup(trepr)
 	as2rad = np.pi/180/60/60
-	ao = slalib.sla_aoppa(time[0], info.dUT, site.lon*np.pi/180, site.lat*np.pi/180, site.alt,
+	ao = slalib.sla_aoppa(trepr, info.dUT, site.lon*np.pi/180, site.lat*np.pi/180, site.alt,
 		info.pmx*as2rad, info.pmy*as2rad, site.T, site.P, site.hum,
-		299792.458/site.freq, 0.0065)
-	am = slalib.sla_mappa(2000.0, time[0])
+		299792.458/site.freq, site.lapse)
+	am = slalib.sla_mappa(2000.0, trepr)
 	# This involves a transpose operation, which is not optimal
 	res = pyfsla.aomulti(time, coord, ao, am)
 	return res
@@ -85,12 +89,13 @@ def hor2cel(coord, time, site):
 def cel2hor(coord, time, site):
 	# This is very slow for objects near the horizon!
 	coord  = np.asarray(coord)
-	info   = iers.lookup(time[0])
+	trepr  = time[len(time)/2]
+	info   = iers.lookup(trepr)
 	as2rad = np.pi/180/60/60
-	ao = slalib.sla_aoppa(time[0], info.dUT, site.lon*np.pi/180, site.lat*np.pi/180, site.alt,
+	ao = slalib.sla_aoppa(trepr, info.dUT, site.lon*np.pi/180, site.lat*np.pi/180, site.alt,
 		info.pmx*as2rad, info.pmy*as2rad, site.T, site.P, site.hum,
-		299792.458/site.freq, 0.0065)
-	am = slalib.sla_mappa(2000.0, time[0])
+		299792.458/site.freq, site.lapse)
+	am = slalib.sla_mappa(2000.0, trepr)
 	# This involves a transpose operation, which is not optimal
 	return pyfsla.oamulti(time, coord, ao, am)
 
@@ -117,20 +122,6 @@ def euler_mat(euler_angles, kind="zyz", unit="rad"):
 	R2 = rotmatrix(beta,  kind[1], unit)
 	R3 = rotmatrix(alpha, kind[0], unit)
 	return np.einsum("...ij,...jk->...ik",np.einsum("...ij,...jk->...ik",R3,R2),R1)
-
-# Why do I have to define these myself?
-def ang2rect(angs, zenith=True):
-	phi, theta = angs
-	ct, st, cp, sp = np.cos(theta), np.sin(theta), np.cos(phi), np.sin(phi)
-	if zenith: return np.array([st*cp,st*sp,ct])
-	else:      return np.array([ct*cp,ct*sp,st])
-def rect2ang(rect, zenith=True):
-	x,y,z = rect
-	r     = (x**2+y**2)**0.5
-	phi   = np.arctan2(y,x)
-	if zenith: theta = np.arctan2(r,z)
-	else:      theta = np.arctan2(z,r)
-	return np.array([phi,theta])
 
 def euler_rot(euler_angles, coords, kind="zyz", unit="rad"):
 	unit   = getunit(unit)
@@ -233,6 +224,28 @@ def ephem_pos(name, mjd):
 			res[0,i] = float(obj.ra)
 			res[1,i] = float(obj.dec)
 		return res.reshape((2,)+djd.shape)
+
+def interpol_pos(from_sys, to_sys, name_or_pos, mjd, site=None, dt=10):
+	"""Given the name of an ephemeris object or a [ra,dec]-type position
+	in radians in from_sys, compute its position in the specified coordinate system for
+	each mjd. The mjds are assumed to cover a short
+	enough range that positions can be effectively
+	interpolated."""
+	box  = utils.widen_box([np.min(mjd),np.max(mjd)], 1e-2)
+	sub_nsamp = max(3,int((box[1]-box[0])*24.*3600/dt))
+	sub_mjd = np.linspace(box[0], box[1], sub_nsamp, endpoint=True)
+	if isinstance(name_or_pos, basestring):
+		sub_from = ephem_pos(name_or_pos, sub_mjd)
+	else:
+		pos = np.asarray(name_or_pos)
+		assert pos.ndim == 1
+		sub_from = np.zeros([2,sub_nsamp])
+		sub_from[:] = np.asarray(name_or_pos)[:,None]
+	sub_pos = transform(from_sys, to_sys, sub_from, time=sub_mjd, site=site)
+	sub_pos[1] = utils.rewind(sub_pos[1], ref="auto")
+	inds = (mjd-box[0])*(sub_nsamp-1)/(box[1]-box[0])
+	full_pos= utils.interpol(sub_pos, inds[None], order=3)
+	return full_pos
 
 def make_mapping(dict): return {value:key for key in dict for value in dict[key]}
 str2unit = make_mapping({

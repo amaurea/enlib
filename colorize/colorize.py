@@ -58,6 +58,10 @@ def colorize(arr, desc="wmap", method="simple"):
 			res = colorize_simple(a, desc)
 		elif method == "fast":
 			res = colorize_fast(a, desc)
+		elif method == "direct":
+			a = arr.reshape(arr.shape[0],-1)
+			res = colorize_direct(a, desc)
+			return res.reshape(arr.shape[1:]+(4,))
 		else:
 			raise NotImplementedError("colorize method '%d' is not implemented" % method)
 		return res.reshape(arr.shape+(4,))
@@ -86,3 +90,8 @@ def colorize_simple(a, desc):
 	col = np.round(desc.cols[i-1]*(1-x)[:,None] + desc.cols[i]*x[:,None])
 	res[ok] = np.array(np.minimum(np.maximum(col,0),0xff),dtype=np.uint8)
 	return res
+
+def colorize_direct(a, desc):
+	res = np.empty((a.shape[1],4),dtype=np.uint16)
+	fortran.direct(a.T, res.T)
+	return res.astype(np.uint8)

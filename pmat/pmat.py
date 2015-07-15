@@ -6,8 +6,8 @@ forward will update tod based on m, and backward will update m based on tod.
 The reason for allowing the other argument to be modified is to make it easier
 to incrementally project different parts of the signal.
 """
-import numpy as np, bunch
-from enlib import enmap, interpol, utils, coordinates, config, errors
+import numpy as np, bunch, time
+from enlib import enmap, interpol, utils, coordinates, config, errors, array_ops
 import pmat_core_32
 import pmat_core_64
 def get_core(dtype):
@@ -22,6 +22,8 @@ config.default("map_eqsys",       "equ", "The coordinate system of the maps. Can
 config.default("pmat_accuracy",     1.0, "Factor by which to lower accuracy requirement in pointing interpolation. 1.0 corresponds to 1e-3 pixels and 0.1 arc minute in polangle")
 config.default("pmat_interpol_max_size", 100000, "Maximum mesh size in pointing interpolation. Worst-case time and memory scale at most proportionally with this.")
 config.default("pmat_interpol_max_time", 50, "Maximum time to spend in pointing interpolation constructor. Actual time spent may be up to twice this.")
+# Disable window for now - it is buggy
+config.default("tod_window",        0.0, "Seconds by which to window each end of the TOD.")
 
 class PointingMatrix:
 	def forward(self, tod, m): raise NotImplementedError
@@ -34,9 +36,9 @@ class PmatMap(PointingMatrix):
 		sys   = config.get("map_eqsys",      sys)
 		order = config.get("pmat_map_order", order)
 
-		box = np.array(scan.box)
-		margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
-		box[0] -= margin/2; box[1] += margin/2
+		# We widen the bounding box slightly to avoid samples falling outside it
+		# due to rounding errors.
+		box = utils.widen_box(np.array(scan.box), 1e-3)
 		acc  = config.get("pmat_accuracy")
 		ip_size= config.get("pmat_interpol_max_size")
 		ip_time= config.get("pmat_interpol_max_time")
@@ -66,9 +68,9 @@ class PmatMap(PointingMatrix):
 	def forward(self, tod, m, tmul=0, mmul=1):
 		"""m -> tod"""
 		self.func( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
-	def backward(self, tod, m):
+	def backward(self, tod, m, tmul=1, mmul=1):
 		"""tod -> m"""
-		self.func(-1, 1, 0, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
+		self.func(-1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -82,6 +84,99 @@ class PmatMap(PointingMatrix):
 		phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
 		self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
 		return pix, phase
+
+def get_moby_pointing(entry, bore, dets, downgrade=1):
+	# Set up moby2
+	import moby2
+	moby2.pointing.set_bulletin_A()
+	params = {
+		"detector_offsets": {
+			"format": "fp_file",
+			"filename": entry.point_template },
+		"pol_source": {
+			"source": "file",
+			"filename": entry.polangle,
+			"format": "ascii",
+			"fail_value": -1 },
+		"shift_generator": {
+			"source": "file",
+			"filename": entry.point_offsets,
+			"columns": [0,5,6],
+			"rescale_degrees": 180/np.pi},
+		}
+	bore   = np.ascontiguousarray(bore[::downgrade].T)
+	fplane = moby2.scripting.get_focal_plane(params, det_uid=dets, tod=entry.id)
+	res = fplane.get_coords(bore[0], bore[1], bore[2], fields=['ra','dec','cos_2gamma','sin_2gamma'])
+	res[0][:] = utils.unwind(res[0])
+	return np.array(res)
+
+downsamp = config.default("pmat_moby_downsamp", 20, "How much to downsample pointing by in pmat moby when fitting model")
+class PmatMoby(PointingMatrix):
+	def __init__(self, scan, template, sys=None):
+		sys      = config.get("map_eqsys",      sys)
+		downsamp = config.get("pmat_moby_downsamp", 20)
+
+		bore = scan.boresight.copy()
+		bore[:,0] += utils.mjd2ctime(scan.mjd0)
+		opoint = get_moby_pointing(scan.entry, bore, scan.dets, downgrade=downsamp)
+		# We will fit a polynomial to the pointing for each detector
+		box = np.array([[np.min(a),np.max(a)] for a in scan.boresight.T]).T
+		def scale(a, r): return 2*(a-r[0])/(r[1]-r[0])-1
+		t  = scale(scan.boresight[::downsamp,0], box[:,0])
+		az = scale(scan.boresight[::downsamp,1], box[:,1])
+		el = scale(scan.boresight[::downsamp,2], box[:,2])
+
+		basis  = np.array([az**4, az**3, az**2, az**1, az**0, el**2, el, t**2, t, t*az]).T
+		denom  = basis.T.dot(basis)
+		e,v = np.linalg.eigh(denom)
+		if (np.min(e) < 1e-8*np.max(e)):
+			basis = np.concatenate([basis[:,:5],basis[:,6:]],1)
+			denom = basis.T.dot(basis)
+		# Convert from ra/dec to pixels, since we've confirmed that
+		# our ra/dec is the same as ninkasi to 0.01".
+		t1 = time.time()
+		pix= template.sky2pix(opoint[1::-1],safe=True)
+		t2 = time.time()
+		#rafit  = np.linalg.solve(denom, basis.T.dot(opoint[0].T))
+		#decfit = np.linalg.solve(denom, basis.T.dot(opoint[1].T))
+		yfit = np.linalg.solve(denom, basis.T.dot(pix[0].T))
+		xfit = np.linalg.solve(denom, basis.T.dot(pix[1].T))
+
+		## For some reason pol angles are interpolated differently
+		#t  = np.linspace(0,1,bore.shape[0])[::downsamp]
+		#az = bore[::downsamp,1]
+		#npoly = 3
+		#basis = np.zeros([len(t),2+npoly])
+		#basis[:,0]  = 1
+		#basis[:,-1] = t
+		#for i in range(npoly):
+		#	basis[:,i+1] = basis[:,i]*az
+
+		# Just use the same az and t as before for simplicity. The
+		# coefficients will be different, but the result will be
+		# the same.
+		basis = np.array([az**0, az**1, az**2, az**3, t]).T
+		denom = basis.T.dot(basis)
+
+		cosfit = np.linalg.solve(denom, basis.T.dot(opoint[2].T))
+		sinfit = np.linalg.solve(denom, basis.T.dot(opoint[3].T))
+
+		# Parameters for pmat
+		self.posfit = np.concatenate([yfit[:,:,None],xfit[:,:,None]],2)
+		self.polfit = np.concatenate([cosfit[:,:,None],sinfit[:,:,None]],2)
+		self.box    = box
+		self.pixbox = np.array([[0,0],template.shape[-2:]])
+		self.scan   = scan
+		self.dtype  = template.dtype
+		self.core   = get_core(self.dtype)
+	def forward(self, tod, m, tmul=0, mmul=1):
+		"""m -> tod"""
+		self.core.pmat_ninkasi( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.box.T, self.pixbox.T, self.posfit.T, self.polfit.T)
+	def backward(self, tod, m, tmul=1, mmul=1):
+		"""tod -> m"""
+		self.core.pmat_ninkasi(-1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.box.T, self.pixbox.T, self.posfit.T, self.polfit.T)
+	def translate(self, bore=None, offs=None, comps=None):
+		raise NotImplementedError
 
 # Neither this approach nor time-domain linear interpolation works at the moment.
 # In theory, they would help with the subpixel bias issue. In practice, they
@@ -185,10 +280,10 @@ class PmatCut(PointingMatrix):
 		toks = params.split(":")
 		kind = toks[0]
 		args = tuple([int(s) for s in toks[1].split(",")]) if len(toks) > 1 else ()
-		return ({"none":0,"full":1,"bin":2,"exp":3}[toks[0]],)+args
+		return ({"none":0,"full":1,"bin":2,"exp":3,"poly":4}[toks[0]],)+args
 
 class pos2pix:
-	"""Transforms from scan coordintaes to pixel-center coordinates."""
+	"""Transforms from scan coordinates to pixel-center coordinates."""
 	def __init__(self, scan, template, sys, ref_phi=0):
 		self.scan, self.template, self.sys = scan, template, sys
 		self.ref_phi = ref_phi
@@ -208,6 +303,15 @@ class pos2pix:
 		opix[2]  = np.cos(2*opos[2])
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)
+
+def apply_window(tod, width):
+	"""Apply tapering window on width samples at each side of the tod.
+	For example, apply_window(tod, 5*srate) would apply a 5-second window
+	at each edge of the tod."""
+	width = int(width)
+	if width < 1: return
+	core = get_core(tod.dtype)
+	core.pmat_window(tod.T, width)
 
 config.default("pmat_scan_mode", "azimuth", "The coodinate basis to use for scan mode projection. Can be 'azimuth' or 'phase'. Default is azimuth.")
 class PmatScan(PointingMatrix):

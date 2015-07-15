@@ -29,3 +29,22 @@ subroutine remap(a, res, vals, cols)
 		end if
 	end do
 end subroutine
+
+subroutine direct(a, res)
+	use iso_c_binding
+	implicit none
+	real(8),    intent(in)    :: a(:,:)
+	integer(2), intent(inout) :: res(:,:)
+	real(8) :: v
+	integer :: i
+	!$omp parallel do private(i,v)
+	do i = 1, size(a,1)
+		v = a(i,1)
+		if(v .ne. v) then
+			res(:,i) = 0
+		else
+			res(1:size(a,2),i)  = min(max(0,nint(a(i,:)*256)),255)
+			res(size(a,2)+1:,i) = 255
+		end if
+	end do
+end subroutine
