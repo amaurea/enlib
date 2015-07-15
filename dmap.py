@@ -74,6 +74,7 @@ class Dmap:
 			bbpix = box2pix(shape, wcs, bbox)
 		bbpix = np.sort(bbpix, 1)
 		bbpix = bbpix.reshape((-1,)+bbpix.shape[-2:])
+		bbpix = np.minimum(shape[-2:],np.maximum(0,bbpix))
 		# 2. Set up local workspace(s)
 		work  = []
 		for b in bbpix:
