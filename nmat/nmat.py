@@ -92,7 +92,8 @@ class NmatBinned(NoiseMatrix):
 		# Slice covs, not icovs
 		covs  = enlib.array_ops.eigpow(icovs, -1, axes=[-2,-1])[mask][:,detslice][:,:,detslice]
 		icovs = enlib.array_ops.eigpow(covs,  -1, axes=[-2,-1])
-		return BinnedNmat(dets, bins, icovs)
+		# Downsampling changes the noise per sample
+		return BinnedNmat(dets, bins, icovs*step)
 	def __mul__(self, a):
 		return NmatBinned(self.icovs/a, self.bins, self.dets)
 	def write(self, fname, group=None):
@@ -146,6 +147,23 @@ class NmatDetvecs(NmatBinned):
 		ft = enlib.fft.rfft(tod)
 		fft_norm = tod.shape[1]
 		core = get_core(tod.dtype)
+		# Unit of noise model we apply:
+		#  Assume we start from white noise with stddev s.
+		#  FFT giving sum of N random numbers with dev s per mode:
+		#  each mode will have dev s sqrt(N).
+		#  Divide by sqrt(N) before estimating noise: each mode has dev s.
+		#  So unit of iN is 1/s^2.
+		#  We apply as ifft(iN fft(d))/N, which for white simlifies to ifft(fft(d))/N /s^2.
+		#  Since our ifft/N is the real, normalized ifft, so this simplifies to d/s^2. Good.
+		# What happens when we downgrade by factor D:
+		#  The noise variance per sample in the TOD should go down by factor D, which means
+		#  that we want iN to multiply d by D/s^2
+		#  We don't do that here.
+		#  That means that our iN is D times too small, and hence RHS is D times too small.
+		#  The same applies to div, so bin should come out OK. And the unit of iN does not
+		#  really matter for the rest of the mapmaker.
+		# To summarize, iN, RHS and div are all D times too small because we don't properly
+		# rescale the noise when downsampling.
 		core.nmat_detvecs(ft.T, self.get_ibins(tod.shape[-1]).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
 		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
@@ -158,8 +176,9 @@ class NmatDetvecs(NmatBinned):
 		mask = res.bins[:,0] < fmax
 		bins, ebins = res.bins[mask], res.ebins[mask]
 		bins[-1,-1] = fmax
-		# Slice covs, not icovs
-		return NmatDetvecs(res.D[mask][:,detslice], res.V[:,detslice], res.E, bins, ebins, dets)
+		# Slice covs, not icovs. Downsampling changes the noise per sample, which is why we divide
+		# the variances here.
+		return NmatDetvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, dets)
 	def __mul__(self, a):
 		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.dets)
 	def write(self, fname, group=None):
@@ -204,7 +223,7 @@ class NmatSharedvecs(NmatDetvecs):
 		bins, ebins, vbins = res.bins[mask], res.ebins[mask], res.vbins[mask]
 		bins[-1,-1] = fmax
 		# Slice covs, not icovs
-		return NmatSharedvecs(res.D[mask][:,detslice], res.V[:,detslice], res.E, bins, ebins, vbins, dets)
+		return NmatSharedvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, vbins, dets)
 	def __mul__(self, a):
 		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.vbins, self.dets)
 	def write(self, fname, group=None):
