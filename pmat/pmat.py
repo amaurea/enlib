@@ -22,7 +22,8 @@ config.default("map_eqsys",       "equ", "The coordinate system of the maps. Can
 config.default("pmat_accuracy",     1.0, "Factor by which to lower accuracy requirement in pointing interpolation. 1.0 corresponds to 1e-3 pixels and 0.1 arc minute in polangle")
 config.default("pmat_interpol_max_size", 100000, "Maximum mesh size in pointing interpolation. Worst-case time and memory scale at most proportionally with this.")
 config.default("pmat_interpol_max_time", 50, "Maximum time to spend in pointing interpolation constructor. Actual time spent may be up to twice this.")
-config.default("tod_window",        5.0, "Seconds by which to window each end of the TOD.")
+# Disable window for now - it is buggy
+config.default("tod_window",        0.0, "Seconds by which to window each end of the TOD.")
 
 class PointingMatrix:
 	def forward(self, tod, m): raise NotImplementedError
