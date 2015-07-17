@@ -250,7 +250,7 @@ class MapEquation:
 			d.nmat = scan.noise
 			d.window = int(d.scan.srate * config.get("tod_window"))
 			# Make maps from data projected from input map instead of real data
-			if imap: d.pmat_imap = pmat.PmatMap(scan, imap.work[d.sub], order=pmat_order, sys=imap.sys)
+			if imap: d.pmat_imap = pmat.PmatMap(scan, imap.map, order=pmat_order, sys=imap.sys)
 			if isrc: d.pmat_isrc = pmat.PmatPtsrc(scan, isrc.model.params.astype(area.dtype), sys=isrc.sys, tmul=isrc.tmul, pmul=isrc.pmul)
 			if azmap: d.pmat_azmap = pmat.PmatScan(scan, area.shape[0], azmap.npix, mode=azmap.mode)
 			data.append(d)
@@ -284,7 +284,7 @@ class MapEquation:
 				else:
 					tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
 				if self.imap is not None:
-					d.pmat_imap.forward(tod, self.imap.map.work[d.sub], tmul=self.imap.tmul, mmul=self.imap.mmul)
+					d.pmat_imap.forward(tod, self.imap.map, tmul=self.imap.tmul, mmul=self.imap.mmul)
 					utils.deslope(tod, inplace=True)
 				if self.isrc is not None:
 					d.pmat_isrc.forward(tod, self.isrc.model.params)

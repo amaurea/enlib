@@ -376,7 +376,9 @@ class PmatPtsrc(PointingMatrix):
 		box = np.array(scan.box)
 		margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
 		box[0] -= margin/2; box[1] += margin/2
-		ref_phi = params[1,0]
+		# Find the rough position of our scan
+		ref_phi = coordinates.transform(scan.sys, sys, scan.box[:1,1:].T, time=scan.mjd0+scan.box[:1,0], site=scan.site)[0,0]
+		#ref_phi = params[1,0]
 		acc  = config.get("pmat_accuracy")
 		ip_size= config.get("pmat_interpol_max_size")
 		ip_time= config.get("pmat_interpol_max_time")
