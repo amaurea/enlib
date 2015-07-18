@@ -438,6 +438,19 @@ class PmatPtsrc(PointingMatrix):
 		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets)
 		return res
 
+class PmatAz(PointingMatrix):
+	"""Fortran-accelerated scan <-> enmap pointing matrix implementation.
+	20 times faster than the slower python+numpy implementation below."""
+	def __init__(self, scan, group, az0, daz):
+		self.scan, self.group, self.az0, self.daz = scan, group, az0, daz
+		self.az = utils.rewind(self.scan.boresight[:,1],0)
+	def forward(self, tod, m):
+		core = get_core(tod.dtype)
+		core.pmat_az( 1, tod.T, m[self.group].T, self.az, self.scan.dets, self.az0, self.daz)
+	def backward(self, tod, m):
+		core = get_core(tod.dtype)
+		core.pmat_az(-1, tod.T, m[self.group].T, self.az, self.scan.dets, self.az0, self.daz)
+
 def compress_ranges(ranges, nrange, cut, nsamp):
 	"""Given ranges[nsrc,ndet,nmax,2], nrange[nsrc,ndet] where ranges has
 	det-local numbering, return the same information in a compressed format
@@ -508,5 +521,6 @@ def extract_interpol_params(ipol, dtype):
 
 def build_pixbox(obox, n, margin=10):
 	return np.array([np.maximum(0,np.floor(obox[0]-margin)),np.minimum(n,np.floor(obox[1]+margin))]).astype(np.int32)
+
 
 

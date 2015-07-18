@@ -678,3 +678,11 @@ def rect2ang(rect, zenith=True):
 	if zenith: theta = np.arctan2(r,z)
 	else:      theta = np.arctan2(z,r)
 	return np.array([phi,theta])
+
+def angdist(a, b, zenith=True):
+	ra = ang2rect(a, zenith)
+	rb = ang2rect(b, zenith)
+	c = np.sum(ra.T*rb.T,-1)
+	res = np.zeros(c.T.shape)
+	res[c < 1] = np.arccos(c[c<1])
+	return res

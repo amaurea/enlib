@@ -668,20 +668,25 @@ def pad(emap, pix, return_slice=False,wrap=False):
 		res[...,:,-pix[1,1]:] = res[...,:,pix[0,1]:pix[0,1]+pix[1,1]]
 	return (res,mslice) if return_slice else res
 
-def autocrop(m, method="plain", value=np.nan, margin=0, factors=None, return_info=False):
+def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_info=False):
 	"""Adjust the size of m to be more fft-friendly. If possible,
 	blank areas at the edge of the map are cropped to bring us to a nice
 	length. If there there aren't enough blank areas, the map is padded
 	instead."""
-	# Count blank areas on each side
-	if np.isnan(value):
-		hitmask = np.any(~np.isnan(m),axis=tuple(range(m.ndim-2)))
+	def calc_blanks(m, value):
+		value   = np.asarray(value)
+		hitmask = np.all(np.isclose(m.T, value.T, equal_nan=True, rtol=1e-6, atol=0).T,axis=tuple(range(m.ndim-2)))
+		hitrows = np.all(hitmask,1)
+		hitcols = np.all(hitmask,0)
+		blanks  = np.array([np.where(~hitrows)[0][[0,-1]],np.where(~hitcols)[0][[0,-1]]]).T
+		blanks[1] = m.shape[-2:]-blanks[1]-1
+		return blanks
+	if value == "auto":
+		bs = [calc_blanks(m, m[...,i,j]) for  i in [0,-1] for j in [0,-1]]
+		nb = [np.product(np.sum(b,0)) for b in bs]
+		blanks = bs[np.argmax(nb)]
 	else:
-		hitmask = np.any(m!=value,axis=tuple(range(m.ndim-2)))
-	hitrows = np.any(hitmask,1)
-	hitcols = np.any(hitmask,0)
-	blanks  = np.array([np.where(hitrows)[0][[0,-1]],np.where(hitcols)[0][[0,-1]]]).T
-	blanks[1] = m.shape[-2:]-blanks[1]-1
+		blanks = calc_blanks(m, value)
 	nblank  = np.sum(blanks,0)
 	# Find the first good sizes larger than the unblank lengths
 	minshape  = m.shape[-2:]-nblank+margin

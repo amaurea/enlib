@@ -1366,6 +1366,37 @@ contains
 		end do
 	end subroutine
 
+
+	subroutine pmat_az(dir, tod, map, az, dets, az0, daz)
+		implicit none
+		integer, intent(in)    :: dir, dets(:)
+		real(_), intent(inout) :: tod(:,:), map(:,:)
+		real(_), intent(in)    :: az0, daz, az(:)
+		integer, allocatable   :: ais(:)
+		integer :: di, si, ai, ndet, nsamp, naz
+		ndet  = size(tod,2)
+		nsamp = size(tod,1)
+		naz   = size(map,1)
+		allocate(ais(nsamp))
+		ais = min(int((az-az0)/daz)+1,naz)
+
+		if(dir > 0) then
+			!$omp parallel do private(di,si)
+			do di = 1, ndet
+				do si = 1, nsamp
+					tod(si,di) = map(ais(si),dets(di)+1)
+				end do
+			end do
+		elseif(dir < 0) then
+			!$omp parallel do private(di,si)
+			do di = 1, ndet
+				do si = 1, nsamp
+					map(ais(si),dets(di)+1) = map(ais(si),dets(di)+1) + tod(si,di)
+				end do
+			end do
+		end if
+	end subroutine
+
 end module
 
 

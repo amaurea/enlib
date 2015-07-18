@@ -164,6 +164,7 @@ class NmatDetvecs(NmatBinned):
 		#  really matter for the rest of the mapmaker.
 		# To summarize, iN, RHS and div are all D times too small because we don't properly
 		# rescale the noise when downsampling.
+		# FIXED: I now scale D and E when downsampling.
 		core.nmat_detvecs(ft.T, self.get_ibins(tod.shape[-1]).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
 		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod

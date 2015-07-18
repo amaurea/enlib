@@ -897,3 +897,111 @@ def build_effective_noise_model(group, nsamp):
 	# Build a dense binned noise model based on this
 	return nmat.NmatBinned(iC, bins)
 
+
+# Az stuff. Adding this was surprisingly cumbersome. I need to rethink
+# this module.
+
+class LinearSystemAz(LinearSystem):
+	def __init__(self, scans, area, groups, az0, daz, comm=MPI.COMM_WORLD, cut_type=None):
+		L.info("Building preconditioner")
+		self.azeq  = AzEquation(scans, area, groups, az0, daz, comm=comm, cut_type=cut_type)
+		self.precon = PrecondAz(self.azeq)
+		zippers = [
+				zipper.ArrayZipper(area, shared=True, comm=comm),
+				zipper.ArrayZipper(np.zeros(self.azeq.njunk,dtype=area.dtype),shared=False,comm=comm)
+				]
+		self.dof = zipper.MultiZipper(zippers, comm=comm)
+		L.info("Building right-hand side")
+		self.b  = self.dof.zip(*self.azeq.b())
+		self.comm, self.scans = comm, scans
+	def A(self, x):
+		res = self.dof.zip(*self.azeq.A(*self.dof.unzip(x)))
+		return res
+	def M(self, x):
+		res = self.dof.zip(*self.precon.apply(*self.dof.unzip(x)))
+		return res
+	def dot(self, x, y):
+		res = self.dof.dot(x,y)
+		return res
+	def write(self, prefix="", ext="fits"):
+		rhs = self.dof.unzip(self.b)[0]
+		if self.comm.rank == 0:
+			with h5py.File(prefix + "rhs.hdf", "w") as hfile:
+				hfile["data"] = rhs
+		self.precon.write(prefix, ext=ext)
+
+class AzEquation:
+	def __init__(self, scans, area, groups, az0, daz, comm=MPI.COMM_WORLD, cut_type=None):
+		data = []
+		njunk = 0
+		for si, scan in enumerate(scans):
+			d = bunch.Bunch()
+			d.scan = scan
+			d.pcut = pmat.PmatCut(scan, cut_type)
+			d.paz  = pmat.PmatAz(scan, groups[si], az0, daz)
+			d.cutrange = [njunk,njunk+d.pcut.njunk]
+			njunk = d.cutrange[1]
+			d.nmat = scan.noise
+			data.append(d)
+		self.data, self.groups, self.area, self.az0, self.daz, = data, groups, area, az0, daz
+		self.njunk, self.comm, self.dtype = njunk, comm, area.dtype
+	def b(self):
+		rhs_map  = self.area.copy()
+		rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
+		for di, d in enumerate(self.data):
+			with bench.mark("aeq_b_get"):
+				tod = d.scan.get_samples()
+				# To avoid losing precision, we only reduce precision
+				# after subtracting the mean.
+				tod-= np.mean(tod,1)[:,None]
+				tod = tod.astype(self.dtype)
+			with bench.mark("aeq_b_N"):
+				d.nmat.apply(tod)
+			# Project down on az box
+			with bench.mark("aeq_b_P"):
+				d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
+				d.paz.backward(tod,rhs_map)
+			times = [bench.stats[s]["time"].last for s in ["aeq_b_get","aeq_b_N","aeq_b_P'"]]
+			L.debug("aeq b get %5.1f N %5.3f P' %5.3f" % tuple(times))
+		rhs_map = reduce(rhs_map, self.comm)
+		return rhs_map, rhs_junk
+	def A(self, map, junk, white=False):
+		with bench.mark("aeq_A_expand"):
+			map, junk = map.copy(), junk.copy()
+			omap, ojunk = map*0, junk*0
+		for di, d in enumerate(self.data):
+			with bench.mark("aeq_A_P"):
+				tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
+				d.paz.forward(tod, map)
+				d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
+			with bench.mark("aeq_A_N"):
+				if white:
+					d.nmat.white(tod)
+				else:
+					d.nmat.apply(tod)
+			with bench.mark("aeq_A_P'"):
+				d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
+				d.paz.backward(tod,omap)
+			del tod
+			times = [bench.stats[s]["time"].last for s in ["aeq_A_P","aeq_A_N","aeq_A_P'"]]
+			L.debug("aeq A P %5.3f N %5.3f P' %5.3f" % tuple(times))
+		omap = reduce(omap, self.comm)
+		return omap, ojunk
+	def white(self, map, junk):
+		return self.A(map, junk, white=True)
+
+class PrecondAz:
+	def __init__(self, azeq):
+		div_az = azeq.area * 0 + 1
+		div_junk  = np.zeros(azeq.njunk, dtype=azeq.area.dtype)+1
+		div_az, div_junk = azeq.white(div_az, div_junk)
+		self.azeq = azeq
+		self.div_az, self.div_junk = div_az, div_junk
+		self.idiv_az = azeq.area*0
+		self.idiv_az[div_az != 0] = 1/div_az[div_az!=0]
+	def apply(self, map, junk):
+		return self.idiv_az*map, junk/self.div_junk
+	def write(self, prefix="", ext=None):
+		if self.azeq.comm.rank == 0:
+			with h5py.File(prefix + "div.hdf", "w") as hfile:
+				hfile["data"] = self.div_az
