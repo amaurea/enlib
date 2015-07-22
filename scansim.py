@@ -97,7 +97,7 @@ def nocut(ndet, nsamp):
 	return rangelist.Multirange([rangelist.Rangelist(np.zeros([0,2],dtype=int),n=nsamp) for i  in range(ndet)])
 
 class SimSrcs(scan.Scan):
-	def __init__(self, scanpattern, dets, srcs, noise, simsys="equ", cache=False, seed=0, noise_scale=1):
+	def __init__(self, scanpattern, dets, srcs, noise, simsys="equ", cache=False, seed=0, noise_scale=1, nsigma=4):
 		# Set up the telescope
 		self.boresight = scanpattern.boresight
 		self.sys       = scanpattern.sys
@@ -113,6 +113,7 @@ class SimSrcs(scan.Scan):
 		self.site  = scanpattern.site
 		self.noise_scale = noise_scale
 		self.simsys  = simsys
+		self.nsigma = nsigma
 
 		if cache: self._tod = None
 
@@ -136,7 +137,7 @@ class SimSrcs(scan.Scan):
 				point = (self.boresight+self.offsets[di,None,:])[:,1:]
 				point = coordinates.transform(self.sys, self.simsys, point, time=self.boresight[:,0]+self.mjd0, site=self.site)
 				r2 = np.sum((point-pos[None,:])**2,1)/beam**2
-				I  = np.where(r2 < 4**2)[0]
+				I  = np.where(r2 < self.nsigma**2)[0]
 				tod[di,I] += np.exp(-0.5*r2[I])*np.sum(amp*self.comps[di])
 		if hasattr(self, "_tod"):
 			self._tod = tod.copy()

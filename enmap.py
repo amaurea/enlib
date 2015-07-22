@@ -121,7 +121,11 @@ class ndmap(np.ndarray):
 		return ibox
 
 def slice_wcs(shape, wcs, sel):
+	"""Slice a geometry specified by shape and wcs according to the
+	slice sel. Returns a tuple of the output shape and the correponding
+	wcs."""
 	wcs = wcs.deepcopy()
+	pre, shape = shape[:-2], shape[-2:]
 	oshape = np.array(shape)
 	# The wcs object has the indices in reverse order
 	for i,s in enumerate(sel):
@@ -134,7 +138,7 @@ def slice_wcs(shape, wcs, sel):
 		wcs.wcs.crpix[j] += 0.5
 		oshape[i] = s.stop-s.start
 		oshape[i] = (oshape[i]+s.step-1)/s.step
-	return tuple(oshape), wcs
+	return tuple(pre)+tuple(oshape), wcs
 
 def scale_wcs(wcs, factor):
 	return enlib.wcs.scale(wcs, factor, rowmajor=True)
@@ -171,10 +175,12 @@ def enmap(arr, wcs=None, dtype=None, copy=True):
 			wcs = create_wcs(arr.shape)
 	return ndmap(arr, wcs)
 
-def zeros(shape, wcs=None, dtype=None):
-	return enmap(np.zeros(shape, dtype=dtype), wcs, copy=False)
 def empty(shape, wcs=None, dtype=None):
 	return enmap(np.empty(shape, dtype=dtype), wcs, copy=False)
+def zeros(shape, wcs=None, dtype=None):
+	return enmap(np.zeros(shape, dtype=dtype), wcs, copy=False)
+def ones(shape, wcs=None, dtype=None):
+	return enmap(np.ones(shape, dtype=dtype), wcs, copy=False)
 
 def posmap(shape, wcs, safe=True, corner=False):
 	"""Return an enmap where each entry is the coordinate of that entry,
