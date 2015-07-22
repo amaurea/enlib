@@ -34,12 +34,128 @@ The complication is that sends and receives have to happen at the same time.
 The easiest way to do this is via alltoallv, which requires the use of
 flattened arrays.
 """
-import numpy as np, mpi4py.MPI, copy, os, re, enlib.slice, logging
+import numpy as np, mpi4py.MPI, copy, os, re, enlib.slice, operator
 from enlib import enmap, utils, zipper
 from astropy.wcs import WCS
-L = logging.getLogger(__name__)
 
-import h5py
+def empty(geometry):
+	"""Return an empty Dmap2 with the specified geometry."""
+	return Dmap2(geometry)
+def zeros(geometry):
+	"""Return a new Dmap2 with the specified geometry, filled with zeros."""
+	tiles = [enmap.zeros(ts,tw,dtype=geometry.dtype) for ts,tw in geometry.tile_geometry]
+	return Dmap2(geometry, tiles, copy=False)
+def ones(geometry):
+	"""Return a new Dmap2 with the specified geometry, filled with ones."""
+	tiles = [enmap.ones(ts,tw,dtype=geometry.dtype) for ts,tw in geometry.tile_geometry]
+	return Dmap2(geometry, tiles, copy=False)
+def geometry(shape, wcs=None, bbpix=None, tshape=None, dtype=None, comm=None, bbox=None):
+	"""Construct a dmap geometry."""
+	return DGeometry(shape=shape, wcs=wcs, bbpix=bbpix, tshape=tshape, dtype=dtype, comm=comm, bbox=bbox)
+
+class Dmap2:
+	"""Dmap - distributed enmap. After construction, its relevant members
+	are:
+		.tiles: list of tile data owned by this task. Each tile is an enmap.
+		.work2tile(): sums contribution from all workspaces into tiles
+		.tile2work(): projects from tiles to workspaces
+		.geometry: geometry and layout of distributed map"""
+	def __init__(self, geometry, tiles=None, copy=True):
+		try:
+			self.geometry = geometry.geometry
+			self.tiles = [t.copy() for t in geometry.tiles]
+		except AttributeError:
+			self.geometry = geometry
+			if tiles is not None:
+				if copy: tiles = copy=deepcopy(tiles)
+				self.tiles = tiles
+			else:
+				self.tiles = [enmap.empty(ts,tw,dtype=geometry.dtype) for ts,tw in geometry.tile_geometry]
+	def work2tile(self, work):
+		"""Project from local workspaces into the distributed tiles. Multiple workspaces
+		may overlap with a single tile. The contribution from each workspace is summed."""
+		self.geometry.work_bufinfo.data2data(work, self.geometry.tile_bufinfo, self.tiles, self.comm)
+	def tile2work(self, work=None):
+		"""Project from tiles into the local workspaces."""
+		if work is None:
+			work = [enmap.zeros(ws,ww,dtype=self.dtype) for ws,ww in self.geometry.work_geometry]
+		self.geometry.tile_bufinfo.data2data(self.tiles, self.geometry.work_bufinfo, work, self.comm)
+		return work
+	def copy(self):
+		return Dmap2(self)
+	@property
+	def comm(self): return self.geometry.comm
+	@property
+	def shape(self): return self.geometry.shape
+	@property
+	def dtype(self): return self.geometry.dtype
+	@property
+	def ndim(self): return len(self.shape)
+	@property
+	def npix(self): return np.product(self.shape[-2:])
+	def astype(self, dtype):
+		if dtype == self.dtype: return self
+		else:
+			res = Dmap2(self.geometry.astype(dtype))
+			for st,rt in zip(self.tiles, res.tiles):
+				rt[:] = st[:].astype(dtype)
+			return res
+	def fill(self, val):
+		for t in self.tiles: t[:] = val
+	def __getitem__(self, sel):
+		# Split sel into normal and wcs parts. We only handle non-pixel slices
+		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
+		if len(sel2) > 0:
+			raise NotImplementedError("Pixel slicing of dmaps not implemented")
+		geometry = self.geometry[sel1]
+		tiles = [tile[sel1] for tile in self.tiles]
+		return Dmap2(geometry, tiles, copy=False)
+	def __setitem__(self, sel, val):
+		# Split sel into normal and wcs parts. We only handle non-pixel slices
+		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
+		if len(sel2) > 0:
+			raise NotImplementedError("Pixel slicing of dmaps not implemented")
+		try:
+			for tile, vtile in zip(self.tiles, val.tiles): tile[sel] = vtile
+		except AttributeError:
+			for tile in self.tiles: tile[sel] = val
+	def __repr__(self):
+		return "Dmap2(%s, rank %d/%d, tiles %d/%d %s)" % (str(self.geometry), self.geometry.comm.rank,
+			self.geometry.comm.size, self.geometry.nloc, self.geometry.ntile, str(self.geometry.loctiles))
+	# Math operations
+	def _domath(self, other, op, inplace=False):
+		res = self if inplace else self.copy()
+		try:
+			for i, (rtile, otile) in enumerate(zip(res.tiles, other.tiles)):
+				res.tiles[i] = op(rtile, otile)
+		except AttributeError:
+			for i, rtile in enumerate(res.tiles):
+				res.tiles[i] = op(rtile, other)
+		return res
+	def fill_diagonal(self, value):
+		"""Fills the diagonal of the non-pixel part of the map with the specified value.
+		All pre-dimensions must have the same shape."""
+		ndim = len(self.geometry.pre)
+		n    = self.geometry.pre[0]
+		for tile in self.tiles:
+			for i in range(n):
+				tile[tuple([i]*ndim)] = value
+
+# Add some math operators
+def makefun(key, inplace):
+	op = getattr(operator, key)
+	def fun(a,b): return a._domath(b, op, inplace=inplace)
+	return fun
+
+for opname in ["__add__", "__and__", "__div__", "__eq__", "__floordiv__",
+		"__ge__", "__gt__", "__le__", "__lshift__", "__lt__", "__mod__", "__mul__",
+		"__ne__", "__or__", "__pow__", "__rshift__", "__sub__", "__truediv__",
+		"__xor__"]:
+	setattr(Dmap2, opname, makefun(opname, False))
+for opname in ["__iadd__", "__iand__", "__idiv__", "__ifloordiv__",
+		"__ilshift__", "__imod__", "__imul__", "__ior__", "__ipow__",
+		"__irshift__", "__isub__", "__itruediv__", "__ixor__"]:
+	setattr(Dmap2, opname, makefun(opname, True))
 
 class Dmap:
 	"""Dmap - distributed enmap. After construction, its relevant members
@@ -86,8 +202,8 @@ class Dmap:
 		# 2. Set up local workspace(s)
 		work  = []
 		for b in bbpix:
-			wshape, wwcs = enmap.slice_wcs(shape[-2:], wcs, (slice(b[0,0],b[1,0]),slice(b[0,1],b[1,1])))
-			work.append(enmap.zeros(shape[:-2]+wshape, wwcs, dtype=dtype))
+			wshape, wwcs = enmap.slice_wcs(shape, wcs, (slice(b[0,0],b[1,0]),slice(b[0,1],b[1,1])))
+			work.append(enmap.zeros(wshape, wwcs, dtype=dtype))
 		# 3. Define global workspace ownership
 		nwork = utils.allgather([len(bbpix)],comm)
 		wown  = np.concatenate([np.full(n,i,dtype=int) for i,n in enumerate(nwork)])
@@ -342,6 +458,202 @@ def dmap2enmap(dmap, emap, root=0):
 		if dmap.comm.rank == root:
 			emap[...,box[0,0]:box[1,0],box[0,1]:box[1,1]] = data
 
+class DGeometry:
+	"""DGeometry represents the shape and layout of a DMap."""
+	def __init__(self, shape, wcs=None, bbpix=None, tshape=None, dtype=None, comm=None, bbox=None):
+		"""DGeometry(shape, wcs, bbpix, tshape) or
+		DGeometry(dgeometry)
+
+		Construct a DMap geometry. When constructed explicitly from shape, wcs, etc.,
+		it is a relatively expensive operation, as MPI communication is necessary.
+		Constructing one based on an existing DGeometry is fast."""
+		keys = ["shape","wcs","bbpix","tshape","dtype","comm",
+				"tile_bufinfo", "work_bufinfo", "tile_ownership",
+				"tile_glob2loc", "tile_loc2glob","tile_geometry",
+				"work_geometry"]
+		try:
+			# We are pretty lightweight, so copy everything properly. This is
+			# less error prone than having changes in one object suddenly affect
+			# another. comm must *not* be deepcopied, as that breaks it.
+			for key in ["shape","tshape","comm","dtype"]:
+				setattr(self, key, getattr(shape, key))
+			for key in ["wcs","tile_bufinfo","work_bufinfo","bbpix","tile_loc2glob",
+					"tile_glob2loc","work_geometry","tile_geometry","tile_ownership"]:
+				setattr(self, key, copy.deepcopy(getattr(shape, key)))
+		except AttributeError:
+			# 1. Set up basic properties
+			assert shape is not None
+			if wcs is None: _, wcs = enmap.geometry(pos=np.array([[-1,-1],[1,1]])*5*np.pi/180, shape=shape[-2:])
+			if comm is None: comm = mpi4py.MPI.COMM_WORLD
+			if tshape is None: tshape = (240,240)
+			if dtype is None: dtype = np.float64
+			if bbpix is None:
+				if bbox is None: bbpix = [[0,0],shape[-2:]]
+				else: bbpix = box2pix(shape, wcs, bbox)
+			bbpix = sanitize_pixbox(bbpix, shape)
+			dtype = np.dtype(dtype)
+			self.shape,  self.wcs,   self.bbpix = tuple(shape),  wcs.deepcopy(), np.array(bbpix)
+			self.tshape, self.dtype, self.comm  = tuple(tshape), dtype, comm
+
+			# 2. Set up workspace descriptions
+			work_geometry = [enmap.slice_wcs(shape, wcs, (slice(b[0,0],b[1,0]),slice(b[0,1],b[1,1]))) for b in bbpix]
+			# 3. Define global workspace ownership
+			nwork = utils.allgather([len(bbpix)],comm)
+			wown  = np.concatenate([np.full(n,i,dtype=int) for i,n in enumerate(nwork)])
+			# 3. Define tiling. Each tile has shape tshape, starting from the (0,0) corner
+			#    of the full map. Tiles at the edge are clipped, as pixels beyond the edge
+			#    of the full map may have undefined wcs positions.
+			tbox   = build_tiles(shape, tshape)
+			bshape = tbox.shape[:2]
+			tbox   = tbox.reshape(-1,2,2)
+			ntile  = len(tbox)
+			bcoord = np.array([np.arange(ntile)/bshape[1],np.arange(ntile)%bshape[1]]).T
+			# 4. Define tile ownership.
+			# a) For each task compute the overlap of each tile with its workspaces, and
+			#    concatenate across tasks to form a [nworktot,ntile] array.
+			wslices = utils.allgatherv(utils.box_slice(bbpix, tbox),comm, axis=0) # slices into work
+			tslices = utils.allgatherv(utils.box_slice(tbox, bbpix),comm, axis=1) # slices into tiles
+			# b) Compute the total overlap each mpi task has with each tile, and use this
+			# to decide who should get which tiles
+			overlaps    = utils.box_area(wslices)
+			overlaps    = utils.sum_by_id(overlaps, wown, 0)
+			town        = assign_cols_round_robin(overlaps)
+			# Map tile indices from local to global and back
+			tgmap = [[] for i in range(comm.size)]
+			tlmap = np.zeros(ntile,dtype=int)
+			for ti, id in enumerate(town):
+				tlmap[ti] = len(tgmap[id]) # glob 2 loc
+				tgmap[id].append(ti)       # loc  2 glob
+			# 5. Define tiles
+			tile_geometry = [enmap.slice_wcs(shape, wcs, (slice(tb[0,0],tb[1,0]),slice(tb[0,1],tb[1,1]))) for tb in tbox[town==comm.rank]]
+			# 6. Define mapping between work<->wbuf and tiles<->tbuf
+			wbufinfo  = np.zeros([2,comm.size],dtype=int)
+			tbufinfo  = np.zeros([2,comm.size],dtype=int)
+			winfo, tinfo = [], []
+			woff, toff = 0, 0
+			prelen = np.product(shape[:-2])
+			for id in xrange(comm.size):
+				## Buffer info to send to alltoallv
+				wbufinfo[1,id] = woff
+				tbufinfo[1,id] = toff
+				# Slices for transfering to and from w buffer. Loop over all of my
+				# workspaces and determine the slices into them and how much we need
+				# to send.
+				for tloc, tglob in enumerate(np.where(town==id)[0]):
+					for wloc, wglob in enumerate(np.where(wown==comm.rank)[0]):
+						ws = wslices[wglob,tglob]
+						wlen = utils.box_area(ws)*prelen
+						work_slice = (Ellipsis,slice(ws[0,0],ws[1,0]),slice(ws[0,1],ws[1,1]))
+						wbuf_slice = slice(woff,woff+wlen)
+						winfo.append((wloc,work_slice,wbuf_slice))
+						woff += wlen
+				# Slices for transferring to and from t buffer. Loop over all
+				# my tiles, and determine how much I have to receive from each
+				# workspace of each task.
+				for tloc, tglob in enumerate(np.where(town==comm.rank)[0]):
+					for wloc, wglob in enumerate(np.where(wown==id)[0]):
+						ts = tslices[tglob,wglob]
+						tlen = utils.box_area(ts)*prelen
+						tile_slice = (Ellipsis,slice(ts[0,0],ts[1,0]),slice(ts[0,1],ts[1,1]))
+						tbuf_slice = slice(toff,toff+tlen)
+						tinfo.append((tloc,tile_slice,tbuf_slice))
+						toff += tlen
+				wbufinfo[0,id] = woff-wbufinfo[1,id]
+				tbufinfo[0,id] = toff-tbufinfo[1,id]
+			wbufinfo, tbufinfo = tuple(wbufinfo), tuple(tbufinfo)
+			# 7. Store as Bufinfo objects
+			self.tile_geometry= tile_geometry
+			self.work_geometry= work_geometry
+			self.tile_bufinfo = Bufmap(tinfo, tbufinfo, toff)
+			self.work_bufinfo = Bufmap(winfo, wbufinfo, woff)
+			self.tile_ownership = town
+			self.tile_glob2loc  = tlmap
+			self.tile_loc2glob  = tgmap
+	@property
+	def pre(self): return self.shape[:-2]
+	@pre.setter
+	def pre(self, val):
+		oldlen = np.product(self.pre)
+		self.shape = tuple(val)+self.shape[-2:]
+		newlen = np.product(self.pre)
+		# These are affected by non-pixel slicing:
+		# shape, tile_geometry, work_geometry, tile_bufinfo, work_bufinfo
+		# Bufinfos change due to the different amount of data involved
+		self.tile_geometry = [(self.pre+ts[-2:],tw) for ts,tw in self.tile_geometry]
+		self.work_geometry = [(self.pre+ws[-2:],ww) for ws,ww in self.work_geometry]
+		self.tile_bufinfo  = self.tile_bufinfo.slice_helper(newlen, oldlen)
+		self.work_bufinfo  = self.work_bufinfo.slice_helper(newlen, oldlen)
+	@property
+	def npix(self): return np.product(self.shape[-2:])
+	@property
+	def ndim(self): return len(self.shape)
+	@property
+	def ntile(self): return len(self.tile_ownership)
+	@property
+	def loctiles(self): return self.tile_loc2glob[self.comm.rank]
+	@property
+	def nloc(self): return len(self.loctiles)
+	def __repr__(self):
+		return "DGeometry(shape=%s,wcs=%s,bbpix=%s,tshape=%s,dtype=%s,comm=%s)" % (self.shape, self.wcs, str(self.bbpix).replace("\n",","), self.tshape, np.dtype(self.dtype).name, self.comm.name)
+	def copy(self): return DGeometry(self)
+	def astype(self, dtype):
+		if dtype == self.dtype: return self
+		res = self.copy()
+		res.dtype = dtype
+		return res
+	def __getitem__(self, sel):
+		# Split sel into normal and wcs parts.
+		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
+		if len(sel2) > 0: raise NotImplementedError("Pixel slicing of dmap geometries not implemented")
+		res = self.copy()
+		res.pre= np.zeros(self.pre)[sel].shape
+		return res
+
+class Bufmap:
+	"""This class encapsulates the information needed to transer data
+	between a list of numpy arrays and an mpi alltoallv buffer, as well
+	as the parameters for alltoallv. It is a helper class for DGeometry
+	and DMap. It does not handle the scomplicated construction of
+	the info objects itself."""
+	def __init__(self, data_info, buf_info=None, buf_shape=None):
+		try:
+			for key in ["data_info","buf_info","buf_shape"]:
+					setattr(self, key, copy(getattr(data_info, key)))
+		except AttributeError:
+			assert data_info is not None
+			assert buf_info  is not None
+			assert buf_shape is not None
+			self.data_info, self.buf_info, self.buf_shape = copy.deepcopy(data_info), copy.deepcopy(buf_info), copy.deepcopy(buf_shape)
+	def data2buf(self, data, buf):
+		"""Transfer data to a buffer compatible with this bufmap."""
+		for ind, dslice, bslice in self.data_info:
+			buf[bslice] = data[ind][dslice].reshape(-1)
+	def buf2data(self, buf, data):
+		"""Transfer data from a buffer compatible with this bufmap.
+		Parts of data that are hit multiple times are accumulated."""
+		for d in data: d[:] = 0
+		for ind, dslice, bslice in self.data_info:
+			data[ind][dslice] += buf[bslice].reshape(data[ind][dslice].shape)
+	def buf2buf(self, source_buf, target_bufmap, target_buf, comm):
+		"""Transfer data from one buffer to another using MPI."""
+		comm.Alltoallv((source_buf, self.buf_info),(target_buf,target_bufmap.buf_info))
+	def data2data(self, source_data, target_bufmap, target_data, comm):
+		"""Transfer data from one configuration (as described by this
+		bufmap) to another (as described by target_bufmap), allocating
+		buffers internally as needed."""
+		source_buffer = np.zeros(self.buf_shape, source_data[0].dtype)
+		target_buffer = np.zeros(target_bufmap.buf_shape, target_data[0].dtype)
+		self.data2buf(source_data, source_buffer)
+		self.buf2buf(source_buffer, target_bufmap, target_buffer, comm)
+		self.buf2data(target_buffer, target_data)
+	def slice_helper(self, newlen, oldlen):
+		"""Returns a new Bufmap with buffer slices scaled by newlen/oldlen.
+		This is used for defining slice operations."""
+		buf_info  = tuple(np.array(self.buf_info)*newlen/oldlen)
+		buf_shape = self.buf_shape*newlen/oldlen
+		data_info = [(ind,dslice,slice(bslice.start*newlen/oldlen,bslice.stop*newlen/oldlen)) for ind,dslice,bslice in self.data_info]
+		return Bufmap(data_info, buf_info, buf_shape)
+
 def box2pix(shape, wcs, box):
 	"""Convert one or several bounding boxes of shape [2,2] or [n,2,2]
 	into pixel counding boxes in standard python half-open format."""
@@ -352,6 +664,19 @@ def box2pix(shape, wcs, box):
 	ibox = np.array([np.floor(ibox[0]),np.ceil(ibox[1])]).astype(int)
 	ibox = utils.moveaxis(ibox, 0, 2)
 	return ibox.reshape(box.shape)
+
+def sanitize_pixbox(bbpix, shape):
+	bbpix = np.array(bbpix)
+	# For slicing, we need the first bound to be lower than the second bound.
+	# It might not be, as Ra and x have opposite ordering. So sort along the
+	# from-to axis. bbpix has 3 dims [scan,fromto,radec]
+	bbpix = bbpix.reshape((-1,)+bbpix.shape[-2:])
+	bbpix = np.sort(bbpix, 1)
+	# Some scans may extend partially beyond the end of our map. We must therefore
+	# truncate the bounding box.
+	bbpix[:,0,:] = np.maximum(bbpix[:,0,:],0)
+	bbpix[:,1,:] = np.minimum(bbpix[:,1,:],shape[-2:])
+	return bbpix
 
 def build_tiles(shape, tshape):
 	"""Given a bounding shape and the target shape of each tile, returns
