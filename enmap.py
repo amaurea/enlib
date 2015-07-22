@@ -65,6 +65,7 @@ class ndmap(np.ndarray):
 	def npix(self): return np.product(self.shape[-2:])
 	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode, cval=0)
 	def autocrop(self, method="plain", value=np.nan, margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
+	def apod(self, width): return apod(self, width)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
@@ -730,6 +731,21 @@ def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
 	print "FIXME: grad not done"
 	return np.reshape(np.real(ifft(fft(m)[None,:,...]*m.lmap()[:,None,...]*1j)),[2]+list(m.shape))
+
+def apod(m, width, profile="cos"):
+	width = np.minimum(np.zeros(2)+width,m.shape[-2:])
+	if profile == "cos":
+		a = [0.5*(1-np.linspace(0,np.pi,w)) for w in width]
+	else:
+		raise ValueError("Unknown apodization profile %s" % profile)
+	res = m.copy()
+	if width[0] > 0:
+		res[...,:width[0],:] *= a[0][:,None]
+		res[...,-width[0]:,:] *= a[0][::-1,None]
+	if width[1] > 0:
+		res[...,:,:width[1]] *= a[1][None,:]
+		res[...,:,-width[1]:]  *= a[1][None,::-1]
+	return res
 
 ############
 # File I/O #
