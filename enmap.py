@@ -64,7 +64,7 @@ class ndmap(np.ndarray):
 	@property
 	def npix(self): return np.product(self.shape[-2:])
 	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode, cval=0)
-	def autocrop(self, method="plain", value=np.nan, margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
+	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width): return apod(self, width)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
