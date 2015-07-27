@@ -101,15 +101,16 @@ def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=Fa
 
 	If copy=True, the input map is not overwritten.
 	"""
+	# Work on views of alm and map that have at least 2 and 3 dimensions
 	alm_full = np.atleast_2d(alm)
+	map_full = map if map.ndim > 2 else map[None]
 	if ainfo is None: ainfo = sharp.alm_info(nalm=alm_full.shape[-1])
 	ncomp = alm_full.shape[-2] if not deriv else 2
-	if copy: map = map.copy()
+	if copy: map_full = map_full.copy()
 	if direct:
-		tmap, tslice = map, (Ellipsis,)
+		tmap, tslice = map_full, (Ellipsis,)
 	else:
-		tmap, tslice = make_projectable_map_cyl(map)
-		print "A", map.box()*180/np.pi, tmap[tslice].box()*180/np.pi, tmap.box()*180/np.pi
+		tmap, tslice = make_projectable_map_cyl(map_full)
 	sht    = sharp.sht(map2minfo(tmap), ainfo)
 	# We need a pixel-flattened version for the SHTs
 	tflat  = tmap.reshape(tmap.shape[:-2]+(-1,))
@@ -130,7 +131,7 @@ def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=Fa
 		if alm.ndim == 1 and tmap.shape[-3] == 1:
 			tmap = tmap[...,0,:,:]
 
-	map[:] = tmap[tslice]
+	map_full[:] = tmap[tslice]
 	return map
 
 def alm2map_pos(alm, pos=None, ainfo=None, oversample=2.0, spin=2, deriv=False):
