@@ -368,6 +368,7 @@ class PmatCutRebin(PointingMatrix):
 config.default("pmat_ptsrc_rsigma", 5.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
 class PmatPtsrc(PointingMatrix):
 	def __init__(self, scan, params, sys=None, tmul=None, pmul=None):
+		# Params is [nsrc,{dec,ra,amps,ibeams}]
 		sys   = config.get("map_eqsys", sys)
 		rmul  = config.get("pmat_ptsrc_rsigma")
 		self.dtype = params.dtype

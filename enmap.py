@@ -303,8 +303,8 @@ def extent(shape, wcs, nsub=0x10):
 	pos = posmap([nsub+1,nsub+1], wcs, corner=True)
 	# Apply az scaling
 	scale = np.zeros([2,nsub,nsub])
-	scale[0] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
-	scale[1] = 1
+	scale[1] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
+	scale[0] = 1
 	ly = np.sum(((pos[:,1:,:-1]-pos[:,:-1,:-1])*scale)**2,0)**0.5
 	lx = np.sum(((pos[:,:-1,1:]-pos[:,:-1,:-1])*scale)**2,0)**0.5
 	areas = ly*lx
