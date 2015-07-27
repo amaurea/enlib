@@ -38,125 +38,6 @@ import numpy as np, mpi4py.MPI, copy, os, re, enlib.slice, operator
 from enlib import enmap, utils, zipper
 from astropy.wcs import WCS
 
-def empty(geometry):
-	"""Return an empty Dmap2 with the specified geometry."""
-	return Dmap2(geometry)
-def zeros(geometry):
-	"""Return a new Dmap2 with the specified geometry, filled with zeros."""
-	tiles = [enmap.zeros(ts,tw,dtype=geometry.dtype) for ts,tw in geometry.tile_geometry]
-	return Dmap2(geometry, tiles, copy=False)
-def ones(geometry):
-	"""Return a new Dmap2 with the specified geometry, filled with ones."""
-	tiles = [enmap.ones(ts,tw,dtype=geometry.dtype) for ts,tw in geometry.tile_geometry]
-	return Dmap2(geometry, tiles, copy=False)
-def geometry(shape, wcs=None, bbpix=None, tshape=None, dtype=None, comm=None, bbox=None):
-	"""Construct a dmap geometry."""
-	return DGeometry(shape=shape, wcs=wcs, bbpix=bbpix, tshape=tshape, dtype=dtype, comm=comm, bbox=bbox)
-
-class Dmap2:
-	"""Dmap - distributed enmap. After construction, its relevant members
-	are:
-		.tiles: list of tile data owned by this task. Each tile is an enmap.
-		.work2tile(): sums contribution from all workspaces into tiles
-		.tile2work(): projects from tiles to workspaces
-		.geometry: geometry and layout of distributed map"""
-	def __init__(self, geometry, tiles=None, copy=True):
-		try:
-			self.geometry = geometry.geometry
-			self.tiles = [t.copy() for t in geometry.tiles]
-		except AttributeError:
-			self.geometry = geometry
-			if tiles is not None:
-				if copy: tiles = copy=deepcopy(tiles)
-				self.tiles = tiles
-			else:
-				self.tiles = [enmap.empty(ts,tw,dtype=geometry.dtype) for ts,tw in geometry.tile_geometry]
-	def work2tile(self, work):
-		"""Project from local workspaces into the distributed tiles. Multiple workspaces
-		may overlap with a single tile. The contribution from each workspace is summed."""
-		self.geometry.work_bufinfo.data2data(work, self.geometry.tile_bufinfo, self.tiles, self.comm)
-	def tile2work(self, work=None):
-		"""Project from tiles into the local workspaces."""
-		if work is None:
-			work = [enmap.zeros(ws,ww,dtype=self.dtype) for ws,ww in self.geometry.work_geometry]
-		self.geometry.tile_bufinfo.data2data(self.tiles, self.geometry.work_bufinfo, work, self.comm)
-		return work
-	def copy(self):
-		return Dmap2(self)
-	@property
-	def comm(self): return self.geometry.comm
-	@property
-	def shape(self): return self.geometry.shape
-	@property
-	def dtype(self): return self.geometry.dtype
-	@property
-	def ndim(self): return len(self.shape)
-	@property
-	def npix(self): return np.product(self.shape[-2:])
-	def astype(self, dtype):
-		if dtype == self.dtype: return self
-		else:
-			res = Dmap2(self.geometry.astype(dtype))
-			for st,rt in zip(self.tiles, res.tiles):
-				rt[:] = st[:].astype(dtype)
-			return res
-	def fill(self, val):
-		for t in self.tiles: t[:] = val
-	def __getitem__(self, sel):
-		# Split sel into normal and wcs parts. We only handle non-pixel slices
-		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
-		if len(sel2) > 0:
-			raise NotImplementedError("Pixel slicing of dmaps not implemented")
-		geometry = self.geometry[sel1]
-		tiles = [tile[sel1] for tile in self.tiles]
-		return Dmap2(geometry, tiles, copy=False)
-	def __setitem__(self, sel, val):
-		# Split sel into normal and wcs parts. We only handle non-pixel slices
-		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
-		if len(sel2) > 0:
-			raise NotImplementedError("Pixel slicing of dmaps not implemented")
-		try:
-			for tile, vtile in zip(self.tiles, val.tiles): tile[sel] = vtile
-		except AttributeError:
-			for tile in self.tiles: tile[sel] = val
-	def __repr__(self):
-		return "Dmap2(%s, rank %d/%d, tiles %d/%d %s)" % (str(self.geometry), self.geometry.comm.rank,
-			self.geometry.comm.size, self.geometry.nloc, self.geometry.ntile, str(self.geometry.loctiles))
-	# Math operations
-	def _domath(self, other, op, inplace=False):
-		res = self if inplace else self.copy()
-		try:
-			for i, (rtile, otile) in enumerate(zip(res.tiles, other.tiles)):
-				res.tiles[i] = op(rtile, otile)
-		except AttributeError:
-			for i, rtile in enumerate(res.tiles):
-				res.tiles[i] = op(rtile, other)
-		return res
-	def fill_diagonal(self, value):
-		"""Fills the diagonal of the non-pixel part of the map with the specified value.
-		All pre-dimensions must have the same shape."""
-		ndim = len(self.geometry.pre)
-		n    = self.geometry.pre[0]
-		for tile in self.tiles:
-			for i in range(n):
-				tile[tuple([i]*ndim)] = value
-
-# Add some math operators
-def makefun(key, inplace):
-	op = getattr(operator, key)
-	def fun(a,b): return a._domath(b, op, inplace=inplace)
-	return fun
-
-for opname in ["__add__", "__and__", "__div__", "__eq__", "__floordiv__",
-		"__ge__", "__gt__", "__le__", "__lshift__", "__lt__", "__mod__", "__mul__",
-		"__ne__", "__or__", "__pow__", "__rshift__", "__sub__", "__truediv__",
-		"__xor__"]:
-	setattr(Dmap2, opname, makefun(opname, False))
-for opname in ["__iadd__", "__iand__", "__idiv__", "__ifloordiv__",
-		"__ilshift__", "__imod__", "__imul__", "__ior__", "__ipow__",
-		"__irshift__", "__isub__", "__itruediv__", "__ixor__"]:
-	setattr(Dmap2, opname, makefun(opname, True))
-
 class Dmap:
 	"""Dmap - distributed enmap. After construction, its relevant members
 	are:
@@ -457,6 +338,125 @@ def dmap2enmap(dmap, emap, root=0):
 			dmap.comm.Send(dmap.tiles[loc], dest=root, tag=loc)
 		if dmap.comm.rank == root:
 			emap[...,box[0,0]:box[1,0],box[0,1]:box[1,1]] = data
+
+def empty(geometry):
+	"""Return an empty Dmap2 with the specified geometry."""
+	return Dmap2(geometry)
+def zeros(geometry):
+	"""Return a new Dmap2 with the specified geometry, filled with zeros."""
+	tiles = [enmap.zeros(ts,tw,dtype=geometry.dtype) for ts,tw in geometry.tile_geometry]
+	return Dmap2(geometry, tiles, copy=False)
+def ones(geometry):
+	"""Return a new Dmap2 with the specified geometry, filled with ones."""
+	tiles = [enmap.ones(ts,tw,dtype=geometry.dtype) for ts,tw in geometry.tile_geometry]
+	return Dmap2(geometry, tiles, copy=False)
+def geometry(shape, wcs=None, bbpix=None, tshape=None, dtype=None, comm=None, bbox=None):
+	"""Construct a dmap geometry."""
+	return DGeometry(shape=shape, wcs=wcs, bbpix=bbpix, tshape=tshape, dtype=dtype, comm=comm, bbox=bbox)
+
+class Dmap2:
+	"""Dmap - distributed enmap. After construction, its relevant members
+	are:
+		.tiles: list of tile data owned by this task. Each tile is an enmap.
+		.work2tile(): sums contribution from all workspaces into tiles
+		.tile2work(): projects from tiles to workspaces
+		.geometry: geometry and layout of distributed map"""
+	def __init__(self, geometry, tiles=None, copy=True):
+		try:
+			self.geometry = geometry.geometry
+			self.tiles = [t.copy() for t in geometry.tiles]
+		except AttributeError:
+			self.geometry = geometry
+			if tiles is not None:
+				if copy: tiles = copy=deepcopy(tiles)
+				self.tiles = tiles
+			else:
+				self.tiles = [enmap.empty(ts,tw,dtype=geometry.dtype) for ts,tw in geometry.tile_geometry]
+	def work2tile(self, work):
+		"""Project from local workspaces into the distributed tiles. Multiple workspaces
+		may overlap with a single tile. The contribution from each workspace is summed."""
+		self.geometry.work_bufinfo.data2data(work, self.geometry.tile_bufinfo, self.tiles, self.comm)
+	def tile2work(self, work=None):
+		"""Project from tiles into the local workspaces."""
+		if work is None:
+			work = [enmap.zeros(ws,ww,dtype=self.dtype) for ws,ww in self.geometry.work_geometry]
+		self.geometry.tile_bufinfo.data2data(self.tiles, self.geometry.work_bufinfo, work, self.comm)
+		return work
+	def copy(self):
+		return Dmap2(self)
+	@property
+	def comm(self): return self.geometry.comm
+	@property
+	def shape(self): return self.geometry.shape
+	@property
+	def dtype(self): return self.geometry.dtype
+	@property
+	def ndim(self): return len(self.shape)
+	@property
+	def npix(self): return np.product(self.shape[-2:])
+	def astype(self, dtype):
+		if dtype == self.dtype: return self
+		else:
+			res = Dmap2(self.geometry.astype(dtype))
+			for st,rt in zip(self.tiles, res.tiles):
+				rt[:] = st[:].astype(dtype)
+			return res
+	def fill(self, val):
+		for t in self.tiles: t[:] = val
+	def __getitem__(self, sel):
+		# Split sel into normal and wcs parts. We only handle non-pixel slices
+		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
+		if len(sel2) > 0:
+			raise NotImplementedError("Pixel slicing of dmaps not implemented")
+		geometry = self.geometry[sel1]
+		tiles = [tile[sel1] for tile in self.tiles]
+		return Dmap2(geometry, tiles, copy=False)
+	def __setitem__(self, sel, val):
+		# Split sel into normal and wcs parts. We only handle non-pixel slices
+		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
+		if len(sel2) > 0:
+			raise NotImplementedError("Pixel slicing of dmaps not implemented")
+		try:
+			for tile, vtile in zip(self.tiles, val.tiles): tile[sel] = vtile
+		except AttributeError:
+			for tile in self.tiles: tile[sel] = val
+	def __repr__(self):
+		return "Dmap2(%s, rank %d/%d, tiles %d/%d %s)" % (str(self.geometry), self.geometry.comm.rank,
+			self.geometry.comm.size, self.geometry.nloc, self.geometry.ntile, str(self.geometry.loctiles))
+	# Math operations
+	def _domath(self, other, op, inplace=False):
+		res = self if inplace else self.copy()
+		try:
+			for i, (rtile, otile) in enumerate(zip(res.tiles, other.tiles)):
+				res.tiles[i] = op(rtile, otile)
+		except AttributeError:
+			for i, rtile in enumerate(res.tiles):
+				res.tiles[i] = op(rtile, other)
+		return res
+	def fill_diagonal(self, value):
+		"""Fills the diagonal of the non-pixel part of the map with the specified value.
+		All pre-dimensions must have the same shape."""
+		ndim = len(self.geometry.pre)
+		n    = self.geometry.pre[0]
+		for tile in self.tiles:
+			for i in range(n):
+				tile[tuple([i]*ndim)] = value
+
+# Add some math operators
+def makefun(key, inplace):
+	op = getattr(operator, key)
+	def fun(a,b): return a._domath(b, op, inplace=inplace)
+	return fun
+
+for opname in ["__add__", "__and__", "__div__", "__eq__", "__floordiv__",
+		"__ge__", "__gt__", "__le__", "__lshift__", "__lt__", "__mod__", "__mul__",
+		"__ne__", "__or__", "__pow__", "__rshift__", "__sub__", "__truediv__",
+		"__xor__"]:
+	setattr(Dmap2, opname, makefun(opname, False))
+for opname in ["__iadd__", "__iand__", "__idiv__", "__ifloordiv__",
+		"__ilshift__", "__imod__", "__imul__", "__ior__", "__ipow__",
+		"__irshift__", "__isub__", "__itruediv__", "__ixor__"]:
+	setattr(Dmap2, opname, makefun(opname, True))
 
 class DGeometry:
 	"""DGeometry represents the shape and layout of a DMap."""

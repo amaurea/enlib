@@ -303,8 +303,8 @@ def extent(shape, wcs, nsub=0x10):
 	pos = posmap([nsub+1,nsub+1], wcs, corner=True)
 	# Apply az scaling
 	scale = np.zeros([2,nsub,nsub])
-	scale[0] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
-	scale[1] = 1
+	scale[1] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
+	scale[0] = 1
 	ly = np.sum(((pos[:,1:,:-1]-pos[:,:-1,:-1])*scale)**2,0)**0.5
 	lx = np.sum(((pos[:,:-1,1:]-pos[:,:-1,:-1])*scale)**2,0)**0.5
 	areas = ly*lx
@@ -383,7 +383,11 @@ def rotate_pol(emap, angle, comps=[-2,-1]):
 
 def map_mul(mat, vec):
 	"""Elementwise matrix multiplication mat*vec. Result will have
-	the same shape as vec. Multiplication happens along the first indices."""
+	the same shape as vec. Multiplication happens along the first indices.
+	This function is buggy when mat is not square (in the multiplication
+	dimensions). This is due to the reshape at the end. I should figure out
+	what code depends on that, and decide what I really want this function
+	to do."""
 	oshape= vec.shape
 	if len(oshape) == 2: oshape = (1,)+oshape
 	tvec = np.reshape(vec, oshape)
@@ -431,7 +435,7 @@ def samewcs(arr, *args):
 # Use that to make everything that currently accepts shape, wcs
 # transparently accept geometry. This will free us from having
 # to drag around a shape, wcs pair all the time.
-def geometry(pos, res=None, shape=None, proj="cea", deg=False, **kwargs):
+def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs):
 	"""Consruct a shape,wcs pair suitable for initializing enmaps.
 	pos can be either a [2] center position or a [{from,to},2]
 	bounding box. At least one of res or shape must be specified.
@@ -439,8 +443,9 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, **kwargs):
 	which the same resolution is used in each direction,
 	or [2]. If shape is specified, it must be [2]. All angles
 	are given in radians."""
-	pos = np.asarray(pos)*180/np.pi
-	if res is not None: res = np.asarray(res)*180/np.pi
+	scale = 1 if deg else 180/np.pi
+	pos = np.asarray(pos)*scale
+	if res is not None: res = np.asarray(res)*scale
 	wcs = enlib.wcs.build(pos, res, shape, rowmajor=True, system=proj, **kwargs)
 	if shape is None:
 		# Infer shape. WCS does not allow us to wrap around the
@@ -452,7 +457,7 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, **kwargs):
 		# being valied. If we always round down, we should be safe:
 		faredge = wcs.wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
 		shape = tuple(np.floor(faredge+0.5).astype(int))
-	return tuple(shape), wcs
+	return pre+tuple(shape), wcs
 
 
 #class geometry:

@@ -682,7 +682,7 @@ def rect2ang(rect, zenith=True):
 def angdist(a, b, zenith=True):
 	ra = ang2rect(a, zenith)
 	rb = ang2rect(b, zenith)
-	c = np.sum(ra.T*rb.T,-1)
-	res = np.zeros(c.T.shape)
+	c = np.sum(ra.T*rb.T,-1).T
+	res = np.zeros(c.shape)
 	res[c < 1] = np.arccos(c[c<1])
 	return res

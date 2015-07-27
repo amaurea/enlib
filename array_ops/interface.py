@@ -124,7 +124,7 @@ def gen_mat2mat(**funcs):
 	return f
 
 # Our wrapped functions
-matmul = wrap_mm_m(vec2mat=True, **get_funcs("matmul_multi"))
+matmul_sym = wrap_mm_m(vec2mat=True, **get_funcs("matmul_multi_sym"))
 solve_multi = wrap_mm_m(**get_funcs("solve_multi"))
 solve_masked = wrap_mm_m(**get_funcs("solve_masked"))
 condition_number_multi = gen_wrap1(**get_funcs("condition_number_multi"))
@@ -142,3 +142,27 @@ def ang2rect(a):
 	res = np.zeros([len(a),3],dtype=a.dtype)
 	core.ang2rect(a.T,res.T)
 	return res
+
+def matmul(A,B,axes=[-2,-1]):
+	# Massage input arrays. This should be factored out,
+	# as it is common for many functions
+	axes = [i if i >= 0 else A.ndim+i for i in axes]
+	bax  = axes[:len(axes)-(A.ndim-B.ndim)]
+	Af = utils.partial_flatten(A,axes)
+	Bf = utils.partial_flatten(B,bax)
+	mustadd = Bf.ndim == 2
+	if mustadd: Bf = utils.addaxes(Bf, [1])
+	Bf = np.ascontiguousarray(Bf)
+	if A.dtype != B.dtype:
+		dtype = np.result_type(A.dtype,B.dtype)
+		Af = Af.astype(dtype,copy=False)
+		Bf = Bf.astype(dtype,copy=False)
+	# Compute the shape of the output array
+	Xf = np.empty((Bf.shape[0],Bf.shape[1],Af.shape[1]),dtype=Bf.dtype)
+	# Actually perform the operation
+	core = get_core(Bf.dtype)
+	core.matmul_multi(Af.T, Bf.T, Xf.T)
+	# Unwrangle
+	if mustadd: Xf = utils.delaxes(Xf, [1])
+	X = utils.partial_expand(Xf, B.shape, bax)
+	return X
