@@ -5,7 +5,7 @@ slaobj=$(slasrc:.f=.o)
 all: pyfsla.so tidy
 
 pyfsla.so: pyfsla.f90 libsla.a
-	$(PYTHON) setup.py build_ext --inplace --fcompiler=$(F2PYCOMP)
+	$(F2PY) --fcompiler=$(F2PYCOMP) --noopt -c -m $(basename $<) $< $(OMP_LINK) -L. -lsla
 
 libsla.a: $(slaobj)
 	ar rcs $@ $^
