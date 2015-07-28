@@ -62,6 +62,10 @@ class ndmap(np.ndarray):
 	def area(self): return area(self.shape, self.wcs)
 	def extent(self): return extent(self.shape, self.wcs)
 	@property
+	def preflat(self):
+		"""Returns a view of the map with the non-pixel dimensions flattened."""
+		return self.reshape(-1, self.shape[-2], self.shape[-1])
+	@property
 	def npix(self): return np.product(self.shape[-2:])
 	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode, cval=0)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
