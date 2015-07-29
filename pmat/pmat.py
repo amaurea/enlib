@@ -405,7 +405,6 @@ class PmatPtsrc(PointingMatrix):
 		if np.max(nrange) > ranges.shape[2]:
 			ranges = np.zeros([nsrc,ndet,np.max(nrange),2],dtype=np.int32)
 			self.core.pmat_ptsrc_prepare(params, rhit, rmax, scan.noise.ivar, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
-
 		self.ranges, self.rangesets, self.offsets = compress_ranges(ranges, nrange, scan.cut, scan.nsamp)
 		self.src_ivars = src_ivars
 		self.nhit = np.sum(self.ranges[:,1]-self.ranges[:,0])
@@ -460,11 +459,12 @@ def compress_ranges(ranges, nrange, cut, nsamp):
 	nsrc, ndet = nrange.shape
 	# Special case: None hit. We represent this as a single range hitting no samples,
 	# which isn't used by any of the srcs.
-	if np.sum(nrange) == 0:
+	def dummy():
 		ranges  = np.array([[0,0]],dtype=np.int32)
 		rangesets = np.array([0],dtype=np.int32)
 		offsets = np.zeros([nsrc,ndet,2],dtype=np.int32)
 		return ranges, rangesets, offsets
+	if np.sum(nrange) == 0: return dummy()
 	# First collapse ranges,nrange to flat ranges and indices into it
 	det_ranges = []
 	maps       = []
@@ -495,9 +495,10 @@ def compress_ranges(ranges, nrange, cut, nsamp):
 			src_merged, map = utils.range_union(src_ranges, mapping=True)
 			det_ranges.append(src_merged)
 			maps.append(map)
-	# Concatenate the detector ranges into one long list. We know that
-	# there will be at least one range due to the check at the top.
-	# We have already added the necessary offsets to maps.
+	# Concatenate the detector ranges into one long list. Make sure
+	# that we actually have some ranges left. While we did check at the
+	# start, the cuts may have eliminated the ranges we started with.
+	if sum([len(r) for r in det_ranges]) == 0: return dummy()
 	oranges = np.concatenate(det_ranges)
 	moffs   = utils.cumsum([len(r) for r in det_ranges])
 	map     = np.concatenate([m+o for m,o in zip(maps,moffs)])
