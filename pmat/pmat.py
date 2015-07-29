@@ -313,42 +313,6 @@ def apply_window(tod, width):
 	core = get_core(tod.dtype)
 	core.pmat_window(tod.T, width)
 
-config.default("pmat_scan_mode", "azimuth", "The coodinate basis to use for scan mode projection. Can be 'azimuth' or 'phase'. Default is azimuth.")
-class PmatScan(PointingMatrix):
-	"""Project tods to and from azimuth phase coordinates, which are
-	appropriate for modelling magnetic pickup and similar. We support
-	two modes: "azimuth" and "phase". These differ by how they handle
-	the left and right sweeps.
-		azimuth: the range min(az), max(az) is divided into npix pixels.
-		phase: samples where az increases are mapped to [0:npix/2], while
-		       samples where az decreases are mapped to [npix/2:npix]."""
-	def __init__(self, scan, ncomp, npix, mode=None):
-		mode = config.get("pmat_scan_mode", mode)
-		# Compute our sample -> basis mapping for this scan
-		az  = scan.boresight[:,1]
-		box = np.array([np.min(az),np.max(az)])
-		raz = (az-box[0])/(box[1]-box[0])
-		if mode == "azimuth":
-			# Simple azimuth mapping
-			inds = raz*npix
-		elif mode == "phase":
-			# Scan phase mapping
-			increasing = az[1:]-az[:-1] >= 0
-			increasing = np.concatenate([increasing,increasing[-1:]])
-			inds = np.where(increasing, raz, 2-raz)*npix/2
-		inds = np.floor(inds).astype(np.int32)
-		inds = np.minimum(npix-1,inds)
-		
-		self.inds  = inds
-		self.comps = np.arange(ncomp)
-		self.scan  = scan
-		self.mode  = mode
-		self.npix  = npix
-	def forward (self, tod, model):
-		get_core(tod.dtype).pmat_scan( 1, tod.T, model.T, self.inds, self.scan.comps.T, self.comps)
-	def backward(self, tod, model):
-		get_core(tod.dtype).pmat_scan(-1, tod.T, model.T, self.inds, self.scan.comps.T, self.comps)
-
 class PmatMapRebin(PointingMatrix):
 	"""Fortran-accelerated rebinning of maps."""
 	def forward (self, mhigh, mlow):
@@ -439,18 +403,23 @@ class PmatPtsrc(PointingMatrix):
 		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets)
 		return res
 
-class PmatAz(PointingMatrix):
-	"""Fortran-accelerated scan <-> enmap pointing matrix implementation.
-	20 times faster than the slower python+numpy implementation below."""
-	def __init__(self, scan, group, az0, daz):
-		self.scan, self.group, self.az0, self.daz = scan, group, az0, daz
-		self.az = utils.rewind(self.scan.boresight[:,1],0)
-	def forward(self, tod, m):
+class PmatScan(PointingMatrix):
+	"""Project between tod and per-det az basis. Will be plain az
+	basis if used with 2d maps. For [2,ny,nx]-maps, will fill one
+	component with rightgoing scans and one with leftgoing scans."""
+	def __init__(self, scan, area, dets):
+		abox = area.box()[:,1]
+		self.scan, self.az0, self.daz = scan, abox[0], (abox[1]-abox[0])/area.shape[-1]
+		self.az, self.dets = utils.rewind(self.scan.boresight[:,1],0), dets
+	def apply(self, tod, m, dir):
 		core = get_core(tod.dtype)
-		core.pmat_az( 1, tod.T, m[self.group].T, self.az, self.scan.dets, self.az0, self.daz)
-	def backward(self, tod, m):
-		core = get_core(tod.dtype)
-		core.pmat_az(-1, tod.T, m[self.group].T, self.az, self.scan.dets, self.az0, self.daz)
+		if m.ndim == 3 and m.shape[0] == 2:
+			core.pmat_phase(dir, tod.T, m.T, self.az, self.dets, self.az0, self.daz)
+		elif m.ndim == 2:
+			core.pmat_az   (dir, tod.T, m.T, self.az, self.dets, self.az0, self.daz)
+		else: raise ValueError("PmatScan needs a [ny,nx] or [2,ny,nx] map")
+	def forward(self, tod, m):  self.apply(tod, m, 1)
+	def backward(self, tod, m): self.apply(tod, m,-1)
 
 def compress_ranges(ranges, nrange, cut, nsamp):
 	"""Given ranges[nsrc,ndet,nmax,2], nrange[nsrc,ndet] where ranges has
@@ -523,5 +492,6 @@ def extract_interpol_params(ipol, dtype):
 def build_pixbox(obox, n, margin=10):
 	return np.array([np.maximum(0,np.floor(obox[0]-margin)),np.minimum(n,np.floor(obox[1]+margin))]).astype(np.int32)
 
-
-
+def pmat_phase(dir, tod, map, az, dets, az0, daz):
+	core = get_core(tod.dtype)
+	core.pmat_phase(dir, tod.T, map.T, az, dets, az0, daz)
