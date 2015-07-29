@@ -705,19 +705,13 @@ def label_unique(a, axes=(-1,), rtol=1e-5, atol=1e-8):
 
 	a  = partial_flatten(a, axes=pre, pos=-1)
 	fa = a.reshape(-1, a.shape[-1])
-	# Sort by value axes, and compute reverse mapping
-	inds = np.lexsort(fa.T[::-1])
-	reverse = np.zeros(len(inds),dtype=int)
-	reverse[inds] = np.arange(len(inds))
-	# Run through all values, incrementing id every time
-	# we see a significantly different value
-	ids  = np.zeros(len(fa),dtype=int)
+	# Can't use lexsort, as it has no tolerance. This
+	# is O(N^2) instead of O(NlogN)
 	id = 0
-	vref = fa[inds[0]]
-	for i, v in enumerate(fa[inds]):
-		if not np.allclose(v, vref, rtol=rtol, atol=atol):
-			id += 1
-			vref = v
-		ids[i] = id
-	# Undo sort and restore shape
-	return ids[reverse].reshape(a.shape[:-1])
+	ids = np.zeros(len(fa),dtype=int)-1
+	for i,v in enumerate(fa):
+		if ids[i] >= 0: continue
+		match = np.all(np.isclose(v,fa,rtol=rtol,atol=atol),-1)
+		ids[match] = id
+		id += 1
+	return ids.reshape(a.shape[:-1])
