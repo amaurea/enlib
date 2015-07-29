@@ -9,7 +9,7 @@ contains
 ! ONE, ZERO: gemm constants
 ! SY: matrix form
 
-subroutine matmul_multi(A, b)
+subroutine matmul_multi_sym(A, b)
 	! This function assumes very small matrices, so it uses matmul instead of sgemm
 	implicit none
 	T(_), intent(in)    :: A(:,:,:)
@@ -20,6 +20,19 @@ subroutine matmul_multi(A, b)
 	do i = 1, size(A,3)
 		x = b(:,:,i)
 		b(:,:,i) = matmul(A(:,:,i),x)
+	end do
+end subroutine
+
+subroutine matmul_multi(A, b, x)
+	! This function assumes very small matrices, so it uses matmul instead of sgemm
+	implicit none
+	T(_), intent(in)    :: A(:,:,:)
+	T(_), intent(in)    :: b(:,:,:)
+	T(_), intent(inout) :: x(:,:,:)
+	integer(4) :: i
+	!$omp parallel do private(i)
+	do i = 1, size(A,3)
+		x(:,:,i) = matmul(transpose(A(:,:,i)),b(:,:,i))
 	end do
 end subroutine
 

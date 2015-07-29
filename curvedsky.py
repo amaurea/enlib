@@ -3,7 +3,7 @@ full sky."""
 import numpy as np
 from enlib import sharp, enmap, powspec, wcs, utils
 
-def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2):
+def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, method="auto"):
 	"""Generates a CMB realization with the given power spectrum for an enmap
 	with the specified shape and WCS. This is identical to enlib.rand_map, except
 	that it takes into account the curvature of the full sky. This makes it much
@@ -12,15 +12,15 @@ def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=
 	ps = utils.atleast_3d(ps)
 	assert ps.shape[0] == ps.shape[1], "ps must be [ncomp,ncomp,nl] or [nl]"
 	assert len(shape) == 2 or len(shape) == 3, "shape must be (ncomp,ny,nx) or (ny,nx)"
-	ncomp = 1 if len(shape) == 2 else shape[-2]
+	ncomp = 1 if len(shape) == 2 else shape[-3]
 	ps = ps[:ncomp,:ncomp]
 
 	ctype = np.result_type(dtype,0j)
 	alm   = rand_alm(ps, lmax=lmax, seed=seed, dtype=ctype)
-	# Now find the pixels to project on
-	pos   = enmap.posmap(shape,wcs)
-	res   = enmap.samewcs(alm2map(alm, pos, oversample=oversample, spin=spin), wcs)
-	return res[0] if len(shape) == 2 else res
+	map   = enmap.empty((ncomp,)+shape[-2:], wcs, dtype=dtype)
+	alm2map(alm, map, spin=spin, oversample=oversample, method=method)
+	if len(shape) == 2: map = map[0]
+	return map
 
 def rand_alm_healpy(ps, lmax=None, seed=None, dtype=np.complex128):
 	import healpy
@@ -63,22 +63,54 @@ def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128, m_major=
 	if ps.ndim == 1: alm = alm[0]
 	return alm
 
-def alm2map(alm, pos, ainfo=None, oversample=2.0, spin=2, deriv=False):
-	"""Projects the given alms (with layout) on the specified pixel positions.
-	alm[ncomp,nelem], pos[2,...] => res[ncomp,...]. It projects on a large
-	cylindrical grid and then interpolates to the actual pixels. This is the
-	general way of doing things, but not the fastest. Computing pos and
-	interpolating takes a significant amount of time."""
+def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False, oversample=2.0, method="auto"):
+	if method == "cyl":
+		alm2map_cyl(alm, map, ainfo=ainfo, spin=spin, deriv=deriv, direct=direct, copy=copy)
+	elif method == "pos":
+		pos = map.posmap()
+		res = alm2map_pos(alm, pos, ainfo=ainfo, oversample=oversample, spin=spin, deriv=deriv)
+		map[:] = res
+	elif method == "auto":
+		# Cylindrical method if possible, else slow pos-based method
+		try:
+			alm2map_cyl(alm, map, ainfo=ainfo, spin=spin, deriv=deriv, direct=direct, copy=copy)
+		except AssertionError:
+			# Wrong pixelization. Fall back on slow, general method
+			pos = map.posmap()
+			res = alm2map_pos(alm, pos, ainfo=ainfo, oversample=oversample, spin=spin, deriv=deriv)
+			map[:] = res
+	else:
+		raise ValueError("Unknown alm2map method %s" % method)
+	return map
+
+def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False):
+	"""When called as alm2map(alm, map) projects those alms onto that map.
+	alms are interpreted according to ainfo if specified.
+
+	Possible shapes:
+		alm[nelem] -> map[ny,nx]
+		alm[ncomp,nelem] -> map[ncomp,ny,nx]
+		alm[ntrans,ncomp,nelem] -> map[ntrans,ncomp,ny,nx]
+		alm[nelem] -> map[{dy,dx},ny,nx] (deriv=True)
+		alm[ntrans,nelem] -> map[ntrans,{dy,dx},ny,nx] (deriv=True)
+
+	Spin specifies the spin of the transform. Deriv indicates whether
+	we will return the derivatives rather than the map itself. If
+	direct is true, the input map is assumed to already cover the whole
+	sky horizontally, so that no intermediate maps need to be computed.
+
+	If copy=True, the input map is not overwritten.
+	"""
+	# Work on views of alm and map that have at least 2 and 3 dimensions
 	alm_full = np.atleast_2d(alm)
+	map_full = map if map.ndim > 2 else map[None]
 	if ainfo is None: ainfo = sharp.alm_info(nalm=alm_full.shape[-1])
-	ashape, ncomp = alm_full.shape[:-2], alm_full.shape[-2]
-	if deriv:
-		# If we're computing derivatives, spin isn't allowed.
-		# alm must be either [ntrans,nelem] or [nelem],
-		# and the output will be [ntrans,2,ny,nx] or [2,ny,nx]
-		ashape = ashape + (ncomp,)
-		ncomp = 2
-	tmap   = make_projectable_map(pos, ainfo.lmax, ashape+(ncomp,), oversample, alm.real.dtype)
+	ncomp = alm_full.shape[-2] if not deriv else 2
+	if copy: map_full = map_full.copy()
+	if direct:
+		tmap, tslice = map_full, (Ellipsis,)
+	else:
+		tmap, tslice = make_projectable_map_cyl(map_full)
 	sht    = sharp.sht(map2minfo(tmap), ainfo)
 	# We need a pixel-flattened version for the SHTs
 	tflat  = tmap.reshape(tmap.shape[:-2]+(-1,))
@@ -99,9 +131,60 @@ def alm2map(alm, pos, ainfo=None, oversample=2.0, spin=2, deriv=False):
 		if alm.ndim == 1 and tmap.shape[-3] == 1:
 			tmap = tmap[...,0,:,:]
 
+	map_full[:] = tmap[tslice]
+	return map
+
+def alm2map_pos(alm, pos=None, ainfo=None, oversample=2.0, spin=2, deriv=False):
+	"""Projects the given alms (with layout) on the specified pixel positions.
+	alm[ncomp,nelem], pos[2,...] => res[ncomp,...]. It projects on a large
+	cylindrical grid and then interpolates to the actual pixels. This is the
+	general way of doing things, but not the fastest. Computing pos and
+	interpolating takes a significant amount of time."""
+	alm_full = np.atleast_2d(alm)
+	if ainfo is None: ainfo = sharp.alm_info(nalm=alm_full.shape[-1])
+	ashape, ncomp = alm_full.shape[:-2], alm_full.shape[-2]
+	if deriv:
+		# If we're computing derivatives, spin isn't allowed.
+		# alm must be either [ntrans,nelem] or [nelem],
+		# and the output will be [ntrans,2,ny,nx] or [2,ny,nx]
+		ashape = ashape + (ncomp,)
+		ncomp = 2
+	tmap   = make_projectable_map(pos, ainfo.lmax, ashape+(ncomp,), oversample, alm.real.dtype)
+	alm2map(alm, tmap, ainfo=ainfo, spin=spin, deriv=deriv)
 	# Project down on our final pixels. This will result in a slight smoothing
 	pix = tmap.sky2pix(pos[:2])
 	return enmap.samewcs(utils.interpol(tmap, pix, mode="wrap"), pos)
+
+def make_projectable_map_cyl(map):
+	"""Given an enmap in a cylindrical projection, return a map with
+	the same pixelization, but extended to cover a whole band in phi
+	around the sky. Also returns the slice required to recover the
+	input map from the output map."""
+	# First check that the map has the right properties
+	ny, nx = map.shape[-2:]
+	vy,vx = enmap.pix2sky(map.shape, map.wcs, [np.arange(ny),np.zeros(ny)])
+	hy,hx = enmap.pix2sky(map.shape, map.wcs, [np.zeros(nx),np.arange(nx)])
+	dx = hx[1:]-hx[:-1]
+	flip = dx[0] < 0
+	if flip:
+		# Sharp requires increasing phi
+		map = map[...,::-1]
+		dx  = np.abs(dx)
+	assert np.allclose(dx,dx[0]), "Map must have constant phi spacing"
+	nphi = int(np.round(2*np.pi/dx[0]))
+	assert np.allclose(2*np.pi/nphi,dx[0]), "Pixels must evenly circumference"
+	assert np.allclose(vx,vx[0]), "Different phi0 per row indicates non-cylindrical enmap"
+	phi0 = vx[0]
+	# Make a map with the same geometry covering a whole band around the sky
+	# We can do this simply by extending it in the positive pixel dimension.
+	oshape = map.shape[:-1]+(nphi,)
+	owcs   = map.wcs
+	# Flip back if necessary
+	if flip:
+		oslice = (Ellipsis, slice(nx-1,None,-1))
+	else:
+		oslice = (Ellipsis, slice(0,nx))
+	return enmap.empty(oshape, owcs, dtype=map.dtype), oslice
 
 def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	"""Make a map suitable as an intermediate step in projecting alms up to

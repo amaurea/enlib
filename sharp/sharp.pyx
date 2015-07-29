@@ -194,7 +194,7 @@ cdef class alm_info:
 			assert self.nelem == nalm, "lmax must be explicitly specified when lmax != mmax"
 		self.mstart= mstart
 		self.mstart.flags.writeable = False
-	def lm2ind(self, np.ndarray[int,ndim=1] l,np.ndarray[int,ndim=1] m):
+	def lm2ind(self, l, m):
 		return self.mstart[m]+l*self.stride
 	def transpose_alm(self, alm, out=None):
 		"""In order to accomodate l-major ordering, which is not directoy

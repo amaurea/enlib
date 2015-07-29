@@ -69,7 +69,7 @@ def rewind(a, ref=0, period=2*np.pi):
 	period cut will be at ref+period/2."""
 	a = np.asanyarray(a)
 	if ref == "auto": ref = np.sort(a.reshape(-1))[a.size/2]
-	return ref + (a-ref+period/2.)%period - period/2
+	return ref + (a-ref+period/2.)%period - period/2.
 
 def cumsplit(sizes, capacities):
 	"""Given a set of sizes (of files for example) and a set of capacities
@@ -636,6 +636,11 @@ def sum_by_id(a, ids, axis=0):
 	rb = fb.reshape((fb.shape[0],)+ra.shape[1:])
 	return moveaxis(rb, 0, axis)
 
+def allreduce(a, comm):
+	res = a.copy()
+	comm.Allreduce(a, res)
+	return res
+
 def allgather(a, comm):
 	a   = np.asarray(a)
 	res = np.zeros((comm.size,)+a.shape,dtype=a.dtype)
@@ -682,7 +687,37 @@ def rect2ang(rect, zenith=True):
 def angdist(a, b, zenith=True):
 	ra = ang2rect(a, zenith)
 	rb = ang2rect(b, zenith)
-	c = np.sum(ra.T*rb.T,-1)
-	res = np.zeros(c.T.shape)
+	c = np.sum(ra.T*rb.T,-1).T
+	res = np.zeros(c.shape)
 	res[c < 1] = np.arccos(c[c<1])
 	return res
+
+def label_unique(a, axes=(-1,), rtol=1e-5, atol=1e-8):
+	"""Given an array of values, return an array of
+	labels such that all entries in the array with the
+	same label will have approximately the same value.
+	Labels count contiguously from 0 and up. The labelling
+	will happen along the axes specified by the axes
+	argument."""
+	a = np.asarray(a)
+	axes= [i % a.ndim for i in axes]
+	pre = [i for i in xrange(a.ndim) if i not in axes]
+
+	a  = partial_flatten(a, axes=pre, pos=-1)
+	fa = a.reshape(-1, a.shape[-1])
+	# Sort by value axes, and compute reverse mapping
+	inds = np.lexsort(fa.T[::-1])
+	reverse = np.zeros(len(inds),dtype=int)
+	reverse[inds] = np.arange(len(inds))
+	# Run through all values, incrementing id every time
+	# we see a significantly different value
+	ids  = np.zeros(len(fa),dtype=int)
+	id = 0
+	vref = fa[inds[0]]
+	for i, v in enumerate(fa[inds]):
+		if not np.allclose(v, vref, rtol=rtol, atol=atol):
+			id += 1
+			vref = v
+		ids[i] = id
+	# Undo sort and restore shape
+	return ids[reverse].reshape(a.shape[:-1])

@@ -62,9 +62,14 @@ class ndmap(np.ndarray):
 	def area(self): return area(self.shape, self.wcs)
 	def extent(self): return extent(self.shape, self.wcs)
 	@property
+	def preflat(self):
+		"""Returns a view of the map with the non-pixel dimensions flattened."""
+		return self.reshape(-1, self.shape[-2], self.shape[-1])
+	@property
 	def npix(self): return np.product(self.shape[-2:])
 	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode, cval=0)
-	def autocrop(self, method="plain", value=np.nan, margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
+	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
+	def apod(self, width): return apod(self, width)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
@@ -121,7 +126,11 @@ class ndmap(np.ndarray):
 		return ibox
 
 def slice_wcs(shape, wcs, sel):
+	"""Slice a geometry specified by shape and wcs according to the
+	slice sel. Returns a tuple of the output shape and the correponding
+	wcs."""
 	wcs = wcs.deepcopy()
+	pre, shape = shape[:-2], shape[-2:]
 	oshape = np.array(shape)
 	# The wcs object has the indices in reverse order
 	for i,s in enumerate(sel):
@@ -134,7 +143,7 @@ def slice_wcs(shape, wcs, sel):
 		wcs.wcs.crpix[j] += 0.5
 		oshape[i] = s.stop-s.start
 		oshape[i] = (oshape[i]+s.step-1)/s.step
-	return tuple(oshape), wcs
+	return tuple(pre)+tuple(oshape), wcs
 
 def scale_wcs(wcs, factor):
 	return enlib.wcs.scale(wcs, factor, rowmajor=True)
@@ -171,10 +180,12 @@ def enmap(arr, wcs=None, dtype=None, copy=True):
 			wcs = create_wcs(arr.shape)
 	return ndmap(arr, wcs)
 
-def zeros(shape, wcs=None, dtype=None):
-	return enmap(np.zeros(shape, dtype=dtype), wcs, copy=False)
 def empty(shape, wcs=None, dtype=None):
 	return enmap(np.empty(shape, dtype=dtype), wcs, copy=False)
+def zeros(shape, wcs=None, dtype=None):
+	return enmap(np.zeros(shape, dtype=dtype), wcs, copy=False)
+def ones(shape, wcs=None, dtype=None):
+	return enmap(np.ones(shape, dtype=dtype), wcs, copy=False)
 
 def posmap(shape, wcs, safe=True, corner=False):
 	"""Return an enmap where each entry is the coordinate of that entry,
@@ -296,8 +307,8 @@ def extent(shape, wcs, nsub=0x10):
 	pos = posmap([nsub+1,nsub+1], wcs, corner=True)
 	# Apply az scaling
 	scale = np.zeros([2,nsub,nsub])
-	scale[0] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
-	scale[1] = 1
+	scale[1] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
+	scale[0] = 1
 	ly = np.sum(((pos[:,1:,:-1]-pos[:,:-1,:-1])*scale)**2,0)**0.5
 	lx = np.sum(((pos[:,:-1,1:]-pos[:,:-1,:-1])*scale)**2,0)**0.5
 	areas = ly*lx
@@ -376,7 +387,11 @@ def rotate_pol(emap, angle, comps=[-2,-1]):
 
 def map_mul(mat, vec):
 	"""Elementwise matrix multiplication mat*vec. Result will have
-	the same shape as vec. Multiplication happens along the first indices."""
+	the same shape as vec. Multiplication happens along the first indices.
+	This function is buggy when mat is not square (in the multiplication
+	dimensions). This is due to the reshape at the end. I should figure out
+	what code depends on that, and decide what I really want this function
+	to do."""
 	oshape= vec.shape
 	if len(oshape) == 2: oshape = (1,)+oshape
 	tvec = np.reshape(vec, oshape)
@@ -424,7 +439,7 @@ def samewcs(arr, *args):
 # Use that to make everything that currently accepts shape, wcs
 # transparently accept geometry. This will free us from having
 # to drag around a shape, wcs pair all the time.
-def geometry(pos, res=None, shape=None, proj="cea", deg=False, **kwargs):
+def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs):
 	"""Consruct a shape,wcs pair suitable for initializing enmaps.
 	pos can be either a [2] center position or a [{from,to},2]
 	bounding box. At least one of res or shape must be specified.
@@ -432,8 +447,9 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, **kwargs):
 	which the same resolution is used in each direction,
 	or [2]. If shape is specified, it must be [2]. All angles
 	are given in radians."""
-	pos = np.asarray(pos)*180/np.pi
-	if res is not None: res = np.asarray(res)*180/np.pi
+	scale = 1 if deg else 180/np.pi
+	pos = np.asarray(pos)*scale
+	if res is not None: res = np.asarray(res)*scale
 	wcs = enlib.wcs.build(pos, res, shape, rowmajor=True, system=proj, **kwargs)
 	if shape is None:
 		# Infer shape. WCS does not allow us to wrap around the
@@ -445,7 +461,7 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, **kwargs):
 		# being valied. If we always round down, we should be safe:
 		faredge = wcs.wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
 		shape = tuple(np.floor(faredge+0.5).astype(int))
-	return tuple(shape), wcs
+	return pre+tuple(shape), wcs
 
 
 #class geometry:
@@ -724,6 +740,21 @@ def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
 	print "FIXME: grad not done"
 	return np.reshape(np.real(ifft(fft(m)[None,:,...]*m.lmap()[:,None,...]*1j)),[2]+list(m.shape))
+
+def apod(m, width, profile="cos"):
+	width = np.minimum(np.zeros(2)+width,m.shape[-2:])
+	if profile == "cos":
+		a = [0.5*(1-np.linspace(0,np.pi,w)) for w in width]
+	else:
+		raise ValueError("Unknown apodization profile %s" % profile)
+	res = m.copy()
+	if width[0] > 0:
+		res[...,:width[0],:] *= a[0][:,None]
+		res[...,-width[0]:,:] *= a[0][::-1,None]
+	if width[1] > 0:
+		res[...,:,:width[1]] *= a[1][None,:]
+		res[...,:,-width[1]:]  *= a[1][None,::-1]
+	return res
 
 ############
 # File I/O #
