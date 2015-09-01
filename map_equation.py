@@ -902,9 +902,9 @@ def build_effective_noise_model(group, nsamp):
 # this module.
 
 class LinearSystemAz(LinearSystem):
-	def __init__(self, scans, area, groups, az0, daz, comm=MPI.COMM_WORLD, cut_type=None):
+	def __init__(self, scans, area, ordering=None, comm=MPI.COMM_WORLD, cut_type=None):
 		L.info("Building preconditioner")
-		self.azeq  = AzEquation(scans, area, groups, az0, daz, comm=comm, cut_type=cut_type)
+		self.azeq  = AzEquation(scans, area, ordering=ordering, comm=comm, cut_type=cut_type)
 		self.precon = PrecondAz(self.azeq)
 		zippers = [
 				zipper.ArrayZipper(area, shared=True, comm=comm),
@@ -931,19 +931,20 @@ class LinearSystemAz(LinearSystem):
 		self.precon.write(prefix, ext=ext)
 
 class AzEquation:
-	def __init__(self, scans, area, groups, az0, daz, comm=MPI.COMM_WORLD, cut_type=None):
+	def __init__(self, scans, area, ordering=None, comm=MPI.COMM_WORLD, cut_type=None):
 		data = []
 		njunk = 0
 		for si, scan in enumerate(scans):
 			d = bunch.Bunch()
 			d.scan = scan
 			d.pcut = pmat.PmatCut(scan, cut_type)
-			d.paz  = pmat.PmatAz(scan, groups[si], az0, daz)
+			dets   = scan.dets if ordering is None else ordering[scan.dets]
+			d.paz  = pmat.PmatScan(scan, area, dets)
 			d.cutrange = [njunk,njunk+d.pcut.njunk]
 			njunk = d.cutrange[1]
 			d.nmat = scan.noise
 			data.append(d)
-		self.data, self.groups, self.area, self.az0, self.daz, = data, groups, area, az0, daz
+		self.data, self.area = data, area
 		self.njunk, self.comm, self.dtype = njunk, comm, area.dtype
 	def b(self):
 		rhs_map  = self.area.copy()
@@ -1003,5 +1004,4 @@ class PrecondAz:
 		return self.idiv_az*map, junk/self.div_junk
 	def write(self, prefix="", ext=None):
 		if self.azeq.comm.rank == 0:
-			with h5py.File(prefix + "div.hdf", "w") as hfile:
-				hfile["data"] = self.div_az
+			enmap.write_map(prefix + "div.fits", self.div_az)

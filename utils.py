@@ -636,6 +636,11 @@ def sum_by_id(a, ids, axis=0):
 	rb = fb.reshape((fb.shape[0],)+ra.shape[1:])
 	return moveaxis(rb, 0, axis)
 
+def allreduce(a, comm):
+	res = a.copy()
+	comm.Allreduce(a, res)
+	return res
+
 def allgather(a, comm):
 	a   = np.asarray(a)
 	res = np.zeros((comm.size,)+a.shape,dtype=a.dtype)
@@ -686,3 +691,27 @@ def angdist(a, b, zenith=True):
 	res = np.zeros(c.shape)
 	res[c < 1] = np.arccos(c[c<1])
 	return res
+
+def label_unique(a, axes=(-1,), rtol=1e-5, atol=1e-8):
+	"""Given an array of values, return an array of
+	labels such that all entries in the array with the
+	same label will have approximately the same value.
+	Labels count contiguously from 0 and up. The labelling
+	will happen along the axes specified by the axes
+	argument."""
+	a = np.asarray(a)
+	axes= [i % a.ndim for i in axes]
+	pre = [i for i in xrange(a.ndim) if i not in axes]
+
+	a  = partial_flatten(a, axes=pre, pos=-1)
+	fa = a.reshape(-1, a.shape[-1])
+	# Can't use lexsort, as it has no tolerance. This
+	# is O(N^2) instead of O(NlogN)
+	id = 0
+	ids = np.zeros(len(fa),dtype=int)-1
+	for i,v in enumerate(fa):
+		if ids[i] >= 0: continue
+		match = np.all(np.isclose(v,fa,rtol=rtol,atol=atol),-1)
+		ids[match] = id
+		id += 1
+	return ids.reshape(a.shape[:-1])

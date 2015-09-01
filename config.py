@@ -123,7 +123,10 @@ def from_str(string):
 			except KeyError:
 				return type(ast.literal_eval(value))
 		ptype = deduce_ptype(name, value)
-		if ptype in [int,float,bool]: value = ptype(value)
+		if ptype in [int,float]:
+			value = ptype(value)
+		elif ptype is bool:
+			value = value == "True"
 		elif ptype is str:
 			if len(value) < 2 or value[0] != value[-1] or value[0] != "'" and value[0] != '"':
 				raise ValueError("Invalid string in config: %s" % line)
