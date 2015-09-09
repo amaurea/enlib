@@ -3,7 +3,7 @@ include ../compile_opts/$(ENLIB_COMP).mk
 all: fortran_32.so fortran_64.so
 
 %.so: %.f90
-	$(F2PY) --fcompiler=$(F2PYCOMP) --noopt -c -m $(basename $<) $< $(LAPACK_LINK) $(OMP_LINK) skip: map_border
+	$(F2PY) --fcompiler=$(F2PYCOMP) --noopt -c -m $(basename $<) $< $(LAPACK_LINK) $(OMP_LINK) skip: map_border calc_weights
 
 fortran_32.f90: fortran.F90
 	$(SED) 's/\<_\>/4/g' < $< > $@
