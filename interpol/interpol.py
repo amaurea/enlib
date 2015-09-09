@@ -1,7 +1,6 @@
 import numpy as np, time
 from enlib import utils
-
-import h5py
+import fortran_32, fortran_64
 
 def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_obox=False, *args, **kwargs):
 	"""Given a function func([nin,...]) => [nout,...] and
@@ -142,3 +141,82 @@ def grad_forward(y, npre=0):
 		cells2 = (whole,)*(npre+i)+(end,)  +(whole,)*(nin-i-1)
 		dy[i][cells1] = y[source+cells2]-y[source+cells1]
 	return dy[(slice(None),)+(slice(None,-1),)*(dy.ndim-1)]
+
+def get_core(dtype):
+	if dtype == np.float32:   return fortran_32.fortran
+	elif dtype == np.float64: return fortran_64.fortran
+
+def spline_filter(data, order=3, border="cyclic", ndim=None, trans=False):
+	data = np.array(data)
+	core = get_core(data.dtype)
+	iborder = {"zero":0, "nearest":1, "cyclic":2, "mirror":3}[border]
+	if ndim is None: ndim = data.ndim
+	for axis in range(ndim)[::-1 if trans else 1]:
+		core.spline_filter1d(data.reshape(-1), data.shape, axis, order, iborder, trans)
+	return data
+
+# idata[{dims},{isub}], points[ndim,{osub}], odata[{osub},{isub}]
+# This differs from scipy.map_coordinates, which has idata[{dims}], points[ndim,{osub}],
+# odata[{osub}]. But they are compatible when there are no isub dimensions.
+# The keywords differ, though.
+def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="cyclic", trans=False):
+	"""An alternative implementation of scipy.ndimage.map_coordinates. It is slightly
+	slower (20-30%), but more general. Basic usage is
+	 odata[{pdims},{isub}] = map_coordinates(idata[{dims},{isub}], points[ndim,{pdims}])
+	where {foo} means a (possibly empty) shape. For example, if idata has shape (10,20)
+	and points has shape (2,100), then the result will have shape (100,), and if
+	idata has shape (10,20,30,40) and points has shape (3,1,2,3,4), then the result
+	will have shape (1,2,3,4,40). Except for the presence of {isub}, this is the same
+	as how map_coordinates works.
+
+	It is also possible to pass the output array as an argument (odata), which must
+	have the same data type as idata in that case.
+
+	The function differs from ndimage in the meaning of the optional arguments.
+	mode specifies the interpolation scheme to use: "conv", "spline" or "lanczos".
+	"conv" is polynomial convolution, which is commonly used in image processing.
+	"spline" is spline interpolation, which is what ndimage uses.
+	"lanczos" convolutes with a lanczos kernerl, which approximates the optimal
+	sinc kernel. This is slow, and the quality is not much better than splin.
+
+	order specifies the interpolation order, its exact meaning differs based on
+	mode.
+
+	border specifies the handling of boundary conditions. It can be "zero",
+	"nearest", "cyclic" or "mirror". "mirror" corresponds to ndimage's
+	"reflect". The others do not match ndimage due to ndimage's inconsistent
+	treatment of boundary conditions in spline_filter vs. map_coordiantes.
+
+	trans specifies whether to perform the transpose operation or not.
+	The interpolation performed by map_coordinates is a linear operation,
+	and can hence be expressed as out = A*data, where A is a matrix.
+	If trans is true, then what will instead be performed is data = A.T*in.
+	For this to work, the odata argument must be specified."""
+
+	imode   = {"conv":0, "spline":1, "lanczos":2}[mode]
+	iborder = {"zero":0, "nearest":1, "cyclic":2, "mirror":3}[border]
+	idata   = np.asarray(idata)
+	points  = np.asarray(points)
+	core    = get_core(idata.dtype)
+	ndim    = points.shape[0]
+	dpre,dpost= idata.shape[:ndim], idata.shape[ndim:]
+	if not trans:
+		if odata is None:
+			odata = np.empty(points.shape[1:]+dpost,dtype=idata.dtype)
+		if mode == "spline": idata = spline_filter(idata, order=order, border=border, ndim=ndim, trans=False)
+		core.interpol(
+			idata.reshape(np.product(dpre),np.product(dpost)).T, dpre,
+			odata.reshape(np.product(points.shape[1:]),np.product(dpost)).T,
+			points.reshape(ndim, -1).T,
+			imode, order, iborder, False)
+		return odata
+	else:
+		# We cannot infer the shape of idata from odata and points. So both
+		# idata and odata must be specified in this case.
+		core.interpol(
+			idata.reshape(np.product(dpre),np.product(dpost)).T, dpre,
+			odata.reshape(np.product(points.shape[1:]),np.product(dpost)).T,
+			points.reshape(ndim,-1).T,
+			imode, order, iborder, True)
+		if mode == "spline": idata[:] = spline_filter(idata, order=order, border=border, ndim=ndim, trans=True)
+		return idata
