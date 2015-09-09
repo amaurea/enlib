@@ -738,8 +738,7 @@ def padcrop(m, info):
 
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
-	print "FIXME: grad not done"
-	return np.reshape(np.real(ifft(fft(m)[None,:,...]*m.lmap()[:,None,...]*1j)),[2]+list(m.shape))
+	return ifft(map2harm(m)*m.lmap()*1j).real
 
 def apod(m, width, profile="cos"):
 	width = np.minimum(np.zeros(2)+width,m.shape[-2:])
