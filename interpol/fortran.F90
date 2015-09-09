@@ -1,4 +1,7 @@
 module fortran
+
+	private :: map_border
+
 contains
 
 ! Given flattened N-dim data(:,ncell), with ncell = product(dims)
@@ -316,16 +319,19 @@ end subroutine
 
 ! Apply a 1d spline filter of the given order along
 ! the given axis of a flat view data of an array
-! with shape dims
-subroutine spline_filter1d(data, dims, axis, order, trans)
+! with shape dims. This is copied from scipy, which
+! seems to implement the algorithm described here:
+! http://users.fmrib.ox.ac.uk/~jesper/papers/future_readgroups/unser9302.pdf
+! It assumes *mirrored* boundary conditions, not cyclic!
+subroutine spline_filter1d(data, dims, axis, order, border, trans)
 	implicit none
 	real(_), intent(inout) :: data(:)
-	integer, intent(in)    :: dims(:), axis, order
+	integer, intent(in)    :: dims(:), axis, order, border
 	logical, intent(in)    :: trans
 	real(_), allocatable   :: a(:)
 	real(_), parameter     :: tolerance = 1d-15
-	real(_) :: pole(2), p, weight, pn, p2n, ip, q
-	integer :: ndim, nblock, noff, n, oi, bi, i, pind, m, npole
+	real(_) :: pole(2), p, weight, pn, p2n, ip, q, v
+	integer :: ndim, nblock, noff, n, oi, bi, i, pind, m, npole, xi, pi1, pi2, dpi
 
 	ndim   = size(dims)
 	n      = dims(axis+1)
@@ -344,42 +350,40 @@ subroutine spline_filter1d(data, dims, axis, order, trans)
 		case default; return
 	end select
 	weight = product((1-pole(1:npole))*(1-1/pole(1:npole)))
-
-	!$omp parallel private(oi, bi, a, pind, p, m, pn, i, p2n, ip, q)
+	if(.not. trans) then
+		pi1 = 1; pi2 = npole; dpi = 1
+	else
+		pi1 = npole; pi2 = 1; dpi =-1;
+	end if
+	!$omp parallel private(oi, bi, a, pind, p, m, pn, i, p2n, ip, q, v)
 	allocate(a(n))
 	!$omp do collapse(2)
 	do oi = 0, noff-1
 		do bi = 0, nblock-1
 			a = data(oi+bi*n*noff+1:oi+(bi+1)*n*noff:noff)
 			a = a * weight
-			do pind = 1, npole
+			do pind = pi1, pi2, dpi
 				p = pole(pind)
 				m = ceiling(log(tolerance)/log(abs(p)))
 				! This is a bit cryptic. It is a port of
-				! scipy ni_interpolation.c:273
+				! scipy ni_interpolation.c:273.
 				if(.not. trans) then
-					! Compute starting element
-					if(m < n) then
-						pn = p
-						do i = 2, n
-							a(1) = a(1) + a(i)*pn
-							pn = pn * p
-						end do
-					else
-						! Effectively a(1) = a(1) + (p**(i-1)+p**(2*n-2-i))*a(i) + p**(n-1)*a(n)
-						! a(1) = a(1)/(1+p**(2*n-2))
-						pn  = p
-						ip  = 1/p
-						p2n = p**(n-1)
-						a(1) = a(1) + p2n*a(n)
-						p2n = p2n**2 * ip
-						do i = 2, n-1
-							a(1) = a(1) + (pn+p2n)*a(i)
-							pn  = pn*p
-							p2n = p2n*ip
-						end do
-						a(1) = a(1)/(1+pn**2)
-					end if
+					! Compute starting element. This is essentially
+					! for(i=1;i<m;i++) a[0] += 0.5*(a[i]+a[-i]) * p**i
+					! it only looks complicated due to boundary conditions.
+					! The standard version used mirrored boundary conditions,
+					! which give a[-i] = a[i], but we also want constant,
+					! nearest and cyclic conditions.
+					pn = 1
+					v  = 0
+					do i = 0, m-1
+						xi = map_border(border, n, i)+1
+						if(xi > 0) v = v + pn*a(xi)
+						xi = map_border(border, n,-i)+1
+						if(xi > 0) v = v + pn*a(xi)
+						pn = pn*p
+					end do
+					a(1) = v/2
 					! Update the rest of the array
 					do i = 2, n
 						a(i) = a(i) + p*a(i-1)
@@ -399,32 +403,86 @@ subroutine spline_filter1d(data, dims, axis, order, trans)
 					do i = n-1, 1, -1
 						a(i) = a(i) + p*a(i+1)
 					end do
-					! Transpose of start element computation
-					if(m < n) then
-						pn = p
-						do i = 2, n
-							a(i) = a(i) + pn * a(1)
-							pn = pn*p
-						end do
-					else
-						! Effectively
-						! a(1) = a(1)/(1+p**(2*n-2))
-						! a(i) = a(i) + (p**(i-1)+p**(2*n-2-i))*a(1)
-						! a(n) = a(n) + p**(n-1)*a(1)
-						q   = 1/(1+p**(2*(n-1)))
-						pn  = p
-						ip  = 1/p
-						p2n = p**(n-1)
-						a(1) = q*a(1)
-						a(n) = a(n) + p2n*a(1)
-						p2n = p2n**2 * ip
-						do i = 2, n-1
-							a(i) = a(i) + (pn+p2n)*a(1)
-							pn  = pn*p
-							p2n = p2n*ip
-						end do
-					end if
+					pn = 1
+					! Boundary condition
+					v  = a(1)/2
+					a(1) = 0
+					do i = 0, m-1
+						xi = map_border(border, n, i)+1
+						if(xi > 0) a(xi) = a(xi) + v * pn
+						xi = map_border(border, n,-i)+1
+						if(xi > 0) a(xi) = a(xi) + v * pn
+						pn = pn*p
+					end do
 				end if
+
+				!if(.not. trans) then
+				!	if(m < n) then
+				!		pn = p
+				!		do i = 2, n
+				!			a(1) = a(1) + a(i)*pn
+				!			pn = pn * p
+				!		end do
+				!	else
+				!		! Effectively a(1) = a(1) + (p**(i-1)+p**(2*n-2-i))*a(i) + p**(n-1)*a(n)
+				!		! a(1) = a(1)/(1+p**(2*n-2))
+				!		pn  = p
+				!		ip  = 1/p
+				!		p2n = p**(n-1)
+				!		a(1) = a(1) + p2n*a(n)
+				!		p2n = p2n**2 * ip
+				!		do i = 2, n-1
+				!			a(1) = a(1) + (pn+p2n)*a(i)
+				!			pn  = pn*p
+				!			p2n = p2n*ip
+				!		end do
+				!		a(1) = a(1)/(1+pn**2)
+				!	end if
+				!	! Update the rest of the array
+				!	do i = 2, n
+				!		a(i) = a(i) + p*a(i-1)
+				!	end do
+				!	a(n) = p/(p**2-1)*(a(n)+p*a(n-1))
+				!	do i = n-1, 1, -1
+				!		a(i) = p*(a(i+1)-a(i))
+				!	end do
+				!else
+				!	a(1) = -p*a(1)
+				!	do i = 2, n-1
+				!		a(i) = p*(a(i-1)-a(i))
+				!	end do
+				!	a(n) = a(n) - a(n-1)
+				!	a(n-1) = a(n-1)+p/(p**2-1)*p*a(n)
+				!	a(n)   = p/(p**2-1)*a(n)
+				!	do i = n-1, 1, -1
+				!		a(i) = a(i) + p*a(i+1)
+				!	end do
+				!	! Transpose of start element computation
+				!	if(m < n) then
+				!		pn = p
+				!		do i = 2, n
+				!			a(i) = a(i) + pn * a(1)
+				!			pn = pn*p
+				!		end do
+				!	else
+				!		! Effectively
+				!		! a(1) = a(1)/(1+p**(2*n-2))
+				!		! a(i) = a(i) + (p**(i-1)+p**(2*n-2-i))*a(1)
+				!		! a(n) = a(n) + p**(n-1)*a(1)
+				!		q   = 1/(1+p**(2*(n-1)))
+				!		pn  = p
+				!		ip  = 1/p
+				!		p2n = p**(n-1)
+				!		a(1) = q*a(1)
+				!		a(n) = a(n) + p2n*a(1)
+				!		p2n = p2n**2 * ip
+				!		do i = 2, n-1
+				!			a(i) = a(i) + (pn+p2n)*a(1)
+				!			pn  = pn*p
+				!			p2n = p2n*ip
+				!		end do
+				!	end if
+				!end if
 			end do
 			data(oi+bi*n*noff+1:oi+(bi+1)*n*noff:noff) = a
 		end do
@@ -554,12 +612,12 @@ subroutine calc_weights(type, order, p, weights, off)
 							elseif(x < 2.0) then; weights(j,i) = (2-x)**3/6; end if
 						case(4)
 							if    (x < 0.5) then; weights(j,i) = x**2 * (x**2 * 0.25-0.625)+115d0/192
-							elseif(x < 1.5) then; weights(j,i) = x*(x*(x*(5/6-x/6)-1.25)+5d0/24)+55d0/96
+							elseif(x < 1.5) then; weights(j,i) = x*(x*(x*(5d0/6-x/6)-1.25)+5d0/24)+55d0/96
 							elseif(x < 2.5) then; weights(j,i) = (x-2.5)**4/24; end if
 						case(5)
-							if    (x < 1.0) then; weights(j,i) = x**2*(x**2*(0.25-x/12)-0.5)+0.55
-							elseif(x < 2.0) then; weights(j,i) = x*(x*(x*(x*(x/24-0.375)+1.25)-1.75)+0.625)+0.425
-							elseif(x < 3.0) then; weights(j,i) = (3-x)**2 * x**2 / 120; end if
+							if    (x < 1.0) then; weights(j,i) = x**2*(x**2*(0.25d0-x/12)-0.5d0)+0.55d0
+							elseif(x < 2.0) then; weights(j,i) = x*(x*(x*(x*(x/24-0.375d0)+1.25d0)-1.75d0)+0.625d0)+0.425d0
+							elseif(x < 3.0) then; weights(j,i) = (3-x)**5/120d0; end if
 					end select
 				case(2) ! lanczos
 					if(order == 0) then
@@ -572,24 +630,45 @@ subroutine calc_weights(type, order, p, weights, off)
 	end do
 end subroutine
 
+pure function map_border(border, n, i) result(v)
+	implicit none
+	integer, intent(in) :: border, n, i
+	integer :: v
+	if(i < 0 .or. i >= n) then
+		select case(border)
+			case(0) ! constant value
+				v = -1
+			case(1) ! nearest
+				v = max(0,min(n-1,i))
+			case(2) ! cyclic
+				v = modulo(i, n)
+			case(3) ! mirrored
+				v = modulo(i, 2*n-2)
+				if(v >= n) v = 2*n-2-v
+			case default
+				v = -1
+		end select
+	else
+		v = i
+	end if
+end function
 
 ! pos[ndim,nout] has indices into pre-flattened idata. nout = product(oshape)
 ! type indicates the type of interpolation to use. 0 is convolution, 1 is
 ! spline and 2 is lanczos. border indicates how to handle borders. 0 is
-! constant value (bval), 1 is cyclic and 2 is nearest edge. trans indicates
+! constant zero value, 1 is nearest, 2 is cyclic and 3 is mirrored. trans indicates
 ! the transpose operation. It only makes sense when interpolate is a linear operation,
 ! which it is as long as one doesn't use constant boundary values.
-subroutine interpol(idata, ishape, odata, pos, type, order, border, bval, trans)
+subroutine interpol(idata, ishape, odata, pos, type, order, border, trans)
 	implicit none
 	real(_), intent(inout) :: idata(:,:), odata(:,:)
-	real(_), intent(in)    :: pos(:,:), bval
+	real(_), intent(in)    :: pos(:,:)
 	integer, intent(in)    :: ishape(:), type, order, border
 	logical, intent(in)    :: trans
 	real(_), allocatable   :: weights(:,:)
 	real(_) :: v(size(idata,1)), res(size(idata,1))
 	integer :: off(size(pos,2)), inds(size(pos,2))
-	integer :: xi, si, ci, i, j, dind, ndim, nsamp, nw, nsub, ncon
-	logical :: use_bval
+	integer :: xi, si, ci, i, j, dind, ndim, nsamp, nw, nsub, ncon, n
 
 	ndim  = size(pos,2)
 	nsamp = size(pos,1)
@@ -597,7 +676,7 @@ subroutine interpol(idata, ishape, odata, pos, type, order, border, bval, trans)
 	nw    = get_weight_length(type, order)
 	ncon  = nw**ndim
 	if(trans) idata = 0
-	!$omp parallel private(si,weights,off,res,inds,ci,dind,i,xi,use_bval,v,j)
+	!$omp parallel private(si,weights,off,res,inds,ci,dind,i,xi,v,j,n)
 	allocate(weights(nw,ndim))
 	!$omp do
 	do si = 1, nsamp
@@ -611,33 +690,37 @@ subroutine interpol(idata, ishape, odata, pos, type, order, border, bval, trans)
 		! So loop through each cell of context
 		if(.not. trans) res  = 0
 		inds = 0
-		do ci = 1, ncon
+		cloop: do ci = 1, ncon
 			! Get the value of this cell of context, taking into
 			! account boundary conditions
 			dind = 0
 			do i = 1,ndim
 				xi = inds(i) + off(i)
-				use_bval = .false.
-				if(xi < 0 .or. xi >= ishape(i)) then
-					select case(border)
-						case(0) ! constant value
-							use_bval = .true.
-							exit
-						case(1) ! cyclic
-							xi = modulo(xi, ishape(i))
-						case(2) ! nearest
-							xi = max(0,min(ishape(i)-1,xi))
-					end select
-				end if
-				dind = dind * ishape(i) + xi
+				n  = ishape(i)
+				xi = map_border(border, ishape(i), xi)
+				! If we don't map onto a valid point (because we use null-boundaries),
+				! this cell doesn't contribute, so go to the next one
+				if(xi < 0) cycle cloop
+				!use_bval = .false.
+				!if(xi < 0 .or. xi >= n) then
+				!	select case(border)
+				!		case(0) ! constant value
+				!			use_bval = .true.
+				!			exit
+				!		case(1) ! nearest
+				!			xi = max(0,min(n-1,xi))
+				!		case(2) ! cyclic
+				!			xi = modulo(xi, n)
+				!		case(3) ! mirrored
+				!			xi = modulo(xi, 2*n-2)
+				!			if(xi >= n) xi = 2*n-2-xi
+				!	end select
+				!end if
+				dind = dind * n + xi
 			end do
 			if(.not. trans) then
 				! Standard interpolation
-				if(use_bval) then
-					v = bval
-				else
-					v = idata(:,dind+1)
-				end if
+				v = idata(:,dind+1)
 				! Now multiply this value by all the relevant weights, one
 				! for each dimension
 				do i = 1, ndim
@@ -650,12 +733,10 @@ subroutine interpol(idata, ishape, odata, pos, type, order, border, bval, trans)
 				do i = 1, ndim
 					v = v * weights(inds(i)+1,i)
 				end do
-				if(.not. use_bval) then
-					do j = 1, nsub
-						!$omp atomic
-						idata(j,dind+1) = idata(j,dind+1) + v(j)
-					end do
-				end if
+				do j = 1, nsub
+					!$omp atomic
+					idata(j,dind+1) = idata(j,dind+1) + v(j)
+				end do
 			end if
 			! Advance to next cell
 			do i = ndim,1,-1
@@ -663,7 +744,7 @@ subroutine interpol(idata, ishape, odata, pos, type, order, border, bval, trans)
 				if(inds(i) < nw) exit
 				inds(i) = 0
 			end do
-		end do
+		end do cloop
 		if(.not. trans) odata(:,si) = res
 	end do
 	!$omp end parallel
