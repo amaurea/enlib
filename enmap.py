@@ -738,7 +738,16 @@ def padcrop(m, info):
 
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
-	return ifft(map2harm(m)*m.lmap()*1j).real
+	return ifft(fft(m)*_widen(m.lmap(),m.ndim+1)*1j).real
+
+def div(m):
+	"""Returns the divergence of the map m[2,...] as [...]."""
+	return ifft(np.sum(fft(m)*_widen(m.lmap(),m.ndim)*1j,0)).real
+
+def _widen(map,n):
+	"""Helper for gard and div. Adds degenerate axes between the first
+	and the last two to give the map a total dimensionality of n."""
+	return map[(slice(None),) + (None,)*(n-3) + (slice(None),slice(None))]
 
 def apod(m, width, profile="cos"):
 	width = np.minimum(np.zeros(2)+width,m.shape[-2:])

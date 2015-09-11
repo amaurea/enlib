@@ -49,7 +49,7 @@ def dstat(a): return np.std(a)
 # Test spline filter for symmetry and ndimage equivalence. Should only
 # match ndimage for mirror boundary conditions.
 print "Testing spline filter"
-n = 100
+n = 10
 for border in ["zero", "nearest", "cyclic", "mirror"]:
 	for order in range(6):
 #for border in ["mirror"]:

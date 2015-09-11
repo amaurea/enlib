@@ -13,6 +13,8 @@ def lens_map(imap, grad_phi, order=3, mode="spline", border="cyclic", trans=Fals
 
 	If the same lensing field needs to be reused repeatedly, then higher efficiency
 	can be gotten from calling displace_map directly with precomputed pixel positions."""
+	# Converting from grad_phi to pix has roughly the same cost as calling displace_map.
+	# So almost a factor 2 in speed can be won from calling displace_map directly.
 	pix = imap.sky2pix(imap.posmap() + grad_phi, safe=False)
 	return displace_map(imap, pix, order=order, mode=mode, border=border, trans=trans)
 

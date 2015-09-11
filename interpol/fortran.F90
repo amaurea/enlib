@@ -81,7 +81,7 @@ subroutine spline_filter1d(data, dims, axis, order, border, trans)
 	real(_), allocatable   :: a(:)
 	real(_), parameter     :: tolerance = 1d-15
 	real(_) :: pole(2), p, weight, pn, p2n, ip, q, v
-	integer :: ndim, nblock, noff, n, oi, bi, i, pind, m, npole, xi, pi1, pi2, dpi
+	integer :: ndim, nblock, noff, n, oi, bi, i, pind, m, npole, pi1, pi2, dpi
 
 	ndim   = size(dims)
 	n      = dims(axis+1)
@@ -115,55 +115,127 @@ subroutine spline_filter1d(data, dims, axis, order, border, trans)
 			do pind = pi1, pi2, dpi
 				p = pole(pind)
 				m = ceiling(log(tolerance)/log(abs(p)))
-				! This is a bit cryptic. It is a port of
-				! scipy ni_interpolation.c:273.
+				! This is a bit cryptic. It was a port of
+				! scipy ni_interpolation.c:273. Now it is generalized
+				! to support other boundary conditions, as given in
+				! https://lorensen.github.io/VTKCodeCoverage/VTK/Imaging/Core/vtkImageBSplineInternals.cxx.gcov.html
 				if(.not. trans) then
-					! Compute starting element. This is essentially
-					! for(i=1;i<m;i++) a[0] += 0.5*(a[i]+a[-i]) * p**i
-					! it only looks complicated due to boundary conditions.
-					! The standard version used mirrored boundary conditions,
-					! which give a[-i] = a[i], but we also want constant,
-					! nearest and cyclic conditions.
-					pn = 1
-					v  = 0
-					do i = 0, m-1
-						xi = map_border(border, n, i)+1
-						if(xi > 0) v = v + pn*a(xi)
-						xi = map_border(border, n,-i)+1
-						if(xi > 0) v = v + pn*a(xi)
-						pn = pn*p
-					end do
-					a(1) = v/2
-					! Update the rest of the array
+					! Non-transposed case
+					! First initialize the causal filter, which is divided into two cases based on
+					! the length of the array. We handle four different initial conditions:
+					select case(border)
+						case(0) ! Zero boundaries c0+ = a0, so nothing to do
+						case(1) ! Nearest neighbor (clamped) initial conditions
+							a(1) = a(1)/(1-p)
+						case(2) ! Cyclic boundary conditions
+							pn = p
+							do i = 0, min(n,m)-2
+								a(1) = a(1) + pn*a(n-i)
+								pn = pn*p
+							end do
+							if(m >= n) a(1) = a(1)/(1-pn)
+						case(3) ! Mirrored boundary conditions
+							pn = p
+							do i = 2, min(m,n)
+								a(1) = a(1) + pn*a(i)
+								pn = pn*p
+							end do
+							if(m >= n) then
+								do i = n-1, 2, -1
+									a(1) = a(1) + pn*a(i)
+									pn = pn*p
+								end do
+								a(1) = a(1)/(1-pn)
+							end if
+					end select
+					! Perform the forwards recursion
 					do i = 2, n
 						a(i) = a(i) + p*a(i-1)
 					end do
-					a(n) = p/(p**2-1)*(a(n)+p*a(n-1))
+					! Initialize the backwards recursion
+					select case(border)
+						case(0) ! Zero boundary conditions
+							a(n) = -p/(1-p**2)*a(n)
+						case(1) ! Nearest neighbor
+							a(n) = -p/(1-p**2)/(1-p)*(a(n)-p**2*a(n-1))
+						case(2) ! Cyclic
+							v = 0
+							pn = 1
+							do i = 1, min(m,n)
+								v = v + a(i)*pn
+								pn = pn*p
+							end do
+							if(m >= n) v = v/(1-pn)
+							a(n) = -p*(a(n) + p*v)
+						case(3) ! Mirror
+							a(n) = -p/(1-p**2)*(a(n)+p*a(n-1))
+					end select
+					! Perform the backwards recursion
 					do i = n-1, 1, -1
 						a(i) = p*(a(i+1)-a(i))
 					end do
 				else
+					! Transposed case
+					! Perform the transposed backwards recursion
 					a(1) = -p*a(1)
 					do i = 2, n-1
 						a(i) = p*(a(i-1)-a(i))
 					end do
 					a(n) = a(n) - a(n-1)
-					a(n-1) = a(n-1)+p/(p**2-1)*p*a(n)
-					a(n)   = p/(p**2-1)*a(n)
+					! Initialize the tranposed backwards recursion
+					select case(border)
+						case(0) ! Zero
+							a(n) = -p/(1-p**2)*a(n)
+						case(1) ! Nearest
+							v      = -p/(1-p**2)/(1-p)
+							a(n-1) = a(n-1) - v*p**2 * a(n)
+							a(n)   = v * a(n)
+						case(2) ! Cyclic
+							v = -p**2 * a(n)
+							a(n) = -p * a(n)
+							if(m >= n) v = v/(1-p**n)
+							pn = 1
+							do i = 1, min(m,n)
+								a(i) = a(i) + v*pn
+								pn = pn*p
+							end do
+						case(3) ! Mirror
+							v      = -p/(1-p**2)
+							a(n-1) = a(n-1) + v*p * a(n)
+							a(n)   = v * a(n)
+					end select
+					! Perform transposed forwards recursion
 					do i = n-1, 1, -1
 						a(i) = a(i) + p*a(i+1)
 					end do
-					pn = 1
-					! Boundary condition
-					v  = a(1)/2
-					a(1) = 0
-					do i = 0, m-1
-						xi = map_border(border, n, i)+1
-						if(xi > 0) a(xi) = a(xi) + v * pn
-						xi = map_border(border, n,-i)+1
-						if(xi > 0) a(xi) = a(xi) + v * pn
-						pn = pn*p
-					end do
+					! Initialize the tranposed forwards recursion
+					select case(border)
+						case(0) ! Zero
+						case(1) ! Nearest
+							a(1) = a(1)/(1-p)
+						case(2) ! Cyclic
+							if(m >= n) a(1) = a(1)/(1-p**n)
+							pn = p
+							do i = 0, min(n,m)-2
+								a(n-i) = a(n-i) + pn*a(1)
+								pn = pn*p
+							end do
+						case(3) ! Mirror
+							if(m >= n) a(1) = a(1)/(1-p**(2*n-2))
+							pn = p
+							! The order of these two loops doesn't have to
+							! be reversed because they commute
+							do i = 2, min(m,n)
+								a(i) = a(i) + pn*a(1)
+								pn = pn*p
+							end do
+							if(m >= n) then
+								do i = n-1, 2, -1
+									a(i) = a(i) + pn*a(1)
+									pn = pn*p
+								end do
+							end if
+					end select
 				end if
 			end do
 			data(oi+bi*n*noff+1:oi+(bi+1)*n*noff:noff) = a
