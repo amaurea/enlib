@@ -573,6 +573,7 @@ class DGeometry:
 	def pre(self): return self.shape[:-2]
 	@pre.setter
 	def pre(self, val):
+		"""Change the shape of the non-pixel dimensions. Both longer and shorter vals are supported."""
 		oldlen = np.product(self.pre)
 		self.shape = tuple(val)+self.shape[-2:]
 		newlen = np.product(self.pre)
