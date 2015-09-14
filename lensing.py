@@ -3,7 +3,7 @@ from enlib import enmap, utils, powspec, sharp, curvedsky, interpol
 
 ####### Flat sky lensing #######
 
-def lens_map(imap, grad_phi, order=3, mode="spline", border="cyclic", trans=False):
+def lens_map(imap, grad_phi, order=3, mode="spline", border="cyclic", trans=False, deriv=False, h=1e-7):
 	"""Lens map imap[{pre},ny,nx] according to grad_phi[2,ny,nx], where phi is the
 	lensing potential, and grad_phi, which can be computed as enmap.grad(phi), simply
 	is the coordinate displacement for each pixel. order, mode and border specify
@@ -15,8 +15,22 @@ def lens_map(imap, grad_phi, order=3, mode="spline", border="cyclic", trans=Fals
 	can be gotten from calling displace_map directly with precomputed pixel positions."""
 	# Converting from grad_phi to pix has roughly the same cost as calling displace_map.
 	# So almost a factor 2 in speed can be won from calling displace_map directly.
-	pix = imap.sky2pix(imap.posmap() + grad_phi, safe=False)
-	return displace_map(imap, pix, order=order, mode=mode, border=border, trans=trans)
+	pos = imap.posmap() + grad_phi
+	pix = imap.sky2pix(pos, safe=False)
+	if not deriv:
+		return displace_map(imap, pix, order=order, mode=mode, border=border, trans=trans)
+	else:
+		# displace_map deriv gives us ndim,{pre},ny,nx
+		dlens_pix = displace_map(imap, pix, order=order, mode=mode, border=border, trans=trans, deriv=True)
+		res = dlens_pix[0]*0
+		pad = (slice(None),)+(None,)*(imap.ndim-2)+(slice(None),slice(None))
+		for i in range(2):
+			pos2 = pos.copy()
+			pos2[i] += h
+			pix2 = imap.sky2pix(pos2, safe=False)
+			dpix = (pix2-pix)/h
+			res += np.sum(dlens_pix * dpix[pad],0)
+		return res
 
 def delens_map(imap, grad_phi, nstep=3, order=3, mode="spline", border="cyclic"):
 	"""The inverse of lens_map, such that delens_map(lens_map(imap, dpos), dpos) = imap
@@ -33,28 +47,33 @@ def delens_grad(grad_phi, nstep=3, order=3, mode="spline", border="cyclic"):
 	given one that has been displaced by itself."""
 	alpha = grad_phi
 	for i in range(nstep):
-		print i, alpha[:,0,0]
 		alpha = lens_map(grad_phi, -alpha, order=order, mode=mode, border=border)
 	return alpha
 
-def displace_map(imap, pix, order=3, mode="spline", border="cyclic", trans=False):
+def displace_map(imap, pix, order=3, mode="spline", border="cyclic", trans=False, deriv=False):
 	"""Displace map m[{pre},ny,nx] by pix[2,ny,nx], where pix indicates the location
 	in the input map each output pixel should get its value from (float). The output
 	is [{pre},ny,nx]."""
 	iwork = np.empty(imap.shape[-2:]+imap.shape[:-2],imap.dtype)
-	out   = imap.copy()
+	if not deriv:
+		out = imap.copy()
+	else:
+		out = enmap.empty((2,)+imap.shape, imap.wcs, imap.dtype)
 	# Why do we have to manually allocate outputs and juggle whcih is copied over here?
 	# Because it is in general not possible to infer from odata what shape idata should have.
 	# So the map_coordinates can't allocate the output array automatically in the transposed
 	# case. But in this function we know that they will have the same shape, so we can.
 	if not trans:
 		iwork[:] = utils.moveaxes(imap, (-2,-1), (0,1))
-		owork = interpol.map_coordinates(iwork, pix, order=order, mode=mode, border=border, trans=trans)
+		owork = interpol.map_coordinates(iwork, pix, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
 		out[:] = utils.moveaxes(owork, (0,1), (-2,-1))
 	else:
-		owork = iwork.copy()
+		if not deriv:
+			owork = iwork.copy()
+		else:
+			owork = np.empty(imap.shape[-2:]+(2,)+imap.shape[:-2],imap.dtype)
 		owork[:] = utils.moveaxes(imap, (-2,-1), (0,1))
-		interpol.map_coordinates(iwork, pix, owork, order=order, mode=mode, border=border, trans=trans)
+		interpol.map_coordinates(iwork, pix, owork, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
 		out[:] = utils.moveaxes(iwork, (0,1), (-2,-1))
 	return out
 

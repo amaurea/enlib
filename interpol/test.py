@@ -14,7 +14,7 @@ def spline_filter_mat(n, order=3, border="mirror", trans=False, scipy=False):
 				out[i] = ndimage.spline_filter(data, order=order)
 	return out
 
-def interpol_mat(n, m, mode="spline", order=3, border="mirror", trans=False, scipy=False):
+def interpol_mat(n, m, mode="spline", order=3, border="mirror", trans=False, scipy=False, deriv=False):
 	idata = np.zeros(m)
 	odata = np.zeros(n)
 	point = np.linspace(0, m, n, endpoint=False)[None]

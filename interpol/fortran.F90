@@ -17,6 +17,19 @@ pure function sinc(x)
 	end if
 end function
 
+pure function dsinc(x)
+	implicit none
+	real(_), intent(in) :: x
+	real(_) :: dsinc, y
+	real(_), parameter :: cut = 1e-4, pi = 3.14159265358979323846d0
+	y = abs(pi*x)
+	if(y < cut) then
+		dsinc = -sin(y)/2
+	else
+		dsinc = cos(y)/x - sin(y)/(x*y)
+	end if
+end function
+
 ! Port of scipy.ndimage's interpolation, for the purpose of adding transposes.
 ! It has two main components. One is the so-called spline filter, which I think
 ! computes relevant B-spline coefficients. It is a 1d operation applied along
@@ -321,6 +334,70 @@ pure subroutine calc_weights(type, order, p, weights, off)
 	end do
 end subroutine
 
+pure subroutine calc_weights_deriv(type, order, p, weights, off)
+	implicit none
+	integer, intent(in)    :: type, order
+	integer, intent(inout) :: off(:)
+	real(_), intent(in)    :: p(:)
+	real(_), intent(inout) :: weights(:,:)
+	integer :: ndim, nw, i, j
+	real(_) :: x, sgn
+	ndim = size(weights, 2)
+	nw   = size(weights, 1)
+	! Speed up nearest neighbor
+	if(order == 0) then
+		off = nint(p); weights = 0; return
+	end if
+	do i = 1, ndim
+		off(i) = floor(p(i)-(nw-2)*0.5d0)
+		do j = 1, nw
+			x = p(i)-(j-1)-off(i)
+			if(x > 0) then; sgn = 1; else; sgn = -1; end if
+			x = abs(x)
+			weights(j,i) = 0
+			select case(type)
+				case(0) ! convolution
+					select case(order)
+						case(0); if(x < 0.5) weights(j,i) = 0
+						case(1); if(x < 1.0) weights(j,i) = -1
+						case(3)
+							if    (x < 1) then; weights(j,i) =  4.5*x**2 - 5*x
+							elseif(x < 2) then; weights(j,i) = -1.5*x**2 + 5*x - 4; end if
+					end select
+				case(1) ! spline
+					select case(order)
+						case(0); if(x < 0.5) weights(j,i) = 0
+						case(1); if(x < 1.0) weights(j,i) = -1
+						case(2)
+							if    (x < 0.5) then; weights(j,i) = -2*x
+							elseif(x < 1.5) then; weights(j,i) = -(1.5-x); end if
+						case(3)
+							if    (x < 1.0) then; weights(j,i) = x**2 - x*2/3
+							elseif(x < 2.0) then; weights(j,i) = -(2-x)**2/2; end if
+						case(4)
+							if    (x < 0.5) then; weights(j,i) = 2*x * (x**2 * 0.25-0.625d0) + x**2 * 2*x * 0.25
+							elseif(x < 1.5) then; weights(j,i) = x**2*5/2 - x**3*2/3  - 2*x*1.25 + 5d0/24
+							elseif(x < 2.5) then; weights(j,i) = (x-2.5)**3/6; end if
+						case(5)
+							! Not computed yet
+							!if    (x < 1.0) then; weights(j,i) = x**2*(x**2*(0.25d0-x/12)-0.5d0)+0.55d0
+							!elseif(x < 2.0) then; weights(j,i) = x*(x*(x*(x*(x/24-0.375d0)+1.25d0)-1.75d0)+0.625d0)+0.425d0
+							!elseif(x < 3.0) then; weights(j,i) = (3-x)**5/120d0; end if
+					end select
+				case(2) ! lanczos
+					if(order == 0) then
+						if(x < 0.5) weights = 0
+					else
+						if(x < order) weights(j,i) = dsinc(x)*sinc(x/order) + sinc(x)*dsinc(x/order)/order
+					end if
+			end select
+			weights(j,i) = sgn*weights(j,i)
+		end do
+	end do
+end subroutine
+
+
+
 pure function map_border(border, n, i) result(v)
 	implicit none
 	integer, intent(in) :: border, n, i
@@ -423,6 +500,102 @@ subroutine interpol(idata, ishape, odata, pos, type, order, border, trans)
 		end do cloop
 		if(.not. trans) odata(:,si) = res
 	end do
+	deallocate(weights)
+	!$omp end parallel
+end subroutine
+
+! If deriv is true, returns the diagonal of the derivative of interpol(idata, pos)
+! with respect to pos. This derivative is a diagonal matrix with respect to
+! pixel becuase the value in one interpolated pixel only depends on the position
+! that pixel reads off, not the positions any other pixels read off. For each
+! element it is a vector, corresponding to the derivative in each direction.
+! So if b_i = interpol(a,pos_i), then
+! (d b_i)_a / d pos_ja = q_ia delta_ij, where q_ia = dinterpol(a,pos_i)_a.
+! odata(nsub,ndim,npos), v(nsub), res(nsub,ndim)
+subroutine interpol_deriv(idata, ishape, odata, pos, type, order, border, trans)
+	implicit none
+	real(_), intent(inout) :: idata(:,:), odata(:,:,:)
+	real(_), intent(in)    :: pos(:,:)
+	integer, intent(in)    :: ishape(:), type, order, border
+	logical, intent(in)    :: trans
+	real(_), allocatable   :: weights(:,:), dweights(:,:)
+	real(_) :: v(size(idata,1)), res(size(idata,1),size(pos,2))
+	integer :: off(size(pos,2)), inds(size(pos,2))
+	integer :: xi, si, ci, i, j, dind, ndim, nsamp, nw, nsub, ncon, n
+
+	ndim  = size(pos,2)
+	nsamp = size(pos,1)
+	nsub  = size(idata,1)
+	nw    = get_weight_length(type, order)
+	ncon  = nw**ndim
+	if(trans) idata = 0
+	!$omp parallel private(si,weights,dweights,off,res,inds,ci,dind,i,xi,v,j,n)
+	allocate(weights(nw,ndim),dweights(nw,ndim))
+	!$omp do
+	do si = 1, nsamp
+		call calc_weights(type, order, pos(si,:), weights, off)
+		call calc_weights_deriv(type, order, pos(si,:), dweights, off)
+		! Multiply each interpolation weight with its corresponding
+		! element in idata. For a 2d case with a non-flattened idata D
+		! in C order, this would be
+		!  D00*W00*W01 D01*W00*W11 D02*W00*W21
+		!  D10*W10*W01 D11*W10*W11 D12*W10*W21
+		!  D20*W20*W01 D21*W20*W11 D22*W20*W21
+		! So loop through each cell of context
+		if(.not. trans) res  = 0
+		inds = 0
+		cloop: do ci = 1, ncon
+			! Get the value of this cell of context, taking into
+			! account boundary conditions
+			dind = 0
+			do i = 1,ndim
+				xi = inds(i) + off(i)
+				n  = ishape(i)
+				xi = map_border(border, ishape(i), xi)
+				! If we don't map onto a valid point (because we use null-boundaries),
+				! this cell doesn't contribute, so go to the next one
+				if(xi < 0) cycle cloop
+				dind = dind * n + xi
+			end do
+			if(.not. trans) then
+				! Standard interpolation
+				v = idata(:,dind+1)
+				! Now multiply this value by all the relevant weights, one
+				! for each dimension
+				do i = 1, ndim
+					v = v * weights(inds(i)+1,i)
+				end do
+				! Deriv of v1 v2 v3 ... = (dv1/v1 + dv2/v2 + ...)*v1*v2*v3 ...
+				do i = 1, ndim
+					do j = 1, nsub
+						if(v(j) .ne. 0) res(j,i) = res(j,i) + v(j) * dweights(j,i)/weights(j,i)
+					end do
+				end do
+			else
+				! Transposed interpolation
+				res = odata(:,:,si)
+				do i = 1, ndim
+					res(:,i) = res(:,i) * weights(inds(i)+1,i)
+				end do
+				do i = 1, ndim
+					do j = 1, nsub
+						if(weights(j,i) .ne. 0) then
+							!$omp atomic
+							idata(j,dind+1) = idata(j,dind+1) + res(j,i) * dweights(j,i)/weights(j,i)
+						end if
+					end do
+				end do
+			end if
+			! Advance to next cell
+			do i = ndim,1,-1
+				inds(i) = inds(i) + 1
+				if(inds(i) < nw) exit
+				inds(i) = 0
+			end do
+		end do cloop
+		if(.not. trans) odata(:,:,si) = res
+	end do
+	deallocate(weights, dweights)
 	!$omp end parallel
 end subroutine
 
