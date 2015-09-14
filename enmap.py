@@ -24,6 +24,22 @@ except np.linalg.LinAlgError:
 					res[i] = (s**e*U).dot(Vh)
 			return res
 
+# Things that could be improved:
+#  1. We assume exactly 2 WCS axes in spherical projection in {dec,ra} order.
+#     It would be nice to support other configurations too. I have for example
+#     needed [det,ra] or even [time,det,ra]. Adding support for this would
+#     probably necessitate breaking backwards compatibility due to units.
+#     WCS uses the units specified in the fits file, but I use radians.
+#     Once we allos non-degree axes, the simple pi/180 conversion I use
+#     won't work for all axes. It is simpler to just go with the flow and
+#     use the same units as wcs. I need to think about how this would
+#     interact with fourier units. Also, reordering or removing axes
+#     can be difficult. I disallow that now, but for > 2 wcs dimensions,
+#     these would be useful operations.
+#  2. Passing around shape, wcs, dtype all the time is tedious. A simple
+#     geometry object would make this less tedious, as long as it is
+#     simple to override individual properties.
+
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
 # itself uses column-major ordering. So an array which is (ncomp,ny,nx)
 # will be (nx,ny,ncomp) in the file. This means that the axes in the ndmap

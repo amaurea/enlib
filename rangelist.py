@@ -11,7 +11,7 @@ class Rangelist:
 			if copy: ranges = ranges.copy()
 			self.n, self.ranges =  ranges.n, ranges.ranges
 		else:
-			ranges      = np.asarray(ranges)
+			ranges = np.asarray(ranges, dtype=int)
 			if copy: ranges = np.array(ranges)
 			if ranges.ndim == 1:
 				self.n      = ranges.size
@@ -29,7 +29,7 @@ class Rangelist:
 		if isinstance(sel,slice):
 			sel = expand_slice(sel, self.n)
 			if len(self.ranges) == 0: return self
-			if (sel.stop-sel.start)*sel.step < 0: return Rangelist(np.zeros([0,2]),0)
+			if (sel.stop-sel.start)*sel.step < 0: return Rangelist(np.zeros([0,2],dtype=int),0)
 			if sel.step > 0:
 				return Rangelist(slice_helper(self.ranges, sel),(sel.stop-sel.start)/sel.step)
 			else:

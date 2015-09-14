@@ -926,8 +926,7 @@ class LinearSystemAz(LinearSystem):
 	def write(self, prefix="", ext="fits"):
 		rhs = self.dof.unzip(self.b)[0]
 		if self.comm.rank == 0:
-			with h5py.File(prefix + "rhs.hdf", "w") as hfile:
-				hfile["data"] = rhs
+			enmap.write_map(prefix + "rhs.fits", rhs)
 		self.precon.write(prefix, ext=ext)
 
 class AzEquation:

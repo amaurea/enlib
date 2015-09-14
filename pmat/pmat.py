@@ -256,6 +256,8 @@ class PmatCut(PointingMatrix):
 		self.cuts[:,1] = flat[:,0]
 		self.cuts[:,2] = flat[:,1]-flat[:,0]
 		self.cuts[:,5:]= par[None,:]
+		assert np.all(self.cuts[:,2] > 0),  "Empty cut range detected in %s" % scan.entry.id
+		assert np.all(self.cuts[:,1] >= 0) and np.all(flat[:,1] <= scan.nsamp), "Out of bounds cut range detected in %s" % scan.entry.id
 		if self.cuts.size > 0:
 			get_core(np.float32).measure_cuts(self.cuts.T)
 		self.cuts[:,3] = utils.cumsum(self.cuts[:,4])
