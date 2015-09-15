@@ -36,25 +36,34 @@
 # signal_map   = SignalMap(..., cut=signal_cut)
 # signal_phase = SignalPhase(..., cut=signal_cut)
 # signals = [signal_cut, signal_map, signal_phase]
+import numpy as np, h5py, zipper
+from enlib import enmap, dmap2 as dmap, array_ops, pmat
 
 ######## Signals ########
 
 class Signal:
 	"""General signal interface."""
-	def __init__(self, scans):
+	def __init__(self, name, ext):
+		self.ext    = ext
 		self.dof    = zipper.ArrayZipper(np.zeros([0]))
 		self.precon = PreconNull()
+		if isinstance(name, basestring):
+			self.name, self.oname = name, name
+		else:
+			self.name, self.oname = name
 	def prepare (self, x): return x.copy()
 	def forward (self, scan, tod, x): pass
 	def backward(self, scan, tod, x): pass
 	def finish  (self, x, y): x[:] = y
+	def write   (self, prefix, tag, x): pass
 
-def SignalMap(Signal):
-	def __init__(self, scans, area, cuts=None, comm=None, pmat_order=None, eqsys=None):
+class SignalMap(Signal):
+	def __init__(self, scans, area, comm, cuts=None, name="main", ext="fits", pmat_order=None, eqsys=None, nuisance=False):
+		Signal.__init__(self, name, ext)
 		self.area = area
 		self.cuts = cuts
-		self.dof  = dmap.ArrayZipper(area, shared=False)
-		self.data = {scan: pmat.PmatMap(scan, area, order=pmat_order, eqsys=eqsys) for scan in scans}
+		self.dof  = dmap.ArrayZipper(area)
+		self.data = {scan: pmat.PmatMap(scan, area, order=pmat_order, sys=eqsys) for scan in scans}
 	def forward(self, scan, tod, work):
 		self.data[scan].forward(tod, work)
 	def backward(self, scan, tod, work):
@@ -62,9 +71,15 @@ def SignalMap(Signal):
 	def finish(self, m, work):
 		self.dof.comm.Allreduce(work, m)
 	def zeros(self): return enmap.zeros(self.area.shape, self.area.wcs, self.area.dtype)
+	def write(self, prefix, tag, m):
+		if self.oname is None: return
+		oname = "%s%s_%s.%s" % (prefix, self.oname, tag, self.ext)
+		if self.dof.comm.rank == 0:
+			enmap.write_map(oname, m)
 
-def SignalDMap2(Signal):
-	def __init__(self, scans, subinds, area, cuts=None, comm=None, pmat_order=None, eqsys=None):
+class SignalDmap(Signal):
+	def __init__(self, scans, subinds, area, cuts=None, name="main", ext="fits", pmat_order=None, eqsys=None, nuisance=False):
+		Signal.__init__(self, name, ext)
 		self.area = area
 		self.cuts = cuts
 		self.dof  = dmap.DmapZipper(area)
@@ -72,7 +87,7 @@ def SignalDMap2(Signal):
 		self.data = {}
 		for scan, subind in zip(scans, subinds):
 			work = area.tile2work()
-			self.data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, eqsys=eqsys), subind]
+			self.data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=eqsys), subind]
 	def prepare(self, m):
 		return m.tile2work()
 	def forward(self, scan, tod, work):
@@ -83,10 +98,15 @@ def SignalDMap2(Signal):
 		mat.backward(tod, work[ind])
 	def finish(self, m, work):
 		m.work2tile(work)
-	def zeros(self): return dmap.Dmap2(self.area.geometry)
+	def zeros(self): return dmap.zeros(self.area.geometry)
+	def write(self, prefix, tag, m):
+		if self.oname is None: return
+		oname = "%s%s_%s.%s" % (prefix, self.oname, tag, self.ext)
+		dmap.write_map(oname, m)
 
-def SignalCut(Signal):
-	def __init__(self, scans, dtype, cut_type=None):
+class SignalCut(Signal):
+	def __init__(self, scans, dtype, comm, name=["cut",None], cut_type=None):
+		Signal.__init__(self, name, "hdf")
 		self.data  = {}
 		self.dtype = dtype
 		cutrange = [0,0]
@@ -95,6 +115,7 @@ def SignalCut(Signal):
 			cutrange = [cutrange[1], cutrange[1]+mat.njunk]
 			self.data[scan] = [mat, cutrange]
 		self.njunk = cutrange[1]
+		self.dof = zipper.ArrayZipper(np.zeros(self.njunk, self.dtype), shared=False, comm=comm)
 	def forward(self, scan, tod, junk):
 		mat, cutrange = self.data[scan]
 		mat.forward(tod, junk[cutrange[0]:cutrange[1]])
@@ -102,6 +123,11 @@ def SignalCut(Signal):
 		mat, cutrange = self.data[scan]
 		mat.backward(tod, junk[cutrange[0]:cutrange[1]])
 	def zeros(self): return np.zeros(self.njunk, self.dtype)
+	def write(self, prefix, tag, m):
+		if self.oname is None: return
+		oname = "%s%s_%s.%s" % (prefix, self.oname.format(rank=self.dof.comm.rank), tag, self.ext)
+		with h5py.File(oname, "w") as hfile:
+			hfile["data"] = m
 
 ######## Preconditioners ########
 
@@ -123,7 +149,7 @@ class PreconMapBinned:
 		for i in range(ncomp):
 			div[i,i] = 1
 			iwork = signal.prepare(div[i])
-			owork = signal.zeros()
+			owork = signal.prepare(signal.zeros())
 			for scan in scans:
 				tod = np.zeros((scan.ndet, scan.nsamp), iwork.dtype)
 				signal.forward(scan, tod, iwork)
@@ -143,19 +169,19 @@ class PreconMapBinned:
 		signal.finish(hits, work)
 		hits = hits[0].astype(np.int32)
 		self.div, self.idiv, self.hits = div, idiv, hits
+		self.signal = signal
 	def __call__(self, m):
 		m[:] = array_ops.matmul(self.idiv, m)
-	def write(self, prefix="", ext="fits"):
-		# We want the original div, not the inverse one
-		enmap.write_map(prefix + "div."  + ext, self.div)
-		enmap.write_map(prefix + "hits." + ext, self.hits)
+	def write(self, prefix):
+		self.signal.write(prefix, "div", self.div)
+		self.signal.write(prefix, "hits", self.hits)
 
-class PreconDmap2Binned:
+class PreconDmapBinned:
 	def __init__(self, signal, scans):
 		ncomp = signal.area.shape[0]
 		geom  = signal.area.geometry.copy()
 		geom.pre = (ncomp,)+geom.pre
-		div   = dmap.Dmap2(geom)
+		div   = dmap.zeros(geom)
 		# The cut samples are included here becuase they must be avoided, but the
 		# actual computation of the junk sample preconditioner happens elsewhere.
 		# This is a bit redundant, but should not cost much time since this only happens
@@ -165,13 +191,13 @@ class PreconDmap2Binned:
 		for i in range(ncomp):
 			div[i,i] = 1
 			iwork = signal.prepare(div[i])
-			owork = signal.prepare(div[i])
+			owork = signal.prepare(signal.zeros())
 			for scan in scans:
-				tod = np.zeros((scan.ndet, scan.nsamp), iwork.dtype)
+				tod = np.zeros((scan.ndet, scan.nsamp), geom.dtype)
 				signal.forward(scan, tod, iwork)
 				signal.cuts.forward (scan, tod, ijunk)
 				scan.noise.white(tod)
-				signal.cuts.backward(scan, tod. ojunk)
+				signal.cuts.backward(scan, tod, ojunk)
 				signal.backward(scan, tod, owork)
 			signal.finish(div[i], owork)
 		idiv = div.copy()
@@ -184,16 +210,17 @@ class PreconDmap2Binned:
 			tod = np.full((scan.ndet, scan.nsamp), 1, hits.dtype)
 			signal.cuts.backward(scan, tod, ojunk)
 			signal.backward(scan, tod, work)
+		enmap.write_map("workB.fits", work[0])
 		signal.finish(hits, work)
 		hits = hits[0].astype(np.int32)
 		self.div, self.idiv, self.hits = div, idiv, hits
+		self.signal = signal
 	def __call__(self, m):
 		for idtile, mtile in zip(self.idiv.tiles, m.tiles):
 			mtile[:] = array_ops.matmul(idtile, mtile, axes=[0,1])
-	def write(self, prefix="", ext="fits"):
-		# We want the original div, not the inverse one
-		dmap.write_map(prefix + "div."  + ext, self.div)
-		dmap.write_map(prefix + "hits." + ext, self.hits)
+	def write(self, prefix):
+		self.signal.write(prefix, "div", self.div)
+		self.signal.write(prefix, "hits", self.hits)
 
 class PreconCut:
 	def __init__(self, signal, scans):
@@ -207,9 +234,11 @@ class PreconCut:
 			signal.backward(scan, tod, owork)
 		signal.finish(junk, owork)
 		self.idiv = 1/junk
+		self.signal = signal
 	def __call__(self, m):
 		m *= self.idiv
-	def write(self, prefix="", ext="fits"): pass
+	def write(self, prefix):
+		self.signal.write(prefix, "idiv", self.idiv)
 
 ######## Equation system ########
 
@@ -219,28 +248,29 @@ class Eqsys:
 		self.signals = signals
 		self.dtype   = dtype
 		self.dof     = zipper.MultiZipper([signal.dof for signal in signals], comm=comm)
+		self.b       = None
 	def A(self, x):
 		"""Apply the A-matrix P'N"P to the zipped vector x, returning the result."""
 		maps  = self.dof.unzip(x)
 		# Set up our input and output work arrays. The output work array will accumulate
 		# the results, so it must start at zero.
 		iwork = [signal.prepare(map) for signal, map in zip(self.signals, maps)]
-		owork = [signal.prepare(signal.zeros()) for signal in signals]
+		owork = [signal.prepare(signal.zeros()) for signal in self.signals]
 		for scan in self.scans:
 			# Set up a TOD for this scan
 			tod = np.zeros([scan.ndet, scan.nsamp], self.dtype)
 			# Project each signal onto the TOD (P) in reverse order. This is done
 			# so that the cuts can override the other signals.
-			for signal, work in zip(signals, iwork):
+			for signal, work in zip(self.signals, iwork):
 				signal.forward(scan, tod, work)
 			# Apply the noise matrix (N")
 			scan.noise.apply(tod)
 			# Project the TOD onto each signal (P') in normal order. This is done
 			# to allow the cuts to zero out the relevant TOD samples first
-			for signal, work in zip(singals, owork):
-				signal.backward(scan, tod, owork)
+			for signal, work in zip(self.signals, owork):
+				signal.backward(scan, tod, work)
 		# Collect all the results, and flatten them
-		for signal, map, work in zip(signals, maps, owork):
+		for signal, map, work in zip(self.signals, maps, owork):
 			signal.finish(map, work)
 		# NOTE Any priors should be handled here!
 		return self.dof.zip(*maps)
@@ -249,9 +279,10 @@ class Eqsys:
 		maps = self.dof.unzip(x)
 		for signal, map in zip(self.signals, maps):
 			signal.precon(map)
-		return self.dof.zip(maps)
+		return self.dof.zip(*maps)
 	def calc_b(self):
-		maps = [signal.zeros() for signal in self.signals]
+		maps  = [signal.zeros() for signal in self.signals]
+		owork = [signal.prepare(map) for signal, map in zip(self.signals,maps)]
 		for scan in self.scans:
 			# Get the actual TOD samples (d)
 			tod  = scan.get_samples()
@@ -261,9 +292,17 @@ class Eqsys:
 			scan.noise.apply(tod)
 			# Project onto signals
 			for signal, work in zip(self.signals, owork):
-				signal.backward(scan, tod, owork)
+				signal.backward(scan, tod, work)
 			del tod
 		# Collect results
 		for signal, map, work in zip(self.signals, maps, owork):
 			signal.finish(map, work)
-		return self.dof.zip(maps)
+		self.b = self.dof.zip(*maps)
+	def write(self, prefix, tag, x):
+		maps = self.dof.unzip(x)
+		for signal, map in zip(self.signals, maps):
+			signal.write(prefix, tag, map)
+
+def write_precons(signals, prefix):
+	for signal in signals:
+		signal.precon.write(prefix)

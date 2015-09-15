@@ -140,6 +140,8 @@ class ndmap(np.ndarray):
 		else:
 			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
 		return ibox
+	def write(self, fname, fmt=None):
+		write_map(fname, self, fmt=fmt)
 
 def slice_wcs(shape, wcs, sel):
 	"""Slice a geometry specified by shape and wcs according to the
