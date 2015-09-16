@@ -140,6 +140,8 @@ class ndmap(np.ndarray):
 		else:
 			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
 		return ibox
+	def write(self, fname, fmt=None):
+		write_map(fname, self, fmt=fmt)
 
 def slice_wcs(shape, wcs, sel):
 	"""Slice a geometry specified by shape and wcs according to the
@@ -202,6 +204,8 @@ def zeros(shape, wcs=None, dtype=None):
 	return enmap(np.zeros(shape, dtype=dtype), wcs, copy=False)
 def ones(shape, wcs=None, dtype=None):
 	return enmap(np.ones(shape, dtype=dtype), wcs, copy=False)
+def full(shape, wcs, val, dtype=None):
+	return enmap(np.full(shape, val, dtype=dtype), wcs, copy=False)
 
 def posmap(shape, wcs, safe=True, corner=False):
 	"""Return an enmap where each entry is the coordinate of that entry,
@@ -754,8 +758,16 @@ def padcrop(m, info):
 
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
-	print "FIXME: grad not done"
-	return np.reshape(np.real(ifft(fft(m)[None,:,...]*m.lmap()[:,None,...]*1j)),[2]+list(m.shape))
+	return ifft(fft(m)*_widen(m.lmap(),m.ndim+1)*1j).real
+
+def div(m):
+	"""Returns the divergence of the map m[2,...] as [...]."""
+	return ifft(np.sum(fft(m)*_widen(m.lmap(),m.ndim)*1j,0)).real
+
+def _widen(map,n):
+	"""Helper for gard and div. Adds degenerate axes between the first
+	and the last two to give the map a total dimensionality of n."""
+	return map[(slice(None),) + (None,)*(n-3) + (slice(None),slice(None))]
 
 def apod(m, width, profile="cos"):
 	width = np.minimum(np.zeros(2)+width,m.shape[-2:])

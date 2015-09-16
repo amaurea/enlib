@@ -715,3 +715,10 @@ def label_unique(a, axes=(-1,), rtol=1e-5, atol=1e-8):
 		ids[match] = id
 		id += 1
 	return ids.reshape(a.shape[:-1])
+
+def transpose_inds(inds, nrow, ncol):
+	"""Given a set of flattened indices into an array of shape (nrow,ncol),
+	return the indices of the corresponding elemens in a transposed array."""
+	row_major = inds
+	row, col = row_major/ncol, row_major%ncol
+	return col*nrow + row

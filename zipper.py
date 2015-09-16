@@ -56,7 +56,8 @@ class MultiZipper:
 		self.bins = np.array([cum[:-1],cum[1:]]).T
 		self.allshared = np.all([z.shared for z in zippers])
 		self.comm = getcomm(comm, self.allshared)
-	def zip(self, *args):
+		self.shared = True
+	def zip(self, args):
 		return np.concatenate([z.zip(a) for z,a in zip(self.zippers, args)])
 	def unzip(self, x):
 		return tuple([z.unzip(x[b[0]:b[1]]) for z,b in zip(self.zippers, self.bins)])
