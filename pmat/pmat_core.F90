@@ -1435,4 +1435,50 @@ contains
 		end if
 	end subroutine
 
+	subroutine pmat_plain(dir, map, tod, pix)
+		use omp_lib
+		implicit none
+		integer, intent(in)    :: dir
+		real(_), intent(in)    :: pix(:,:)
+		real(_), intent(inout) :: map(:,:,:), tod(:,:)
+		integer :: npix, ipix(size(pix,1)), i, j, k, nproc, id
+		real(_), allocatable   :: wmap(:,:,:,:)
+
+		nproc= omp_get_max_threads()
+		npix = size(pix,2)
+		if(dir > 0) then
+			!$omp parallel do private(i,ipix)
+			do i = 1, npix
+				ipix = nint(pix(:,i))
+				ipix(1) = max(1,min(size(map,2),ipix(1)))
+				ipix(2) = max(1,min(size(map,1),ipix(2)))
+				tod(i,:) = map(ipix(2),ipix(1),:)
+			end do
+		else
+			allocate(wmap(size(map,1),size(map,2),size(map,3),nproc))
+			!$omp parallel workshare
+			wmap = 0
+			!$omp end parallel workshare
+			!$omp parallel private(i, ipix, id)
+			id = omp_get_thread_num()+1
+			!$omp do
+			do i = 1, npix
+				ipix = nint(pix(:,i))
+				ipix(1) = max(1,min(size(map,2),ipix(1)))
+				ipix(2) = max(1,min(size(map,1),ipix(2)))
+				wmap(ipix(2),ipix(1),:,id) = tod(i,:)
+			end do
+			!$omp end do
+			!$omp end parallel
+			!$omp parallel do private(i,j)
+			do i = 1, size(map, 3)
+				do j = 1, size(map,2)
+					do k = 1, size(map,1)
+						map(k,j,i) = map(k,j,i) + sum(wmap(k,j,i,:))
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
 end module

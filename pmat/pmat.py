@@ -498,3 +498,7 @@ def build_pixbox(obox, n, margin=10):
 def pmat_phase(dir, tod, map, az, dets, az0, daz):
 	core = get_core(tod.dtype)
 	core.pmat_phase(dir, tod.T, map.T, az, dets, az0, daz)
+
+def pmat_plain(dir, tod, map, pix):
+	core = get_core(tod.dtype)
+	core.pmat_plain(dir, tod.T, map.T, pix.T)
