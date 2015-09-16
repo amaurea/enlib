@@ -1,5 +1,5 @@
-all: sharp iers coordinates array_ops pmat nmat colorize ptsrc_data
-clean: clean_sharp clean_iers clean_coordinates clean_array_ops clean_pmat clean_nmat clean_colorize clean_ptsrc_data
+all: sharp iers coordinates array_ops pmat nmat colorize ptsrc_data interpol
+clean: clean_sharp clean_iers clean_coordinates clean_array_ops clean_pmat clean_nmat clean_colorize clean_ptsrc_data clean_interpol
 	rm -rf *.pyc
 
 sharp: foo
@@ -34,6 +34,10 @@ ptsrc_data: foo
 	make -C ptsrc_data
 clean_ptsrc_data:
 	make -C ptsrc_data clean
+interpol: foo
+	make -C interpol
+clean_interpol: foo
+	make -C interpol clean
 
 
 foo:
