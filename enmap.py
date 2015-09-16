@@ -204,6 +204,8 @@ def zeros(shape, wcs=None, dtype=None):
 	return enmap(np.zeros(shape, dtype=dtype), wcs, copy=False)
 def ones(shape, wcs=None, dtype=None):
 	return enmap(np.ones(shape, dtype=dtype), wcs, copy=False)
+def full(shape, wcs, val, dtype=None):
+	return enmap(np.full(shape, val, dtype=dtype), wcs, copy=False)
 
 def posmap(shape, wcs, safe=True, corner=False):
 	"""Return an enmap where each entry is the coordinate of that entry,

@@ -127,7 +127,7 @@ class LinearSystem:
 # 		signal.PT(scan, tod, signal.b)
 # for signal in signals:
 # 	signal.b = signal.dof.reduce(signal.b)
-# b = tot_dof.zip(*sum([signal.dof.unzip(signal.b) for signal in signals]))
+# b = tot_dof.zip(sum([signal.dof.unzip(signal.b) for signal in signals]))
 #
 # Memory overhead. The scheme above stores the map redundantly, both as part of
 # global array and as part of a local one for one of the signals. This wastes a bit
@@ -177,17 +177,17 @@ class LinearSystemMap(LinearSystem):
 			zippers.append(zipper.ArrayZipper(np.zeros(self.mapeq.azshape,dtype=area.dtype),shared=azmap.shared,comm=comm))
 		self.dof = zipper.MultiZipper(zippers, comm=comm)
 		L.info("Building right-hand side")
-		self.b      = self.dof.zip(*self.mapeq.b())
+		self.b      = self.dof.zip(self.mapeq.b())
 		self.scans, self.area, self.comm = scans, area, comm
 		self.isrc   = isrc
 		# Store a copy of the next level, which
 		# we will use when going up and down in levels.
 		self._upsys = None
 	def A(self, x):
-		res = self.dof.zip(*self.mapeq.A(*self.dof.unzip(x)))
+		res = self.dof.zip(self.mapeq.A(*self.dof.unzip(x)))
 		return res
 	def M(self, x):
-		res = self.dof.zip(*self.precon.apply(*self.dof.unzip(x)))
+		res = self.dof.zip(self.precon.apply(*self.dof.unzip(x)))
 		return res
 	def dot(self, x, y):
 		res = self.dof.dot(x,y)
@@ -624,7 +624,7 @@ def test_symmetry(mapeq, nmax=0, shuf=True, verbose=True, prec=None):
 		inds = np.arange(nmax)
 	for i, ind in enumerate(inds):
 		a = np.zeros(dof.n,dtype=mapeq.dtype); a[ind] = 1
-		rows.append(dof.zip(*fun(*dof.unzip(a))))
+		rows.append(dof.zip(fun(*dof.unzip(a))))
 		if verbose:
 			b = np.array(rows)[:,np.array(inds[:i+1])]
 			sym = checksym(b)
@@ -912,13 +912,13 @@ class LinearSystemAz(LinearSystem):
 				]
 		self.dof = zipper.MultiZipper(zippers, comm=comm)
 		L.info("Building right-hand side")
-		self.b  = self.dof.zip(*self.azeq.b())
+		self.b  = self.dof.zip(self.azeq.b())
 		self.comm, self.scans = comm, scans
 	def A(self, x):
-		res = self.dof.zip(*self.azeq.A(*self.dof.unzip(x)))
+		res = self.dof.zip(self.azeq.A(*self.dof.unzip(x)))
 		return res
 	def M(self, x):
-		res = self.dof.zip(*self.precon.apply(*self.dof.unzip(x)))
+		res = self.dof.zip(self.precon.apply(*self.dof.unzip(x)))
 		return res
 	def dot(self, x, y):
 		res = self.dof.dot(x,y)

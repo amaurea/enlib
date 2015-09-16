@@ -49,6 +49,11 @@ def ones(geometry):
 	"""Return a new Dmap with the specified geometry, filled with ones."""
 	tiles = [enmap.ones(ts,tw,dtype=geometry.dtype) for ts,tw in geometry.loc_geometry]
 	return Dmap(geometry, tiles, copy=False)
+def full(geometry, val):
+	"""Return a new Dmap fwith the specified geometry, filled with the given value."""
+	tiles = [enmap.full(ts,tw,val,dtype=geometry.dtype) for ts,tw in geometry.loc_geometry]
+	return Dmap(geometry, tiles, copy=False)
+
 def geometry(shape, wcs=None, bbpix=None, tshape=None, dtype=None, comm=None, bbox=None):
 	"""Construct a dmap geometry."""
 	return DGeometry(shape=shape, wcs=wcs, bbpix=bbpix, tshape=tshape, dtype=dtype, comm=comm, bbox=bbox)
@@ -171,6 +176,51 @@ for opname in ["__iadd__", "__iand__", "__idiv__", "__ifloordiv__",
 		"__ilshift__", "__imod__", "__imul__", "__ior__", "__ipow__",
 		"__irshift__", "__isub__", "__itruediv__", "__ixor__"]:
 	setattr(Dmap, opname, makefun(opname, True))
+
+def sum(dmap, axis=None):
+	"""Sum a dmap along the specified axis, or the flattened version if axis is None.
+	The result is a Dmap if the pixel axes are not involved in the sum."""
+	# Full sum
+	if axis is None:
+		return dmap.geometry.comm.allreduce(np.sum([np.sum(t) for t in self.tiles]))
+	# Non-pixel sums
+	if axis < 0: axis = dmap.ndim+axis
+	if axis < dmap.ndim-2:
+		pre = dmap.pre[:axis]+dmap.pre[axis+1:]
+		res = zeros(dmap.geometry.aspre(pre))
+		for itile, otile in zip(dmap.tiles, res.tiles):
+			otile[:] = np.sum(itile, axis)
+		return res
+	# Pixel sums: Sum each tile along the specified direction. Then sum tiles
+	# that are on the same row/column. Then stack along the remaining row/column
+	res = np.zeros(dmap.shape[:axis]+dmap.shape[axis+1:],dmap.dtype)
+	paxis = axis-(dmap.ndim-2)
+	for tile, ind in zip(dmap.tiles, dmap.loc_inds):
+		pbox = dmap.geometry.tile_boxes[ind]
+		res[...,pbox[0,1-paxis]:pbox[1,1-paxis]] += np.sum(tile, axis)
+	return utils.allreduce(res, dmap.comm)
+
+def broadcast_into(dmap, val, axis=None):
+	"""Transpose of a sum a dmap along the specified axis, or the flattened version if axis is None."""
+	# Full sum
+	if axis is None: dmap[:] = val
+	else:
+		# Non-pixel sums
+		if axis < 0: axis = dmap.ndim+axis
+		if axis < dmap.ndim-2:
+			for itile, otile in zip(dmap.tiles, val.tiles):
+				itile[:] = np.asarray(otile)[(slice(None),)*axis+(None,)+(slice(None),)*(dmap.ndim-axis-1)]
+		else:
+			# Pixel sums: Sum each tile along the specified direction. Then sum tiles
+			# that are on the same row/column. Then stack along the remaining row/column
+			res = np.zeros(dmap.shape[:axis]+dmap.shape[axis+1:],dmap.dtype)
+			paxis = axis-(dmap.ndim-2)
+			for tile, ind in zip(dmap.tiles, dmap.loc_inds):
+				pbox = dmap.geometry.tile_boxes[ind]
+				if paxis == 0:
+					tile[:] = res[Ellipsis,None,pbox[0,1]:pbox[1,1]]
+				else:
+					tile[:] = res[Ellipsis,pbox[0,0]:pbox[1,0],None]
 
 class DGeometry(object):
 	"""DGeometry represents the shape and layout of a DMap."""
@@ -507,7 +557,13 @@ def box2pix(shape, wcs, box):
 	fbox = box.reshape(-1,2,2)
 	# Must rollaxis because sky2pix expects [{dec,ra},...]
 	ibox = enmap.sky2pix(shape, wcs, utils.moveaxis(fbox,2,0), corner=True)
-	ibox = np.array([np.floor(ibox[0]),np.ceil(ibox[1])]).astype(int)
+	# We now have [{y,x},:,{from,to}
+	# Truncate to integer, and add one to endpoint to make halfopen interval
+	ibox = np.floor(np.sort(ibox, 2)).astype(int)
+	# Add 1 to endpoint to make halfopen interval
+	ibox[:,:,1] += 1
+	#ibox = np.array([np.floor(ibox[0]),np.ceil(ibox[1])]).astype(int)
+	# Shuffle to [:,{from,to},{y,x}]
 	ibox = utils.moveaxis(ibox, 0, 2)
 	return ibox.reshape(box.shape)
 
