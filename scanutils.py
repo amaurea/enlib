@@ -42,7 +42,7 @@ def classify_scanning_patterns(myscans, tol=0.5*utils.degree, comm=None):
 	rank  = np.full(len(boxes),comm.rank)
 	if comm is not None:
 		boxes = utils.allgatherv(boxes, comm)
-		ranks = utils.allgatherv(rank,  comm)
+		rank  = utils.allgatherv(rank,  comm)
 	pids = utils.label_unique(boxes, axes=(1,2), atol=tol)
 	npattern = np.max(pids)+1
 	# For each scanning pattern, define a bounding box

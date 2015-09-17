@@ -750,7 +750,6 @@ contains
 		real(_),    intent(inout) :: tod(:,:), junk(:)
 		integer(4), parameter     :: det=1, lstart=2, llen=3, gstart=4, glen=5, cuttype=6
 		integer(4) :: ci, di, l1, l2, g1, g2
-
 		!$omp parallel do private(l1,l2,g1,g2,di)
 		do ci = 1, size(cuts,2)
 			l1 = cuts(lstart,ci)+1; l2 = l1+cuts(llen,ci)-1

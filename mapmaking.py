@@ -134,7 +134,7 @@ class SignalCut(Signal):
 
 class SignalPhase(Signal):
 	def __init__(self, scans, pids, patterns, array_shape, res, dtype, comm, cuts=None,
-			name=["phase","phase_{pid:02}_{az0:.0}_{az1:.0}_{el:.0}"], col_major=True, hysteresis=True):
+			name=["phase","phase_{pid:02}_{az0:.0f}_{az1:.0f}_{el:.0f}"], col_major=True, hysteresis=True):
 		Signal.__init__(self, name, "fits")
 		nrow,ncol = array_shape
 		ndet = nrow*ncol
@@ -152,7 +152,7 @@ class SignalPhase(Signal):
 		# nicer if passed in, but then the ugliness would only be moved to the calling
 		# code instead.
 		for pattern in patterns:
-			az0,az1 = pattern[:,1]
+			az0,az1 = utils.widen_box(pattern)[:,1]
 			naz = np.ceil((az1-az0)/res)
 			az1 = az0 + naz*res
 			det_unit = nrow if col_major else ncol
@@ -291,7 +291,8 @@ class PreconCut:
 			scan.noise.white(tod)
 			signal.backward(scan, tod, owork)
 		signal.finish(junk, owork)
-		self.idiv = 1/junk
+		self.idiv = junk*0
+		self.idiv[junk!=0] = 1/junk[junk!=0]
 		self.signal = signal
 	def __call__(self, m):
 		m *= self.idiv
@@ -360,7 +361,7 @@ class Eqsys:
 			tod = np.zeros([scan.ndet, scan.nsamp], self.dtype)
 			# Project each signal onto the TOD (P) in reverse order. This is done
 			# so that the cuts can override the other signals.
-			for signal, work in zip(self.signals, iwork):
+			for signal, work in zip(self.signals, iwork)[::-1]:
 				signal.forward(scan, tod, work)
 			# Apply the noise matrix (N")
 			scan.noise.apply(tod)
@@ -403,6 +404,17 @@ class Eqsys:
 		maps = self.dof.unzip(x)
 		for signal, map in zip(self.signals, maps):
 			signal.write(prefix, tag, map)
+	def check_symmetry(self, inds):
+		"""Debug function - checks the symmetry of A[inds,inds]"""
+		res = np.zeros([len(inds),len(inds)])
+		for i, ind in enumerate(inds):
+			ivec = np.zeros(self.dof.n)
+			ivec[ind] = 1
+			ovec = self.A(ivec)
+			res[i] = ovec[inds]
+			if self.dof.comm.rank == 0:
+				print "----", np.sum(ovec), ind
+				np.savetxt("/dev/stdout", res[:i+1,:i+1], fmt="%11.4e")
 
 def write_precons(signals, prefix):
 	for signal in signals:
