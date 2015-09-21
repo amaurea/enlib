@@ -65,7 +65,7 @@ class PmatMap(PointingMatrix):
 			raise NotImplementedError("order > 1 is not implemented")
 		self.transform = transform
 		self.ipol = ipol
-	def forward(self, tod, m, tmul=0, mmul=1):
+	def forward(self, tod, m, tmul=1, mmul=1):
 		"""m -> tod"""
 		self.func( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
 	def backward(self, tod, m, tmul=1, mmul=1):

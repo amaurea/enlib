@@ -1421,7 +1421,7 @@ contains
 			!$omp parallel do private(di,si)
 			do di = 1, ndet
 				do si = 1, nsamp
-					tod(si,di) = map(ais(si),dets(di)+1,pis(si))
+					tod(si,di) = tod(si,di) + map(ais(si),dets(di)+1,pis(si))
 				end do
 			end do
 		elseif(dir < 0) then

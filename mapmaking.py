@@ -312,7 +312,17 @@ class PreconPhaseBinned:
 		owork = signal.prepare(signal.zeros())
 		prec_div_helper(signal, scans, iwork, owork, ijunk, ojunk)
 		signal.finish(div, owork)
+		hits = signal.zeros()
+		owork = signal.prepare(hits)
+		for scan in scans:
+			tod = np.full((scan.ndet, scan.nsamp), 1, signal.dtype)
+			signal.cuts.backward(scan, tod, ojunk)
+			signal.backward(scan, tod, owork)
+		signal.finish(hits, owork)
+		for i in range(len(hits)):
+			hits[i] = hits[i].astype(np.int32)
 		self.div = div
+		self.hits = hits
 		self.signal = signal
 	def __call__(self, ms):
 		for d, m in zip(self.div, ms):
@@ -323,21 +333,46 @@ class PreconPhaseBinned:
 ######## Priors ########
 
 class PriorNull:
-	def __call__(self, xin, xout): pass
+	def __call__(self, scans, xin, xout): pass
 
 class PriorMapNohor:
 	def __init__(self, weight=1):
 		self.weight = weight
-	def __call__(self, imap, omap):
+	def __call__(self, scans, imap, omap):
 		omap += np.asarray(np.sum(imap*self.weight,-1))[:,:,None]*self.weight
 
 class PriorDmapNohor:
 	def __init__(self, weight=1):
 		self.weight = weight
-	def __call__(self, imap, omap):
+	def __call__(self, scans, imap, omap):
 		tmp = omap*0
 		dmap.broadcast_into(tmp, dmap.sum(imap*self.weight,-1), -1)
 		omap += tmp * self.weight
+
+class PriorProjectOut:
+	def __init__(self, signal_map, signal_pickup, weight=1):
+		self.signal_map = signal_map
+		self.signal_pickup = signal_pickup
+		self.weight = weight
+	def __call__(self, scans, imap, omap):
+		pmap  = self.signal_pickup.zeros()
+		mmap  = self.signal_map.zeros()
+		mwork = self.signal_map.prepare(self.signal_map.zeros())
+		pwork = self.signal_pickup.prepare(pmap)
+		for scan in scans:
+			tod = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
+			self.signal_map.forward(scan, tod, mwork)
+			self.signal_pickup.backward(scan, tod, pwork)
+		self.signal_pickup.finish(pmap, pwork)
+		for pm, h in zip(pmap,self.signal_pickup.precon.hits):
+			pm /= h*h
+		mwork = self.signal_map.prepare(mmap)
+		for scan in scans:
+			tod = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
+			self.signal_pickup.forward(scan, tod, pwork)
+			self.signal_map.backward(scan, tod, mwork)
+		self.signal_map.finish(mmap, mwork)
+		omap += mmap*self.weight
 
 ######## Equation system ########
 
@@ -374,7 +409,7 @@ class Eqsys:
 			signal.finish(map, work)
 		# priors
 		for signal, imap, omap in zip(self.signals, imaps, omaps):
-			signal.prior(imap, omap)
+			signal.prior(self.scans, imap, omap)
 		return self.dof.zip(omaps)
 	def M(self, x):
 		"""Apply the preconditioner to the zipped vector x."""
@@ -404,6 +439,8 @@ class Eqsys:
 		maps = self.dof.unzip(x)
 		for signal, map in zip(self.signals, maps):
 			signal.write(prefix, tag, map)
+	# These debug functions don't work properly for
+	# distributed degrees of freedom.
 	def check_symmetry(self, inds):
 		"""Debug function - checks the symmetry of A[inds,inds]"""
 		res = np.zeros([len(inds),len(inds)])
@@ -415,6 +452,18 @@ class Eqsys:
 			if self.dof.comm.rank == 0:
 				print "----", np.sum(ovec), ind
 				np.savetxt("/dev/stdout", res[:i+1,:i+1], fmt="%11.4e")
+	def calc_A(self):
+		n = self.dof.n
+		res = np.eye(n)
+		for i in range(n):
+			res[i] = self.A(res[i])
+		return res
+	def calc_M(self):
+		n = self.dof.n
+		res = np.eye(n)
+		for i in range(n):
+			res[i] = self.M(res[i])
+		return res
 
 def write_precons(signals, prefix):
 	for signal in signals:
