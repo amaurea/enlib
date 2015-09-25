@@ -1073,6 +1073,46 @@ contains
 
 	!!! Point source stuff !!!
 
+	! Fast point source projection for a single source. Can't do OMP over
+	! sources in this case. Current scheme can't easily OMP over dets,
+	! as each (source,det,range) maps to a different set of samples, which
+	! causes clobbering. I think this is hard to avoid in the range approach.
+	!
+	! Need to transpose the loop somehow:
+	!  for det, for samp, for relevant src
+	! But can't afford to compute distance from each source to each samp.
+	! The prepare function uses a grid lookup, which is a good appraoch.
+	! Precompute a grid that looks like:
+	!  srclist=(ny,nx,nmax), srchits(ny,nx)
+	! for det, samp
+	!  y,x = interpol(det,samp)
+	!  for src in srclist(y,x,1:srchits(ny,nx))
+	!   etc.
+	! This will have no TOD clobbering. The transpose operation involves
+	! much fewer degrees of freedom, so we can use duplicate arrays as normal.
+	!
+	! How accurate do the distances and angles need to be?
+	!  1. Euclidean pixels: Ignores cos(theta) variation inside image.
+	!     Probably not good enough - expect 10% ellipticitty
+	!  2. Semi-flat sky: r**2 = dtheta**2 + cos(theta_src)**2 * dphi**2
+	!     This is what the current approach uses.
+	!  3. Curved sky: r = acos(p_src*p_point), angles = something complicated
+	!     Probably too expensive if implemented directly.
+	!     But what about caching? For each source, precompute the transformation
+	!     from az,el,t to source-centered coordinates. Then both r and angle
+	!     are just a quick lookup away. If all interpolation arrays use the
+	!     same resolution grid, then this simply amounts to having an extra
+	!     ys_src(:,:,:,nsrc). Sounds like a good plan.
+	! So precompute hit grid, normal interpolation and interpolation.
+	!
+	! What if we wanted to support both intrinsic and beam ellipticity?
+	! These are defined in different coordinate systems. But one gaussian
+	! convoluted with another gaussian is still a gaussian with
+	! cov_tot = cov_A + cov_B:  r'(A+B)"r. Chisquare not decomposable :/
+	! We will restrict ourselves either intrinsic or beam ellipticity, not both.
+	! It will be up to the user to disentangle these later. The user chooses
+	! which coordinate system to use based on how he sets up ys_src.
+
 	! params(nparam,nsrc) takes the form [dec,ra,amps[namp],ibeam[3]]
 	! The beam is defined in the target coordinate system. This is appropriate
 	! if the beam is a physical property of each source (an elliptical galaxy
@@ -1162,7 +1202,7 @@ contains
 	! Loops through all samples for all detectors for all sources, computing
 	! the distance between each. Builds up a list of which samples are close
 	! enough to each source to matter. Also builds up an inverse variance for
-	! each source based on how much eac detector hits it. This can be used to
+	! each source based on how much each detector hits it. This can be used to
 	! divide sources into sets of sufficient sensitivity.
 	!  pos(2,nsrc), rhit(nsrc), rmax(nsrc), det_ivars(nsrc), src_ivars(nsrc)
 	!  ranges(2,maxrange,ndet,nsrc), nrange(ndet,nsrc)
