@@ -214,7 +214,7 @@ class PreconMapBinned:
 		if hits:
 			# Build hitcount map too
 			self.hits = signal.area.copy()
-			calc_map_hits(self.hits, signal, signal_cut, scans)
+			calc_hits_map(self.hits, signal, signal_cut, scans)
 		else: self.hits = None
 		self.signal = signal
 	def __call__(self, m):
@@ -239,7 +239,7 @@ class PreconDmapBinned:
 		if hits:
 			# Build hitcount map too
 			self.hits = signal.area.copy()
-			calc_map_hits(self.hits, signal, signal_cut, scans)
+			calc_hits_map(self.hits, signal, signal_cut, scans)
 		else: self.hits = None
 		self.signal = signal
 	def __call__(self, m):
@@ -309,22 +309,23 @@ def prec_div_helper(signal, signal_cut, scans, iwork, owork, ijunk, ojunk, noise
 		signal_cut.backward(scan, tod, ojunk)
 		signal.backward(scan, tod, owork)
 
-def calc_map_div(div, signal, signal_cut, scans, noise=True):
+def calc_div_map(div, signal, signal_cut, scans, noise=True):
 	# The cut samples are included here becuase they must be avoided, but the
 	# actual computation of the junk sample preconditioner happens elsewhere.
 	# This is a bit redundant, but should not cost much time since this only happens
 	# in the beginning.
 	ijunk= np.zeros(signal_cut.njunk, dtype=signal.area.dtype)
 	ojunk= signal_cut.prepare(signal_cut.zeros())
-	for i in range(ncomp):
+	for i in range(div.shape[0]):
 		div[i,i] = 1
 		iwork = signal.prepare(div[i])
 		owork = signal.prepare(signal.zeros())
 		prec_div_helper(signal, signal_cut, scans, iwork, owork, ijunk, ojunk)
 		signal.finish(div[i], owork)
 
-def calc_map_hits(hits, signal_map, signal_cut, scans):
+def calc_hits_map(hits, signal, signal_cut, scans):
 	work = signal.prepare(hits)
+	ojunk= signal_cut.prepare(signal_cut.zeros())
 	for scan in scans:
 		tod = np.full((scan.ndet, scan.nsamp), 1, hits.dtype)
 		signal_cut.backward(scan, tod, ojunk)
