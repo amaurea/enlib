@@ -335,22 +335,10 @@ config.default("pmat_ptsrc_rsigma", 5.0, "Max number of standard deviations away
 class PmatPtsrc(PointingMatrix):
 	def __init__(self, scan, params, sys=None, tmul=None, pmul=None):
 		# Params is [nsrc,{dec,ra,amps,ibeams}]
-		sys   = config.get("map_eqsys", sys)
 		rmul  = config.get("pmat_ptsrc_rsigma")
 		self.dtype = params.dtype
 
-		# Set up pointing interpolation
-		box = np.array(scan.box)
-		margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
-		box[0] -= margin/2; box[1] += margin/2
-		# Find the rough position of our scan
-		ref_phi = coordinates.transform(scan.sys, sys, scan.box[:1,1:].T, time=scan.mjd0+scan.box[:1,0], site=scan.site)[0,0]
-		#ref_phi = params[1,0]
-		acc  = config.get("pmat_accuracy")
-		ip_size= config.get("pmat_interpol_max_size")
-		ip_time= config.get("pmat_interpol_max_time")
-		transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
-		ipol, obox = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
+		ipol, obox = build_pos_interpol(scan, sys=config.get("map_eqsys", sys))
 		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, self.dtype)
 		self.comps = np.arange(params.shape[0]-5)
 		self.scan  = scan
@@ -403,6 +391,75 @@ class PmatPtsrc(PointingMatrix):
 				self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
 		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets)
 		return res
+
+config.default("pmat_ptsrc_cell_res", 20, "Cell size in arcmin to use for fast source lookup.")
+class PmatPtsrc2(PointingMatrix):
+	def __init__(self, scan, srcs, sys=None, tmul=None, pmul=None):
+		srcs = np.asarray(srcs)
+		if srcs.ndim == 2: srcs = srcs[None]
+		# srcs is [ndir,nsrc,{dec,ra,T,Q,U,ibeams}]
+		sys   = config.get("map_eqsys", sys)
+		rmul  = config.get("pmat_ptsrc_rsigma")
+		cres  = config.get("pmat_ptsrc_cell_res")
+		self.dtype = srcs.dtype
+		self.core  = get_core(self.dtype)
+		self.scan  = scan
+
+		# Build interpolator
+		ipol, obox = build_pos_interpol(scan, sys)
+		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, self.dtype)
+
+		# Build source hit grid
+		shape, wcs = enmap.geometry(pos=obox[:,:2], res=cres*utils.arcmin, proj="cea")
+		pos = enmap.posmap(shape, wcs)
+		ref = pos[:,pos.shape[-2]/2,pos.shape[-1]/2]
+		pixmap = enmap.pixmap(shape, wcs)
+		pixrad = np.sum((enmap.extent(shape, wcs)/shape[-2:])**2)**0.5/2
+		ncell = np.zeros((2,)+shape, wcs, dtype=np.int32)
+		cells = np.zeros((2,maxcell)+shape, wcs, dtype=np.int32)
+		# For each source, compute the flat-sky distance from it to the center of each
+		# cell. Include cells that have dist+crad < sigma*rmul
+		for sdir in range(len(srcs)):
+			for si, src in enumerate(srcs[sdir]):
+				spos = utils.rewind(src[:2],ref)
+				srad = utils.expand_beam(src[-3:])[0]
+				dist = utils.samewcs(utils.angdist(pos,spos,zenith=False),pos)
+				hit  = dist+pixrad < srad*rmul
+				cells[(sdir,ncell[sdir],pixmap[0],pixmap[1])] = si
+				ncell[sdir,pixmap[0],pixmap[1]] += hit
+		self.cells, self.ncell = cells, ncell
+		self.tmul = 0 if tmul is None else tmul
+		self.pmul = 1 if pmul is None else pmul
+
+	def apply(self, dir, tod, srcs, tmul=None, pmul=None):
+		if tmul is None: tmul = self.tmul
+		if pmul is None: pmul = self.pmul
+		if srcs.ndim == 3: srcs = srcs[None]
+		self.core.pmat_ptsrc2(dir, tmul, pmul, tod.T, srcs.T,
+				self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox.T, self.ys.T,
+				self.cells.T, self.ncell.T, self.cells.box().T)
+	def forward(self, tod, srcs, tmul=None, pmul=None):
+		"""srcs -> tod"""
+		self.apply( 1, tod, srcs, tmul=tmul, pmul=pmul)
+	def forward(self, tod, srcs, tmul=None, pmul=None):
+		"""tod -> srcs"""
+		self.apply(-1, tod, srcs, tmul=tmul, pmul=pmul)
+
+def build_pos_interpol(scan, sys):
+	# Set up pointing interpolation
+	box = np.array(scan.box)
+	margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
+	box[0] -= margin/2; box[1] += margin/2
+	# Find the rough position of our scan
+	ref_phi = coordinates.transform(scan.sys, sys, scan.box[:1,1:].T, time=scan.mjd0+scan.box[:1,0], site=scan.site)[0,0]
+	#ref_phi = params[1,0]
+	acc  = config.get("pmat_accuracy")
+	ip_size= config.get("pmat_interpol_max_size")
+	ip_time= config.get("pmat_interpol_max_time")
+	transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
+	ipol, obox = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
+	return ipol, obox
 
 class PmatScan(PointingMatrix):
 	"""Project between tod and per-det az basis. Will be plain az
