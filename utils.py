@@ -722,3 +722,8 @@ def transpose_inds(inds, nrow, ncol):
 	row_major = inds
 	row, col = row_major/ncol, row_major%ncol
 	return col*nrow + row
+
+def rescale(a, range=[0,1]):
+	"""Rescale a such that min(a),max(a) -> range[0],range[1]"""
+	mi, ma = np.min(a), np.max(a)
+	return (a-mi)/(ma-mi)*(range[1]-range[0])+range[0]
