@@ -60,7 +60,7 @@ class MultiZipper:
 	def zip(self, args):
 		return np.concatenate([z.zip(a) for z,a in zip(self.zippers, args)])
 	def unzip(self, x):
-		return tuple([z.unzip(x[b[0]:b[1]]) for z,b in zip(self.zippers, self.bins)])
+		return list([z.unzip(x[b[0]:b[1]]) for z,b in zip(self.zippers, self.bins)])
 	def sum(self, x):
 		if self.allshared: return np.sum(x)
 		s = [0,0]

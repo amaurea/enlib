@@ -43,16 +43,15 @@ from enlib import enmap, dmap2 as dmap, array_ops, pmat, utils, todfilter
 
 class Signal:
 	"""General signal interface."""
-	def __init__(self, name, ext):
+	def __init__(self, name, ofmt, output, ext):
 		self.ext    = ext
 		self.dof    = zipper.ArrayZipper(np.zeros([0]))
 		self.precon = PreconNull()
 		self.prior  = PriorNull()
 		self.post   = []
-		if isinstance(name, basestring):
-			self.name, self.oname = name, name
-		else:
-			self.name, self.oname = name
+		self.name   = name
+		self.ofmt   = ofmt
+		self.output = output
 	def prepare (self, x): return x.copy()
 	def forward (self, scan, tod, x): pass
 	def backward(self, scan, tod, x): pass
@@ -63,8 +62,8 @@ class Signal:
 		return x
 
 class SignalMap(Signal):
-	def __init__(self, scans, area, comm, cuts=None, name="main", ext="fits", pmat_order=None, eqsys=None, nuisance=False):
-		Signal.__init__(self, name, ext)
+	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, eqsys=None, nuisance=False):
+		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
 		self.dof  = zipper.ArrayZipper(area, comm=comm)
@@ -78,14 +77,15 @@ class SignalMap(Signal):
 		self.dof.comm.Allreduce(work, m)
 	def zeros(self): return enmap.zeros(self.area.shape, self.area.wcs, self.area.dtype)
 	def write(self, prefix, tag, m):
-		if self.oname is None: return
-		oname = "%s%s_%s.%s" % (prefix, self.oname, tag, self.ext)
+		if not self.output: return
+		oname = self.ofmt.format(name=self.name)
+		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
 		if self.dof.comm.rank == 0:
 			enmap.write_map(oname, m)
 
 class SignalDmap(Signal):
-	def __init__(self, scans, subinds, area, cuts=None, name="main", ext="fits", pmat_order=None, eqsys=None, nuisance=False):
-		Signal.__init__(self, name, ext)
+	def __init__(self, scans, subinds, area, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, eqsys=None, nuisance=False):
+		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
 		self.dof  = dmap.DmapZipper(area)
@@ -107,13 +107,14 @@ class SignalDmap(Signal):
 		m.work2tile(work)
 	def zeros(self): return dmap.zeros(self.area.geometry)
 	def write(self, prefix, tag, m):
-		if self.oname is None: return
-		oname = "%s%s_%s.%s" % (prefix, self.oname, tag, self.ext)
+		if not self.output: return
+		oname = self.ofmt.format(name=self.name)
+		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
 		dmap.write_map(oname, m)
 
 class SignalCut(Signal):
-	def __init__(self, scans, dtype, comm, name=["cut",None], cut_type=None):
-		Signal.__init__(self, name, "hdf")
+	def __init__(self, scans, dtype, comm, name="cut", ofmt="{name}_{rank:02}", output=False, cut_type=None):
+		Signal.__init__(self, name, ofmt, output, ext="hdf")
 		self.data  = {}
 		self.dtype = dtype
 		cutrange = [0,0]
@@ -131,22 +132,23 @@ class SignalCut(Signal):
 		mat.backward(tod, junk[cutrange[0]:cutrange[1]])
 	def zeros(self): return np.zeros(self.njunk, self.dtype)
 	def write(self, prefix, tag, m):
-		if self.oname is None: return
-		oname = "%s%s_%s.%s" % (prefix, self.oname.format(rank=self.dof.comm.rank), tag, self.ext)
+		if not self.output: return
+		oname = self.ofmt.format(name=self.name, rank=self.dof.comm.rank)
+		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
 		with h5py.File(oname, "w") as hfile:
 			hfile["data"] = m
 
 class SignalPhase(Signal):
 	def __init__(self, scans, pids, patterns, array_shape, res, dtype, comm, cuts=None,
-			name=["phase","phase_{pid:02}_{az0:.0f}_{az1:.0f}_{el:.0f}"], col_major=True, hysteresis=True):
-		Signal.__init__(self, name, "fits")
+			name="phase", ofmt="{name}_{pid:02}_{az0:.0f}_{az1:.0f}_{el:.0f}", output=True,
+			ext="fits", col_major=True, hysteresis=True):
+		Signal.__init__(self, name, ofmt, output, ext)
 		nrow,ncol = array_shape
 		ndet = nrow*ncol
 		self.pids = pids
 		self.patterns = patterns
 		self.comm = comm
 		self.dtype = dtype
-		self.array_shape = array_shape
 		self.col_major = col_major
 		self.cuts = cuts
 		self.data = {}
@@ -188,10 +190,10 @@ class SignalPhase(Signal):
 	def zeros(self):
 		return [area*0 for area in self.areas]
 	def write(self, prefix, tag, ms):
-		if self.oname is None: return
-		fmt = "%s%s_%s.%s" % (prefix, self.oname, tag, self.ext)
+		if not self.output: return
 		for pid, (pattern, m) in enumerate(zip(self.patterns, ms)):
-			oname = fmt.format(pid=pid, el=pattern[0,0]/utils.degree, az0=pattern[0,1]/utils.degree, az1=pattern[1,1]/utils.degree)
+			oname = self.ofmt.format(name=self.name, pid=pid, el=pattern[0,0]/utils.degree, az0=pattern[0,1]/utils.degree, az1=pattern[1,1]/utils.degree)
+			oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
 			if self.dof.comm.rank == 0:
 				enmap.write_map(oname, m)
 
@@ -320,7 +322,7 @@ def calc_div_map(div, signal, signal_cut, scans, noise=True):
 		div[i,i] = 1
 		iwork = signal.prepare(div[i])
 		owork = signal.prepare(signal.zeros())
-		prec_div_helper(signal, signal_cut, scans, iwork, owork, ijunk, ojunk)
+		prec_div_helper(signal, signal_cut, scans, iwork, owork, ijunk, ojunk, noise=noise)
 		signal.finish(div[i], owork)
 
 def calc_hits_map(hits, signal, signal_cut, scans):
@@ -412,7 +414,7 @@ class FilterPickup:
 	def __init__(self, naz=None, nt=None):
 		self.naz, self.nt = naz, nt
 	def __call__(self, scan, tod):
-		todfilter.filter_poly_jon2(scan.boresight[:,1], tod)
+		todfilter.filter_poly_jon2(tod, scan.boresight[:,1])
 
 class PostPickup:
 	def __init__(self, scans, signal_map, signal_cut, prec_ptp, naz=None, nt=None):
@@ -428,11 +430,11 @@ class PostPickup:
 		omaps   = [signal.zeros() for signal in signals]
 		iwork   = [signal.prepare(map) for signal, map in zip(signals, imaps)]
 		owork   = [signal.prepare(map) for signal, map in zip(signals, omaps)]
-		for scain in self.scans:
+		for scan in self.scans:
 			tod = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
 			for signal, work in zip(signals, iwork)[::-1]:
 				signal.forward(scan, tod, work)
-			todfilter.filter_poly_jon2(scan.boresight[:,1], tod)
+			todfilter.filter_poly_jon2(tod, scan.boresight[:,1])
 			for signal, work in zip(signals, owork):
 				signal.backward(scan, tod, work)
 		for signal, map, work in zip(signals, omaps, owork):
@@ -509,7 +511,7 @@ class Eqsys:
 	def postprocess(self, x):
 		maps = self.dof.unzip(x)
 		for i in range(len(self.signals)):
-			maps[i] = signals[i].postprocess(maps[i])
+			maps[i] = self.signals[i].postprocess(maps[i])
 		return self.dof.zip(maps)
 	def write(self, prefix, tag, x):
 		maps = self.dof.unzip(x)

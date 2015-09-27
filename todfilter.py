@@ -48,7 +48,7 @@ def filter_poly_jon(tod, az, naz=None, nt=None, deslope=False):
 	# we use d instead.
 	return d.reshape(tod.shape)
 
-def filter_poly_jon2(tod, az, naz=None, nt=None):
+def filter_poly_jon2(tod, az, naz=None, nt=None, deslope=True):
 	"""Fix naz Legendre polynomials in az and nt other polynomials
 	in t jointly. Then subtract the best fit from the data.
 	The subtraction is inplace, so tod is modified. If naz or nt are
@@ -68,7 +68,7 @@ def filter_poly_jon2(tod, az, naz=None, nt=None):
 		B[0] = x
 		if naz > 1: B[1] = 1.5*x**2-0.5
 		for i in range(2, naz):
-			B[i] = ((2*i+1)*x*B[i-1] - i*B[i-2])/(j+1)
+			B[i] = ((2*i+1)*x*B[i-1] - i*B[i-2])/(i+1)
 	if nt > 0:
 		x = np.linspace(-1,1,d.shape[-1],endpoint=False)
 		for i in range(nt): B[naz+i] = x**i
@@ -76,5 +76,6 @@ def filter_poly_jon2(tod, az, naz=None, nt=None):
 	amps = np.linalg.solve(B.dot(B.T),B.dot(d.T))
 	# Subtract the best fit
 	if asign > 0: d -= amps[:naz].T.dot(B[:naz])
-	if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[:naz:naz+nt])
+	if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[naz:naz+nt])
+	if deslope: utils.deslope(d, w=8, inplace=True)
 	return d.reshape(tod.shape)
