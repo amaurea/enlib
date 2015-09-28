@@ -21,8 +21,7 @@ def distribute_scans(myinds, mycosts, myboxes, comm):
 	all_costs = np.array(comm.allreduce(mycosts))
 	all_inds  = np.array(comm.allreduce(myinds))
 	if myboxes is None:
-		costs  = all_costs[all_inds]
-		myinds = utils.equal_split(costs, comm.size)[comm.rank]
+		myinds = all_inds[utils.equal_split(all_costs, comm.size)[comm.rank]]
 		return myinds
 	else:
 		all_boxes = np.array(comm.allreduce(myboxes))
