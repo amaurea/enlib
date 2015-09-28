@@ -289,7 +289,7 @@ class MapEquation:
 				if self.isrc is not None:
 					d.pmat_isrc.forward(tod, self.isrc.model.params)
 				# Optional azimuth filter. This should probably happen in enact.data.calibrate,
-				# as it should happend before the noise estimation. It might be best to make a
+				# as it should happen before the noise estimation. It might be best to make a
 				# new function that handles all these extra things.
 				if self.azfilter is not None:
 					todfilter.filter_poly_jon(tod, d.scan.boresight[:,1], naz=self.azfilter.naz, nt=self.azfilter.nt, deslope=True)

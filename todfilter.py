@@ -21,7 +21,9 @@ def filter_poly_jon(tod, az, naz=None, nt=None, deslope=False):
 	polynomials = fft.ichebt(params)
 	tbasis  = polynomials[:nt]
 	# The azimuth basis is built by interpreting the [0:nsamp] range as
-	# azimuth, and interpolating it into time domain
+	# azimuth, and interpolating it into time domain. I do this because the
+	# cheb transform needs evenly spaced points. It might be simpler to just
+	# construct the basis directly via a recurrence relation.
 	az_basis_map = (az-np.min(az))*nsamp/(np.max(az)-np.min(az))
 	t2 = time.time()
 	azbasis = utils.interpol(polynomials[1:naz], az_basis_map[None], order=1, mask_nan=False)
