@@ -1160,7 +1160,7 @@ contains
 			steps(ic) = steps(ic+1)*nbox(ic+1)
 		end do
 		x0 = rbox(:,1); inv_dx = nbox/(rbox(:,2)-rbox(:,1))
-		c0 = cbox(:,1); inv_dc = shape(cell_nsrc)/(cbox(:,2)-cbox(:,1))
+		c0 = cbox(:,1); inv_dc = shape(cell_nsrc(1,:,:))/(cbox(:,2)-cbox(:,1))
 
 		nproc = omp_get_max_threads()
 		allocate(cosdec(nsrc,ndir),amps(3,nsrc,ndir,nproc))
