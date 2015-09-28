@@ -37,30 +37,33 @@
 # signal_phase = SignalPhase(..., cut=signal_cut)
 # signals = [signal_cut, signal_map, signal_phase]
 import numpy as np, h5py, zipper
-from enlib import enmap, dmap2 as dmap, array_ops, pmat, utils
+from enlib import enmap, dmap2 as dmap, array_ops, pmat, utils, todfilter
 
 ######## Signals ########
 
 class Signal:
 	"""General signal interface."""
-	def __init__(self, name, ext):
+	def __init__(self, name, ofmt, output, ext):
 		self.ext    = ext
 		self.dof    = zipper.ArrayZipper(np.zeros([0]))
 		self.precon = PreconNull()
 		self.prior  = PriorNull()
-		if isinstance(name, basestring):
-			self.name, self.oname = name, name
-		else:
-			self.name, self.oname = name
+		self.post   = []
+		self.name   = name
+		self.ofmt   = ofmt
+		self.output = output
 	def prepare (self, x): return x.copy()
 	def forward (self, scan, tod, x): pass
 	def backward(self, scan, tod, x): pass
 	def finish  (self, x, y): x[:] = y
 	def write   (self, prefix, tag, x): pass
+	def postprocess(self, x):
+		for p in self.post: x = p(x)
+		return x
 
 class SignalMap(Signal):
-	def __init__(self, scans, area, comm, cuts=None, name="main", ext="fits", pmat_order=None, eqsys=None, nuisance=False):
-		Signal.__init__(self, name, ext)
+	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, eqsys=None, nuisance=False):
+		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
 		self.dof  = zipper.ArrayZipper(area, comm=comm)
@@ -74,14 +77,15 @@ class SignalMap(Signal):
 		self.dof.comm.Allreduce(work, m)
 	def zeros(self): return enmap.zeros(self.area.shape, self.area.wcs, self.area.dtype)
 	def write(self, prefix, tag, m):
-		if self.oname is None: return
-		oname = "%s%s_%s.%s" % (prefix, self.oname, tag, self.ext)
+		if not self.output: return
+		oname = self.ofmt.format(name=self.name)
+		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
 		if self.dof.comm.rank == 0:
 			enmap.write_map(oname, m)
 
 class SignalDmap(Signal):
-	def __init__(self, scans, subinds, area, cuts=None, name="main", ext="fits", pmat_order=None, eqsys=None, nuisance=False):
-		Signal.__init__(self, name, ext)
+	def __init__(self, scans, subinds, area, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, eqsys=None, nuisance=False):
+		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
 		self.dof  = dmap.DmapZipper(area)
@@ -103,13 +107,14 @@ class SignalDmap(Signal):
 		m.work2tile(work)
 	def zeros(self): return dmap.zeros(self.area.geometry)
 	def write(self, prefix, tag, m):
-		if self.oname is None: return
-		oname = "%s%s_%s.%s" % (prefix, self.oname, tag, self.ext)
+		if not self.output: return
+		oname = self.ofmt.format(name=self.name)
+		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
 		dmap.write_map(oname, m)
 
 class SignalCut(Signal):
-	def __init__(self, scans, dtype, comm, name=["cut",None], cut_type=None):
-		Signal.__init__(self, name, "hdf")
+	def __init__(self, scans, dtype, comm, name="cut", ofmt="{name}_{rank:02}", output=False, cut_type=None):
+		Signal.__init__(self, name, ofmt, output, ext="hdf")
 		self.data  = {}
 		self.dtype = dtype
 		cutrange = [0,0]
@@ -127,22 +132,23 @@ class SignalCut(Signal):
 		mat.backward(tod, junk[cutrange[0]:cutrange[1]])
 	def zeros(self): return np.zeros(self.njunk, self.dtype)
 	def write(self, prefix, tag, m):
-		if self.oname is None: return
-		oname = "%s%s_%s.%s" % (prefix, self.oname.format(rank=self.dof.comm.rank), tag, self.ext)
+		if not self.output: return
+		oname = self.ofmt.format(name=self.name, rank=self.dof.comm.rank)
+		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
 		with h5py.File(oname, "w") as hfile:
 			hfile["data"] = m
 
 class SignalPhase(Signal):
 	def __init__(self, scans, pids, patterns, array_shape, res, dtype, comm, cuts=None,
-			name=["phase","phase_{pid:02}_{az0:.0f}_{az1:.0f}_{el:.0f}"], col_major=True, hysteresis=True):
-		Signal.__init__(self, name, "fits")
+			name="phase", ofmt="{name}_{pid:02}_{az0:.0f}_{az1:.0f}_{el:.0f}", output=True,
+			ext="fits", col_major=True, hysteresis=True):
+		Signal.__init__(self, name, ofmt, output, ext)
 		nrow,ncol = array_shape
 		ndet = nrow*ncol
 		self.pids = pids
 		self.patterns = patterns
 		self.comm = comm
 		self.dtype = dtype
-		self.array_shape = array_shape
 		self.col_major = col_major
 		self.cuts = cuts
 		self.data = {}
@@ -184,10 +190,10 @@ class SignalPhase(Signal):
 	def zeros(self):
 		return [area*0 for area in self.areas]
 	def write(self, prefix, tag, ms):
-		if self.oname is None: return
-		fmt = "%s%s_%s.%s" % (prefix, self.oname, tag, self.ext)
+		if not self.output: return
 		for pid, (pattern, m) in enumerate(zip(self.patterns, ms)):
-			oname = fmt.format(pid=pid, el=pattern[0,0]/utils.degree, az0=pattern[0,1]/utils.degree, az1=pattern[1,1]/utils.degree)
+			oname = self.ofmt.format(name=self.name, pid=pid, el=pattern[0,0]/utils.degree, az0=pattern[0,1]/utils.degree, az1=pattern[1,1]/utils.degree)
+			oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
 			if self.dof.comm.rank == 0:
 				enmap.write_map(oname, m)
 
@@ -198,87 +204,53 @@ class PreconNull:
 	def __call__(self, m): pass
 	def write(self, prefix="", ext="fits"): pass
 
-def prec_div_helper(signal, scans, iwork, owork, ijunk, ojunk):
-	for scan in scans:
-		tod = np.zeros((scan.ndet, scan.nsamp), signal.dtype)
-		signal.forward(scan, tod, iwork)
-		signal.cuts.forward (scan, tod, ijunk)
-		scan.noise.white(tod)
-		signal.cuts.backward(scan, tod, ojunk)
-		signal.backward(scan, tod, owork)
-
 class PreconMapBinned:
-	def __init__(self, signal, scans):
+	def __init__(self, signal, signal_cut, scans, noise=True, hits=True):
+		"""Binned preconditioner: (P'W"P)", where W" is a white
+		nosie approximation of N". If noise=False, instead computes
+		(P'P)". If hits=True, also computes a hitcount map."""
 		ncomp = signal.area.shape[0]
-		div  = enmap.zeros((ncomp,)+signal.area.shape, signal.area.wcs, signal.area.dtype)
-		# The cut samples are included here becuase they must be avoided, but the
-		# actual computation of the junk sample preconditioner happens elsewhere.
-		# This is a bit redundant, but should not cost much time since this only happens
-		# in the beginning.
-		ijunk= np.zeros(signal.cuts.njunk, dtype=signal.area.dtype)
-		ojunk= signal.cuts.prepare(signal.cuts.zeros())
-		for i in range(ncomp):
-			div[i,i] = 1
-			iwork = signal.prepare(div[i])
-			owork = signal.prepare(signal.zeros())
-			prec_div_helper(signal, scans, iwork, owork, ijunk, ojunk)
-			signal.finish(div[i], owork)
-		idiv = array_ops.eigpow(div, -1, axes=[0,1])
-		# Build hitcount map too
-		hits = signal.area.copy()
-		work = signal.prepare(hits)
-		for scan in scans:
-			tod = np.full((scan.ndet, scan.nsamp), 1, hits.dtype)
-			signal.cuts.backward(scan, tod, ojunk)
-			signal.backward(scan, tod, work)
-		signal.finish(hits, work)
-		hits = hits[0].astype(np.int32)
-		self.div, self.idiv, self.hits = div, idiv, hits
+		self.div = enmap.zeros((ncomp,)+signal.area.shape, signal.area.wcs, signal.area.dtype)
+		calc_div_map(self.div, signal, signal_cut, scans, noise=noise)
+		self.idiv = array_ops.eigpow(self.div, -1, axes=[0,1])
+		if hits:
+			# Build hitcount map too
+			self.hits = signal.area.copy()
+			calc_hits_map(self.hits, signal, signal_cut, scans)
+		else: self.hits = None
 		self.signal = signal
 	def __call__(self, m):
 		m[:] = array_ops.matmul(self.idiv, m, axes=[0,1])
 	def write(self, prefix):
 		self.signal.write(prefix, "div", self.div)
-		self.signal.write(prefix, "hits", self.hits)
+		if self.hits is not None:
+			self.signal.write(prefix, "hits", self.hits)
 
 class PreconDmapBinned:
-	def __init__(self, signal, scans):
-		ncomp = signal.area.shape[0]
+	def __init__(self, signal, signal_cut, scans, noise=True, hits=True):
+		"""Binned preconditioner: (P'W"P)", where W" is a white
+		nosie approximation of N". If noise=False, instead computes
+		(P'P)". If hits=True, also computes a hitcount map."""
 		geom  = signal.area.geometry.copy()
-		geom.pre = (ncomp,)+geom.pre
-		div   = dmap.zeros(geom)
-		# The cut samples are included here becuase they must be avoided, but the
-		# actual computation of the junk sample preconditioner happens elsewhere.
-		# This is a bit redundant, but should not cost much time since this only happens
-		# in the beginning.
-		ijunk= signal.cuts.zeros()
-		ojunk= signal.cuts.zeros()
-		for i in range(ncomp):
-			div[i,i] = 1
-			iwork = signal.prepare(div[i])
-			owork = signal.prepare(signal.zeros())
-			prec_div_helper(signal, scans, iwork, owork, ijunk, ojunk)
-			signal.finish(div[i], owork)
-		idiv = div.copy()
-		for dtile in idiv.tiles:
+		geom.pre = (signal.area.shape[0],)+geom.pre
+		self.div = dmap.zeros(geom)
+		calc_div_map(self.div, signal, signal_cut, scans, noise=noise)
+		self.idiv = self.div.copy()
+		for dtile in self.idiv.tiles:
 			dtile[:] = array_ops.eigpow(dtile, -1, axes=[0,1])
-		# Build hitcount map too
-		hits = signal.area.copy()
-		work = signal.prepare(hits)
-		for scan in scans:
-			tod = np.full((scan.ndet, scan.nsamp), 1, hits.dtype)
-			signal.cuts.backward(scan, tod, ojunk)
-			signal.backward(scan, tod, work)
-		signal.finish(hits, work)
-		hits = hits[0].astype(np.int32)
-		self.div, self.idiv, self.hits = div, idiv, hits
+		if hits:
+			# Build hitcount map too
+			self.hits = signal.area.copy()
+			calc_hits_map(self.hits, signal, signal_cut, scans)
+		else: self.hits = None
 		self.signal = signal
 	def __call__(self, m):
 		for idtile, mtile in zip(self.idiv.tiles, m.tiles):
 			mtile[:] = array_ops.matmul(idtile, mtile, axes=[0,1])
 	def write(self, prefix):
 		self.signal.write(prefix, "div", self.div)
-		self.signal.write(prefix, "hits", self.hits)
+		if self.hits is not None:
+			self.signal.write(prefix, "hits", self.hits)
 
 class PreconCut:
 	def __init__(self, signal, scans):
@@ -300,23 +272,23 @@ class PreconCut:
 		self.signal.write(prefix, "idiv", self.idiv)
 
 class PreconPhaseBinned:
-	def __init__(self, signal, scans):
+	def __init__(self, signal, signal_cut, scans):
 		div = [area*0+1 for area in signal.areas]
 		# The cut samples are included here becuase they must be avoided, but the
 		# actual computation of the junk sample preconditioner happens elsewhere.
 		# This is a bit redundant, but should not cost much time since this only happens
 		# in the beginning.
-		ijunk = np.zeros(signal.cuts.njunk, dtype=signal.dtype)
-		ojunk = signal.cuts.prepare(signal.cuts.zeros())
+		ijunk = np.zeros(signal_cut.njunk, dtype=signal.dtype)
+		ojunk = signal_cut.prepare(signal_cut.zeros())
 		iwork = signal.prepare(div)
 		owork = signal.prepare(signal.zeros())
-		prec_div_helper(signal, scans, iwork, owork, ijunk, ojunk)
+		prec_div_helper(signal, signal_cut, scans, iwork, owork, ijunk, ojunk)
 		signal.finish(div, owork)
 		hits = signal.zeros()
 		owork = signal.prepare(hits)
 		for scan in scans:
 			tod = np.full((scan.ndet, scan.nsamp), 1, signal.dtype)
-			signal.cuts.backward(scan, tod, ojunk)
+			signal_cut.backward(scan, tod, ojunk)
 			signal.backward(scan, tod, owork)
 		signal.finish(hits, owork)
 		for i in range(len(hits)):
@@ -329,6 +301,39 @@ class PreconPhaseBinned:
 			m[d!=0] /= d[d!=0]
 	def write(self, prefix):
 		self.signal.write(prefix, "div", self.div)
+
+def prec_div_helper(signal, signal_cut, scans, iwork, owork, ijunk, ojunk, noise=True):
+	for scan in scans:
+		tod = np.zeros((scan.ndet, scan.nsamp), signal.dtype)
+		signal.forward(scan, tod, iwork)
+		signal_cut.forward (scan, tod, ijunk)
+		if noise: scan.noise.white(tod)
+		signal_cut.backward(scan, tod, ojunk)
+		signal.backward(scan, tod, owork)
+
+def calc_div_map(div, signal, signal_cut, scans, noise=True):
+	# The cut samples are included here becuase they must be avoided, but the
+	# actual computation of the junk sample preconditioner happens elsewhere.
+	# This is a bit redundant, but should not cost much time since this only happens
+	# in the beginning.
+	ijunk= np.zeros(signal_cut.njunk, dtype=signal.area.dtype)
+	ojunk= signal_cut.prepare(signal_cut.zeros())
+	for i in range(div.shape[0]):
+		div[i,i] = 1
+		iwork = signal.prepare(div[i])
+		owork = signal.prepare(signal.zeros())
+		prec_div_helper(signal, signal_cut, scans, iwork, owork, ijunk, ojunk, noise=noise)
+		signal.finish(div[i], owork)
+
+def calc_hits_map(hits, signal, signal_cut, scans):
+	work = signal.prepare(hits)
+	ojunk= signal_cut.prepare(signal_cut.zeros())
+	for scan in scans:
+		tod = np.full((scan.ndet, scan.nsamp), 1, hits.dtype)
+		signal_cut.backward(scan, tod, ojunk)
+		signal.backward(scan, tod, work)
+	signal.finish(hits, work)
+	hits = hits[0].astype(np.int32)
 
 ######## Priors ########
 
@@ -374,13 +379,78 @@ class PriorProjectOut:
 		self.signal_map.finish(mmap, mwork)
 		omap += mmap*self.weight
 
+######## Filters ########
+# Possible filters: A (P'BN"BP)" P'BN"BC d
+# B: weighting filter: windowing
+# C: preprocessing filter:  source subtraction, azimuth filter
+# A: postprocessing filter: source subtraction, azimuth filter
+# C and A typically come in groups.
+#
+# A single logical task may have both A, B and C components, so
+# it may be convenient to represent each of these tasks by a filter
+# class, with different methods corresponding to these steps.
+#
+# A problem with joining these is that postprocessing acts on specific
+# signals. With the current setup, it is more natural to attach these
+# to signals instead ("signal foo needs this postprocessing"). But that
+# may be inefficient if multiple postprocessors need to iterate through
+# TODs.
+#
+# The best solution is probably to handle windowing, preprocessing and
+# postprocessing individually. Each signal should have an array of
+# postprocessors. The equation system has an array of preprocessors.
+# And either the eqsys or the nmat itself takes care of windowing.
+# Advantages of the latter:
+#  1. Windowing can be interpreted as a position-dependence of N
+#  2. N is measured assuming a given window, so the window should be
+#     tied to it and stored with it.
+#  3. It simplifies the mapmaker and other code that needs to use N.
+# Disadvantages:
+#  1. calibrate must return an unwindowed tod, which means that it
+#     either can't use windowing, or it must unwindow first. Unwindowing
+#     is only safe if immediately followed by windowing.
+
+class FilterPickup:
+	def __init__(self, naz=None, nt=None):
+		self.naz, self.nt = naz, nt
+	def __call__(self, scan, tod):
+		todfilter.filter_poly_jon2(tod, scan.boresight[:,1])
+
+class PostPickup:
+	def __init__(self, scans, signal_map, signal_cut, prec_ptp, naz=None, nt=None):
+		self.scans = scans
+		self.signal_map = signal_map
+		self.signal_cut = signal_cut
+		self.naz, self.nt = naz, nt
+		self.ptp = prec_ptp
+	def __call__(self, imap):
+		# This function has a lot of duplicate code with Eqsys.A :/
+		signals = [self.signal_cut, self.signal_map]
+		imaps   = [self.signal_cut.zeros(), imap]
+		omaps   = [signal.zeros() for signal in signals]
+		iwork   = [signal.prepare(map) for signal, map in zip(signals, imaps)]
+		owork   = [signal.prepare(map) for signal, map in zip(signals, omaps)]
+		for scan in self.scans:
+			tod = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
+			for signal, work in zip(signals, iwork)[::-1]:
+				signal.forward(scan, tod, work)
+			todfilter.filter_poly_jon2(tod, scan.boresight[:,1])
+			for signal, work in zip(signals, owork):
+				signal.backward(scan, tod, work)
+		for signal, map, work in zip(signals, omaps, owork):
+			signal.finish(map, work)
+		# Must use (P'P)" here, not any other preconditioner!
+		self.ptp(omaps[1])
+		return omaps[1]
+
 ######## Equation system ########
 
 class Eqsys:
-	def __init__(self, scans, signals, dtype, comm=None):
+	def __init__(self, scans, signals, filters=[], dtype=np.float64, comm=None):
 		self.scans   = scans
 		self.signals = signals
 		self.dtype   = dtype
+		self.filters = filters
 		self.dof     = zipper.MultiZipper([signal.dof for signal in signals], comm=comm)
 		self.b       = None
 	def A(self, x):
@@ -425,6 +495,9 @@ class Eqsys:
 			tod  = scan.get_samples()
 			tod -= np.mean(tod,1)[:,None]
 			tod  = tod.astype(self.dtype)
+			# Apply all filters (pickup filter, src subtraction, etc)
+			for filter in self.filters:
+				filter(scan, tod)
 			# Apply the noise model (N")
 			scan.noise.apply(tod)
 			# Project onto signals
@@ -435,6 +508,11 @@ class Eqsys:
 		for signal, map, work in zip(self.signals, maps, owork):
 			signal.finish(map, work)
 		self.b = self.dof.zip(maps)
+	def postprocess(self, x):
+		maps = self.dof.unzip(x)
+		for i in range(len(self.signals)):
+			maps[i] = self.signals[i].postprocess(maps[i])
+		return self.dof.zip(maps)
 	def write(self, prefix, tag, x):
 		maps = self.dof.unzip(x)
 		for signal, map in zip(self.signals, maps):

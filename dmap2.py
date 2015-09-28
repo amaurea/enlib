@@ -94,6 +94,8 @@ class Dmap(object):
 	@property
 	def shape(self): return self.geometry.shape
 	@property
+	def size(self): return self.geometry.size
+	@property
 	def wcs(self): return self.geometry.wcs
 	@property
 	def dtype(self): return self.geometry.dtype
@@ -182,7 +184,7 @@ def sum(dmap, axis=None):
 	The result is a Dmap if the pixel axes are not involved in the sum."""
 	# Full sum
 	if axis is None:
-		return dmap.geometry.comm.allreduce(np.sum([np.sum(t) for t in self.tiles]))
+		return dmap.geometry.comm.allreduce(np.sum([np.sum(t) for t in dmap.tiles]))
 	# Non-pixel sums
 	if axis < 0: axis = dmap.ndim+axis
 	if axis < dmap.ndim-2:
@@ -371,6 +373,8 @@ class DGeometry(object):
 		self.work_geometry = [(self.pre+ws[-2:],ww) for ws,ww in self.work_geometry]
 		self.tile_bufinfo  = self.tile_bufinfo.slice_helper(newlen, oldlen)
 		self.work_bufinfo  = self.work_bufinfo.slice_helper(newlen, oldlen)
+	@property
+	def size(self): return np.product(self.shape)
 	@property
 	def npix(self): return np.product(self.shape[-2:])
 	@property

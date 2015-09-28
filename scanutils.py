@@ -18,18 +18,22 @@ def distribute_scans(myinds, mycosts, myboxes, comm):
 
 	This function does not move the scan data to the new processes. This is
 	up tot he caller."""
-	all_costs = comm.allreduce(mycosts)
-	all_boxes = np.array(comm.allreduce(myboxes))
-	# Avoid angle wraps.
-	all_boxes[...,1] = np.sort(utils.rewind(all_boxes[...,1], ref="auto"),-1)
-	all_inds  = comm.allreduce(myinds)
-	myinds_old = myinds
-	# Split into nearby scans
-	mygroups = dmap.split_boxes_rimwise(all_boxes, all_costs, comm.size)[comm.rank]
-	myinds = [all_inds[i] for group in mygroups for i in group]
-	mysubs = [gi for gi, group in enumerate(mygroups) for i in group]
-	mybbox = [utils.bounding_box([all_boxes[i] for i in group]) for group in mygroups]
-	return myinds, mysubs, mybbox
+	all_costs = np.array(comm.allreduce(mycosts))
+	all_inds  = np.array(comm.allreduce(myinds))
+	if myboxes is None:
+		myinds = all_inds[utils.equal_split(all_costs, comm.size)[comm.rank]]
+		return myinds
+	else:
+		all_boxes = np.array(comm.allreduce(myboxes))
+		# Avoid angle wraps.
+		all_boxes[...,1] = np.sort(utils.rewind(all_boxes[...,1], ref="auto"),-1)
+		myinds_old = myinds
+		# Split into nearby scans
+		mygroups = dmap.split_boxes_rimwise(all_boxes, all_costs, comm.size)[comm.rank]
+		myinds = [all_inds[i] for group in mygroups for i in group]
+		mysubs = [gi for gi, group in enumerate(mygroups) for i in group]
+		mybbox = [utils.bounding_box([all_boxes[i] for i in group]) for group in mygroups]
+		return myinds, mysubs, mybbox
 
 def get_scan_bounds(myscans):
 	return np.array([[np.min(scan.boresight[:,2:0:-1],0),np.max(scan.boresight[:,2:0:-1],0)] for scan in myscans])

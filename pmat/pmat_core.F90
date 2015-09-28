@@ -1102,7 +1102,9 @@ contains
 	!     from az,el,t to source-centered coordinates. Then both r and angle
 	!     are just a quick lookup away. If all interpolation arrays use the
 	!     same resolution grid, then this simply amounts to having an extra
-	!     ys_src(:,:,:,nsrc). Sounds like a good plan.
+	!     ys_src(:,:,:,nsrc). HOWEVER, this approach requires a heavy
+	!     recomputation step every time the source changes position. We can't
+	!     afford that when fitting for the position.
 	! So precompute hit grid, normal interpolation and interpolation.
 	!
 	! What if we wanted to support both intrinsic and beam ellipticity?
@@ -1112,6 +1114,103 @@ contains
 	! We will restrict ourselves either intrinsic or beam ellipticity, not both.
 	! It will be up to the user to disentangle these later. The user chooses
 	! which coordinate system to use based on how he sets up ys_src.
+	subroutine pmat_ptsrc2( &
+			dir, tmul, pmul,                 &! Projection direction, tod multiplier, src multiplier
+			tod, srcs,                       &! Main inputs/outputs. tod(nsamp,ndet), srcs(nparam,nsrc,ndir)
+			bore, det_pos, det_comps,        &
+			rbox, nbox, ys_pos,              &! Coordinate transformation
+			cell_srcs, cell_nsrc, cbox       &! Relevant source lookup. cell_srcs(:,nx,ny,ndir), cell_nsrc(nx,ny,ndir)
+		)
+		use omp_lib
+		implicit none
+		integer, intent(in)    :: dir
+		real(_), intent(in)    :: tmul, pmul
+		real(_), intent(inout) :: tod(:,:), srcs(:,:,:)
+		real(_), intent(in)    :: bore(:,:), det_pos(:,:), det_comps(:,:)
+		real(_), intent(in)    :: rbox(:,:), ys_pos(:,:,:), cbox(:,:)
+		integer, intent(in)    :: nbox(:), cell_srcs(:,:,:,:), cell_nsrc(:,:,:)
+		! Work
+		integer :: nsamp, ndet, nsrc, nproc
+		integer :: ic, i, id, di, si, xind(3), ig, cell(2), cell_ind, cid, ci, sdir, ndir
+		real(_) :: steps(3), x0(2), inv_dx(2), c0(2), inv_dc(2), xrel(3)
+		real(_) :: point(4), phase(3), dec, ra, ddec, dra, r2, ibeam(3)
+		real(_), allocatable :: amps(:,:,:,:), cosdec(:,:)
+		integer, allocatable :: scandir(:)
+		nsamp   = size(tod, 1)
+		ndet    = size(tod, 2)
+		nsrc    = size(srcs,2)
+		ndir    = size(srcs,3)
+
+		! Set up scanning direction. Two modes are supported. If ndir is 1, then
+		! the same set of parameters are used for both left and rightgoing scans.
+		! If ndir is 2, then these are separated.
+		allocate(scandir(nsamp))
+		if(ndir > 1) then
+			scandir(1) = 1
+			do si = 2, nsamp
+				scandir(si) = merge(1,2,bore(2,si)>=bore(2,si-1))
+			end do
+		else
+			scandir = 1
+		end if
+
+		! Precompute a few interpolation-relevant numbers
+		steps(size(steps)) = 1
+		do ic = size(steps)-1, 1, -1
+			steps(ic) = steps(ic+1)*nbox(ic+1)
+		end do
+		x0 = rbox(:,1); inv_dx = nbox/(rbox(:,2)-rbox(:,1))
+		c0 = cbox(:,1); inv_dc = shape(cell_nsrc)/(cbox(:,2)-cbox(:,1))
+
+		nproc = omp_get_max_threads()
+		allocate(cosdec(nsrc,ndir),amps(3,nsrc,ndir,nproc))
+		cosdec = cos(srcs(1,:,:))
+		if(dir > 0) then
+			do i = 1, nproc; amps(:,:,:,i) = srcs(3:5,:,:)*pmul; end do
+		else
+			amps = 0
+		end if
+		!$omp parallel private(id,di,si,xrel,xind,ig,point,phase,cell,cell_ind,cid,dec,ra,ibeam,ddec,dra,r2,sdir)
+		id = omp_get_thread_num()+1
+		!$omp do
+		do di = 1, ndet
+			do si = 1, nsamp
+				sdir = scandir(si)
+				xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+				xind = floor(xrel)
+				xrel = xrel - xind
+				ig   = sum(xind*steps)+1
+				point = ys_pos(:,1,ig) + xrel(1)*ys_pos(:,2,ig) + xrel(2)*ys_pos(:,3,ig) + xrel(3)*ys_pos(:,4,ig)
+				phase(1) = det_comps(1,di)
+				phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+				phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+				cell = (point(1:2)-c0)*inv_dc+1
+				! Bounds checking. Costs 2% performance. Worth it
+				cell(1) = min(size(cell_nsrc,2),max(1,cell(1)))
+				cell(2) = min(size(cell_nsrc,1),max(1,cell(2)))
+				if(dir > 0) tod(si,di) = tod(si,di)*tmul
+				do cell_ind = 1, cell_nsrc(cell(1),cell(2),sdir)
+					cid = cell_srcs(cell_ind,cell(1),cell(2),sdir)
+					dec   = srcs(1,cid,sdir)
+					ra    = srcs(2,cid,sdir)
+					ibeam = srcs(6:8,cid,sdir)
+					! Calc flat-sky relative position for this source
+					ddec = point(1)-dec
+					dra  = (point(2)-ra)*cosdec(cid,sdir)
+					r2   = ddec*(ibeam(1)*ddec+ibeam(3)*dra) + dra*(ibeam(2)*dra+ibeam(3)*ddec)
+					if(dir > 0) then
+						tod(si,di) = tod(si,di) + sum(amps(:,cid,sdir,1)*phase)*exp(-0.5*r2)
+					else
+						amps(:,ci,sdir,id) = amps(:,ci,sdir,id) + tod(si,di)*exp(-0.5*r2)*phase
+					end if
+				end do
+			end do
+		end do
+		!$omp end parallel
+		if(dir < 0) then
+			srcs(3:5,:,:) = srcs(3:5,:,:)*pmul + sum(amps,4)*tmul
+		end if
+	end subroutine
 
 	! params(nparam,nsrc) takes the form [dec,ra,amps[namp],ibeam[3]]
 	! The beam is defined in the target coordinate system. This is appropriate
