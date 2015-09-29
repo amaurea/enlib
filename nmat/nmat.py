@@ -236,6 +236,7 @@ class NmatSharedvecs(NmatDetvecs):
 		step = np.abs(sampslice.step or 1)
 		fmax = res.bins[-1,-1]/step
 		mask = res.bins[:,0] < fmax
+		window = self.window/step
 		bins, ebins, vbins = res.bins[mask], res.ebins[mask], res.vbins[mask]
 		bins[-1,-1] = fmax
 		# Slice covs, not icovs
