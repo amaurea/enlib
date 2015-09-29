@@ -443,6 +443,34 @@ class PostPickup:
 		self.ptp(omaps[1])
 		return omaps[1]
 
+class FilterAddMap:
+	def __init__(self, scans, map, eqsys=None, mul=1, pmat_order=None):
+		self.map, self.eqsys, self.mul = map, eqsys, mul
+		self.data = {scan: pmat.PmatMap(scan, map, order=pmat_order, sys=eqsys) for scan in scans}
+	def __call__(self, scan, tod):
+		pmat = self.data[scan]
+		pmat.forward(tod, self.map, tmul=1, mmul=self.mul)
+
+class FilterAddDmap:
+	def __init__(self, scans, subinds, dmap, eqsys=None, mul=1, pmat_order=None):
+		self.map, self.eqsys, self.mul = dmap, eqsys, mul
+		self.data = {}
+		for scan, subind in zip(scans, subinds):
+			work = dmap.tile2work()
+			self.data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=eqsys), work[subind]]
+	def __call__(self, scan, tod):
+		pmat, work = self.data[scan]
+		pmat.forward(tod, work, tmul=1, mmul=self.mul)
+
+class PostAddMap:
+	# This one is easy if imap and map are compatible (the common case),
+	# but hard otherwise, as it requires reprojection in that case. We
+	# only support the compatible case for now.
+	def __init__(self, map, mul=1):
+		self.map, self.mul = map, mul
+	def __call__(self, imap):
+		return imap + self.map*self.mul
+
 ######## Equation system ########
 
 class Eqsys:
