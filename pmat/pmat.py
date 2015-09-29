@@ -306,15 +306,6 @@ class pos2pix:
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)
 
-def apply_window(tod, width):
-	"""Apply tapering window on width samples at each side of the tod.
-	For example, apply_window(tod, 5*srate) would apply a 5-second window
-	at each edge of the tod."""
-	width = int(width)
-	if width < 1: return
-	core = get_core(tod.dtype)
-	core.pmat_window(tod.T, width)
-
 class PmatMapRebin(PointingMatrix):
 	"""Fortran-accelerated rebinning of maps."""
 	def forward (self, mhigh, mlow):

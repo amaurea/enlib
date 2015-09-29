@@ -499,6 +499,7 @@ class Eqsys:
 			for filter in self.filters:
 				filter(scan, tod)
 			# Apply the noise model (N")
+			scan.noise = scan.noise.update(tod, scan.srate)
 			scan.noise.apply(tod)
 			# Project onto signals
 			for signal, work in zip(self.signals, owork):

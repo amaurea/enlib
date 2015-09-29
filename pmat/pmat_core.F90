@@ -918,31 +918,6 @@ contains
 		mean = sum(a)/size(a)
 	end function
 
-	!!! Windowing stuff !!!
-	subroutine pmat_window(tod, width)
-		implicit none
-		real(_),    intent(inout) :: tod(:,:)
-		integer(4), intent(in)    :: width
-		real(_),    allocatable   :: window(:)
-		real(_),    parameter     :: pi = 3.14159265358979323846d0
-		integer(4) :: nsamp, ndet, di, si
-		if(width < 1) return
-		nsamp = size(tod,1)
-		ndet  = size(tod,2)
-		! First build window
-		allocate(window(width))
-		!$omp parallel do
-		do si = 1, width
-			window(si) = 0.5-0.5*cos(pi*(si-1)/width)
-		end do
-		!$omp parallel do
-		do di = 1, ndet
-			! Apply window on each end
-			tod(1:width,di) = tod(1:width,di)*window
-			tod(nsamp-width+1:nsamp,di) = tod(nsamp-width+1:nsamp,di) * window(width:1:-1)
-		end do
-	end subroutine
-
   !!! Azimuth binning stuff !!!
 	subroutine pmat_scan(dir, tod, model, inds, det_comps, comps)
 		use omp_lib

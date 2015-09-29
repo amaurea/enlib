@@ -155,4 +155,42 @@ contains
 		end do
 	end subroutine
 
+	!!! Windowing stuff !!!
+	! Applies a cosine window of width samples
+	! to the end of the provided tod. Provide
+	! a negative width to invert the filter.
+	subroutine apply_window(tod, width)
+		implicit none
+		real(_),    intent(inout) :: tod(:,:)
+		integer(4), intent(in)    :: width
+		real(_),    allocatable   :: window(:)
+		real(_),    parameter     :: pi = 3.14159265358979323846d0
+		integer(4) :: nsamp, ndet, di, si, w
+		logical    :: invert
+		invert = width < 0
+		w      = abs(width)
+		if(width == 0) return
+		nsamp = size(tod,1)
+		ndet  = size(tod,2)
+		! First build window
+		allocate(window(w))
+		if(invert) then
+			!$omp parallel do
+			do si = 1, w
+				window(si) = 1/(0.5d0-0.5d0*cos(pi*si/w))
+			end do
+		else
+			!$omp parallel do
+			do si = 1, w
+				window(si) = 0.5d0-0.5d0*cos(pi*si/w)
+			end do
+		end if
+		!$omp parallel do
+		do di = 1, ndet
+			! Apply window on each end
+			tod(1:w,di) = tod(1:w,di)*window
+			tod(nsamp-w+1:nsamp,di) = tod(nsamp-w+1:nsamp,di) * window(w:1:-1)
+		end do
+	end subroutine
+
 end module
