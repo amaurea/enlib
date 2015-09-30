@@ -92,8 +92,8 @@ class SignalDmap(Signal):
 		self.dtype= area.dtype
 		self.subs = subinds
 		self.data = {}
+		work = area.tile2work()
 		for scan, subind in zip(scans, subinds):
-			work = area.tile2work()
 			self.data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=eqsys), subind]
 	def prepare(self, m):
 		return m.tile2work()
@@ -455,8 +455,8 @@ class FilterAddDmap:
 	def __init__(self, scans, subinds, dmap, eqsys=None, mul=1, pmat_order=None):
 		self.map, self.eqsys, self.mul = dmap, eqsys, mul
 		self.data = {}
+		work = dmap.tile2work()
 		for scan, subind in zip(scans, subinds):
-			work = dmap.tile2work()
 			self.data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=eqsys), work[subind]]
 	def __call__(self, scan, tod):
 		pmat, work = self.data[scan]
