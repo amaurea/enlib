@@ -216,7 +216,7 @@ class PreconMapBinned:
 		if hits:
 			# Build hitcount map too
 			self.hits = signal.area.copy()
-			calc_hits_map(self.hits, signal, signal_cut, scans)
+			self.hits = calc_hits_map(self.hits, signal, signal_cut, scans)
 		else: self.hits = None
 		self.signal = signal
 	def __call__(self, m):
@@ -241,7 +241,7 @@ class PreconDmapBinned:
 		if hits:
 			# Build hitcount map too
 			self.hits = signal.area.copy()
-			calc_hits_map(self.hits, signal, signal_cut, scans)
+			self.hits = calc_hits_map(self.hits, signal, signal_cut, scans)
 		else: self.hits = None
 		self.signal = signal
 	def __call__(self, m):
@@ -333,7 +333,7 @@ def calc_hits_map(hits, signal, signal_cut, scans):
 		signal_cut.backward(scan, tod, ojunk)
 		signal.backward(scan, tod, work)
 	signal.finish(hits, work)
-	hits = hits[0].astype(np.int32)
+	return hits[0].astype(np.int32)
 
 ######## Priors ########
 
