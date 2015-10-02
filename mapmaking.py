@@ -159,7 +159,7 @@ class SignalPhase(Signal):
 		# code instead.
 		for pattern in patterns:
 			az0,az1 = utils.widen_box(pattern)[:,1]
-			naz = np.ceil((az1-az0)/res)
+			naz = int(np.ceil((az1-az0)/res))
 			az1 = az0 + naz*res
 			det_unit = nrow if col_major else ncol
 			shape, wcs = enmap.geometry(pos=[[0,az0],[ndet/det_unit*utils.degree,az1]], shape=(ndet,naz), proj="car")

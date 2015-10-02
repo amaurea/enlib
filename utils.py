@@ -727,3 +727,44 @@ def rescale(a, range=[0,1]):
 	"""Rescale a such that min(a),max(a) -> range[0],range[1]"""
 	mi, ma = np.min(a), np.max(a)
 	return (a-mi)/(ma-mi)*(range[1]-range[0])+range[0]
+
+def split_by_group(a, start, end):
+	"""Split string a info non-group and group sections,
+	where a group is defined as a set of characters from
+	a start character to a corresponding end character."""
+	res, ind, n = [], 0, 0
+	new = True
+	for c in a:
+		if new:
+			res.append("")
+			new = False
+		i = start.find(c)
+		if n == 0:
+			if i >= 0:
+				# Start of new group
+				res.append("")
+				ind = i
+				n += 1
+		else:
+			if start[ind] == c:
+				n += 1
+			elif end[ind] == c:
+				n-= 1
+				if n == 0: new = True
+		res[-1] += c
+	return res
+
+def split_outside(a, sep, start, end):
+	"""Split string a at occurences of separator sep, except when
+	it occurs inside matching groups of start and end characters."""
+	segments = split_by_group(a, start, end)
+	res = [""]
+	for seg in segments:
+		if len(seg) == 0: continue
+		if seg[0] in start:
+			res[-1] += seg
+		else:
+			toks = seg.split(sep)
+			res[-1] += toks[0]
+			res += toks[1:]
+	return res
