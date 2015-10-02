@@ -50,6 +50,12 @@ class NoiseMatrix:
 		res = copy.deepcopy(self)
 		return res, detslice, sampslice
 
+class NmatNull(NoiseMatrix):
+	def apply(self, tod):
+		tod[:] = 0
+		return tod
+	def white(self, tod): return self.apply(tod)
+
 class NmatBinned(NoiseMatrix):
 	"""TOD noise matrices where power is assumed to be constant
 	in a set of bins in frequency. Stores a covariance matrix for

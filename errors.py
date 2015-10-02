@@ -2,3 +2,4 @@
 class DataError(Exception): pass
 class DataMissing(DataError): pass
 class DataInvalid(DataError): pass
+class ModelError(Exception): pass
