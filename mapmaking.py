@@ -441,18 +441,18 @@ class PostPickup:
 				signal.forward(scan, tod, work)
 			if self.weighted: 
 				# Weighted needs quite a bit more memory :/
-				weight = tod.copy()
-				self.signal_map.forward(scan, weight, wwork)
-			else: weight = None
+				weights = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
+				self.signal_map.forward(scan, weights, wwork)
+			else: weights = None
 			# I'm worried about the effect of single, high pixels at the edge
 			# here. Even when disabling desloping, we may still end up introducing
 			# striping when subtracting polynomials fit to data with very
 			# inhomogeneous noise. Might it be better to apply the filter to
 			# a prewhitened map?
-			todfilter.filter_poly_jon_weighted(tod, scan.boresight[:,1], weight=weight, deslope=False, naz=self.naz, nt=self.nt)
+			todfilter.filter_poly_jon_weighted(tod, scan.boresight[:,1], weights=weights, deslope=False, naz=self.naz, nt=self.nt)
 			for signal, work in zip(signals, owork):
 				signal.backward(scan, tod, work)
-			del weight, tod
+			if self.weighted: del weights, tod
 		for signal, map, work in zip(signals, omaps, owork):
 			signal.finish(map, work)
 		# Must use (P'P)" here, not any other preconditioner!
