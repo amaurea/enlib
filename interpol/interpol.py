@@ -2,7 +2,7 @@ import numpy as np, time
 from enlib import utils
 import fortran_32, fortran_64
 
-def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_obox=False, *args, **kwargs):
+def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_obox=False, return_status=False, *args, **kwargs):
 	"""Given a function func([nin,...]) => [nout,...] and
 	an interpolator class interpolator(box,[nout,...]),
 	(where the input array is regularly spaced in each direction),
@@ -23,11 +23,14 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_ob
 	ip = interpolator(box, func(x), *args, **kwargs)
 
 	errs = [np.inf]*idim # Max error for each *input* dimension in last refinement step
+	err  = np.max(errs)
 	depth = 0
 	# Refine until good enough
 	while True:
 		depth += 1
 		if maxsize and np.product(n) > maxsize:
+			if return_status:
+				return ip if not return_obox else ip, np.array(obox), False, err
 			raise OverflowError("Maximum refinement mesh size exceeded")
 		nok = 0
 		# Consider accuracy for each input parameter by tentatively doubling
@@ -36,6 +39,8 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_ob
 		for i in range(idim):
 			if any(errs[i] > errlim):
 				if maxtime and time.time() - t0 > maxtime:
+					if return_status:
+						return ip if not return_obox else ip, np.array(obox), False, err
 					raise OverflowError("Maximum refinement time exceeded")
 				# Grid may not be good enough in this direction.
 				# Try doubling resolution
@@ -58,7 +63,10 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_ob
 				obox[1] = np.maximum(obox[0], np.max(ytrue.reshape(ytrue.shape[0],-1),1))
 			else: nok += 1
 		if nok >= idim: break
-	return ip if not return_obox else ip, np.array(obox)
+	res = (ip,)
+	if return_obox: res = res + (np.array(obox),)
+	if return_status: res = res + (True,err)
+	return res[0] if len(res) == 1 else res
 
 class Interpolator:
 	def __init__(self, box, y, *args, **kwargs):

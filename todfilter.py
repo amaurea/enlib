@@ -81,3 +81,40 @@ def filter_poly_jon2(tod, az, naz=None, nt=None, deslope=True):
 	if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[naz:naz+nt])
 	if deslope: utils.deslope(d, w=8, inplace=True)
 	return d.reshape(tod.shape)
+
+def filter_poly_jon_weighted(tod, az, weights=Nones, naz=None, nt=None, deslope=True):
+	"""Fix naz Legendre polynomials in az and nt other polynomials
+	in t jointly. Then subtract the best fit from the data.
+	The subtraction is inplace, so tod is modified. If naz or nt are
+	negative, they are fit for, but not subtracted.
+	NOTE: This function may leave tod nonperiodic.
+	"""
+	naz = config.get("gfilter_jon_naz", naz)
+	nt  = config.get("gfilter_jon_nt", nt)
+	naz, asign = np.abs(naz), np.sign(naz)
+	nt,  tsign = np.abs(nt),  np.sign(nt)
+	d  = tod.reshape(-1,tod.shape[-1])
+	if naz == 0 and nt == 0: return tod
+	B = np.zeros([naz+nt,d.shape[-1]],dtype=tod.dtype)
+	if naz > 0:
+		# Build azimuth basis as Legendre polynomials
+		x = utils.rescale(az,[-1,1])
+		B[0] = x
+		if naz > 1: B[1] = 1.5*x**2-0.5
+		for i in range(2, naz):
+			B[i] = ((2*i+1)*x*B[i-1] - i*B[i-2])/(i+1)
+	if nt > 0:
+		x = np.linspace(-1,1,d.shape[-1],endpoint=False)
+		for i in range(nt): B[naz+i] = x**i
+	# Solve for the best fit for each detector, [nbasis,ndet]
+	if weights is None:
+		amps = np.linalg.solve(B.dot(B.T),B.dot(d.T))
+	else:
+		w = weights.reshape(-1,weights.shape[-1])
+		amps = np.zeros([naz+nt],dtype=tod.type)
+		for d in range(len(tod)):
+			amps[:,di] = np.linalg.solve(B.dot(w[di,:,None]*B.T),B.dot(w[di]*d[di]))
+	if asign > 0: d -= amps[:naz].T.dot(B[:naz])
+	if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[naz:naz+nt])
+	if deslope: utils.deslope(d, w=8, inplace=True)
+	return d.reshape(tod.shape)

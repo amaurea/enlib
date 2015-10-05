@@ -417,12 +417,13 @@ class FilterPickup:
 		todfilter.filter_poly_jon2(tod, scan.boresight[:,1])
 
 class PostPickup:
-	def __init__(self, scans, signal_map, signal_cut, prec_ptp, naz=None, nt=None):
+	def __init__(self, scans, signal_map, signal_cut, prec_ptp, naz=None, nt=None, weighted=False):
 		self.scans = scans
 		self.signal_map = signal_map
 		self.signal_cut = signal_cut
 		self.naz, self.nt = naz, nt
 		self.ptp = prec_ptp
+		self.weighted = weighted
 	def __call__(self, imap):
 		# This function has a lot of duplicate code with Eqsys.A :/
 		signals = [self.signal_cut, self.signal_map]
@@ -430,13 +431,28 @@ class PostPickup:
 		omaps   = [signal.zeros() for signal in signals]
 		iwork   = [signal.prepare(map) for signal, map in zip(signals, imaps)]
 		owork   = [signal.prepare(map) for signal, map in zip(signals, omaps)]
+		if self.weighted:
+			wmap  = self.ptp.div[0]
+			wmap[1:] = 0
+			wwork = self.signal_map.prepare(wmap)
 		for scan in self.scans:
 			tod = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
 			for signal, work in zip(signals, iwork)[::-1]:
 				signal.forward(scan, tod, work)
-			todfilter.filter_poly_jon2(tod, scan.boresight[:,1])
+			if self.weighted: 
+				# Weighted needs quite a bit more memory :/
+				weight = tod.copy()
+				self.signal_map.forward(scan, weight, wwork)
+			else: weight = None
+			# I'm worried about the effect of single, high pixels at the edge
+			# here. Even when disabling desloping, we may still end up introducing
+			# striping when subtracting polynomials fit to data with very
+			# inhomogeneous noise. Might it be better to apply the filter to
+			# a prewhitened map?
+			todfilter.filter_poly_jon_weighted(tod, scan.boresight[:,1], weight=weight, deslope=False, naz=self.naz, nt=self.nt)
 			for signal, work in zip(signals, owork):
 				signal.backward(scan, tod, work)
+			del weight, tod
 		for signal, map, work in zip(signals, omaps, owork):
 			signal.finish(map, work)
 		# Must use (P'P)" here, not any other preconditioner!
