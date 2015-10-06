@@ -440,7 +440,7 @@ class PostPickup:
 			for signal, work in zip(signals, iwork)[::-1]:
 				signal.forward(scan, tod, work)
 			if self.weighted: 
-				# Weighted needs quite a bit more memory :/
+				# Weighted needs quite a bit more memory (and time) :/
 				weight = tod.copy()
 				self.signal_map.forward(scan, weight, wwork)
 			else: weight = None
