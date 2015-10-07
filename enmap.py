@@ -760,6 +760,14 @@ def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
 	return ifft(fft(m)*_widen(m.lmap(),m.ndim+1)*1j).real
 
+def grad_pix(m):
+	"""The gradient of map m expressed in units of pixels.
+	Not the same as the gradient of m with resepect to pixels.
+	Useful for avoiding sky2pix-calls for e.g. lensing,
+	and removes the complication of axes that increase in
+	nonstandard directions."""
+	return grad(m)*(m.shape[-2:]/m.extent())[(slice(None),)+(None,)*m.ndim]
+
 def div(m):
 	"""Returns the divergence of the map m[2,...] as [...]."""
 	return ifft(np.sum(fft(m)*_widen(m.lmap(),m.ndim)*1j,0)).real

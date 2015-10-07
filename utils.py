@@ -501,6 +501,14 @@ def atleast_3d(a):
 	elif a.ndim == 2: return a.reshape((1,)+a.shape)
 	else: return a
 
+def to_Nd(a, n, return_inverse=False):
+	a = np.asanyarray(a)
+	if n >= a.ndim:
+		res = a.reshape((1,)*(n-a.ndim)+a.shape)
+	else:
+		res = a.reshape((-1,)+a.shape[1:])
+	return (res, a.shape) if return_inverse else res
+
 def between_angles(a, range, period=2*np.pi):
 	a = rewind(a, np.mean(range), period=period)
 	return (a>=range[0])&(a<range[1])

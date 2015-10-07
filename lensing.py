@@ -80,23 +80,20 @@ def displace_map(imap, pix, order=3, mode="spline", border="cyclic", trans=False
 # Compatibility function. Not quite equivalent lens_map above due to taking phi rather than
 # its gradient as an argument.
 def lens_map_flat(cmb_map, phi_map):
-	obs_pos  = cmb_map.posmap()
-	grad_phi = enmap.ifft(enmap.map2harm(phi_map)*phi_map.lmap()*1j).real
-	raw_pos  = obs_pos + grad_phi
-	# Convert to pixel positions
-	raw_pix  = cmb_map.sky2pix(raw_pos, safe=False)
+	raw_pix  = cmb_map.pixmap() + enmap.grad_pix(phi_map)
 	# And extract the interpolated values. Because of a bug in map_pixels with
 	# mode="wrap", we must handle wrapping ourselves.
 	npad = int(np.ceil(max(np.max(-raw_pix),np.max(raw_pix-np.array(cmb_map.shape[-2:])[:,None,None]))))
 	pmap = enmap.pad(cmb_map, npad, wrap=True)
 	return enmap.samewcs(utils.interpol(pmap, raw_pix+npad, order=4, mode="wrap"), cmb_map)
 
-
 ######## Curved sky lensing ########
 
 def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False):
 	ctype   = np.result_type(dtype,0j)
 	ncomp   = ps_cmb.shape[0]
+	if ps_lens.ndim == 3 and ps_lens.shape[:2] == (1,1): ps_lens = ps_lens[0,0]
+	else: raise ValueError("The lensing spectrum must be scalar, but got " + ps_lens.shape)
 	# First draw a random lensing field, and use it to compute the undeflected positions
 	if verbose: print "Computing observed coordinates"
 	obs_pos = enmap.posmap(shape, wcs)
@@ -104,11 +101,9 @@ def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None
 	phi_alm = curvedsky.rand_alm(ps_lens, lmax=lmax, seed=seed, dtype=ctype)
 	if "p" in output:
 		if verbose: print "Computing phi map"
-		phi_map = curvedsky.alm2map(phi_alm, obs_pos, oversample=oversample)
+		phi_map = curvedsky.alm2map(phi_alm, enmap.zeros(shape, wcs, dtype=dtype))
 	if verbose: print "Computing grad map"
-	# This gradient uses zenith coordinates, so the y-sign is flipped
-	grad    = curvedsky.alm2map(phi_alm, obs_pos, oversample=oversample, deriv=True)
-	grad[0] = -grad[0]
+	grad = curvedsky.alm2map(phi_alm, enmap.zeros((2,)+shape[-2:], wcs, dtype=dtype), deriv=True)
 	if verbose: print "Computing alpha map"
 	raw_pos = enmap.samewcs(offset_by_grad(obs_pos, grad, pol=ncomp>1, geodesic=geodesic), obs_pos)
 	del phi_alm
@@ -117,9 +112,9 @@ def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None
 	cmb_alm = curvedsky.rand_alm(ps_cmb, lmax=lmax, dtype=ctype) # already seeded
 	if "u" in output:
 		if verbose: print "Computing unlensed map"
-		cmb_raw = curvedsky.alm2map(cmb_alm, obs_pos, oversample=oversample, spin=spin)
+		cmb_raw = curvedsky.alm2map(cmb_alm, enmap.zeros(shape, wcs, dtype=dtype), spin=spin)
 	if verbose: print "Computing lensed map"
-	cmb_obs = curvedsky.alm2map(cmb_alm, raw_pos[:2], oversample=oversample, spin=spin)
+	cmb_obs = curvedsky.alm2map_pos(cmb_alm, raw_pos[:2], oversample=oversample, spin=spin)
 	if raw_pos.shape[0] > 2 and np.any(raw_pos[2]):
 		if verbose: print "Rotating polarization"
 		cmb_obs = enmap.rotate_pol(cmb_obs, raw_pos[2])
@@ -132,7 +127,6 @@ def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None
 		elif c == "p": res.append(phi_map)
 		elif c == "a": res.append(grad)
 	return tuple(res)
-
 
 def offset_by_grad(ipos, grad, geodesic=True, pol=None):
 	"""Given a set of coordinates ipos[{dec,ra},...] and a gradient
@@ -197,3 +191,43 @@ def pole_wrap(pos):
 	a[0,bad] = -np.pi - a[0,bad]
 	a[1,bad] = a[1,bad]+np.pi
 	return a
+
+
+
+#def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False):
+#	ctype   = np.result_type(dtype,0j)
+#	ncomp   = ps_cmb.shape[0]
+#	if ps_lens.ndim == 3: ps_lens = ps_lens[0,0]
+#	# First draw a random lensing field, and use it to compute the undeflected positions
+#	if verbose: print "Computing observed coordinates"
+#	obs_pos = enmap.posmap(shape, wcs)
+#	if verbose: print "Generating phi alms"
+#	phi_alm = curvedsky.rand_alm(ps_lens, lmax=lmax, seed=seed, dtype=ctype)
+#	if "p" in output:
+#		if verbose: print "Computing phi map"
+#		phi_map = curvedsky.alm2map_pos(phi_alm, obs_pos, oversample=oversample)
+#	if verbose: print "Computing grad map"
+#	grad    = curvedsky.alm2map_pos(phi_alm, obs_pos, oversample=oversample, deriv=True)
+#	if verbose: print "Computing alpha map"
+#	raw_pos = enmap.samewcs(offset_by_grad(obs_pos, grad, pol=ncomp>1, geodesic=geodesic), obs_pos)
+#	del phi_alm
+#	# Then draw a random CMB realization at the raw positions
+#	if verbose: print "Generating cmb alms"
+#	cmb_alm = curvedsky.rand_alm(ps_cmb, lmax=lmax, dtype=ctype) # already seeded
+#	if "u" in output:
+#		if verbose: print "Computing unlensed map"
+#		cmb_raw = curvedsky.alm2map_pos(cmb_alm, obs_pos, oversample=oversample, spin=spin)
+#	if verbose: print "Computing lensed map"
+#	cmb_obs = curvedsky.alm2map_pos(cmb_alm, raw_pos[:2], oversample=oversample, spin=spin)
+#	if raw_pos.shape[0] > 2 and np.any(raw_pos[2]):
+#		if verbose: print "Rotating polarization"
+#		cmb_obs = enmap.rotate_pol(cmb_obs, raw_pos[2])
+#	del cmb_alm
+#	# Output in same order as specified in output argument
+#	res = []
+#	for c in output:
+#		if c == "l": res.append(cmb_obs)
+#		elif c == "u": res.append(cmb_raw)
+#		elif c == "p": res.append(phi_map)
+#		elif c == "a": res.append(grad)
+#	return tuple(res)

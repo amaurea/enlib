@@ -74,7 +74,7 @@ def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False,
 		# Cylindrical method if possible, else slow pos-based method
 		try:
 			alm2map_cyl(alm, map, ainfo=ainfo, spin=spin, deriv=deriv, direct=direct, copy=copy)
-		except AssertionError:
+		except AssertionError as e:
 			# Wrong pixelization. Fall back on slow, general method
 			pos = map.posmap()
 			res = alm2map_pos(alm, pos, ainfo=ainfo, oversample=oversample, spin=spin, deriv=deriv)
@@ -101,35 +101,35 @@ def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=Fa
 
 	If copy=True, the input map is not overwritten.
 	"""
-	# Work on views of alm and map that have at least 2 and 3 dimensions
-	alm_full = np.atleast_2d(alm)
-	map_full = map if map.ndim > 2 else map[None]
+	# Work on views of alm and map with shape alm_full[ntrans,ncomp,nalm]
+	# and map[ntrans,ncomp/nderiv,ny,nx] to avoid lots of if tests later.
+	# We undo the reshape before returning.
+	alm_full = utils.to_Nd(alm, 2 if deriv else 3)
+	map_full = utils.to_Nd(map, 4)
 	if ainfo is None: ainfo = sharp.alm_info(nalm=alm_full.shape[-1])
-	ncomp = alm_full.shape[-2] if not deriv else 2
 	if copy: map_full = map_full.copy()
 	if direct:
 		tmap, tslice = map_full, (Ellipsis,)
 	else:
 		tmap, tslice = make_projectable_map_cyl(map_full)
 	sht    = sharp.sht(map2minfo(tmap), ainfo)
-	# We need a pixel-flattened version for the SHTs
+	# We need a pixel-flattened version for the SHTs.
 	tflat  = tmap.reshape(tmap.shape[:-2]+(-1,))
 
 	# Perform the SHT
 	if deriv:
+		# We need alm_full[ntrans,nalm] -> tflat[ntrans,2,npix]
+		# or alm_full[nalm] -> tflat[2,npix]
 		tflat = sht.alm2map_der1(alm_full, tflat)
-		# sharp's theta is a zenith angle, but we want a declination
-		tflat[...,0] = -tflat[...,0]
-		# Make output have the same shape as input, if possible
-		if alm.ndim == 1 and tmap.shape[-4] == 1:
-			tmap = tmap[...,0,:,:,:]
+		# sharp's theta is a zenith angle, but we want a declination.
+		# Actually, we may need to take into account left-handed
+		# coordinates too, though I'm not sure how to detect those in
+		# general.
+		tflat[:,0] = -tflat[:,0]
 	else:
-		tflat[...,:1,:] = sht.alm2map(alm_full[...,:1,:], tflat[...,:1,:])
-		if ncomp > 1:
-			tflat[...,1:,:] = sht.alm2map(alm_full[...,1:,:], tflat[...,1:,:], spin=spin)
-		# Make output have the same shape as input, if possible
-		if alm.ndim == 1 and tmap.shape[-3] == 1:
-			tmap = tmap[...,0,:,:]
+		tflat[:,:1,:] = sht.alm2map(alm_full[:,:1,:], tflat[:,:1,:])
+		if tflat.shape[1] > 1:
+			tflat[:,1:,:] = sht.alm2map(alm_full[:,1:,:], tflat[:,1:,:], spin=spin)
 
 	map_full[:] = tmap[tslice]
 	return map
@@ -150,10 +150,13 @@ def alm2map_pos(alm, pos=None, ainfo=None, oversample=2.0, spin=2, deriv=False):
 		ashape = ashape + (ncomp,)
 		ncomp = 2
 	tmap   = make_projectable_map(pos, ainfo.lmax, ashape+(ncomp,), oversample, alm.real.dtype)
-	alm2map(alm, tmap, ainfo=ainfo, spin=spin, deriv=deriv)
+	alm2map_cyl(alm, tmap, ainfo=ainfo, spin=spin, deriv=deriv, direct=True)
 	# Project down on our final pixels. This will result in a slight smoothing
 	pix = tmap.sky2pix(pos[:2])
-	return enmap.samewcs(utils.interpol(tmap, pix, mode="wrap"), pos)
+	res = enmap.samewcs(utils.interpol(tmap, pix, mode="wrap"), pos)
+	# Remove any extra dimensions we added
+	if alm.ndim == alm_full.ndim-1: res = res[0]
+	return res
 
 def make_projectable_map_cyl(map):
 	"""Given an enmap in a cylindrical projection, return a map with
