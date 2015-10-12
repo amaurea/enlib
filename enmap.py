@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, astropy.io.fits, sys
+import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, enlib.powspec, astropy.io.fits, sys
 try:
 	import h5py
 except ImportError:
@@ -74,7 +74,7 @@ class ndmap(np.ndarray):
 	def box(self): return box(self.shape, self.wcs)
 	def posmap(self, corner=False): return posmap(self.shape, self.wcs, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
-	def lmap(self): return lmap(self.shape, self.wcs)
+	def lmap(self, oversample=1): return lmap(self.shape, self.wcs, oversample=oversample)
 	def area(self): return area(self.shape, self.wcs)
 	def extent(self): return extent(self.shape, self.wcs)
 	@property
@@ -343,25 +343,38 @@ def area(shape, wcs, nsub=0x10):
 	and wcs, in steradians."""
 	return np.prod(extent(shape, wcs, nsub))
 
-def lmap(shape, wcs):
+def lmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
 	of a map with the given shape and wcs."""
-	ly, lx = laxes(shape, wcs)
-	data = np.empty([2]+list(shape[-2:]))
+	ly, lx = laxes(shape, wcs, oversample=oversample)
+	data = np.empty((2,ly.size,lx.size))
 	data[0] = ly[:,None]
 	data[1] = lx[None,:]
 	return ndmap(data, wcs)
 
-def laxes(shape, wcs):
+def laxes(shape, wcs, oversample=1):
+	overample = int(oversample)
 	step = extent(shape, wcs)/shape[-2:]
-	ly = np.fft.fftfreq(shape[-2], step[0])*2*np.pi
-	lx = np.fft.fftfreq(shape[-1], step[1])*2*np.pi
+	ly = np.fft.fftfreq(shape[-2]*oversample, step[0])*2*np.pi
+	lx = np.fft.fftfreq(shape[-1]*oversample, step[1])*2*np.pi
+	if oversample > 1:
+		# When oversampling, we want even coverage of fourier-space
+		# pixels. Because the pixel value indicates the *center* l
+		# of that pixel, we must shift ls when oversampling.
+		# E.g. [0,100,200,...] oversample 2 => [-25,25,75,125,175,...],
+		# not [0,50,100,150,200,...].
+		# And  [0,100,200,...] os 3 => [-33,0,33,66,100,133,...]
+		# In general [0,a,2a,3a,...] os n => a*(-1+(2*i+1)/n)/2
+		# Since fftfreq generates a*i, the difference is a/2*(-1+1/n)
+		def shift(l,a,n): return l+a/2*(-1+1./n)
+		ly = shift(ly,ly[oversample],oversample)
+		lx = shift(lx,lx[oversample],oversample)
 	return ly, lx
 
-def lrmap(shape, wcs):
+def lrmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
 	of a map with the given shape and wcs."""
-	return lmap(shape, wcs)[...,:shape[-1]/2+1]
+	return lmap(shape, wcs, oversample=oversample)[...,:shape[-1]/2+1]
 
 def fft(emap, omap=None, nthread=0, normalize=True):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
@@ -613,14 +626,11 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs)
 #	except AttributeError:
 #		return shape, wcs
 
-
-
-
 def create_wcs(shape, box=None, proj="cea"):
 	if box is None: box = np.array([[-1,-1],[1,1]])*0.5*10*np.pi/180
 	return enlib.wcs.build(box*180/np.pi, shape=shape, rowmajor=True, system=proj)
 
-def spec2flat(shape, wcs, cov, exp=1.0, mode="nearest"):
+def spec2flat(shape, wcs, cov, exp=1.0, mode="nearest", oversample=1, smooth="auto"):
 	"""Given a (ncomp,ncomp,l) power spectrum, expand it to harmonic map space,
 	returning (ncomp,ncomp,y,x). This involves a rescaling which converts from
 	power in terms of multipoles, to power in terms of 2d frequency.
@@ -639,13 +649,68 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="nearest"):
 	the map, this is the appropriate place to do so, ugly as it is."""
 	oshape= tuple(shape)
 	if len(oshape) == 2: oshape = (1,)+oshape
-	ls  = np.sum(lmap(oshape, wcs)**2,0)**0.5
+	ls = np.sum(lmap(oshape, wcs, oversample=oversample)**2,0)**0.5
+	if smooth == "auto":
+		# Determine appropriate fourier-scale smoothing based on 2d fourer
+		# space resolution. We wish to smooth by about this width to approximate
+		# averaging over sub-grid modes
+		smooth = 0.5*(ls[1,0]+ls[0,1])
+		smooth /= (8*np.log(2))**0.5 * 1.45 # 1.45 is an empirical factor
+	if smooth > 0:
+		cov = smooth_spectrum(cov, kernel="gauss", weight="mode", width=smooth)
 	# Translate from steradians to pixels
 	cov = cov * np.prod(shape[-2:])/area(shape,wcs)
 	if exp != 1.0: cov = multi_pow(cov, exp)
 	cov[~np.isfinite(cov)] = 0
 	cov   = cov[:oshape[-3],:oshape[-3]]
-	return ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape),mode=mode),wcs)
+	# Use order 1 because we will perform very short interpolation, and to avoid negative
+	# values in spectra that must be positive (and it's faster)
+	res = ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape),mode=mode, mask_nan=False, order=1),wcs)
+	res = downgrade(res, oversample)
+	return res
+
+def smooth_spectrum(ps, kernel="gauss", weight="mode", width=1.0):
+	"""Smooth the spectrum ps with the given kernel, using the given weighting."""
+	ps = np.asanyarray(ps)
+	pflat = ps.reshape(-1,ps.shape[-1])
+	nspec,nl = pflat.shape
+	# Set up the kernel array
+	K = np.zeros((nspec,nl))
+	l = np.arange(nl)
+	if isinstance(kernel, basestring):
+		if kernel == "gauss":
+			K[:] = np.exp(-0.5*(l/width)**2)
+		elif kernel == "step":
+			K[:,:int(width)] = 1
+		else:
+			raise ValueError("Unknown kernel type %s in smooth_spectrum" % kernel)
+	else:
+		tmp = np.atleast_2d(kernel)
+		K[:,:tmp.shape[-1]] = tmp[:,:K.shape[-1]]
+	# Set up the weighting scheme
+	W = np.zeros((nspec,nl))
+	if isinstance(weight, basestring):
+		if weight == "mode":
+			W[:] = l[None,:]**2
+		elif weight == "uniform":
+			W[:] = 1
+		else:
+			raise ValueError("Unknown weighting scheme %s in smooth_spectrum" % weight)
+	else:
+		tmp = np.atleast_2d(weight)
+		assert tmp.shape[-1] == W.shape[-1], "Spectrum weight must have the same length as spectrum"
+	pWK = _convolute_sym(pflat*W, K)
+	WK  = _convolute_sym(W, K)
+	res = pWK/WK
+	return res.reshape(ps.shape)
+
+def _convolute_sym(a,b):
+	sa = np.concatenate([a,a[:,-2:0:-1]],-1)
+	sb = np.concatenate([b,b[:,-2:0:-1]],-1)
+	fa = enlib.fft.rfft(sa)
+	fb = enlib.fft.rfft(sb)
+	sa = enlib.fft.ifft(fa*fb,sa,normalize=True)
+	return sa[:,:a.shape[-1]]
 
 def multi_pow(mat, exp, axes=[0,1]):
 	"""Raise each sub-matrix of mat (ncomp,ncomp,...) to
