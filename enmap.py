@@ -655,7 +655,7 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="nearest", oversample=1, smooth="au
 		# space resolution. We wish to smooth by about this width to approximate
 		# averaging over sub-grid modes
 		smooth = 0.5*(ls[1,0]+ls[0,1])
-		smooth /= (8*np.log(2))**0.5 * 1.45 # 1.45 is an empirical factor
+		smooth /= 3.41 # 3.41 is an empirical factor
 	if smooth > 0:
 		cov = smooth_spectrum(cov, kernel="gauss", weight="mode", width=smooth)
 	# Translate from steradians to pixels

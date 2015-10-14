@@ -43,6 +43,9 @@ class Rangelist:
 	@staticmethod
 	def empty(nsamp):
 		return Rangelist(np.zeros([0,2],dtype=int),n=nsamp,copy=False)
+	@staticmethod
+	def ones(nsamp):
+		return Rangelist(np.array([[0,nsamp]],dtype=int),n=nsamp,copy=False)
 	def sum(self): return np.sum(self.ranges[:,1]-self.ranges[:,0])
 	def __len__(self): return self.n
 	def __repr__(self): return "Rangelist("+str(self.ranges)+",n="+repr(self.n)+")"
@@ -97,6 +100,9 @@ class Multirange:
 	@staticmethod
 	def empty(ndet, nsamp):
 		return Multirange([Rangelist.empty(nsamp) for det in xrange(ndet)])
+	@staticmethod
+	def ones(ndet,nsamp):
+		return Multirange([Rangelist.ones(nsamp) for det in xrange(ndet)])
 	def sum(self, flat=True):
 		getsum = np.vectorize(lambda x: x.sum(), 'i')
 		res = getsum(self.data)
