@@ -146,6 +146,11 @@ class DataSet:
 		if name in self.__dict__["datafields"].keys():
 			return self.__dict__["datafields"][name].data
 		raise AttributeError
+	def __delattr__(self, name):
+		if name in self.names:
+			del self.datafields[name]
+		else:
+			del self.__dict__[name]
 	def __dir__(self): return sorted(self.__dict__.keys() + self.names)
 	def __repr__(self):
 		descs = ["%s%s" % (name, self.datafields[name].data_desc()) for name in self.datafields]
@@ -156,6 +161,7 @@ class DataSet:
 		res = merge([self,other.copy()])
 		self.datafields = res.datafields
 		self.dets, self.samples = self._calc_detsamps()
+		return self
 
 def merge(datasets, copy=False):
 	"""Merge a list of datasets into a single dataset which will contain all
