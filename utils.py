@@ -27,13 +27,20 @@ def listsplit(seq, elem):
 	ranges = zip([0]+[i+1 for i in inds],inds+[len(seq)])
 	return [seq[a:b] for a,b in ranges]
 
+def common_vals(arrs):
+	"""Given a list of arrays, returns their common values.
+	For example
+	  common_vals([[1,2,3,4,5],[2,4,6,8]]) -> [2,4]"""
+	inter = arrs[0]
+	for arr in arrs[1:]:
+		inter = np.lib.arraysetops.intersect1d(inter,arr)
+	return inter
+
 def common_inds(arrs):
 	"""Given a list of arrays, returns the indices into each of them of
 	their common elements. For example
 	  common_inds([[1,2,3,4,5],[2,4,6,8]]) -> [[1,3],[0,1]]"""
-	inter = arrs[0]
-	for arr in arrs[1:]:
-		inter = np.lib.arraysetops.intersect1d(inter,arr)
+	inter = common_vals(arrs)
 	# There should be a faster way of doing this
 	return [np.array([np.where(arr==i)[0][0] for i in inter]) for arr in arrs]
 
@@ -419,8 +426,8 @@ def range_sub(a,b, mapping=False):
 
 def range_union(a, mapping=False):
 	"""Given a set of ranges a[:,{from,to}], return a new set where all
-	overlapping ranges have been merged. If mapping=True, then the mapping
-	from old to new ranges is also returned."""
+	overlapping ranges have been merged, where to >= from. If mapping=True,
+	then the mapping from old to new ranges is also returned."""
 	# We will make a single pass through a in sorted order
 	a    = np.asarray(a)
 	n    = len(a)
@@ -443,6 +450,19 @@ def range_union(a, mapping=False):
 	b = np.array(b)
 	if b.size == 0: b = b.reshape(0,2)
 	return (b,rmap) if mapping else b
+
+def range_normalize(a):
+	"""Given a set of ranges a[:,{from,to}], normalize the ranges
+	such that no ranges are empty, and all ranges go in increasing
+	order."""
+	a = np.asarray(a)
+	n1 = len(a)
+	a = a[a[:,1]!=a[:,0]]
+	reverse = a[:,1]<a[:,0]
+	a[reverse] = a[reverse,::-1]
+	n2 = len(a)
+	if n2 != n1: "Removed %d empty ranges" % (n1-n2)
+	return a
 
 def range_cut(a, c):
 	"""Cut range list a at positions given by c. For example

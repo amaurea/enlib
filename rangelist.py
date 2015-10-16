@@ -3,7 +3,7 @@ providing both a mask-like (numpy bool array) and list of from:to interface.
 It also provides a convenience class for handling multiple of these range lists."""
 import numpy as np
 from enlib.slice import expand_slice, split_slice
-from enlib.utils import mask2range, cumsum, range_union
+from enlib.utils import mask2range, cumsum, range_union, range_normalize
 
 class Rangelist:
 	def __init__(self, ranges, n=None, copy=True):
@@ -18,7 +18,9 @@ class Rangelist:
 				self.ranges = mask2range(ranges)
 			else:
 				self.n      = int(n)
-				self.ranges = ranges
+				# Since this class is supposed to be a sparese representation of a mask,
+				# only non-overlapping non-empty ranges make sense.
+				self.ranges = range_union(range_normalize(ranges))
 	def __getitem__(self, sel):
 		"""This function operates on the rangelist as if it were a dense numpy array.
 		It returns either a sliced Rangelist or a bool."""
@@ -65,7 +67,7 @@ class Rangelist:
 		if isinstance(rlist, Multirange):
 			return rlist + self
 		else:
-			return Rangelist(range_union(np.concatenate([self.ranges, Rangelist(rlist,self.n).ranges],0)), self.n)
+			return Rangelist(np.concatenate([self.ranges, Rangelist(rlist,self.n).ranges],0), self.n)
 
 class Multirange:
 	"""Multirange makes it easier to work with large numbers of rangelists.
@@ -108,7 +110,8 @@ class Multirange:
 		res = getsum(self.data)
 		return np.sum(res) if flat else res
 	@property
-	def shape(self): return self.data.shape + (self.data.reshape(-1)[0].n,)
+	def shape(self):
+		return self.data.shape + (self.data.reshape(-1)[0].n,) if self.data.size > 0 else self.data.shape + (0,)
 	@property
 	def size(self): return np.product(self.shape)
 	def copy(self): return Multirange(self.data, copy=True)
