@@ -411,10 +411,10 @@ class PriorProjectOut:
 #     is only safe if immediately followed by windowing.
 
 class FilterPickup:
-	def __init__(self, naz=None, nt=None):
-		self.naz, self.nt = naz, nt
+	def __init__(self, naz=None, nt=None, niter=None):
+		self.naz, self.nt, self.niter = naz, nt, niter
 	def __call__(self, scan, tod):
-		todfilter.filter_poly_jon2(tod, scan.boresight[:,1])
+		todfilter.filter_poly_jon(tod, scan.boresight[:,1], naz=self.naz, nt=self.nt, niter=self.niter, cuts=scan.cut)
 
 class PostPickup:
 	def __init__(self, scans, signal_map, signal_cut, prec_ptp, naz=None, nt=None, weighted=False):
@@ -449,7 +449,7 @@ class PostPickup:
 			# striping when subtracting polynomials fit to data with very
 			# inhomogeneous noise. Might it be better to apply the filter to
 			# a prewhitened map?
-			todfilter.filter_poly_jon_weighted(tod, scan.boresight[:,1], weights=weights, deslope=False, naz=self.naz, nt=self.nt)
+			todfilter.filter_poly_jon(tod, scan.boresight[:,1], weights=weights, naz=self.naz, nt=self.nt)
 			for signal, work in zip(signals, owork):
 				signal.backward(scan, tod, work)
 			if self.weighted: del weights, tod
@@ -540,11 +540,19 @@ class Eqsys:
 			tod -= np.mean(tod,1)[:,None]
 			tod  = tod.astype(self.dtype)
 			# Apply all filters (pickup filter, src subtraction, etc)
+			#def dump(fname, data):
+			#	with h5py.File(fname,"w") as hfile:
+			#		hfile["data"] = data
+			#dump("test1_d.hdf", tod[:4])
 			for filter in self.filters:
 				filter(scan, tod)
+			#dump("test1_Fd.hdf", tod[:4])
 			# Apply the noise model (N")
 			scan.noise = scan.noise.update(tod, scan.srate)
 			scan.noise.apply(tod)
+			#dump("test1_Nd.hdf", tod[:4])
+			#scan.noise.write("test1_N.hdf")
+			#1/0
 			# Project onto signals
 			for signal, work in zip(self.signals, owork):
 				signal.backward(scan, tod, work)
