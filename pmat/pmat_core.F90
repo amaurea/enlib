@@ -1562,7 +1562,7 @@ contains
 		if(dir > 0) then
 			!$omp parallel do private(i,ipix)
 			do i = 1, npix
-				ipix = nint(pix(:,i))
+				ipix = nint(pix(:,i))+1
 				ipix(1) = max(1,min(size(map,2),ipix(1)))
 				ipix(2) = max(1,min(size(map,1),ipix(2)))
 				tod(i,:) = map(ipix(2),ipix(1),:)
@@ -1576,7 +1576,7 @@ contains
 			id = omp_get_thread_num()+1
 			!$omp do
 			do i = 1, npix
-				ipix = nint(pix(:,i))
+				ipix = nint(pix(:,i))+1
 				ipix(1) = max(1,min(size(map,2),ipix(1)))
 				ipix(2) = max(1,min(size(map,1),ipix(2)))
 				wmap(ipix(2),ipix(1),:,id) = tod(i,:)

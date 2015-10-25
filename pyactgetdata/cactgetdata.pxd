@@ -11,3 +11,6 @@ cdef extern from "cactgetdata.h":
 	bint ACTpolDirfile_has_channel(ACTpolDirfile *dirfile, char *channel)
 	
 	void * ACTpolDirfile_read_channel(char typechar, ACTpolDirfile *dirfile, char *channelname, int *nsamples)
+
+	int GetNEntry(FormatType * F)
+	int GetEntryInfo(FormatType * F, int ind, char ** category, char ** name, char * field_code)
