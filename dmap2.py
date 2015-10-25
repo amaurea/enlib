@@ -34,8 +34,8 @@ The complication is that sends and receives have to happen at the same time.
 The easiest way to do this is via alltoallv, which requires the use of
 flattened arrays.
 """
-import numpy as np, mpi4py.MPI, copy, os, re, enlib.slice, operator
-from enlib import enmap, utils, zipper
+import numpy as np, copy, os, re, enlib.slice, operator
+from enlib import enmap, utils, zipper, mpi
 from astropy.wcs import WCS
 
 def empty(geometry):
@@ -259,7 +259,7 @@ class DGeometry(object):
 			# 1. Set up basic properties
 			assert shape is not None
 			if wcs is None: _, wcs = enmap.geometry(pos=np.array([[-1,-1],[1,1]])*5*np.pi/180, shape=shape[-2:])
-			if comm is None: comm = mpi4py.MPI.COMM_WORLD
+			if comm is None: comm = mpi.COMM_WORLD
 			if tshape is None: tshape = (240,240)
 			if dtype is None: dtype = np.float64
 			if bbpix is None:
@@ -474,7 +474,7 @@ def write_map(name, map, ext="fits", merged=True):
 			enmap.write_map(name, canvas)
 
 def read_map(name, bbpix=None, bbox=None, tshape=None, comm=None):
-	if comm is None: comm = mpi4py.MPI.COMM_WORLD
+	if comm is None: comm = mpi.COMM_WORLD
 	if os.path.isdir(name):
 		# Find the number of tiles in the map
 		entries = os.listdir(name)

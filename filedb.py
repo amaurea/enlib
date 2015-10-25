@@ -155,30 +155,36 @@ class FormatDB(Basedb):
 		self.static = bunch.Bunch()
 		for line in data.splitlines():
 			if len(line) < 1 or line[0] == "#": continue
+			# Split into part before first : and the rest
 			toks = pre_split(line)
 			if len(toks) == 1: toks = toks + [""]
-			assert len(toks)==2
-			name, format   = toks[0], toks[1]
+			# There may be multiple formats on the same line, pipe-separated
+			name, format  = toks[0], toks[1:]
 			self.rules.append({"name":name, "format": format})
 			self.static[name] = format
 	def __getitem__(self, id):
+		return self.query(id)
+	def query(self, id, multi=False):
 		info = {name: fun(id) for name, fun in self.funcs}
 		res = bunch.Bunch()
 		selected=[True]
 		for rule in self.rules:
 			name, format = rule["name"], rule["format"]
 			if name[0] == "@":
+				# In this case, format is actually the conditional in the selector
+				assert len(format) == 1, "FormatDB conditional must have a single argument"
 				if name == "@end":
 					selected.pop()
 				else:
-					selected.append(("{%s}"%name[1:]).format(**info) == format)
+					selected.append(("{%s}"%name[1:]).format(**info) == format[0])
 			elif all(selected):
-				res[rule["name"]] = rule["format"].format(**info)
+				tmp = [fmt.format(**info) for fmt in rule["format"]]
+				res[rule["name"]] = tmp if multi else tmp[0]
 		res.id = id
 		return res
 	def dump(self):
 		lines = []
 		for rule in self.rules:
-			line = "%s: %s" %(rule["name"], pipes.quote(rule["format"]))
+			line = "%s: %s" %(rule["name"], " ".join([pipes.quote(fmt) for fmt in rule["format"]]))
 			lines.append(line)
 		return "\n".join(lines)
