@@ -76,3 +76,7 @@ cdef class dirfile:
 		for i in range(size): res[i] = data[i]
 		free(data)
 		return res.view(typemap[ctype])
+	def __enter__(self):
+		return self
+	def __exit__(self, type, value, traceback):
+		self.close()
