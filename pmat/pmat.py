@@ -452,7 +452,7 @@ def build_pos_interpol(scan, sys):
 	ip_size= config.get("pmat_interpol_max_size")
 	ip_time= config.get("pmat_interpol_max_time")
 	transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
-	ipol, obox = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time)
+	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
 	return ipol, obox
 
 class PmatScan(PointingMatrix):
