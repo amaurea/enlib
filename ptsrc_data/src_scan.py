@@ -14,13 +14,13 @@ class SrcScan:
 		self.ivars   = ivars
 		self.dets    = dets
 	@property
-	def shape(self): return (self.offsets.shape[0],self.offsets.shape[1]-1)
-	def __str__(self): return "SrcScan(nsrc=%d,ndet=%d,nsamp=%d)" % (self.offsets.shape[0],self.offsets.shape[1]-1,self.tod.size)
+	def shape(self): return (self.offsets.shape[:2])
+	def __str__(self): return "SrcScan(nsrc=%d,ndet=%d,nsamp=%d)" % (self.offsets.shape[0],self.offsets.shape[1],self.tod.size)
 	def __getitem__(self, sel):
 		if type(sel) != tuple:
 			sel = (sel,)
 		sel = sel + (slice(None),)*(2-len(sel))
-		nsrc, ndet = self.offsets[:,:-1].shape
+		nsrc, ndet = self.offsets.shape[:2]
 		srcs = np.arange(nsrc)[sel[0]]
 		dets = np.arange(ndet)[sel[1]]
 		return self.select(srcs, dets)
@@ -32,14 +32,14 @@ class SrcScan:
 		# 1. First slice offsets and rangesets
 		rangesets = []
 		nset = 0
-		offsets = np.zeros([len(srcs),len(dets)+1],dtype=np.int32)
+		offsets = np.zeros([len(srcs),len(dets),2],dtype=np.int32)
 		for si, src in enumerate(srcs):
 			for di, det in enumerate(dets):
-				o1,o2 = self.offsets[src,det:det+2]
-				offsets[si,di] = nset
+				o1,o2 = self.offsets[src,det]
+				offsets[si,di,0] = nset
 				rangesets.append(self.rangesets[o1:o2])
 				nset += o2-o1
-				offsets[si,di+1] = nset
+				offsets[si,di,1] = nset
 		rangesets = np.concatenate(rangesets).astype(np.int32)
 		# 2. Then determine which ranges are no longer used, and
 		# a mappings between old and new ranges

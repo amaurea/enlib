@@ -325,7 +325,7 @@ class PmatCutRebin(PointingMatrix):
 	def backward(self, jhigh, jlow):
 		get_core(jhigh.dtype).pmat_cut_rebin(-1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
 
-config.default("pmat_ptsrc_rsigma", 5.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
+config.default("pmat_ptsrc_rsigma", 7.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
 class PmatPtsrc(PointingMatrix):
 	def __init__(self, scan, params, sys=None, tmul=None, pmul=None):
 		# Params is [nsrc,{dec,ra,amps,ibeams}]

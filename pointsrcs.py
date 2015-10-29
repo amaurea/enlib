@@ -16,30 +16,49 @@ The standard parameters are:
 import numpy as np
 from enlib import utils
 
-def read_rahul_marius(fname, exact=False, default_beam=1*utils.arcmin, flux_factor=500):
+def read(fname, format="auto", exact=None, default_beam=1*utils.arcmin, flux_factor=1e4):
+	"""Try to read a point source file in any format."""
+	if format == "skn": return read_skn(fname, default_beam=default_beam)
+	elif format == "rahul_marius": return read_rahul_marius(fname, exact=exact, default_beam=default_beam, flux_factor=flux_factor)
+	elif format == "auto":
+		try:
+			return read_skn(fname, default_beam=default_beam)
+		except (IOError, ValueError):
+			return read_rahul_marius(fname, exact=exact, default_beam=default_beam, flux_factor=flux_factor)
+	else:
+		raise ValueError("Unrecognized format '%s'" % format)
+
+def write(fname, srcs, format="auto"):
+	if format == "skn" or format == "auto":
+		write_skn_standard(fname, srcs)
+	else: ValueError("Unrecognized format '%s'" % format)
+
+def read_rahul_marius(fname, exact=None, default_beam=1*utils.arcmin, flux_factor=500):
 	"""This format has no beam information, and lists only fluxes.
 	Beams will be set to a default 1', and the flux will be converted
-	to amplitude with a very rough approximation."""
+	to amplitude with a very rough approximation. Default is to read only the
+	data for which confirmed exact positions are available, as that is the
+	purpose of the rahul marius lists."""
 	vals = []
+	if exact is None: exact = True
 	with open(fname, "r") as f:
 		for line in f:
 			if len(line) == 0 or line[0] == '#': continue
 			toks = line.split()
+			if len(toks) != 13 and len(toks) != 15: raise IOError("File is not in rahul marius format")
 			ra, dec = [float(toks[i]) for i in [2,3]]
-			ra_true, dec_true = [parse_angle_sexa(toks[i]) for i in [11,12]]
-			ra_true *= 15
 			flux = np.array([float(toks[8]), 0, 0])
-			has_exact = int(toks[10]) >= 0
 			if exact:
+				has_exact = int(toks[10]) >= 0
 				if not has_exact: continue
-				print ra_true, dec_true, ra,dec
+				ra_true, dec_true = [parse_angle_sexa(toks[i]) for i in [11,12]]
+				ra_true *= 15
 				ra, dec = ra_true, dec_true
 			vals.append([dec*utils.degree, ra*utils.degree]+list(flux*flux_factor)+[default_beam,default_beam,0])
 	return np.array(vals)
 
 def read_skn(fname, default_beam=1*utils.arcmin):
 	tmp = np.loadtxt(fname)
-	print tmp.shape
 	if tmp.shape[1] == 5: return read_skn_posamp(fname, default_beam)
 	elif tmp.shape[1] == 8: return read_skn_standard(fname)
 	elif tmp.shape[1] == 25: return read_skn_full(fname)
@@ -63,8 +82,35 @@ def read_skn_full(fname):
 	return np.concatenate([tmp[:,3:7:2]*utils.degree, tmp[:,7:13:2],
 		tmp[:,19:23:2]*utils.arcmin*utils.fwhm, tmp[:,23:25:2]*utils.degree],1)
 
+def write_skn_standard(fname, srcs):
+	deg = utils.degree
+	fwhm = utils.arcmin*utils.fwhm
+	with open(fname, "w") as f:
+		for src in srcs:
+			f.write("%10.5f %10.5f %10.3f %10.3f %10.3f %7.4f %7.4f %7.2f\n" % (
+				src[0]/deg, src[1]/deg, src[2], src[3], src[4],
+				src[5]/fwhm, src[6]/fwhm, src[7]/deg))
+
 def parse_angle_sexa(s):
+	"""Parse an angle in the form [+-]deg:min:sec"""
 	sign = 1
 	if s[0] == "-":
 		s, sign = s[1:], -1
 	return sign*np.sum([float(w)*60.0**(-i) for i,w in enumerate(s.split(":"))])
+
+def src2param(srcs):
+	"""For fast source model evaluation, it is useful to store the beam as an inverse
+	covariance matrix."""
+	params = np.array(srcs)
+	if params.ndim == 1: return src2param(params[None])[0]
+	params[:,5:8] = np.array([utils.compress_beam(b[:2],b[2]) for b in srcs[:,5:8]])
+	return params
+
+def param2src(params):
+	srcs = np.array(params)
+	if srcs.ndim == 1: return param2src(srcs[None])[0]
+	for src in srcs:
+		sigma, phi = utils.expand_beam(src[5:8])
+		src[5:7] = sigma
+		src[7] = phi
+	return srcs

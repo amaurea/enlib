@@ -8,10 +8,10 @@ contains
 		real(_), intent(in) :: tod(:)
 		real(_), intent(inout) :: vars(:,:)
 		integer(4), intent(inout) :: nvars(:,:)
-		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2)), r2src(size(ranges,2))
+		integer(4) :: offsets(:,:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2)), r2src(size(ranges,2))
 		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, detrend
 		real(_)    :: m,s,x,sn,mid
-		nsrc = size(offsets,2)
+		nsrc = size(offsets,3)
 		vars = 0
 		nvars = 0
 	end subroutine
@@ -23,16 +23,16 @@ contains
 		real(_), intent(inout) :: tod(:)
 		integer(4), intent(in)    :: rangemask(:)
 		real(_)    :: ivar(:)
-		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2))
+		integer(4) :: offsets(:,:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2))
 		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, detrend, err
 		real(_)    :: m,s,x,sn,mid
-		nsrc = size(offsets,2)
-		ndet = size(offsets,1)-1
+		nsrc = size(offsets,3)
+		ndet = size(offsets,2)
 
 		! Prepare for parallel loop
 		do si = 1, nsrc
 			do di = 1, ndet
-				do oi = offsets(di,si)+1, offsets(di+1,si)
+				do oi = offsets(1,di,si)+1, offsets(2,di,si)
 					ri = rangesets(oi)+1
 					r2det(ri) = di
 				end do
@@ -72,11 +72,11 @@ contains
 		real(_), intent(in) :: tod(:)
 		real(_), intent(inout) :: vars(:,:)
 		integer(4), intent(inout) :: nvars(:,:)
-		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2)), r2src(size(ranges,2))
+		integer(4) :: offsets(:,:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2)), r2src(size(ranges,2))
 		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, detrend
 		real(_)    :: m,s,x,sn,mid
-		nsrc = size(offsets,2)
-		ndet = size(offsets,1)-1
+		nsrc = size(offsets,3)
+		ndet = size(offsets,2)
 
 		vars  = 0
 		nvars = 0
@@ -85,7 +85,7 @@ contains
 		!$omp parallel do collapse(2) private(si,di,oi,ri,i1,i2,m,s,sn,mid,x)
 		do si = 1, nsrc
 			do di = 1, ndet
-				do oi = offsets(di,si)+1, offsets(di+1,si)
+				do oi = offsets(1,di,si)+1, offsets(2,di,si)
 					ri = rangesets(oi)+1
 					i1 = ranges(1,ri)+1
 					i2 = ranges(2,ri)
@@ -133,15 +133,15 @@ contains
 		real(_), intent(inout) :: tod(:)
 		integer(4), intent(in) :: rangemask(:)
 		real(_)    :: ivar(:), Q(:,:), y(size(Q,1))
-		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2))
+		integer(4) :: offsets(:,:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2))
 		integer(4) :: si, di, ri, nsrc, ndet, oi, i, j, i1, i2, n
-		nsrc = size(offsets,2)
-		ndet = size(offsets,1)-1
+		nsrc = size(offsets,3)
+		ndet = size(offsets,2)
 
 		! Prepare for parallel loop
 		do si = 1, nsrc
 			do di = 1, ndet
-				do oi = offsets(di,si)+1, offsets(di+1,si)
+				do oi = offsets(1,di,si)+1, offsets(2,di,si)
 					ri = rangesets(oi)+1
 					r2det(ri) = di
 				end do
@@ -175,11 +175,11 @@ contains
 		real(_), intent(in) :: tod(:), Q(:,:)
 		real(_), intent(inout) :: vars(:,:)
 		integer(4), intent(inout) :: nvars(:,:)
-		integer(4) :: offsets(:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2)), r2src(size(ranges,2))
+		integer(4) :: offsets(:,:,:), ranges(:,:), rangesets(:), r2det(size(ranges,2)), r2src(size(ranges,2))
 		integer(4) :: si, di, ri, nsrc, ndet, oi, i, i1, i2, n
 		real(_), allocatable :: x(:)
-		nsrc = size(offsets,2)
-		ndet = size(offsets,1)-1
+		nsrc = size(offsets,3)
+		ndet = size(offsets,2)
 
 		vars  = 0
 		nvars = 0
@@ -188,7 +188,7 @@ contains
 		!$omp parallel do collapse(2) private(si,di,oi,ri,i1,i2,n,x)
 		do si = 1, nsrc
 			do di = 1, ndet
-				do oi = offsets(di,si)+1, offsets(di+1,si)
+				do oi = offsets(1,di,si)+1, offsets(2,di,si)
 					ri = rangesets(oi)+1
 					i1 = ranges(1,ri)+1
 					i2 = ranges(2,ri)
@@ -272,15 +272,15 @@ contains
 		! Parameters
 		real(_),    intent(inout) :: tod(:), params(:,:)
 		real(_),    intent(in)    :: point(:,:), phase(:,:)
-		integer(4), intent(in)    :: offsets(:,:), ranges(:,:), rangesets(:), dir
+		integer(4), intent(in)    :: offsets(:,:,:), ranges(:,:), rangesets(:), dir
 		integer(4), intent(in)    :: rangemask(:)
 		! Work
 		integer(4) :: si, di, oi, ri, i, nsrc, ndet, namp
 		real(_)    :: ra, dec, amps(size(params,1)-5), ibeam(3), ddec, dra, r2, cosdec
-		real(_)    :: oamps(size(params,1)-5,size(offsets,2))
+		real(_)    :: oamps(size(params,1)-5,size(offsets,3))
 
-		ndet  = size(offsets,1)-1
-		nsrc  = size(offsets,2)
+		nsrc  = size(offsets,3)
+		ndet  = size(offsets,2)
 		namp  = size(amps)
 
 		if(dir > 0) then
@@ -302,7 +302,7 @@ contains
 				if(dir > 0 .and. all(amps==0)) cycle
 				ibeam = params(3+namp:5+namp,si)
 				cosdec= cos(dec)
-				do oi = offsets(di,si)+1, offsets(di+1,si)
+				do oi = offsets(1,di,si)+1, offsets(2,di,si)
 					ri = rangesets(oi)+1
 					if(rangemask(ri) .eq. 0) cycle
 					do i = ranges(1,ri)+1, ranges(2,ri)
@@ -327,14 +327,14 @@ contains
 	subroutine srcmask2rangemask(srcmask, rangesets, offsets, rangemask)
 		implicit none
 		integer(4), intent(in) :: srcmask(:)
-		integer(4), intent(in) :: rangesets(:), offsets(:,:)
+		integer(4), intent(in) :: rangesets(:), offsets(:,:,:)
 		integer(4), intent(inout) :: rangemask(:)
 		integer(4) :: si, di, oi, ri
 		rangemask = 0
 		do si = 1, size(srcmask)
 			if(srcmask(si) .eq. 0) cycle
-			do di = 1, size(offsets,1)-1
-				do oi = offsets(di,si)+1, offsets(di+1,si)
+			do di = 1, size(offsets,2)
+				do oi = offsets(1,di,si)+1, offsets(2,di,si)
 					ri = rangesets(oi)+1
 					rangemask(ri) = 1
 				end do

@@ -17,7 +17,7 @@ def nmat_mwhite(tod, noise, submean=2):
 
 def measure_mwhite(tod, data, submean=2):
 	core = get_core(tod.dtype)
-	nsrc, ndet = data.offsets[:,:-1].shape
+	nsrc, ndet = data.offsets.shape[:2]
 	vars  = np.zeros([nsrc,ndet],dtype=tod.dtype)
 	nvars = np.zeros([nsrc,ndet],dtype=np.int32)
 	core.measure_mwhite(tod, data.ranges.T, data.rangesets, data.offsets.T, vars.T, nvars.T, submean)
@@ -33,7 +33,7 @@ def nmat_basis(tod, noise, white=False):
 
 def measure_basis(tod, data):
 	core = get_core(tod.dtype)
-	nsrc, ndet = data.offsets[:,:-1].shape
+	nsrc, ndet = data.offsets.shape[:2]
 	vars  = np.zeros([nsrc,ndet],dtype=tod.dtype)
 	nvars = np.zeros([nsrc,ndet],dtype=np.int32)
 	core.measure_basis(tod, data.ranges.T, data.rangesets, data.offsets.T, vars.T, nvars.T, data.Q.T)
