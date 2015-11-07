@@ -331,8 +331,13 @@ class PmatPtsrc(PointingMatrix):
 		# Params is [nsrc,{dec,ra,amps,ibeams}]
 		rmul  = config.get("pmat_ptsrc_rsigma")
 		self.dtype = params.dtype
-
 		ipol, obox = build_pos_interpol(scan, sys=config.get("map_eqsys", sys))
+		# It's error prone to require the user to have the angles consistently
+		# wrapped. So we will rewrap params ourselves
+		self.ref = np.mean(obox[:,:2],0)
+		params   = params.copy()
+		params[:2] = utils.rewind(params[:2].T,self.ref).T
+
 		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, self.dtype)
 		self.comps = np.arange(params.shape[0]-5)
 		self.scan  = scan
@@ -365,9 +370,11 @@ class PmatPtsrc(PointingMatrix):
 		"""params -> tod"""
 		if tmul is None: tmul = self.tmul
 		if pmul is None: pmul = self.pmul
-		self.core.pmat_ptsrc(tmul, pmul, tod.T, params, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
+		pcopy = params.copy()
+		pcopy[:2] = utils.rewind(pcopy[:2].T,self.ref).T
+		self.core.pmat_ptsrc(tmul, pmul, tod.T, pcopy, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
 
-	def extract(self, tod):
+	def extract(self, tod, cut=None):
 		"""Extract precomputed pointing and phase information for the selected samples.
 		These are stored in a compressed format, where sample I of range R of detector D
 		of source S has index ranges[offsets[S,D,0]+R,0]+I.
@@ -383,6 +390,15 @@ class PmatPtsrc(PointingMatrix):
 		self.core.pmat_ptsrc_extract(tod.T, srctod, point.T, phase.T, oranges.T, self.scan.boresight.T,
 				self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
 				self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
+		if cut:
+			# Cuts are handled by setting the phase (response) to zero
+			mtod = cut.to_mask().astype(self.dtype)
+			mask = np.zeros([self.nhit],dtype=self.dtype)
+			self.core.pmat_ptsrc_extract(tod.T, mask, point.T, phase.T, oranges.T, self.scan.boresight.T,
+					self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
+					self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
+			mask = np.rint(mask)==1
+			phase[mask] = 0
 		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets)
 		return res
 
@@ -544,7 +560,11 @@ def extract_interpol_params(ipol, dtype):
 	return rbox, nbox, ys
 
 def build_pixbox(obox, n, margin=10):
-	return np.array([np.maximum(0,np.floor(obox[0]-margin)),np.minimum(n,np.floor(obox[1]+margin))]).astype(np.int32)
+	res = np.array([np.maximum(0,np.floor(obox[0]-margin)),np.minimum(n,np.floor(obox[1]+margin))]).astype(np.int32)
+	# If the original box extends outside [[0,0],n], this box may
+	# have empty ranges. If so, return a single-pixel box
+	if np.any(res[1]<=res[0]): return np.array([[0,0],[1,1]],dtype=np.int32)
+	else: return res
 
 def pmat_phase(dir, tod, map, az, dets, az0, daz):
 	core = get_core(tod.dtype)

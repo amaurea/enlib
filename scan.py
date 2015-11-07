@@ -58,7 +58,7 @@ class Scan:
 		self.sys       = str(sys)               # str
 		self.site      = site
 		self.mjd0      = mjd0                   # time basis
-		self.dets      = np.arange(len(self.bomps)) if dets is None else dets
+		self.dets      = np.arange(len(self.comps)) if dets is None else dets
 		self.dgrid     = (1,np.max(self.dets)+1)
 		# Not part of the general interface
 		self._tod      = np.asfarray(tod)       # [ndet,nsamp]

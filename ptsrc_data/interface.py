@@ -1,5 +1,5 @@
 import numpy as np, fortran_32, fortran_64
-from enlib import fft
+from enlib import fft, utils
 
 def get_core(dtype):
 	if dtype == np.float32:
@@ -67,6 +67,27 @@ def build_noise_basis(data, nbasis, minorder=2):
 			lendb[n] = r[0]
 	return Q
 
+def build_noise_basis_adaptive(data, nmin=2, nmax=20, lim=2):
+	"""Build a polynomial noise basis per sample range based on
+	a simple f_knee detection."""
+	Q = np.zeros((data.tod.size,nmax))
+	for r in data.ranges:
+		n = r[1]-r[0]
+		if n < 2: continue
+		ps = np.abs(np.fft.rfft(data.tod[r[0]:r[1]]))**2
+		if len(ps) < 2: nbad = 1
+		else:
+			ps /= np.median(ps[len(ps)/2:])
+			nbad = np.where(ps<=lim)[0][0]
+		nvec = max(nmin,min(nbad, nmax))
+		# Build the first nbasis chebyshev polynomials
+		V = fft.chebt(np.eye(n)[:nvec]).T
+		# We want QQ' = V(V'V)"V', so Q = V(V'V)**-0.5
+		Qr = V.dot(np.linalg.cholesky(np.linalg.inv(V.T.dot(V))))
+		# Confirm that QrQr' = V(V'V)"V'
+		Q[r[0]:r[1],:nvec] = Qr
+	return Q
+
 def pmat_thumbs(dir, tod, maps, point, phase, boxes):
 	core = get_core(tod.dtype)
 	core.pmat_thumbs(dir, tod.T, maps.T, point.T, phase.T, boxes.T)
@@ -74,11 +95,20 @@ def pmat_thumbs(dir, tod, maps, point, phase, boxes):
 def pmat_model(tod, params, data, dir=1):
 	core = get_core(tod.dtype)
 	rangemask = np.zeros(data.ranges.shape[0],dtype=np.int32)+1
-	core.pmat_model(dir, tod, params.T, data.ranges.T, data.rangesets.T, data.offsets.T, data.point.T, data.phase.T, rangemask)
+	# Make sure the point sources are on the same side of the angle cut.
+	# NB: This function uses the transpose params compared to PmatPtsrc.
+	# That should be fixed.
+	p = params.copy()
+	p[:,:2] = utils.rewind(params[:,:2], data.point[0])
+	core.pmat_model(dir, tod, p.T, data.ranges.T, data.rangesets.T, data.offsets.T, data.point.T, data.phase.T, rangemask)
+	params[:,2:-3] = p[:,2:-3]
 
 def chisq_by_range(tod, params, data, prev_params=None, prev_chisqs=None):
 	changed = np.zeros(params.shape,dtype=bool)+True if prev_params is None else params != prev_params
 	if not np.any(changed): return prev_chisqs
+	# Make sure the point sources are on the same side of the angle cut.
+	params = params.copy()
+	params[:,:2] = utils.rewind(params[:,:2], data.point[0])
 	# Check which sources have changed
 	core = get_core(tod.dtype)
 	changed_srcs   = np.any(changed,axis=1).astype(np.int32)

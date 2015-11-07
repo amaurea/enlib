@@ -63,7 +63,8 @@ class DataField:
 		# Update our object
 		self.dets = self.dets[pos]
 		if self.det_index is not None:
-			self.data = self.data[(slice(None),)*self.det_index + (pos,)]
+			inds = pos if len(pos) > 0 else slice(0,0)
+			self.data = self.data[(slice(None),)*self.det_index + (inds,)]
 		return self
 	def restrict_samples(self, samples):
 		"""Restricts our sample range to that given. Samples must be a standard
@@ -186,6 +187,7 @@ def datafield_intersection(datafields, copy=False):
 	# Preserve data if required
 	if copy: datafields = [df.copy() for df in datafields]
 	# Restrict each dataset to the intersection
-	for df in datafields: df.restrict(dets, samples)
+	for df in datafields:
+		df.restrict(dets, samples)
 	# And return the resulting dataset
 	return datafields

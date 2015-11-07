@@ -5,7 +5,7 @@ properties may be nice to know, those are the only ones that matter for simulati
 it. This module provides functions for reading these minimal parameters from
 various data files.
 
-The standard parameters are:
+The standard parameters are [nsrc,nparam]:
 	dec (radians)
 	ra (radians)
 	[T,Q,U] amplitude at center of gaussian (uK)
@@ -16,15 +16,15 @@ The standard parameters are:
 import numpy as np
 from enlib import utils
 
-def read(fname, format="auto", exact=None, default_beam=1*utils.arcmin, flux_factor=1e4):
+def read(fname, format="auto", exact=None, default_beam=1*utils.arcmin, amp_factor=1/395.11):
 	"""Try to read a point source file in any format."""
 	if format == "skn": return read_skn(fname, default_beam=default_beam)
-	elif format == "rahul_marius": return read_rahul_marius(fname, exact=exact, default_beam=default_beam, flux_factor=flux_factor)
+	elif format == "rahul_marius": return read_rahul_marius(fname, exact=exact, default_beam=default_beam, amp_factor=amp_factor)
 	elif format == "auto":
 		try:
 			return read_skn(fname, default_beam=default_beam)
 		except (IOError, ValueError):
-			return read_rahul_marius(fname, exact=exact, default_beam=default_beam, flux_factor=flux_factor)
+			return read_rahul_marius(fname, exact=exact, default_beam=default_beam, amp_factor=amp_factor)
 	else:
 		raise ValueError("Unrecognized format '%s'" % format)
 
@@ -33,10 +33,10 @@ def write(fname, srcs, format="auto"):
 		write_skn_standard(fname, srcs)
 	else: ValueError("Unrecognized format '%s'" % format)
 
-def read_rahul_marius(fname, exact=None, default_beam=1*utils.arcmin, flux_factor=500):
-	"""This format has no beam information, and lists only fluxes.
-	Beams will be set to a default 1', and the flux will be converted
-	to amplitude with a very rough approximation. Default is to read only the
+def read_rahul_marius(fname, exact=None, default_beam=1*utils.arcmin, amp_factor=1/395.11):
+	"""This format has no beam information, and lists only T amps in Jy/steradian.
+	Beams will be set to a default 1', and the amps will be converted
+	to amplitude. Default is to read only the
 	data for which confirmed exact positions are available, as that is the
 	purpose of the rahul marius lists."""
 	vals = []
@@ -47,14 +47,13 @@ def read_rahul_marius(fname, exact=None, default_beam=1*utils.arcmin, flux_facto
 			toks = line.split()
 			if len(toks) != 13 and len(toks) != 15: raise IOError("File is not in rahul marius format")
 			ra, dec = [float(toks[i]) for i in [2,3]]
-			flux = np.array([float(toks[8]), 0, 0])
+			amp = np.array([float(toks[4]), 0, 0])
 			if exact:
 				has_exact = int(toks[10]) >= 0
 				if not has_exact: continue
-				ra_true, dec_true = [parse_angle_sexa(toks[i]) for i in [11,12]]
-				ra_true *= 15
+				ra_true, dec_true = float(toks[13]), float(toks[14])
 				ra, dec = ra_true, dec_true
-			vals.append([dec*utils.degree, ra*utils.degree]+list(flux*flux_factor)+[default_beam,default_beam,0])
+			vals.append([dec*utils.degree, ra*utils.degree]+list(amp*amp_factor)+[default_beam,default_beam,0])
 	return np.array(vals)
 
 def read_skn(fname, default_beam=1*utils.arcmin):

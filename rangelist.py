@@ -111,7 +111,10 @@ class Multirange:
 		return np.sum(res) if flat else res
 	@property
 	def shape(self):
-		return self.data.shape + (self.data.reshape(-1)[0].n,) if self.data.size > 0 else self.data.shape + (0,)
+		if self.data.size > 0:
+			return self.data.shape + (self.data.reshape(-1)[0].n,)
+		else:
+			return self.data.shape + (0,)
 	@property
 	def size(self): return np.product(self.shape)
 	def copy(self): return Multirange(self.data, copy=True)
