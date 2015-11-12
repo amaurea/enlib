@@ -374,32 +374,39 @@ class PmatPtsrc(PointingMatrix):
 		pcopy[:2] = utils.rewind(pcopy[:2].T,self.ref).T
 		self.core.pmat_ptsrc(tmul, pmul, tod.T, pcopy, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
 
-	def extract(self, tod, cut=None):
+	def extract(self, tod, cut=None, raw=0):
 		"""Extract precomputed pointing and phase information for the selected samples.
-		These are stored in a compressed format, where sample I of range R of detector D
-		of source S has index ranges[offsets[S,D,0]+R,0]+I.
+		These are stored in a (somewhat cumbersome) compressed format, where sample I
+		of range R of detector D and source S has index ranges[rangesets[offsets[S,D,0]+R],0]+I.
+		The reason for this complicated setup is to store each TOD sample only once, even if
+		it hits multiple sources. This is not primarily to save space, but to be able to
+		perform likelihood analysis on it. Subtracting one source from one copy of a sample,
+		and another source from another copy of the sample, will leave each copy with some
+		signal left unmodeled.
 
-		Ideally the ranges should cover the data once and no more, to avoid double-counting
-		and unsubtracted sources when several sources are near each other. In that case,
-		overlapping ranges must be merged, and both sources must be made to refer to the
-		same range, meaning that there will be duplicate entries in offsets."""
+		If cut is specified, the response of cut samples will be set to zero, giving them
+		no weight.
+
+		If raw is a nonzero integer, the output pointing and phase will be in the
+		telescope's native coordinates (i.e. hor) rather than the normal output coordinates.
+		"""
 		point = np.zeros([self.nhit,2],dtype=self.dtype)
 		phase = np.zeros([self.nhit,len(self.comps)],dtype=self.dtype)
 		srctod= np.zeros([self.nhit],dtype=self.dtype)
 		oranges= np.zeros(self.ranges.shape, dtype=np.int32)
 		self.core.pmat_ptsrc_extract(tod.T, srctod, point.T, phase.T, oranges.T, self.scan.boresight.T,
 				self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
-				self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
+				self.ys.T, self.ranges.T, self.rangesets, self.offsets.T, raw)
 		if cut:
 			# Cuts are handled by setting the phase (response) to zero
 			mtod = cut.to_mask().astype(self.dtype)
 			mask = np.zeros([self.nhit],dtype=self.dtype)
 			self.core.pmat_ptsrc_extract(tod.T, mask, point.T, phase.T, oranges.T, self.scan.boresight.T,
 					self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
-					self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
+					self.ys.T, self.ranges.T, self.rangesets, self.offsets.T, raw)
 			mask = np.rint(mask)==1
 			phase[mask] = 0
-		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets)
+		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets, rbox=self.rbox, nbox=self.nbox, ys=self.ys)
 		return res
 
 config.default("pmat_ptsrc_cell_res", 20, "Cell size in arcmin to use for fast source lookup.")
