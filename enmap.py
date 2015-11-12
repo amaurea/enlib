@@ -857,6 +857,24 @@ def apod(m, width, profile="cos"):
 		res[...,:,-width[1]:]  *= a[1][None,::-1]
 	return res
 
+def radial_average(map, center=[0,0], step=1.0):
+	"""Produce a radial average of the given map that's centered on zero"""
+	center = np.asarray(center)
+	pos  = map.posmap()-center[:,None,None]
+	rads = np.sum(pos**2,0)**0.5
+	# Our resolution should be step times the highest resolution direction.
+	res = np.min(map.extent()/map.shape[-2:])*step
+	n   = int(np.max(rads/res))
+	orads = np.arange(n)*res
+	rinds = (rads/res).reshape(-1).astype(int)
+	# Ok, rebin the map. We use this using bincount, which can be a bit slow
+	mflat = map.reshape((-1,)+map.shape[-2:])
+	mout = np.zeros((len(mflat),n))
+	for i, m in enumerate(mflat):
+		mout[i] = (np.bincount(rinds, weights=m.reshape(-1))/np.bincount(rinds))[:n]
+	mout = mout.reshape(map.shape[:-2]+mout.shape[1:])
+	return mout, orads
+
 ############
 # File I/O #
 ############

@@ -373,4 +373,83 @@ contains
 		end do
 	end subroutine
 
+	! dir: 1: amp2tod, -1: tod2amp
+	! tod(ntod): flattened ranges
+	! params({dx,dy,T,Q,U,ib11,ib22,ib12},nsrc)
+	! ranges(2,nrange): indices into tod
+	! rangesets(:): indices into ranges
+	! offsets(2,ndet,nsrc): ranges in rangesets for each det,src
+	! point(2,npoint): detector-relative pointing
+	! phase(3,npoint): T,Q,U response
+	! pranges(2,ndet,nsrc): ranges into point and phase
+	! beam(nbeam): beam profile
+	! beam_res: radians per bin in beam profile
+	subroutine pmat_srcbeam(&
+			dir, tod, params, &
+			ranges, rangesets, offsets, &
+			point, phase, pranges, &
+			beam, beam_res)
+		use omp_lib
+		implicit none
+		! Parameters
+		real(_),    intent(inout) :: tod(:), params(:,:)
+		real(_),    intent(in)    :: point(:,:), phase(:,:), beam(:), beam_res
+		integer(4), intent(in)    :: offsets(:,:,:), ranges(:,:), rangesets(:), dir
+		integer(4), intent(in)    :: pranges(:,:,:)
+		! Work
+		integer(4) :: nsrc, ndet, di, si, pind, tind, oi, ri, bi
+		real(_)    :: amps(3), ibeam(3), dpos(2), dp(2), r, bx, bval, response(3)
+		real(_)    :: oamps(3,size(offsets,3)), inv_bres
+
+		nsrc  = size(offsets,3)
+		ndet  = size(offsets,2)
+		inv_bres = 1/beam_res
+
+		if(dir > 0) then
+			!$omp parallel workshare
+			tod = 0
+			!$omp end parallel workshare
+		else
+			oamps = 0
+		end if
+
+		!Note: it's safe to do di in parallel, but no si, as multiple sources may contribute
+		!to the same sample.
+		!$omp parallel do private(di,si,dpos,amps,ibeam,oi,ri,tind,pind,dp,r,bx,bi,bval,response) reduction(+:oamps)
+		do di = 1, ndet
+			do si = 1, nsrc
+				dpos  = params(1:2,si)
+				amps  = params(3:5,si)
+				if(dir > 0 .and. all(amps==0)) cycle
+				ibeam = params(6:8,si)
+				! pind is the index into the point and phase array. Since all indices for agiven
+				! src-det are contiguous, we simply need to increment this once per tod sample.
+				pind = pranges(1,di,si)
+				do oi = offsets(1,di,si)+1, offsets(2,di,si)
+					ri = rangesets(oi)+1
+					do tind = ranges(1,ri)+1, ranges(2,ri)
+						pind = pind+1
+						! minus because dpos indicates how much to move the detector, not the source
+						dp = point(1:2,pind) - dpos
+						r  = sqrt(dp(1)*(ibeam(1)*dp(1)+2*ibeam(3)*dp(2)) + dp(2)**2 * ibeam(2))
+						! interpolate beam
+						bx = r*inv_bres+1
+						bi = floor(bx)
+						if(bi >= size(beam)) cycle
+						bx = bx-bi
+						bval = beam(bi)*(1-bx) + beam(bi+1)*bx
+						! And project
+						response = bval * phase(1:3,pind)
+						if(dir > 0) then
+							tod(tind) = tod(tind) + sum(amps*response)
+						else
+							oamps(:,si) = oamps(:,si) + tod(tind)*response
+						end if
+					end do
+				end do
+			end do
+		end do
+		if(dir <= 0) params(3:5,:) = oamps
+	end subroutine
+
 end module
