@@ -458,6 +458,7 @@ contains
 		real(_)    :: c2p, s2p, dy, dx, r, bx, bval, cel_phase(3), inv_bres
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
 		real(_)    :: oamps(3,size(offsets,3)), foff(2)
+		real(_), parameter :: pi = 3.14159265359d0
 
 		nsrc  = size(offsets,3)
 		ndet  = size(offsets,2)
@@ -491,7 +492,7 @@ contains
 				if(dir > 0 .and. all(amps==0)) cycle
 				do oi = offsets(1,di,si)+1, offsets(2,di,si)
 					ri = rangesets(oi)+1
-					icosel = 1/cos(point(1,ranges(1,ri)+1))
+					icosel = 1/cos(point(3,ranges(1,ri)+1))
 					do i = ranges(1,ri)+1, ranges(2,ri)
 						! Compute our on-sky pointing. point(:,i) = uncorrected det hor pointing.
 						! We wish to add a focalplane offset. To good accuracy, this will be
@@ -501,19 +502,16 @@ contains
 						hor(2) = point(2,i) + foff(1)
 						hor(3) = point(3,i) + foff(2) * icosel
 						! Now transform this horizontal pointing into celestial coordinates
-						write(*,*) "hor", hor
 						xrel = (hor-x0)*inv_dx
-						write(*,*) "xabs", xrel
 						xind = floor(xrel)
-						write(*,*) "xind", xind
 						xrel = xrel - xind
-						write(*,*) "xrel", xrel
 						ig   = sum(xind*steps)+1
-						write(*,*) "ig", ig
 						cel  = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
 						! Compute offset from source
 						dcel(1) = dec-cel(1)
-						dcel(2) = (ra-cel(2))*cosdec
+						dcel(2) = ra -cel(2)
+						dcel(2) = modulo(dcel(2)+pi,2*pi)-pi
+						dcel(2) = dcel(2)*cosdec
 						c2p = cel(3); s2p = cel(4)
 						! Apply local coordinate system rotation to make the displacement vector
 						! [dy,dx] as similar as possible to what we would have gotten if we had done
@@ -546,10 +544,5 @@ contains
 		end do
 		if(dir <= 0) params(3:5,:) = oamps
 	end subroutine
-
-
-
-
-
 
 end module
