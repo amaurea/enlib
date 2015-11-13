@@ -3,6 +3,29 @@ It is not a subclass of Scan as it makes incompatible assumptions,
 and things are stored more explicitly."""
 import numpy as np, h5py
 
+# This compressed format is quite complicated, but is basically a
+# source-centric representation of the flattened tod. This flattened
+# tod is divided into ranges[nrange,2] of contiguous samples.
+# Each source shows up in a set of ranges rangesets[offsets[source,0]:offsets[source[1]]].
+# rangesets would not be needed if all ranges of a course were
+# consecutive. But because several sources may share the same range,
+# this is impossible.
+#
+# This data structure is quite cumbersome and error prone to
+# work with. For example, removing a source or removing samples
+# is difficult.
+#
+# point is the celestial pointing of each sample. This presents
+# a problem if we switch to focalplane coordinates, as we then
+# would need separate pointing for each source.
+
+
+# What would be an appropriate data structure for focaplane coordinate
+# analysis?
+#
+#
+#
+
 class SrcScan:
 	def __init__(self, tod, point, phase, ranges, rangesets, offsets, ivars, dets):
 		self.tod     = tod
@@ -10,7 +33,7 @@ class SrcScan:
 		self.phase   = phase
 		self.ranges  = ranges
 		self.rangesets=rangesets
-		self.offsets = offsets   # [nsrc,ndet+1]
+		self.offsets = offsets
 		self.ivars   = ivars
 		self.dets    = dets
 	@property

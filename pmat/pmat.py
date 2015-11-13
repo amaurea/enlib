@@ -394,7 +394,7 @@ class PmatPtsrc(PointingMatrix):
 			# Cuts are handled by setting the phase (response) to zero
 			mtod = cut.to_mask().astype(self.dtype)
 			mask = np.zeros([self.nhit],dtype=self.dtype)
-			self.core.pmat_ptsrc_extract(tod.T, mask, point.T, phase.T, oranges.T, self.scan.boresight.T,
+			self.core.pmat_ptsrc_extract(mtod.T, mask, point.T, phase.T, oranges.T, self.scan.boresight.T,
 					self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
 					self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
 			mask = np.rint(mask)==1
