@@ -27,7 +27,7 @@ import numpy as np, h5py
 #
 
 class SrcScan:
-	def __init__(self, tod, point, phase, ranges, rangesets, offsets, ivars, dets):
+	def __init__(self, tod, point, phase, ranges, rangesets, offsets, ivars, dets, rbox, nbox, ys):
 		self.tod     = tod
 		self.point   = point
 		self.phase   = phase
@@ -36,6 +36,9 @@ class SrcScan:
 		self.offsets = offsets
 		self.ivars   = ivars
 		self.dets    = dets
+		self.rbox    = rbox
+		self.nbox    = nbox
+		self.ys      = ys
 	@property
 	def shape(self): return (self.offsets.shape[:2])
 	def __str__(self): return "SrcScan(nsrc=%d,ndet=%d,nsamp=%d)" % (self.offsets.shape[0],self.offsets.shape[1],self.tod.size)
@@ -88,16 +91,17 @@ class SrcScan:
 			phase[o1:o2] = self.phase[i1:i2]
 			ranges[ri] = [o1,o2]
 			m = o2
-		return SrcScan(tod, point, phase, ranges, rangesets, offsets, self.ivars[dets], self.dets[dets])
+		return SrcScan(tod, point, phase, ranges, rangesets, offsets, self.ivars[dets], self.dets[dets], self.rbox, self.nbox, self.ys)
 
 def write_srcscan(fname, scan):
 	with h5py.File(fname, "w") as hfile:
-		for key in ["tod","point","phase","ranges","rangesets","offsets","ivars","dets"]:
+		for key in ["tod","point","phase","ranges","rangesets","offsets","ivars","dets","rbox","nbox","ys"]:
 			hfile[key] = getattr(scan, key)
 
 def read_srcscan(fname):
 	args = {}
 	with h5py.File(fname, "r") as hfile:
-		for key in ["tod","point","phase","ranges","rangesets","offsets","ivars","dets"]:
-			args[key] = hfile[key].value
+		for key in ["tod","point","phase","ranges","rangesets","offsets","ivars","dets","rbox","nbox","ys"]:
+			if key in hfile:
+				args[key] = hfile[key].value
 	return SrcScan(**args)

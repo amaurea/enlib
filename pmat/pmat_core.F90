@@ -1411,7 +1411,7 @@ contains
 			tod, out_tod, point, phase, oranges, &! Main inputs/outpus
 			bore, det_pos, det_comps,  comps,    &! Input pointing
 			rbox, nbox, ys,                      &! Coordinate transformation
-			ranges, rangesets, offsets           &! Precomputed relevant sample info
+			ranges, rangesets, offsets, raw      &! Precomputed relevant sample info
 		)
 		use omp_lib
 		implicit none
@@ -1421,7 +1421,7 @@ contains
 		real(_),    intent(in)    :: bore(:,:), ys(:,:,:)
 		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:)
 		integer(4), intent(inout) :: oranges(:,:)
-		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:,:), rangesets(:), ranges(:,:)
+		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:,:), rangesets(:), ranges(:,:), raw
 		! Work
 		integer(4), parameter :: bz = 321
 		integer(4) :: ndet, nsrc, di, ri, si, s0, oi, i, j, k, i1, i2, ic, nj, nsamp
@@ -1469,9 +1469,14 @@ contains
 				do j = 1, nj
 					ipoint(:,j) = bore(:,i+j-1)+det_pos(:,di)
 				enddo
-				opoint(:,:nj)     = lookup_grad(ipoint(:,:nj), x0, inv_dx, steps, ys)
-				phase(:,k+1:k+nj) = get_phase(comps, det_comps(:,di), opoint(3:,:nj))
-				point(:,k+1:k+nj) = opoint(1:2,:nj)
+				if(raw > 0) then
+					point(:,k+1:k+nj) = ipoint(:,:nj)
+					phase(:,k+1:k+nj) = det_comps(1:size(phase,1),di)
+				else
+					opoint(:,:nj)     = lookup_grad(ipoint(:,:nj), x0, inv_dx, steps, ys)
+					phase(:,k+1:k+nj) = get_phase(comps, det_comps(:,di), opoint(3:,:nj))
+					point(:,k+1:k+nj) = opoint(1:2,:nj)
+				end if
 				out_tod(k+1:k+nj) = tod(i:i+nj-1,di)
 				k = k+nj
 			end do

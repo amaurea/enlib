@@ -2,7 +2,7 @@ import numpy as np, time
 from enlib import utils
 import fortran_32, fortran_64
 
-def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_obox=False, return_status=False, *args, **kwargs):
+def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_obox=False, return_status=False, verbose=False, nstart=None, *args, **kwargs):
 	"""Given a function func([nin,...]) => [nout,...] and
 	an interpolator class interpolator(box,[nout,...]),
 	(where the input array is regularly spaced in each direction),
@@ -13,7 +13,8 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_ob
 	box     = np.asfarray(box)
 	errlim  = np.asfarray(errlim)
 	idim    = box.shape[1]
-	n       = np.array([4]*idim) # starting mesh size
+	n       = [4]*idim if nstart is None else nstart
+	n       = np.array(n) # starting mesh size
 	x       = utils.grid(box, n)
 	obox    = [np.inf,-np.inf]
 
@@ -52,6 +53,7 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_ob
 				if np.any(np.isnan(ytrue)):
 					raise ValueError("Function to interpolate returned invalid value")
 				err = np.std((ytrue-yinter).reshape(ytrue.shape[0],-1), 1)
+				if verbose: print x.shape, x.size, err/errlim
 				if any(err > errlim):
 					# Not good enough, so accept improvement
 					ip = interpolator(box, ytrue, *args, **kwargs)
