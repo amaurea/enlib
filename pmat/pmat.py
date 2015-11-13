@@ -390,7 +390,7 @@ class PmatPtsrc(PointingMatrix):
 		If raw is a nonzero integer, the output pointing and phase will be in the
 		telescope's native coordinates (i.e. hor) rather than the normal output coordinates.
 		"""
-		point = np.zeros([self.nhit,2],dtype=self.dtype)
+		point = np.zeros([self.nhit,2+(raw>0)],dtype=self.dtype)
 		phase = np.zeros([self.nhit,len(self.comps)],dtype=self.dtype)
 		srctod= np.zeros([self.nhit],dtype=self.dtype)
 		oranges= np.zeros(self.ranges.shape, dtype=np.int32)

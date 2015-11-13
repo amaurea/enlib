@@ -27,7 +27,7 @@ import numpy as np, h5py
 #
 
 class SrcScan:
-	def __init__(self, tod, point, phase, ranges, rangesets, offsets, ivars, dets, rbox, nbox, ys):
+	def __init__(self, tod, point, phase, ranges, rangesets, offsets, ivars, dets, rbox=None, nbox=None, ys=None):
 		self.tod     = tod
 		self.point   = point
 		self.phase   = phase

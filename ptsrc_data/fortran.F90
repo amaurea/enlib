@@ -440,7 +440,7 @@ contains
 	!end subroutine
 
 	subroutine pmat_beam_foff(&
-			dir, tod, params, foff, &
+			dir, tod, params, &
 			ranges, rangesets, offsets, &
 			point, phase, &
 			rbox, nbox, ys, &
@@ -449,7 +449,7 @@ contains
 		implicit none
 		! Parameters
 		real(_),    intent(inout) :: tod(:), params(:,:)
-		real(_),    intent(in)    :: foff(:,:), point(:,:), phase(:,:), rbox(:,:), ys(:,:,:), beam(:), rbeam
+		real(_),    intent(in)    :: point(:,:), phase(:,:), rbox(:,:), ys(:,:,:), beam(:), rbeam
 		integer(4), intent(in)    :: offsets(:,:,:), ranges(:,:), rangesets(:), dir, nbox(:)
 		! Work
 		integer(4) :: nsrc, ndet, di, si, oi, ri, i, xind(3), ig, bi
@@ -457,7 +457,7 @@ contains
 		real(_)    :: ra, dec, amps(3), ibeam(3), cosdec, icosel, hor(3), xrel(3), cel(4), dcel(2)
 		real(_)    :: c2p, s2p, dy, dx, r, bx, bval, cel_phase(3), inv_bres
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
-		real(_)    :: oamps(3,size(offsets,3))
+		real(_)    :: oamps(3,size(offsets,3)), foff(2)
 
 		nsrc  = size(offsets,3)
 		ndet  = size(offsets,2)
@@ -479,15 +479,16 @@ contains
 
 		!Note: it's safe to do di in parallel, but no si, as multiple sources may contribute
 		!to the same sample.
-		!$omp parallel do private(di,si,ra,dec,amps,ibeam,cosdec,oi,ri,icosel,i,hor,xrel,xind,ig,cel,dcel,c2p,s2p,dy,dx,r,bx,bi,bval,cel_phase) reduction(+:oamps)
+		!$omp parallel do private(di,si,ra,dec,amps,ibeam,foff,cosdec,oi,ri,icosel,i,hor,xrel,xind,ig,cel,dcel,c2p,s2p,dy,dx,r,bx,bi,bval,cel_phase) reduction(+:oamps)
 		do di = 1, ndet
 			do si = 1, nsrc
 				dec   = params(1,si)
 				ra    = params(2,si)
 				amps  = params(3:5,si)
-				if(dir > 0 .and. all(amps==0)) cycle
 				ibeam = params(6:8,si)
+				foff  = params(9:10,si)
 				cosdec= cos(dec)
+				if(dir > 0 .and. all(amps==0)) cycle
 				do oi = offsets(1,di,si)+1, offsets(2,di,si)
 					ri = rangesets(oi)+1
 					icosel = 1/cos(point(1,ranges(1,ri)+1))
@@ -497,13 +498,18 @@ contains
 						! el += y, az += x/cos(el). We will assume constant elevation scans, so
 						! we can reuse cos(el) for each detector.
 						hor(1) = point(1,i)
-						hor(2) = point(2,i) + foff(2,si)
-						hor(3) = point(3,i) + foff(3,si) * icosel
+						hor(2) = point(2,i) + foff(1)
+						hor(3) = point(3,i) + foff(2) * icosel
 						! Now transform this horizontal pointing into celestial coordinates
+						write(*,*) "hor", hor
 						xrel = (hor-x0)*inv_dx
+						write(*,*) "xabs", xrel
 						xind = floor(xrel)
+						write(*,*) "xind", xind
 						xrel = xrel - xind
+						write(*,*) "xrel", xrel
 						ig   = sum(xind*steps)+1
+						write(*,*) "ig", ig
 						cel  = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
 						! Compute offset from source
 						dcel(1) = dec-cel(1)

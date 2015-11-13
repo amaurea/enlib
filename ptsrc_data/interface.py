@@ -103,6 +103,14 @@ def pmat_model(tod, params, data, dir=1):
 	core.pmat_model(dir, tod, p.T, data.ranges.T, data.rangesets.T, data.offsets.T, data.point.T, data.phase.T, rangemask)
 	params[:,2:-3] = p[:,2:-3]
 
+def pmat_beam_foff(tod, params, beam, data, dir=1):
+	core = get_core(tod.dtype)
+	p = params.copy()
+	p[:,:2] = utils.rewind(params[:,:2], data.point[0,-2:])
+	core.pmat_beam_foff(dir, tod, p.T, data.ranges.T, data.rangesets.T, data.offsets.T,
+			data.point.T, data.phase.T, data.rbox.T, data.nbox, data.ys.T, beam.profile, beam.rmax)
+	params[:,2:-3] = p[:,2:-3]
+
 def chisq_by_range(tod, params, data, prev_params=None, prev_chisqs=None):
 	changed = np.zeros(params.shape,dtype=bool)+True if prev_params is None else params != prev_params
 	if not np.any(changed): return prev_chisqs

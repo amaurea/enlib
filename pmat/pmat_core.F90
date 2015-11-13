@@ -1470,8 +1470,10 @@ contains
 					ipoint(:,j) = bore(:,i+j-1)+det_pos(:,di)
 				enddo
 				if(raw > 0) then
-					point(:,k+1:k+nj) = ipoint(:,:nj)
-					phase(:,k+1:k+nj) = det_comps(1:size(phase,1),di)
+					opoint(:,k+1:k+nj) = ipoint(:,:nj)
+					do j = 1, nj
+						phase(:,k+j) = det_comps(1:size(phase,1),di)
+					end do
 				else
 					opoint(:,:nj)     = lookup_grad(ipoint(:,:nj), x0, inv_dx, steps, ys)
 					phase(:,k+1:k+nj) = get_phase(comps, det_comps(:,di), opoint(3:,:nj))
