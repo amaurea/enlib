@@ -253,6 +253,96 @@ contains
 		end if
 	end subroutine
 
+	subroutine pmat_thumbs_hor(dir, tod, maps, point, phase, boxes, rbox, nbox, ys)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, nbox(:)
+		real(_),    intent(inout) :: tod(:), maps(:,:,:,:)
+		real(_),    intent(in)    :: point(:,:), phase(:,:), boxes(:,:,:), rbox(:,:), ys(:,:,:)
+		real(_),    allocatable   :: wmaps(:,:,:,:,:)
+		integer(4) :: i,j,k,l,a,jprev,p(2), nsamp, n(2), nmap, ncomp, nproc, id
+		integer(4) :: steps(size(rbox,1)), xind(3), ig
+		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1)), xrel(3), cel(4), cel_phase(3), s2p, c2p, pf(2)
+		real(_), parameter :: pi = 3.14159265359d0
+		nsamp = size(tod)
+		! map is (nx,ny,nc,nm). boxes is ({dec,ra},2,nm), point is ({dec,ra},n)
+		! we want ra = x, dec = y, so some indices will be transposed
+		n(1) = size(maps,2)
+		n(2) = size(maps,1)
+		ncomp= size(maps,3)
+		nmap = size(maps,4)
+
+		if(dir < 0) then
+			nproc = omp_get_max_threads()
+			allocate(wmaps(size(maps,1),size(maps,2),size(maps,3),size(maps,4),nproc))
+			!$omp parallel workshare
+			wmaps = 0
+			!$omp end parallel workshare
+		end if
+
+		steps(size(steps)) = 1
+		do i = size(steps)-1, 1, -1
+			steps(i) = steps(i+1)*nbox(i+1)
+		end do
+		x0 = rbox(:,1); inv_dx = nbox/(rbox(:,2)-rbox(:,1))
+
+		!$omp parallel private(jprev,i,k,j,p,id,xind,xrel,ig,cel,cel_phase,s2p,c2p,pf)
+		id = omp_get_thread_num()+1
+		jprev= 1
+		!$omp do
+		do i = 1, nsamp
+			xrel = (point(:,i)-x0)*inv_dx
+			xind = floor(xrel)
+			xrel = xrel - xind
+			! A too large displacement may take us outside the range
+			! our interpolation covers, which basically means taking us outside
+			! the patch. When this happens, it's pretty safe to just skip that sample.
+			if(any(xind<0) .or. any(xind>=nbox)) cycle
+			ig   = sum(xind*steps)+1
+			cel  = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
+			! Semi-naive approach: Brute force search, but start at previous match.
+			do k = 0, nmap
+				j = k; if(k<1) j=jprev
+				pf = cel(1:2)-boxes(:,1,j)
+				pf(2) = modulo(pf(2)+pi,2*pi)-pi
+				p = floor(pf*n/(boxes(:,2,j)-boxes(:,1,j)))+1
+				jprev=j
+				if(all(p>0) .and. all(p<=n)) exit
+			end do
+			if(j > nmap) cycle
+      if(any(p<=0) .or. any(p>n)) p = 1
+
+			c2p = cel(3); s2p = cel(4)
+			cel_phase(1) = phase(1,i)
+			cel_phase(2) = phase(2,i)*c2p - phase(3,i)*s2p
+			cel_phase(3) = phase(2,i)*s2p + phase(3,i)*c2p
+
+			if(dir < 0) then
+				wmaps(p(2),p(1),:,j,id) = wmaps(p(2),p(1),:,j,id) + tod(i)*cel_phase(1:ncomp)
+			else
+				tod(i) = sum(maps(p(2),p(1),:,j)*cel_phase(1:ncomp))
+			end if
+		end do
+		!$omp end parallel
+
+		if(dir < 0) then
+			!$omp parallel do collapse(4)
+			do a = 1, size(wmaps, 4)
+				do j = 1, size(wmaps, 3)
+					do k = 1, size(wmaps, 2)
+						do l = 1, size(wmaps, 1)
+							do i = 1, size(wmaps,5)
+								maps(l,k,j,a) = maps(l,k,j,a) + wmaps(l,k,j,a,i)
+							end do
+						end do
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
+
+
 	subroutine pmat_model(dir, tod, params, ranges, rangesets, offsets, point, phase, rangemask)
 		use omp_lib
 		implicit none
@@ -455,7 +545,7 @@ contains
 		integer(4) :: nsrc, ndet, di, si, oi, ri, i, xind(3), ig, bi
 		integer(4) :: steps(size(rbox,1))
 		real(_)    :: ra, dec, amps(3), ibeam(3), cosdec, icosel, hor(3), xrel(3), cel(4), dcel(2)
-		real(_)    :: c2p, s2p, dy, dx, r, bx, bval, cel_phase(3), inv_bres
+		real(_)    :: c2p, s2p, c1p, s1p, dy, dx, r, bx, bval, cel_phase(3), inv_bres
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
 		real(_)    :: oamps(3,size(offsets,3)), foff(2)
 		real(_), parameter :: pi = 3.14159265359d0
@@ -480,14 +570,14 @@ contains
 
 		!Note: it's safe to do di in parallel, but no si, as multiple sources may contribute
 		!to the same sample.
-		!$omp parallel do private(di,si,ra,dec,amps,ibeam,foff,cosdec,oi,ri,icosel,i,hor,xrel,xind,ig,cel,dcel,c2p,s2p,dy,dx,r,bx,bi,bval,cel_phase) reduction(+:oamps)
+		!$omp parallel do private(di,si,ra,dec,amps,ibeam,foff,cosdec,oi,ri,icosel,i,hor,xrel,xind,ig,cel,dcel,c2p,s2p,dy,dx,r,bx,bi,bval,cel_phase,c1p,s1p) reduction(+:oamps)
 		do di = 1, ndet
 			do si = 1, nsrc
 				dec   = params(1,si)
 				ra    = params(2,si)
-				amps  = params(3:5,si)
-				ibeam = params(6:8,si)
-				foff  = params(9:10,si)
+				amps  = params(3:5,si)   ! T,Q,U
+				ibeam = params(6:8,si)   ! ib11,ib22,ib12
+				foff  = params(9:10,si)  ! dy,dx
 				cosdec= cos(dec)
 				if(dir > 0 .and. all(amps==0)) cycle
 				do oi = offsets(1,di,si)+1, offsets(2,di,si)
@@ -499,12 +589,16 @@ contains
 						! el += y, az += x/cos(el). We will assume constant elevation scans, so
 						! we can reuse cos(el) for each detector.
 						hor(1) = point(1,i)
-						hor(2) = point(2,i) + foff(1)
-						hor(3) = point(3,i) + foff(2) * icosel
+						hor(2) = point(2,i) + foff(2) * icosel
+						hor(3) = point(3,i) + foff(1)
 						! Now transform this horizontal pointing into celestial coordinates
 						xrel = (hor-x0)*inv_dx
 						xind = floor(xrel)
 						xrel = xrel - xind
+						! A too large displacement may take us outside the range
+						! our interpolation covers, which basically means taking us outside
+						! the patch. When this happens, it's pretty safe to just skip that sample.
+						if(any(xind<0) .or. any(xind>=nbox)) cycle
 						ig   = sum(xind*steps)+1
 						cel  = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
 						! Compute offset from source
@@ -512,13 +606,18 @@ contains
 						dcel(2) = ra -cel(2)
 						dcel(2) = modulo(dcel(2)+pi,2*pi)-pi
 						dcel(2) = dcel(2)*cosdec
-						c2p = cel(3); s2p = cel(4)
 						! Apply local coordinate system rotation to make the displacement vector
 						! [dy,dx] as similar as possible to what we would have gotten if we had done
 						! the whole computation in focalplane coordinates (which we didn't do here,
-						! as they requrie a more involved interpolation scheme).
-						dy =  c2p*dcel(1) + s2p*dcel(2)
-						dx = -s2p*dcel(1) + c2p*dcel(2)
+						! as they requrie a more involved interpolation scheme). psi is defined
+						! via daz,del = [1,0] -> dra,ddec = [cos psi,sin psi]. But we have cos2psi
+						! and sin2psi. Can somewhat cheaply recover cos1psi and sin1psi up to an
+						! overall, irrelevant sign, at the cost of two sqrts, which isn't so bad.
+						c2p = cel(3); s2p = cel(4)
+						c1p = sqrt((1+c2p)/2); s1p = sqrt((1-c2p)/2)
+						if(s2p < 0) c1p = -c1p
+						dx = -s1p*dcel(1) + c1p*dcel(2)
+						dy =  c1p*dcel(1) + s1p*dcel(2)
 						! Then comes the beam. First we need the effective radius, which takes
 						! into account elliptical distortions of the beam.
 						r  = sqrt(dy*(ibeam(1)*dy+2*ibeam(3)*dx) + dx**2*ibeam(2))

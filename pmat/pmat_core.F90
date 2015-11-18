@@ -1470,7 +1470,7 @@ contains
 					ipoint(:,j) = bore(:,i+j-1)+det_pos(:,di)
 				enddo
 				if(raw > 0) then
-					opoint(:,k+1:k+nj) = ipoint(:,:nj)
+					point(:,k+1:k+nj) = ipoint(:,:nj)
 					do j = 1, nj
 						phase(:,k+j) = det_comps(1:size(phase,1),di)
 					end do

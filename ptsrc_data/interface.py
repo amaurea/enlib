@@ -92,6 +92,10 @@ def pmat_thumbs(dir, tod, maps, point, phase, boxes):
 	core = get_core(tod.dtype)
 	core.pmat_thumbs(dir, tod.T, maps.T, point.T, phase.T, boxes.T)
 
+def pmat_thumbs_hor(dir, tod, maps, point, phase, boxes, rbox, nbox, ys):
+	core = get_core(tod.dtype)
+	core.pmat_thumbs_hor(dir, tod.T, maps.T, point.T, phase.T, boxes.T, rbox.T, nbox, ys.T)
+
 def pmat_model(tod, params, data, dir=1):
 	core = get_core(tod.dtype)
 	rangemask = np.zeros(data.ranges.shape[0],dtype=np.int32)+1
