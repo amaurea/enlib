@@ -303,7 +303,7 @@ class pos2pix:
 		else:
 			# If we have no template, output angles instead of pixels.
 			# Make sure the angles don't have any jumps in them
-			opix[:2] = opos[1::-1]
+			opix[:2] = opos[1::-1] # output order is dec,ra
 			opix[1]  = utils.rewind(opix[1], self.ref_phi)
 		opix[2]  = np.cos(2*opos[2])
 		opix[3]  = np.sin(2*opos[2])
@@ -325,7 +325,7 @@ class PmatCutRebin(PointingMatrix):
 	def backward(self, jhigh, jlow):
 		get_core(jhigh.dtype).pmat_cut_rebin(-1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
 
-config.default("pmat_ptsrc_rsigma", 7.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
+config.default("pmat_ptsrc_rsigma", 4.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
 class PmatPtsrc(PointingMatrix):
 	def __init__(self, scan, params, sys=None, tmul=None, pmul=None):
 		# Params is [nsrc,{dec,ra,amps,ibeams}]
@@ -348,17 +348,20 @@ class PmatPtsrc(PointingMatrix):
 		ndet = scan.ndet
 		# rhit is the inverse of the squared amplitude-weighted inverse beam for
 		# some reason. But it is basically going to be our beam size.
+		print "FIXME: Point source format incompatible with PmatPtsrc"
 		rhit = np.zeros(nsrc)+(np.sum(1./params[-3]*params[2]**2)/np.sum(params[2]**2))**0.5
 		rmax = rhit*rmul
+		try: det_ivars = scan.noise.ivar
+		except NotImplementedError: det_ivars = np.zeros(ndet)
 		src_ivars = np.zeros(nsrc,dtype=self.dtype)
 
 		# Measure ranges. May need to iterate if initial allocation was too small
 		nrange = np.zeros([nsrc,ndet],dtype=np.int32)
 		ranges = np.zeros([nsrc,ndet,100,2],dtype=np.int32)
-		self.core.pmat_ptsrc_prepare(params, rhit, rmax, scan.noise.ivar, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
+		self.core.pmat_ptsrc_prepare(params, rhit, rmax, det_ivars, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
 		if np.max(nrange) > ranges.shape[2]:
 			ranges = np.zeros([nsrc,ndet,np.max(nrange),2],dtype=np.int32)
-			self.core.pmat_ptsrc_prepare(params, rhit, rmax, scan.noise.ivar, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
+			self.core.pmat_ptsrc_prepare(params, rhit, rmax, det_ivars, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
 		self.ranges, self.rangesets, self.offsets = compress_ranges(ranges, nrange, scan.cut, scan.nsamp)
 		self.src_ivars = src_ivars
 		self.nhit = np.sum(self.ranges[:,1]-self.ranges[:,0])
@@ -406,60 +409,81 @@ class PmatPtsrc(PointingMatrix):
 					self.ys.T, self.ranges.T, self.rangesets, self.offsets.T, raw)
 			mask = np.rint(mask)==1
 			phase[mask] = 0
-		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets, rbox=self.rbox, nbox=self.nbox, ys=self.ys)
+		# Store the raw pointing offsets, so we can ensure that the point fit does everything the same
+		# way the main mapmaker does.
+		mean_point = np.mean(self.scan.boresight.T[1:],1)
+		raw_offsets = coordinates.recenter(mean_point[:,None] + self.scan.offsets.T[1:], np.concatenate([mean_point,mean_point*0])).T
+		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets, rbox=self.rbox, nbox=self.nbox, ys=self.ys, point_offset=raw_offsets, ivars=np.ones(len(self.scan.dets)))
 		return res
 
-config.default("pmat_ptsrc_cell_res", 20, "Cell size in arcmin to use for fast source lookup.")
+config.default("pmat_ptsrc_cell_res", 5, "Cell size in arcmin to use for fast source lookup.")
 class PmatPtsrc2(PointingMatrix):
 	def __init__(self, scan, srcs, sys=None, tmul=None, pmul=None):
-		srcs = np.asarray(srcs)
-		if srcs.ndim == 2: srcs = srcs[None]
+		# We support a srcs which is either [nsrc,nparam] or [nsrc,ndir,nparam], where
+		# ndir is either 1 or 2 depending on whether one wants to separate different
+		# scanning directions.
+		srcs = np.array(srcs)
+		if srcs.ndim == 2: srcs = srcs[:,None]
 		# srcs is [ndir,nsrc,{dec,ra,T,Q,U,ibeams}]
 		sys   = config.get("map_eqsys", sys)
-		rmul  = config.get("pmat_ptsrc_rsigma")
-		cres  = config.get("pmat_ptsrc_cell_res")
+		cres  = config.get("pmat_ptsrc_cell_res")*utils.arcmin
 		self.dtype = srcs.dtype
+		ndir       = srcs.shape[1]
 		self.core  = get_core(self.dtype)
 		self.scan  = scan
+		maxcell    = 10 # max numer of sources per cell
 
-		# Build interpolator
+		# Investigate the beam to find the max relevant radius
+		sigma_lim = config.get("pmat_ptsrc_rsigma")
+		value_lim = np.exp(-0.5*sigma_lim**2)
+		rmax = np.where(scan.beam[1]>=value_lim)[0][-1]*scan.beam[0,1]
+		rmul = max([utils.expand_beam(src[-3:])[0][0] for src in srcs.reshape(-1,srcs.shape[-1])])
+		rmax *= rmul
+
+		# Build interpolator (dec,ra output ordering)
 		ipol, obox = build_pos_interpol(scan, sys)
 		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, self.dtype)
-
 		# Build source hit grid
-		shape, wcs = enmap.geometry(pos=obox[:,:2], res=cres*utils.arcmin, proj="cea")
-		pos = enmap.posmap(shape, wcs)
-		ref = pos[:,pos.shape[-2]/2,pos.shape[-1]/2]
-		pixmap = enmap.pixmap(shape, wcs)
-		pixrad = np.sum((enmap.extent(shape, wcs)/shape[-2:])**2)**0.5/2
-		ncell = np.zeros((2,)+shape, wcs, dtype=np.int32)
-		cells = np.zeros((2,maxcell)+shape, wcs, dtype=np.int32)
-		# For each source, compute the flat-sky distance from it to the center of each
-		# cell. Include cells that have dist+crad < sigma*rmul
-		for sdir in range(len(srcs)):
-			for si, src in enumerate(srcs[sdir]):
-				spos = utils.rewind(src[:2],ref)
-				srad = utils.expand_beam(src[-3:])[0]
-				dist = utils.samewcs(utils.angdist(pos,spos,zenith=False),pos)
-				hit  = dist+pixrad < srad*rmul
-				cells[(sdir,ncell[sdir],pixmap[0],pixmap[1])] = si
-				ncell[sdir,pixmap[0],pixmap[1]] += hit
+		cbox    = obox[:,:2]
+		cshape  = tuple(((cbox[1]-cbox[0])/cres).astype(int))
+		self.ref = np.mean(cbox,0)
+		srcs[:,:,:2] = utils.rewind(srcs[:,:,:2], self.ref)
+		# A cell is hit if it overlaps both horizontall any vertically
+		# with the point source ± rmax
+		ncell = np.zeros((ndir,)+cshape,dtype=np.int32)
+		cells = np.zeros((ndir,)+cshape+(maxcell,),dtype=np.int32)
+		for si, dsrc in enumerate(srcs):
+			for sdir, src in enumerate(dsrc):
+				i1 = np.maximum(0,((src[:2]-rmax-cbox[0])/cres).astype(int))
+				i2 = np.minimum(cshape,((src[:2]+rmax-cbox[0])/cres).astype(int)+1)
+				if np.any(i1 >= cshape) or np.any(i2 < 0): continue
+				sel= (sdir,slice(i1[0],i2[0]),slice(i1[1],i2[1]))
+				cells[sel][:,:,ncell[sel]] = si
+				ncell[sel] += 1
 		self.cells, self.ncell = cells, ncell
-		self.tmul = 0 if tmul is None else tmul
+		self.rmax = rmax
+		self.cbox = cbox
+		self.tmul = 1 if tmul is None else tmul
 		self.pmul = 1 if pmul is None else pmul
-
 	def apply(self, dir, tod, srcs, tmul=None, pmul=None):
 		if tmul is None: tmul = self.tmul
 		if pmul is None: pmul = self.pmul
-		if srcs.ndim == 3: srcs = srcs[None]
-		self.core.pmat_ptsrc2(dir, tmul, pmul, tod.T, srcs.T,
+		if srcs.ndim == 2: srcs = srcs[:,None]
+		# Handle angle wrapping without modifying the original srcs array
+		wsrcs = srcs.copy()
+		wsrcs[:,:,:2] = utils.rewind(srcs[:,:,:2], self.ref)
+		t1 = time.time()
+		self.core.pmat_ptsrc2(dir, tmul, pmul, tod.T, wsrcs.T,
 				self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T,
 				self.rbox.T, self.nbox.T, self.ys.T,
-				self.cells.T, self.ncell.T, self.cells.box().T)
+				self.scan.beam[1], self.scan.beam[0,-1], self.rmax,
+				self.cells.T, self.ncell.T, self.cbox.T)
+		# Copy out any amplitudes that may have changed
+		srcs[:,:,2:5] = wsrcs[:,:,2:5]
 	def forward(self, tod, srcs, tmul=None, pmul=None):
 		"""srcs -> tod"""
 		self.apply( 1, tod, srcs, tmul=tmul, pmul=pmul)
-	def forward(self, tod, srcs, tmul=None, pmul=None):
+	def backward(self, tod, srcs, tmul=None, pmul=None):
 		"""tod -> srcs"""
 		self.apply(-1, tod, srcs, tmul=tmul, pmul=pmul)
 
@@ -467,6 +491,7 @@ def build_pos_interpol(scan, sys):
 	# Set up pointing interpolation
 	box = np.array(scan.box)
 	margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
+	margin[1:] += 10*utils.arcmin
 	box[0] -= margin/2; box[1] += margin/2
 	# Find the rough position of our scan
 	ref_phi = coordinates.transform(scan.sys, sys, scan.box[:1,1:].T, time=scan.mjd0+scan.box[:1,0], site=scan.site)[0,0]
@@ -475,7 +500,9 @@ def build_pos_interpol(scan, sys):
 	ip_size= config.get("pmat_interpol_max_size")
 	ip_time= config.get("pmat_interpol_max_time")
 	transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
-	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, np.array([utils.arcsec, utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
+	# With acc=1, this seems to achieve 0.015" accuracy, which is 10 times worse than what one would
+	# naively expect.
+	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, np.array([0.01*utils.arcsec, 0.01*utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
 	return ipol, obox
 
 class PmatScan(PointingMatrix):

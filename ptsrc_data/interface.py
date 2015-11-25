@@ -1,5 +1,5 @@
 import numpy as np, fortran_32, fortran_64
-from enlib import fft, utils
+from enlib import fft, utils, coordinates
 
 def get_core(dtype):
 	if dtype == np.float32:
@@ -111,8 +111,13 @@ def pmat_beam_foff(tod, params, beam, data, dir=1):
 	core = get_core(tod.dtype)
 	p = params.copy()
 	p[:,:2] = utils.rewind(params[:,:2], data.point[0,-2:])
+	# Apply focal-plane offset to our base offsets, and convert to horizontal offsets
+	mean_point   = np.mean(data.point[:,1:],0)
+	point_offset = data.point_offset + params[None,0,8:]
+	point_offset = coordinates.decenter(point_offset.T, np.concatenate([mean_point,mean_point*0])).T - mean_point[None]
+	point_offset = np.concatenate([point_offset[:,:1]*0,point_offset],1)
 	core.pmat_beam_foff(dir, tod, p.T, data.ranges.T, data.rangesets.T, data.offsets.T,
-			data.point.T, data.phase.T, data.rbox.T, data.nbox, data.ys.T, beam.profile, beam.rmax)
+			data.point.T, point_offset.T, data.phase.T, data.rbox.T, data.nbox, data.ys.T, beam.profile, beam.rmax)
 	params[:,2:-3] = p[:,2:-3]
 
 def chisq_by_range(tod, params, data, prev_params=None, prev_chisqs=None):

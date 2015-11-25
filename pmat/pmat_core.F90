@@ -66,7 +66,7 @@ contains
 		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:), tmul, mmul
 		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
 		! Work
-		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic, i, j, k
+		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic
 		integer(4) :: steps(size(rbox,1)), psize(2)
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
 		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
@@ -204,7 +204,7 @@ contains
 		real(_),    intent(in)    :: tmul, mmul, posfit(:,:,:), polfit(:,:,:), box(:,:)
 		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
 		! Work
-		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic, i, j, k, iy, ix, pix(2), psize(2)
+		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic, iy, ix, pix(2), psize(2)
 		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
 		real(_)    :: point(2), phase(3), tazel(3), boff(3), bscale(3)
 
@@ -1090,11 +1090,12 @@ contains
 	! It will be up to the user to disentangle these later. The user chooses
 	! which coordinate system to use based on how he sets up ys_src.
 	subroutine pmat_ptsrc2( &
-			dir, tmul, pmul,                 &! Projection direction, tod multiplier, src multiplier
-			tod, srcs,                       &! Main inputs/outputs. tod(nsamp,ndet), srcs(nparam,nsrc,ndir)
-			bore, det_pos, det_comps,        &
-			rbox, nbox, ys_pos,              &! Coordinate transformation
-			cell_srcs, cell_nsrc, cbox       &! Relevant source lookup. cell_srcs(:,nx,ny,ndir), cell_nsrc(nx,ny,ndir)
+			dir, tmul, pmul,           &! Projection direction, tod multiplier, src multiplier
+			tod, srcs,                 &! Main inputs/outputs. tod(nsamp,ndet), srcs(nparam,ndir,nsrc)
+			bore, det_pos, det_comps,  &
+			rbox, nbox, ys_pos,        &! Coordinate transformation
+			beam, rbeam, rmax,         &! Beam profile and max radial offset to consider
+			cell_srcs, cell_nsrc, cbox &! Relevant source lookup. cell_srcs(:,nx,ny,ndir), cell_nsrc(nx,ny,ndir)
 		)
 		use omp_lib
 		implicit none
@@ -1103,18 +1104,22 @@ contains
 		real(_), intent(inout) :: tod(:,:), srcs(:,:,:)
 		real(_), intent(in)    :: bore(:,:), det_pos(:,:), det_comps(:,:)
 		real(_), intent(in)    :: rbox(:,:), ys_pos(:,:,:), cbox(:,:)
+		real(_), intent(in)    :: beam(:), rbeam, rmax
 		integer, intent(in)    :: nbox(:), cell_srcs(:,:,:,:), cell_nsrc(:,:,:)
 		! Work
 		integer :: nsamp, ndet, nsrc, nproc
-		integer :: ic, i, id, di, si, xind(3), ig, cell(2), cell_ind, cid, ci, sdir, ndir
-		real(_) :: steps(3), x0(2), inv_dx(2), c0(2), inv_dc(2), xrel(3)
-		real(_) :: point(4), phase(3), dec, ra, ddec, dra, r2, ibeam(3)
+		integer :: ic, i, id, di, si, xind(3), ig, cell(2), cell_ind, cid, sdir, ndir
+		integer :: steps(3), bind
+		real(_) :: x0(3), inv_dx(3), c0(2), inv_dc(2), xrel(3)
+		real(_) :: point(4), phase(3), dec, ra, ddec, dra, ibeam(3)
+		real(_) :: inv_bres, bx,by,br,brel,bval, c2p,s2p,c1p,s1p
+		real(_), parameter   :: pi = 3.14159265359d0
 		real(_), allocatable :: amps(:,:,:,:), cosdec(:,:)
 		integer, allocatable :: scandir(:)
 		nsamp   = size(tod, 1)
 		ndet    = size(tod, 2)
-		nsrc    = size(srcs,2)
-		ndir    = size(srcs,3)
+		ndir    = size(srcs,2)
+		nsrc    = size(srcs,3)
 
 		! Set up scanning direction. Two modes are supported. If ndir is 1, then
 		! the same set of parameters are used for both left and rightgoing scans.
@@ -1135,48 +1140,79 @@ contains
 			steps(ic) = steps(ic+1)*nbox(ic+1)
 		end do
 		x0 = rbox(:,1); inv_dx = nbox/(rbox(:,2)-rbox(:,1))
-		c0 = cbox(:,1); inv_dc = shape(cell_nsrc(1,:,:))/(cbox(:,2)-cbox(:,1))
+		c0 = cbox(:,1)
+		inv_dc(1) = size(cell_nsrc,2)/(cbox(1,2)-cbox(1,1))
+		inv_dc(2) = size(cell_nsrc,1)/(cbox(2,2)-cbox(2,1))
+		inv_bres = size(beam)/rbeam
 
 		nproc = omp_get_max_threads()
-		allocate(cosdec(nsrc,ndir),amps(3,nsrc,ndir,nproc))
+		allocate(cosdec(ndir,nsrc),amps(3,ndir,nsrc,nproc))
 		cosdec = cos(srcs(1,:,:))
 		if(dir > 0) then
 			do i = 1, nproc; amps(:,:,:,i) = srcs(3:5,:,:)*pmul; end do
 		else
 			amps = 0
 		end if
-		!$omp parallel private(id,di,si,xrel,xind,ig,point,phase,cell,cell_ind,cid,dec,ra,ibeam,ddec,dra,r2,sdir)
+		!$omp parallel private(id,di,si,xrel,xind,ig,point,phase,cell,cell_ind,cid,dec,ra,ibeam,ddec,dra,sdir,c2p,s2p,c1p,s1p,bx,by,br,brel,bind,bval)
 		id = omp_get_thread_num()+1
 		!$omp do
 		do di = 1, ndet
 			do si = 1, nsamp
 				sdir = scandir(si)
+				! Transform from hor to cel
 				xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
 				xind = floor(xrel)
 				xrel = xrel - xind
 				ig   = sum(xind*steps)+1
-				point = ys_pos(:,1,ig) + xrel(1)*ys_pos(:,2,ig) + xrel(2)*ys_pos(:,3,ig) + xrel(3)*ys_pos(:,4,ig)
-				phase(1) = det_comps(1,di)
-				phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
-				phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
-				cell = (point(1:2)-c0)*inv_dc+1
+				point= ys_pos(:,1,ig) + xrel(1)*ys_pos(:,2,ig) + xrel(2)*ys_pos(:,3,ig) + xrel(3)*ys_pos(:,4,ig)
+				! Find which point source lookup cell we are in.
+				! dec,ra -> cy,cx
+				cell = floor((point(1:2)-c0)*inv_dc)+1
 				! Bounds checking. Costs 2% performance. Worth it
 				cell(1) = min(size(cell_nsrc,2),max(1,cell(1)))
 				cell(2) = min(size(cell_nsrc,1),max(1,cell(2)))
 				if(dir > 0) tod(si,di) = tod(si,di)*tmul
-				do cell_ind = 1, cell_nsrc(cell(1),cell(2),sdir)
-					cid = cell_srcs(cell_ind,cell(1),cell(2),sdir)
-					dec   = srcs(1,cid,sdir)
-					ra    = srcs(2,cid,sdir)
-					ibeam = srcs(6:8,cid,sdir)
-					! Calc flat-sky relative position for this source
+				! Avoid expensive operations if we don't hit any sources
+				if(cell_nsrc(cell(2),cell(1),sdir) == 0) cycle
+				! The spin-2 and spin-1 rotations associated with the transformation
+				! We need these to get the polarization rotation and beam orientation
+				! right.
+				c2p = point(3);                  s2p = point(4)
+				c1p = sign(sqrt((1+c2p)/2),s2p); s1p = sqrt((1-c2p)/2)
+				phase(1) = det_comps(1,di)
+				phase(2) = c2p*det_comps(2,di) - s2p*det_comps(3,di)
+				phase(3) = s2p*det_comps(2,di) + c2p*det_comps(3,di)
+				! Process each point source in this cell
+				do cell_ind = 1, cell_nsrc(cell(2),cell(1),sdir)
+					cid = cell_srcs(cell_ind,cell(2),cell(1),sdir)+1
+					dec   = srcs(1,sdir,cid)
+					ra    = srcs(2,sdir,cid)
+					ibeam = srcs(6:8,sdir,cid)
+					! Calc effective distance from this source in terms of the beam distortions.
+					! The beam shape is defined in the same coordinate system the polarization
+					! orientation is defined in. We can either rotate the beam (like we do phase)
+					! or rotate the offset vector the opposite direction. I choose the latter
+					! because it is simpler.
 					ddec = point(1)-dec
-					dra  = (point(2)-ra)*cosdec(cid,sdir)
-					r2   = ddec*(ibeam(1)*ddec+ibeam(3)*dra) + dra*(ibeam(2)*dra+ibeam(3)*ddec)
+					dra  = (point(2)-ra)*cosdec(sdir,cid) ! Caller should beware angle wrapping!
+					if(abs(ddec)>rmax .or. abs(dra)>rmax) cycle
+					bx   =  c1p*dra + s1p*ddec
+					by   = -s1p*dra + c1p*ddec
+					br   = sqrt(by*(ibeam(1)*by+2*ibeam(3)*bx) + bx**2*ibeam(2))
+					! Linearly interpolate the beam value
+					brel = br*inv_bres+1
+					bind = floor(brel)
+					if(bind >= size(beam)-1) cycle
+					brel = brel-bind
+					bval = beam(bind)*(1-brel) + beam(bind+1)*brel
+					!if(bval > 0.3) then
+					!	write(*,'(a,i4,i8,i4,13f13.6,e15.7,f13.6)') 'A ', di, si, cid-1, bore(1,si), bore(2:3,si)*180/pi, (bore(2:3,si)+det_pos(2:3,di))*180/pi, det_pos(2:3,di)*180/pi, point(1:2)*180/pi, dec*180/pi, ra*180/pi, ddec*180*60/pi, dra*180*60/pi, tod(si,di), bval
+					!end if
+					! And perform the actual projection
 					if(dir > 0) then
-						tod(si,di) = tod(si,di) + sum(amps(:,cid,sdir,1)*phase)*exp(-0.5*r2)
+						tod(si,di) = tod(si,di) + sum(amps(:,sdir,cid,1)*phase)*bval
 					else
-						amps(:,ci,sdir,id) = amps(:,ci,sdir,id) + tod(si,di)*exp(-0.5*r2)*phase
+						amps(:,sdir,cid,id) = amps(:,sdir,cid,id) + tod(si,di)*bval*phase
 					end if
 				end do
 			end do
@@ -1423,6 +1459,7 @@ contains
 		integer(4), intent(inout) :: oranges(:,:)
 		integer(4), intent(in)    :: comps(:), nbox(:), offsets(:,:,:), rangesets(:), ranges(:,:), raw
 		! Work
+		real(_),    parameter :: pi = 3.14159265359d0
 		integer(4), parameter :: bz = 321
 		integer(4) :: ndet, nsrc, di, ri, si, s0, oi, i, j, k, i1, i2, ic, nj, nsamp
 		integer(4) :: r2det(size(ranges,2)), srcoff(size(ranges,2)+1)
@@ -1466,19 +1503,24 @@ contains
 				! Ok, we're finally at the relevant sample block. We now
 				! need the physical coordinate of that sample.
 				nj = min(i2+1-i,bz)
-				do j = 1, nj
-					ipoint(:,j) = bore(:,i+j-1)+det_pos(:,di)
-				enddo
 				if(raw > 0) then
-					point(:,k+1:k+nj) = ipoint(:,:nj)
+					point(:,k+1:k+nj) = bore(:,i:i+nj-1)
 					do j = 1, nj
 						phase(:,k+j) = det_comps(1:size(phase,1),di)
 					end do
 				else
+					do j = 1, nj
+						ipoint(:,j) = bore(:,i+j-1)+det_pos(:,di)
+					enddo
 					opoint(:,:nj)     = lookup_grad(ipoint(:,:nj), x0, inv_dx, steps, ys)
 					phase(:,k+1:k+nj) = get_phase(comps, det_comps(:,di), opoint(3:,:nj))
 					point(:,k+1:k+nj) = opoint(1:2,:nj)
 				end if
+				!do j = 1, nj
+				!	if(i+j-1 == 57168 .and. di == 497) then
+				!		write(*,'(a,i4,2i8,7f13.6,e15.7)') "B ", di, i+j-1, k+j, bore(1,i+j-1), bore(2:3,i+j-1)*180/pi, point(2:3,k+j)*180/pi, det_pos(2:3,di)*180/pi, tod(i+j-1,di)
+				!	end if
+				!end do
 				out_tod(k+1:k+nj) = tod(i:i+nj-1,di)
 				k = k+nj
 			end do
@@ -1493,7 +1535,7 @@ contains
 		real(_), intent(inout) :: tod(:,:), map(:,:)
 		real(_), intent(in)    :: az0, daz, az(:)
 		integer, allocatable   :: ais(:)
-		integer :: di, si, ai, ndet, nsamp, naz
+		integer :: di, si, ndet, nsamp, naz
 		ndet  = size(tod,2)
 		nsamp = size(tod,1)
 		naz   = size(map,1)
@@ -1523,7 +1565,7 @@ contains
 		real(_), intent(inout) :: tod(:,:), map(:,:,:)
 		real(_), intent(in)    :: az0, daz, az(:)
 		integer, allocatable   :: ais(:), pis(:)
-		integer :: di, si, ai, ndet, nsamp, naz
+		integer :: di, si, ndet, nsamp, naz
 		ndet  = size(tod,2)
 		nsamp = size(tod,1)
 		naz   = size(map,1)

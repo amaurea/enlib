@@ -532,22 +532,22 @@ contains
 	subroutine pmat_beam_foff(&
 			dir, tod, params, &
 			ranges, rangesets, offsets, &
-			point, phase, &
+			bore, dbore, phase, &
 			rbox, nbox, ys, &
 			beam, rbeam)
 		use omp_lib
 		implicit none
 		! Parameters
 		real(_),    intent(inout) :: tod(:), params(:,:)
-		real(_),    intent(in)    :: point(:,:), phase(:,:), rbox(:,:), ys(:,:,:), beam(:), rbeam
+		real(_),    intent(in)    :: bore(:,:), phase(:,:), rbox(:,:), ys(:,:,:), beam(:), rbeam, dbore(:,:)
 		integer(4), intent(in)    :: offsets(:,:,:), ranges(:,:), rangesets(:), dir, nbox(:)
 		! Work
 		integer(4) :: nsrc, ndet, di, si, oi, ri, i, xind(3), ig, bi
 		integer(4) :: steps(size(rbox,1))
-		real(_)    :: ra, dec, amps(3), ibeam(3), cosdec, icosel, hor(3), xrel(3), cel(4), dcel(2)
+		real(_)    :: ra, dec, amps(3), ibeam(3), cosdec, icosel, el, hor(3), xrel(3), cel(4), dcel(2)
 		real(_)    :: c2p, s2p, c1p, s1p, dy, dx, r, bx, bval, cel_phase(3), inv_bres
 		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
-		real(_)    :: oamps(3,size(offsets,3)), foff(2)
+		real(_)    :: oamps(3,size(offsets,3))
 		real(_), parameter :: pi = 3.14159265359d0
 
 		nsrc  = size(offsets,3)
@@ -561,36 +561,39 @@ contains
 		inv_bres = size(beam)/rbeam
 
 		if(dir > 0) then
-			!$omp parallel workshare
-			tod = 0
-			!$omp end parallel workshare
+			!!$omp parallel workshare
+			!tod = 0
+			!!$omp end parallel workshare
 		else
 			oamps = 0
 		end if
 
 		!Note: it's safe to do di in parallel, but no si, as multiple sources may contribute
 		!to the same sample.
-		!$omp parallel do private(di,si,ra,dec,amps,ibeam,foff,cosdec,oi,ri,icosel,i,hor,xrel,xind,ig,cel,dcel,c2p,s2p,dy,dx,r,bx,bi,bval,cel_phase,c1p,s1p) reduction(+:oamps)
+		!$omp parallel do private(di,si,ra,dec,amps,ibeam,cosdec,oi,ri,icosel,el,i,hor,xrel,xind,ig,cel,dcel,c2p,s2p,dy,dx,r,bx,bi,bval,cel_phase,c1p,s1p) reduction(+:oamps)
 		do di = 1, ndet
 			do si = 1, nsrc
 				dec   = params(1,si)
 				ra    = params(2,si)
 				amps  = params(3:5,si)   ! T,Q,U
 				ibeam = params(6:8,si)   ! ib11,ib22,ib12
-				foff  = params(9:10,si)  ! dy,dx
 				cosdec= cos(dec)
 				if(dir > 0 .and. all(amps==0)) cycle
 				do oi = offsets(1,di,si)+1, offsets(2,di,si)
 					ri = rangesets(oi)+1
-					icosel = 1/cos(point(3,ranges(1,ri)+1))
+					el = bore(3,ranges(1,ri)+1)
+					icosel = 1/cos(el)
 					do i = ranges(1,ri)+1, ranges(2,ri)
 						! Compute our on-sky pointing. point(:,i) = uncorrected det hor pointing.
 						! We wish to add a focalplane offset. To good accuracy, this will be
-						! el += y, az += x/cos(el). We will assume constant elevation scans, so
-						! we can reuse cos(el) for each detector.
-						hor(1) = point(1,i)
-						hor(2) = point(2,i) + foff(2) * icosel
-						hor(3) = point(3,i) + foff(1)
+						! el += x, az += y/cos(el). We will assume constant elevation scans, so
+						! we can reuse cos(el) for each detector. The accuracy is about 0.5 arcsec
+						! for arcmin-size deflections. This translates to percent-level beam differences,
+						! which may lead to 500 uK residuals for very strong point sources. So this
+						! accuracy may not be good enough. The full version requires the boresight
+						! pointing, which we don't have here.
+						hor(1) = bore(1,i)
+						hor(2:3) = bore(2:3,i) + dbore(2:3,di)
 						! Now transform this horizontal pointing into celestial coordinates
 						xrel = (hor-x0)*inv_dx
 						xind = floor(xrel)
@@ -627,6 +630,9 @@ contains
 						if(bi >= size(beam)) cycle
 						bx = bx-bi
 						bval = beam(bi)*(1-bx) + beam(bi+1)*bx
+						!if(bval > 0.3) then
+						!	write(*,'(a,i4,i7,13f13.6,e15.7,f13.6)'), "B ", di, si, bore(1,i), bore(2:3,i)*180/pi, (hor(2:3)-bore(2:3,i))*180/pi, hor(2:3)*180/pi, cel(1:2)*180/pi, dec*180/pi, ra*180/pi, dcel*180*60/pi, tod(i), bval
+						!end if
 						! Use this to compute the total detector response
 						cel_phase(1) = phase(1,i)
 						cel_phase(2) = phase(2,i)*c2p - phase(3,i)*s2p

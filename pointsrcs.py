@@ -12,6 +12,15 @@ The standard parameters are [nsrc,nparam]:
 	beam sigma (wide  axis) (radians)
 	beam sigma (short axis) (radians)
 	beam orientation (wide axis from dec axis)  (radians)
+
+What do I really need to simulate a source?
+
+1. Physical source on the sky (pos,amps,shape)
+2. Telescope response (beam in focalplane)
+
+For a point source 1.shape would be a point. But clusters and
+nearby galaxies can have other shapes. In general many profiles are
+possible. Parametrizing them in a standard format may be difficult.
 """
 import numpy as np
 from enlib import utils

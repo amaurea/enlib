@@ -487,6 +487,16 @@ class PostAddMap:
 	def __call__(self, imap):
 		return imap + self.map*self.mul
 
+class FilterAddSrcs:
+	def __init__(self, scans, params, eqsys=None, mul=1):
+		self.params = params
+		self.data = {}
+		for scan in scans:
+			self.data[scan] = pmat.PmatPtsrc2(scan, params, sys=eqsys, pmul=mul)
+	def __call__(self, scan, tod):
+		pmat = self.data[scan]
+		pmat.forward(tod, self.params.astype(tod.dtype))
+
 ######## Equation system ########
 
 class Eqsys:

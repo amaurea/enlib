@@ -75,7 +75,7 @@ def rewind(a, ref=0, period=2*np.pi):
 	specifies the angle furthest away from the cut, i.e. the
 	period cut will be at ref+period/2."""
 	a = np.asanyarray(a)
-	if ref == "auto": ref = np.sort(a.reshape(-1))[a.size/2]
+	if ref is "auto": ref = np.sort(a.reshape(-1))[a.size/2]
 	return ref + (a-ref+period/2.)%period - period/2.
 
 def cumsplit(sizes, capacities):
@@ -204,7 +204,7 @@ def delaxes(a, axes):
 def dedup(a):
 	"""Removes consecutive equal values from a 1d array, returning the result.
 	The original is not modified."""
-	return np.concatenate([a[a[1:]!=a[:-1]],a[-1:]])
+	return a[np.concatenate([[True],a[1:]!=a[:-1]])]
 
 def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 	"""Given an array a[{x},{y}] and a list of
@@ -684,7 +684,7 @@ def allgatherv(a, comm, axis=0):
 	[[1,2],[3,4],[5,6]] for both tasks."""
 	a  = np.asarray(a)
 	fa = moveaxis(a, axis, 0)
-	ra = fa.reshape(fa.shape[0],-1) if fa.size > 0 else fa.reshape(0,1)
+	ra = fa.reshape(fa.shape[0],-1) if fa.size > 0 else fa.reshape(0,np.product(fa.shape[1:]))
 	N  = ra.shape[1]
 	n  = allgather([len(ra)],comm)
 	o  = cumsum(n)
