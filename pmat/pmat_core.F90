@@ -112,6 +112,28 @@ contains
 						xind = floor(xrel)
 						xrel = xrel - xind
 						ig   = sum(xind*steps)+1
+						! Pointing is done via gradient interpolation, which is one
+						! step simpler than multilinear interpolation because it
+						! ignores cross terms. This means that pointing will be
+						! discontinuous at some corners.
+						!
+						! Costs of some approaches (assuming we already have xrel and ig)
+						!                      mul add
+						! 1. Nearest neighbor    0  0  equivalent to precomputing all pixels
+						! 2. Gradient3          12 12  discontinuous
+						! 2. Gradient2           8  8
+						! 3. Implicit grad3     12 24  same as above, but more general storage
+						! 3. Implicit grad2      8 16
+						! 4. Bigradient3        12 15  continuous
+						! 4. Bigradient2         8 10
+						! 5. Impl. Bigrad3      12 27  as above, more general storage
+						! 5. Impl. Bigrad2       9 18
+						! 6. Bilinear3          56 28  differentiable in cell
+						! 6. Bilinear2          24 12
+						! 7. Linear 1d          -3 -8  may be infeasible. Per-detector
+						! Elevation support is quite costly for the more advanced methods.
+						! But without it, we need ~1000 times more interpolation points,
+						! and can't handle elevation jitter.
 						point = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
 						pix = nint(point(1:2))+1 - pbox(:,1)
 						! Bounds checking. Costs 2% performance. Worth it
