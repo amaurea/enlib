@@ -871,8 +871,16 @@ contains
 				tod(si:si3) = junk(ol)
 			end if
 		case(4)
-			! Legendre polynomial projection
-			w = min(n,4+n/cuttype(2))
+			! Legendre polynomial projection, taken from Jon. The odd determination of
+			! numbers of degrees of freedom is also from him.
+			select case(n)
+				case(0:1); w = 1
+				case(2:3); w = 2
+				case(4:6); w = 3
+				case(7:20);w = 4
+				case default;   w = 5 + n/cuttype(2)
+			end select
+			!w = min(n,4+n/cuttype(2))
 			if(w <= 1) then
 				if(dir > 0) then
 					tod = junk(1)
@@ -895,7 +903,7 @@ contains
 					select case(i)
 						case(0); Pa = 1
 						case(1); Pb = 1; Pa = x
-						case default; Pc = Pb; Pb = Pa; Pa = ((2*i+1)*x*Pb-i*Pc)/(i+1)
+						case default; Pc = Pb; Pb = Pa; Pa = ((2*i-1)*x*Pb-(i-1)*Pc)/i
 					end select
 					if(dir < 0) then
 						junk(ol) = sum(Pa*tod)

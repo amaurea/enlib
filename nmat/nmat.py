@@ -60,7 +60,7 @@ class NmatBinned(NoiseMatrix):
 	"""TOD noise matrices where power is assumed to be constant
 	in a set of bins in frequency. Stores a covariance matrix for
 	each such bin."""
-	def __init__(self, icovs, bins, dets=None, window=0):
+	def __init__(self, icovs, bins, dets=None):
 		"""Construct an NmatBinned given a list of detectors dets[ndet],
 		a list of bins[nbin,{from,to}] in frequency, where bins[-1,-1]
 		is assumed to be half the sampling rate, and icovs[nbin,ndet,ndet],
@@ -69,7 +69,6 @@ class NmatBinned(NoiseMatrix):
 		self.bins  = np.array(bins)
 		self.icovs = np.array(icovs)
 		self.dets  = np.array(dets) if dets is not None else np.arange(self.icovs.shape[1])
-		self.window= window
 		# Private
 		# The frequency-averaged inverse covariance matrix. Here the atmosphere will
 		# be sub-dominant, so this matrix should be approximately diagonal
@@ -84,9 +83,7 @@ class NmatBinned(NoiseMatrix):
 		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
 	def white(self, tod):
-		apply_window(tod, self.window)
 		tod *= self.tdiag[:,None]
-		apply_window(tod, self.window)
 		return tod
 	@property
 	def ivar(self): return self.tdiag
@@ -101,16 +98,15 @@ class NmatBinned(NoiseMatrix):
 		step = np.abs(sampslice.step or 1)
 		fmax = res.bins[-1,-1]/step
 		mask = res.bins[:,0] < fmax
-		window = res.window / step
 		bins, icovs = res.bins[mask], res.icovs[mask]
 		bins[-1,-1] = fmax
 		# Slice covs, not icovs
 		covs  = enlib.array_ops.eigpow(icovs, -1, axes=[-2,-1])[mask][:,detslice][:,:,detslice]
 		icovs = enlib.array_ops.eigpow(covs,  -1, axes=[-2,-1])
 		# Downsampling changes the noise per sample
-		return BinnedNmat(dets, bins, icovs*step, window=window)
+		return BinnedNmat(dets, bins, icovs*step)
 	def __mul__(self, a):
-		return NmatBinned(self.icovs/a, self.bins, self.dets, window=self.window)
+		return NmatBinned(self.icovs/a, self.bins, self.dets)
 	def write(self, fname, group=None):
 		fields = [("type","binned"),("icovs",self.icovs),("bins",self.bins),("dets",self.dets)]
 		nmat_write_helper(fname, fields, group)
@@ -118,7 +114,7 @@ class NmatBinned(NoiseMatrix):
 class NmatDetvecs(NmatBinned):
 	"""A binned noise matrix where the inverse covariance matrix is stored and
 	used in a compressed form, as a set of eigenvectors and eigenvalues."""
-	def __init__(self, D, V, E, bins, ebins, dets=None, window=0):
+	def __init__(self, D, V, E, bins, ebins, dets=None):
 		"""Construct an NmatDetvecs.
 		dets[ndet]:
 		 the id of each detector described
@@ -143,7 +139,6 @@ class NmatDetvecs(NmatBinned):
 		self.dets = np.ascontiguousarray(dets) if dets is not None else np.arange(self.D.shape[1])
 		# Compute corresponding parameters for the inverse
 		self.iD, self.iV, self.iE = self.calc_inverse()
-		self.window = window
 
 		# Compute white noise approximation
 		tdiag = np.zeros([len(self.dets)])
@@ -159,9 +154,7 @@ class NmatDetvecs(NmatBinned):
 	def icovs(self): return expand_detvecs(self.iD, self.iE, self.iV, self.ebins)
 	@property
 	def covs(self): return expand_detvecs(self.D, self.E, self.V, self.ebins)
-	def apply(self, tod, nowindow=0):
-		if nowindow < 1:
-			apply_window(tod, self.window)
+	def apply(self, tod, nofft=False):
 		ft = enlib.fft.rfft(tod)
 		fft_norm = tod.shape[1]
 		# Unit of noise model we apply:
@@ -185,8 +178,6 @@ class NmatDetvecs(NmatBinned):
 		core = get_core(tod.dtype)
 		core.nmat_detvecs(ft.T, self.get_ibins(tod.shape[-1]).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
 		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
-		if nowindow < 2:
-			apply_window(tod, self.window)
 		return tod
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
@@ -197,14 +188,13 @@ class NmatDetvecs(NmatBinned):
 		mask = res.bins[:,0] < fmax
 		bins, ebins = res.bins[mask], res.ebins[mask]
 		bins[-1,-1] = fmax
-		window = res.window/step
 		# Slice covs, not icovs. Downsampling changes the noise per sample, which is why we divide
 		# the variances here.
-		return NmatDetvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, dets, window=window)
+		return NmatDetvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, dets)
 	def __mul__(self, a):
-		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.dets, window=self.window)
+		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.dets)
 	def write(self, fname, group=None):
-		fields = [("type","detvecs"),("D",self.D),("V",self.V),("E",self.E),("bins",self.bins),("ebins",self.ebins),("dets",self.dets),("window",self.window)]
+		fields = [("type","detvecs"),("D",self.D),("V",self.V),("E",self.E),("bins",self.bins),("ebins",self.ebins),("dets",self.dets)]
 		write_nmat_helper(fname, fields, group)
 
 class NmatSharedvecs(NmatDetvecs):
@@ -216,7 +206,7 @@ class NmatSharedvecs(NmatDetvecs):
 	This extra compression does not propagate to the inverse quantities that are used
 	internally, however, so this is only relevant for storing these matrices on disk.
 	"""
-	def __init__(self, D, V, E, bins, ebins, vbins, dets=None, window=0):
+	def __init__(self, D, V, E, bins, ebins, vbins, dets=None):
 		"""Construct an NmatDetvecs.
 		dets[ndet]:
 		 the id of each detector described
@@ -230,7 +220,7 @@ class NmatSharedvecs(NmatDetvecs):
 		Note that D, V and E correspond to the normal covmat, *not* the inverse!
 		"""
 		self.vbins = np.ascontiguousarray(vbins)
-		NmatDetvecs.__init__(self, D, V, E, bins, ebins, dets=dets, window=window)
+		NmatDetvecs.__init__(self, D, V, E, bins, ebins, dets=dets)
 	def calc_inverse(self):
 		return woodbury_invert(self.D, self.V, self.E, self.ebins, self.vbins)
 	@property
@@ -242,15 +232,14 @@ class NmatSharedvecs(NmatDetvecs):
 		step = np.abs(sampslice.step or 1)
 		fmax = res.bins[-1,-1]/step
 		mask = res.bins[:,0] < fmax
-		window = self.window/step
 		bins, ebins, vbins = res.bins[mask], res.ebins[mask], res.vbins[mask]
 		bins[-1,-1] = fmax
 		# Slice covs, not icovs
-		return NmatSharedvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, vbins, dets, window=window)
+		return NmatSharedvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, vbins, dets)
 	def __mul__(self, a):
-		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.vbins, self.dets, window=self.window)
+		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.vbins, self.dets)
 	def write(self, fname, group=None):
-		fields = [("type","sharedvecs"),("D",self.D),("V",self.V),("E",self.E),("bins",self.bins),("ebins",self.ebins),("vbins",self.vbins),("dets",self.dets),("window",self.window)]
+		fields = [("type","sharedvecs"),("D",self.D),("V",self.V),("E",self.E),("bins",self.bins),("ebins",self.ebins),("vbins",self.vbins),("dets",self.dets)]
 		write_nmat_helper(fname, fields, group)
 
 def read_nmat(fname, group=None):
@@ -262,14 +251,11 @@ def read_nmat(fname, group=None):
 		f = fname
 	g = f[group] if group else f
 	typ = np.array(g["type"])[...]
-	window = 0
 	if typ == "detvecs":
 		ebins = g["ebins"].value if "ebins" in g else g["vbins"].value # compatibility with old format
-		if "window" in g: window = g["window"].value
-		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, ebins, g["dets"].value, window=window)
+		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, ebins, g["dets"].value)
 	elif typ == "sharedvecs":
-		if "window" in g: window = g["window"].value
-		return NmatSharedvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["vbins"].value, g["dets"].value, window=window)
+		return NmatSharedvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["vbins"].value, g["dets"].value)
 	elif typ == "binned":
 		return NmatBinned(g["icovs"], g["bins"], g["dets"])
 	else:

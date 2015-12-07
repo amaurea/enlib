@@ -45,7 +45,7 @@ class PmatMap(PointingMatrix):
 		transform = pos2pix(scan,template,sys)
 
 		# Build pointing interpolator
-		errlim = np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*0.1*acc
+		errlim = np.array([1e-3,1e-3,utils.arcmin,utils.arcmin])*0.1*acc
 		ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, errlim, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
 		if not ok: print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, scan.entry.id)
 
@@ -252,12 +252,16 @@ class PmatCut(PointingMatrix):
 	def __init__(self, scan, params=None):
 		params = config.get("pmat_cut_type", params)
 		n, neach, flat = scan.cut.flatten()
+		# Detectors for each cut
 		dets = np.concatenate([np.zeros(n,dtype=int)+i for i,n in enumerate(neach)])
-		par  = np.array(self.parse_params(params))
+		# Extract the cut parameters. E.g. poly:foo_secs -> [4,foo_samps]
+		par  = np.array(self.parse_params(params, scan.srate))
+		# Meaning of cuts array: [:,{dets,offset,length,out_length,type,args..}]
 		self.cuts = np.zeros([flat.shape[0],5+len(par)],dtype=np.int32)
 		self.cuts[:,0] = dets
 		self.cuts[:,1] = flat[:,0]
 		self.cuts[:,2] = flat[:,1]-flat[:,0]
+		# Set up the parameter arguments
 		self.cuts[:,5:]= par[None,:]
 		assert np.all(self.cuts[:,2] > 0),  "Empty cut range detected in %s" % scan.entry.id
 		assert np.all(self.cuts[:,1] >= 0) and np.all(flat[:,1] <= scan.nsamp), "Out of bounds cut range detected in %s" % scan.entry.id
@@ -281,11 +285,13 @@ class PmatCut(PointingMatrix):
 		be done without needing to care about the cuts."""
 		if self.cuts.size > 0:
 			get_core(tod.dtype).pmat_cut(-1, tod.T, junk, self.cuts.T)
-	def parse_params(self,params):
+	def parse_params(self,params,srate):
 		toks = params.split(":")
 		kind = toks[0]
-		args = tuple([int(s) for s in toks[1].split(",")]) if len(toks) > 1 else ()
-		return ({"none":0,"full":1,"bin":2,"exp":3,"poly":4}[toks[0]],)+args
+		args = [float(s) for s in toks[1].split(",")] if len(toks) > 1 else []
+		# Transform from seconds to samples if needed
+		if kind in ["bin","exp","poly"]: args[0] = args[0]*srate+0.5
+		return [{"none":0,"full":1,"bin":2,"exp":3,"poly":4}[kind]]+[int(arg) for arg in args]
 
 class pos2pix:
 	"""Transforms from scan coordinates to pixel-center coordinates."""
@@ -449,7 +455,7 @@ class PmatPtsrc2(PointingMatrix):
 		self.ref = np.mean(cbox,0)
 		srcs[:,:,:2] = utils.rewind(srcs[:,:,:2], self.ref)
 		# A cell is hit if it overlaps both horizontall any vertically
-		# with the point source ± rmax
+		# with the point source +- rmax
 		ncell = np.zeros((ndir,)+cshape,dtype=np.int32)
 		cells = np.zeros((ndir,)+cshape+(maxcell,),dtype=np.int32)
 		for si, dsrc in enumerate(srcs):

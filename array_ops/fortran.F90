@@ -127,12 +127,12 @@ subroutine condition_number_multi(A, nums)
 	!$omp end parallel
 end subroutine
 
-subroutine eigpow(A, pow)
+subroutine eigpow(A, pow, lim, lim0)
 	implicit none
 	T(_), intent(inout) :: A(:,:,:)
-	real(_)    :: eigs(size(A,1)), pow, rwork(size(A,1)*3-2)
+	real(_), intent(in) :: pow, lim, lim0
+	real(_) :: eigs(size(A,1)), rwork(size(A,1)*3-2), meig
 	T(_) :: vecs(size(A,1),size(A,2)), tmp2(size(A,1),size(A,2)), tmp(1)
-	real(_), parameter   :: lim = L, lim0 = L0
 	T(_), allocatable :: work(:)
 	integer(4) :: i, j, n, m, lwork, info
 	n = size(A,3)
@@ -140,7 +140,7 @@ subroutine eigpow(A, pow)
 	! Workspace query
 	call C##SY##ev('v', 'u', m, A(:,:,1), m, eigs, tmp, -1, R, info)
 	lwork = int(tmp(1))
-	!$omp parallel private(work,i,vecs,tmp2,info,eigs,j,rwork)
+	!$omp parallel private(work,i,vecs,tmp2,info,eigs,j,rwork,meig)
 	allocate(work(lwork))
 	!$omp do
 	do i = 1, n
@@ -149,15 +149,52 @@ subroutine eigpow(A, pow)
 		if(maxval(eigs) <= lim0) then
 			A(:,:,i) = 0
 		else
-			where(eigs < lim*maxval(eigs))
-				eigs = 0
-			elsewhere
-				eigs = eigs**pow
-			end where
+			meig = lim*maxval(eigs)
 			do j = 1, m
-				tmp2(:,j) = vecs(:,j)*eigs(j)
+				if(eigs(j) < meig) then
+					tmp2(:,j) = 0
+				else
+					tmp2(:,j) = vecs(:,j) * eigs(j)**pow
+				end if
 			end do
 			call C##gemm('n','c', m, m, m, ONE, tmp2, m, vecs, m, ZERO, A(:,:,i), m)
+		end if
+	end do
+	deallocate(work)
+	!$omp end parallel
+end subroutine
+
+subroutine svdpow(A, pow, lim, lim0)
+	implicit none
+	T(_), intent(inout) :: A(:,:,:)
+	real(_), intent(in) :: pow, lim, lim0
+	real(_) :: sigma(size(A,1)), rwork(size(A,1)*5), slim
+	T(_) :: uvecs(size(A,1),size(A,1)), vvecs(size(A,1),size(A,1)), tmp(1)
+	T(_), allocatable :: work(:)
+	integer(4) :: i, j, n, m, lwork, info
+	n = size(A,3)
+	m = size(A,1)
+	! Workspace query
+	call C##GE##svd('o', 'a', m, m, uvecs, m, sigma, uvecs, m, vvecs, m, tmp, -1, R, info)
+	lwork = int(tmp(1))
+	!$omp parallel private(work,i,uvecs,vvecs,info,sigma,j,rwork)
+	allocate(work(lwork))
+	!$omp do
+	do i = 1, n
+		uvecs = A(:,:,i)
+		call C##GE##svd('o', 'a', m, m, uvecs, m, sigma, uvecs, m, vvecs, m, work, lwork, R, info)
+		if(maxval(sigma) <= lim0) then
+			A(:,:,i) = 0
+		else
+			slim = lim*maxval(sigma)
+			do j = 1, m
+				if(sigma(j) < slim) then
+					uvecs(:,j) = 0
+				else
+					uvecs(:,j) = uvecs(:,j) * sigma(j)**pow
+				end if
+			end do
+			call C##gemm('n','n', m, m, m, ONE, uvecs, m, vvecs, m, ZERO, A(:,:,i), m)
 		end if
 	end do
 	deallocate(work)
@@ -194,15 +231,16 @@ subroutine eigflip(A)
 	!$omp end parallel
 end subroutine
 
-subroutine measure_cov(d, cov)
+subroutine measure_cov(d, cov, delay)
 	implicit none
 	T(_), intent(in) :: d(:,:)
+	integer, intent(in) :: delay
 	real(_), intent(inout) :: cov(:,:)
 	T(_), allocatable :: tcov(:,:)
 	T(_) :: norm
 	allocate(tcov(size(cov,1),size(cov,2)))
-	norm = ONE/size(d,1)
-	call C##gemm('c', 'n', size(d,2), size(d,2), size(d,1), norm, d, size(d,1), d, size(d,1), ZERO, tcov, size(tcov,1))
+	norm = ONE/(size(d,1)-delay)
+	call C##gemm('c', 'n', size(d,2), size(d,2)-delay, size(d,1), norm, d(1+delay,1), size(d,1), d, size(d,1), ZERO, tcov, size(tcov,1))
 	cov=tcov
 end subroutine
 

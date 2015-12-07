@@ -19,7 +19,7 @@ from enlib import utils, errors
 
 class DataField:
 	def __init__(self, name="default", data=None, dets=None, samples=None,
-			det_index=None, sample_index=None, force_contiguous=False):
+			det_index=None, sample_index=None, force_contiguous=False, stacker=None):
 		"""Initialize a DataField object, which encapsulates an array of data
 		which may have a detector axis at dimension det_index corresponding
 		to detectors dets, and a sample axis at dimension sample_index corresponding
@@ -40,6 +40,7 @@ class DataField:
 		self.samples_orig = samples
 		self.det_index = det_index
 		self.sample_index = sample_index
+		self.stacker = np.concatenate if stacker is None else stacker
 	def copy(self): return deepcopy(self)
 	def restrict(self, dets=None, samples=None):
 		self.restrict_dets(dets)
@@ -52,7 +53,7 @@ class DataField:
 		be raised if a detector is missing."""
 		if self.dets is None or dets is None: return self
 		# Find positions of requested detectors in our detector array
-		dets = np.asarray(dets)
+		dets = np.array(dets)
 		if np.all(dets == self.dets): return self
 		inds = np.argsort(self.dets)
 		pos  = inds[np.searchsorted(self.dets, dets, sorter=inds)]
@@ -71,7 +72,7 @@ class DataField:
 		half-open from,end pair. An IndexError is raised if the requested range
 		falls outside the samples available."""
 		if self.samples is None or samples is None: return self
-		samples = np.asarray(samples)
+		samples = np.array(samples)
 		if np.all(samples==self.samples): return self
 		if samples[0] < self.samples[0] or samples[1] > self.samples[1]:
 			raise IndexError("DataField %s samples %s does not contain requested range %s" % (self.name, str(self.samples), str(samples)))
@@ -136,6 +137,13 @@ class DataSet:
 			if d.dets is not None: dets = d.dets
 			if d.samples is not None: samples = d.samples
 		return dets, samples
+	def shift(self, det_shift=0, sample_shift=0):
+		"""Renumber detectors and samples by adding the given numbers to them. Since
+		this is just a relabeling, this does not cause any changes to the data itself."""
+		for k in self.datafields:
+			d = self.datafields[k]
+			if d.dets is not None: d.dets += det_shift
+			if d.samples is not None: d.samples += sample_shift
 	def __contains__(self, name):
 		return name in self.datafields
 	def __setattr__(self, name, value):
@@ -191,3 +199,26 @@ def datafield_intersection(datafields, copy=False):
 		df.restrict(dets, samples)
 	# And return the resulting dataset
 	return datafields
+
+def detector_union(datasets):
+	"""Generate the detector union of the input datasets, which must all
+	have the same fields, the same sample ranges and no detectors in common."""
+	ofields = []
+	for key in datasets[0].datafields:
+		fields = [d.datafields[key] for d in datasets]
+		if fields[0].dets is None:
+			field = fields[0]
+		else:
+			# We have a detector axis in this data field. Attempt to concatenate.
+			samples = fields[0].samples
+			for field in fields: assert np.all(field.samples == samples), "Sample disagreement in detector_union"
+			dets = np.concatenate([field.dets for field in fields])
+			assert len(dets) == len(set(dets)), "Overlapping detectors not allowed in detector_union"
+			data = fields[0].stacker([field.data for field in fields], fields[0].det_index)
+			# Generate a new datafield based on these. Non-detector dependent fields
+			# simply use the values from the first field.
+			field = DataField(fields[0].name, data, dets=dets, samples=samples,
+				det_index=fields[0].det_index, sample_index=fields[0].sample_index,
+				force_contiguous=fields[0].force_contiguous, stacker=fields[0].stacker)
+		ofields.append(field)
+	return DataSet(ofields)
