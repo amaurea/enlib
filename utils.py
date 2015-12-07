@@ -113,7 +113,7 @@ def deslope(d, w=1, inplace=False):
 	if not inplace: d = np.array(d)
 	dflat = d.reshape(np.prod(d.shape[:-1]),d.shape[-1])
 	for di in dflat:
-		di -= np.arange(di.size)*(np.mean(di[-w:])-np.mean(di[:w]))/di.size+np.mean(di[:w])
+		di -= np.arange(di.size)*(np.mean(di[-w:])-np.mean(di[:w]))/(di.size-1)+np.mean(di[:w])
 	return d
 
 def ctime2mjd(ctime):
@@ -164,15 +164,18 @@ def moveaxes(a, old, new):
 	for i in range(n):
 		a = moveaxis(a, -1, new[order[i]])
 	return a
+
 def partial_flatten(a, axes=[-1], pos=0):
 	"""Flatten all dimensions of a except those mentioned
 	in axes, and put the flattened one at the given position.
-	The result is always at least 2d.
 
 	Example: if a.shape is [1,2,3,4],
 	then partial_flatten(a,[-1],0).shape is [6,4]."""
+	# Move the selected axes first
 	a = moveaxes(a, axes, range(len(axes)))
-	a = np.reshape(a, list(a.shape[:len(axes)])+[np.prod(a.shape[len(axes):])])
+	# Flatten all the other axes
+	a = a.reshape(a.shape[:len(axes)]+(-1,))
+	# Move flattened axis to the target position
 	return moveaxis(a, -1, pos)
 
 def partial_expand(a, shape, axes=[-1], pos=0):
@@ -200,6 +203,25 @@ def delaxes(a, axes):
 	inds = [slice(None) for i in a.shape]
 	for ax in axes: inds[ax] = 0
 	return a[inds]
+
+class flatview:
+	def __init__(self, array, axes=[], mode="rwc"):
+		self.array = array
+		self.axes  = axes
+		self.flat  = None
+		self.mode  = mode
+	def __enter__(self):
+		self.flat = partial_flatten(self.array, self.axes)
+		if "c" in self.mode:
+			self.flat = np.ascontiguousarray(self.flat)
+		return self.flat
+	def __exit__(self, type, value, traceback):
+		# Copy back out from flat into the original array,
+		# if necessary
+		if "w" not in self.mode: return
+		if np.may_share_memory(self.array, self.flat): return
+		# We need to copy back out
+		self.array[:] = partial_expand(self.flat, self.array.shape, self.axes)
 
 def dedup(a):
 	"""Removes consecutive equal values from a 1d array, returning the result.
@@ -256,6 +278,7 @@ def nearest_product(n, factors, direction="below"):
 	"""Compute the highest product of positive integer powers of the specified
 	factors that is lower than or equal to n. This is done using a simple,
 	O(n) brute-force algorithm."""
+	if 1 in factors: return n
 	below = direction=="below"
 	nmax = n+1 if below else n*min(factors)+1
 	a = np.zeros(nmax+1,dtype=bool)
@@ -454,14 +477,14 @@ def range_union(a, mapping=False):
 def range_normalize(a):
 	"""Given a set of ranges a[:,{from,to}], normalize the ranges
 	such that no ranges are empty, and all ranges go in increasing
-	order."""
+	order. Decreasing ranges are interpreted the same way as in a slice,
+	e.g. empty."""
 	a = np.asarray(a)
 	n1 = len(a)
 	a = a[a[:,1]!=a[:,0]]
 	reverse = a[:,1]<a[:,0]
-	a[reverse] = a[reverse,::-1]
+	a = a[~reverse]
 	n2 = len(a)
-	if n2 != n1: "Removed %d empty ranges" % (n1-n2)
 	return a
 
 def range_cut(a, c):
@@ -721,19 +744,21 @@ def angdist(a, b, zenith=True):
 	res[c < 1] = np.arccos(c[c<1])
 	return res
 
-def label_unique(a, axes=(-1,), rtol=1e-5, atol=1e-8):
+def label_unique(a, axes=(), rtol=1e-5, atol=1e-8):
 	"""Given an array of values, return an array of
 	labels such that all entries in the array with the
 	same label will have approximately the same value.
-	Labels count contiguously from 0 and up. The labelling
-	will happen along the axes specified by the axes
-	argument."""
+	Labels count contiguously from 0 and up.
+	axes specifies which axes make up the subarray that
+	should be compared for equality. For scalars,
+	use axes=()."""
 	a = np.asarray(a)
-	axes= [i % a.ndim for i in axes]
-	pre = [i for i in xrange(a.ndim) if i not in axes]
+	axes = [i % a.ndim for i in axes]
+	rest = [s for i,s in enumerate(a.shape) if i not in axes]
 
-	a  = partial_flatten(a, axes=pre, pos=-1)
-	fa = a.reshape(-1, a.shape[-1])
+	# First reshape into a doubly-flattened 2d array [nelem,ndim]
+	fa = partial_flatten(a, axes, 0)
+	fa = fa.reshape(np.product(rest),-1)
 	# Can't use lexsort, as it has no tolerance. This
 	# is O(N^2) instead of O(NlogN)
 	id = 0
@@ -743,7 +768,7 @@ def label_unique(a, axes=(-1,), rtol=1e-5, atol=1e-8):
 		match = np.all(np.isclose(v,fa,rtol=rtol,atol=atol),-1)
 		ids[match] = id
 		id += 1
-	return ids.reshape(a.shape[:-1])
+	return ids.reshape(rest)
 
 def transpose_inds(inds, nrow, ncol):
 	"""Given a set of flattened indices into an array of shape (nrow,ncol),

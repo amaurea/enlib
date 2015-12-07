@@ -68,6 +68,13 @@ class Rangelist:
 			return rlist + self
 		else:
 			return Rangelist(np.concatenate([self.ranges, Rangelist(rlist,self.n).ranges],0), self.n)
+	def widen(self, n):
+		n = np.zeros(2,dtype=int)+n
+		if np.all(n == 0): return self
+		ranges = self.ranges.copy()
+		ranges[:,0] = np.maximum(ranges[:,0]-n[0], 0)
+		ranges[:,1] = np.minimum(ranges[:,1]+n[1], self.n)
+		return Rangelist(ranges, self.n, copy=False)
 
 class Multirange:
 	"""Multirange makes it easier to work with large numbers of rangelists.
@@ -141,6 +148,9 @@ class Multirange:
 			return Multirange([a+b for a,b in zip(self.data, rlist.data)])
 		else:
 			return Multirange([a+rlist for a in self.data])
+	def widen(self, n):
+		if np.all(np.asarray(n) == 0): return self
+		return Multirange([d.widen(n) for d in self.data], copy=False)
 
 def zeros(shape):
 	assert(len(shape)==2)
@@ -203,3 +213,8 @@ def multify(f):
 			return f(arr, multi, *args, **kwargs)
 	multif.__doc__ = "Multified version of function with docstring:\n" + f.__doc__
 	return multif
+
+def stack_ranges(multiranges, axis=0):
+	"""Return a multirange which is the result of stacking the input
+	multiranges along the selected (non-sample) axis."""
+	return Multirange(np.concatenate([m.data for m in multiranges],axis))

@@ -40,13 +40,13 @@ values in boresight to determine the effective duration of each sample.
 I therefore go with option #1 above, and explicitly do not provide a way
 of skipping samples here.
 """
-import numpy as np, enlib.slice, copy as cpy, h5py, bunch
+import numpy as np, enlib.slice, copy as cpy, h5py, bunch, os
 from enlib import rangelist, nmat, config, resample, utils
 
 class Scan:
 	"""This defines the minimal interface for a Scan. It will usually be
 	inherited from."""
-	def __init__(self, boresight=None, offsets=None, comps=None, tod=None, sys=None, cut=None, site=None, mjd0=0, noise=None, dets=None):
+	def __init__(self, boresight=None, offsets=None, comps=None, tod=None, sys=None, cut=None, site=None, mjd0=0, noise=None, dets=None, id=""):
 		# Boresight will always be unwound, i.e. it will have no 2pi jumps in it.
 		# Time is measured in seconds since start of scan, with mjd0 indicating the MJD of the scan start.
 		self.boresight = np.asfarray(boresight) # [nsamp,coords]
@@ -54,6 +54,7 @@ class Scan:
 		self.comps     = np.asfarray(comps)     # [ndet,comps]
 		self.cut       = rangelist.Multirange(cut) # Multirange[ndet,ranges]
 		self.noise     = noise
+		self.id        = id # Identifier of this scan, for printing purposes
 		# These are needed in order to interpret the coordinates
 		self.sys       = str(sys)               # str
 		self.site      = site
@@ -113,6 +114,7 @@ class H5Scan(Scan):
 			self.site = bunch.Bunch({k:hfile["site/"+k].value for k in hfile["site"]})
 			self.subdets = np.arange(self.ndet)
 			self.sampslices = []
+			self.id = os.path.basename(fname)
 	def get_samples(self):
 		"""Return the actual detector samples. Slow! Data is read from disk,
 		so store the result if you need to reuse it."""

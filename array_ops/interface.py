@@ -128,13 +128,12 @@ matmul_sym = wrap_mm_m(vec2mat=True, **get_funcs("matmul_multi_sym"))
 solve_multi = wrap_mm_m(**get_funcs("solve_multi"))
 solve_masked = wrap_mm_m(**get_funcs("solve_masked"))
 condition_number_multi = gen_wrap1(**get_funcs("condition_number_multi"))
-eigpow = wrap_m_m(**get_funcs("eigpow"))
 eigflip = wrap_m_m(**get_funcs("eigflip"))
 
-def measure_cov(d):
+def measure_cov(d, delay=0):
 	cov = np.empty([d.shape[0],d.shape[0]],dtype=d.real.dtype)
 	fun = get_dtype_fun(get_funcs("measure_cov"), d.dtype)
-	fun(d.T,cov.T)
+	fun(d.T,cov.T,delay)
 	return cov
 
 def ang2rect(a):
@@ -142,6 +141,24 @@ def ang2rect(a):
 	res = np.zeros([len(a),3],dtype=a.dtype)
 	core.ang2rect(a.T,res.T)
 	return res
+
+def eigpow(A, pow, axes=[-2,-1], lim=None, lim0=None, copy=True):
+	core = get_core(A.dtype)
+	if lim  is None: lim  = 1e-6
+	if lim0 is None: lim0 = np.finfo(A.dtype).tiny**0.2
+	if copy: A = A.copy()
+	with utils.flatview(A, axes=axes) as Af:
+		core.eigpow(Af.T, pow, lim, lim0)
+	return A
+
+def svdpow(A, pow, axes=[-2,-1], lim=None, lim0=None, copy=True):
+	core = get_core(A.dtype)
+	if lim  is None: lim  = 1e-6
+	if lim0 is None: lim0 = np.finfo(A.dtype).tiny**0.2
+	if copy: A = A.copy()
+	with utils.flatview(A, axes=axes) as Af:
+		core.svdpow(Af.T, pow, lim, lim0)
+	return A
 
 def matmul(A,B,axes=[-2,-1]):
 	# Massage input arrays. This should be factored out,
