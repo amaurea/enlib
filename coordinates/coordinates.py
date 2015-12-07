@@ -19,7 +19,7 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 	with the same shape as the input. The coordinates are in ra,dec-ordering."""
 	# Make ourselves case insensitive, and look up the corresponding objects
 	unit = getunit(unit)
-	coords = np.asarray(coords)
+	coords = np.array(coords)
 	if time is not None: time = np.asarray(time)
 	(from_sys,from_ref), (to_sys,to_ref) = getsys_full(from_sys,unit,time,site), getsys_full(to_sys,unit,time,site)
 	# Handle polarization by calling ourselves twice wtih slightly differing positions.

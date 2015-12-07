@@ -45,7 +45,7 @@ class PmatMap(PointingMatrix):
 		transform = pos2pix(scan,template,sys)
 
 		# Build pointing interpolator
-		errlim = np.array([1e-3,1e-3,utils.arcmin,utils.arcmin])*0.1*acc
+		errlim = np.array([1e-3,1e-3,utils.arcmin,utils.arcmin])*acc
 		ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, errlim, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
 		if not ok: print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, scan.entry.id)
 
@@ -508,7 +508,7 @@ def build_pos_interpol(scan, sys):
 	transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
 	# With acc=1, this seems to achieve 0.015" accuracy, which is 10 times worse than what one would
 	# naively expect.
-	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, np.array([0.01*utils.arcsec, 0.01*utils.arcsec ,utils.arcmin,utils.arcmin])*0.1*acc, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
+	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, np.array([0.01*utils.arcsec, 0.01*utils.arcsec ,utils.arcmin,utils.arcmin])*acc, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
 	return ipol, obox
 
 class PmatScan(PointingMatrix):
