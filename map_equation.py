@@ -3,9 +3,8 @@ At this level of abstraction, we still deal mostly with maps and cuts etc.
 directly."""
 import numpy as np, bunch, time, h5py, copy, logging, sys
 from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim
-from enlib import bench, todfilter, dmap, zipper
+from enlib import bench, todfilter, dmap, zipper, mpi
 from scipy import ndimage
-from mpi4py import MPI
 
 L = logging.getLogger(__name__)
 
@@ -145,7 +144,7 @@ class LinearSystem:
 
 # Abstract interface to the Map-making system.
 class LinearSystemMap(LinearSystem):
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin", imap=None, isrc=None, azmap=None, azfilter=None, subinds=None):
+	def __init__(self, scans, area, comm=mpi.COMM_WORLD, precon="bin", imap=None, isrc=None, azmap=None, azfilter=None, subinds=None):
 		L.info("Building preconditioner")
 		self.mapeq  = MapEquation(scans, area, comm=comm, imap=imap, isrc=isrc, azmap=azmap, azfilter=azfilter, subinds=subinds)
 		if precon == "bin":
@@ -227,7 +226,7 @@ class LinearSystemMap(LinearSystem):
 			dmap.write_map(prefix + "srcs." + ext, self.isrc.map)
 
 class MapEquation:
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None, isrc=None, azmap=None, azfilter=None, subinds=None):
+	def __init__(self, scans, area, comm=mpi.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None, isrc=None, azmap=None, azfilter=None, subinds=None):
 		# Adding ad-hoc simultaneous solving for an azimuth signal. This should really be done
 		# in a more ordely fashion, which mapmaking.py will do. But I'm adding it here first
 		# as a quick test. azmap should have the following members if present:
@@ -539,7 +538,7 @@ def makemask(div):
 		del condition
 	return masks
 
-def reduce(a, comm=MPI.COMM_WORLD):
+def reduce(a, comm=mpi.COMM_WORLD):
 	res = a.copy()
 	comm.Allreduce(a, res)
 	return res
@@ -902,7 +901,7 @@ def build_effective_noise_model(group, nsamp):
 # this module.
 
 class LinearSystemAz(LinearSystem):
-	def __init__(self, scans, area, ordering=None, comm=MPI.COMM_WORLD, cut_type=None):
+	def __init__(self, scans, area, ordering=None, comm=mpi.COMM_WORLD, cut_type=None):
 		L.info("Building preconditioner")
 		self.azeq  = AzEquation(scans, area, ordering=ordering, comm=comm, cut_type=cut_type)
 		self.precon = PrecondAz(self.azeq)
@@ -930,7 +929,7 @@ class LinearSystemAz(LinearSystem):
 		self.precon.write(prefix, ext=ext)
 
 class AzEquation:
-	def __init__(self, scans, area, ordering=None, comm=MPI.COMM_WORLD, cut_type=None):
+	def __init__(self, scans, area, ordering=None, comm=mpi.COMM_WORLD, cut_type=None):
 		data = []
 		njunk = 0
 		for si, scan in enumerate(scans):

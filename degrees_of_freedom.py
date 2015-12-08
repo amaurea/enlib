@@ -54,8 +54,8 @@ class DOF:
 		# Set up our communicator if necessary
 		comm_needed = any([info.distributed for info in self.info])
 		if comm_needed and comm is None:
-			from mpi4py import MPI
-			comm = MPI.COMM_WORLD
+			from enlib import mpi
+			comm = mpi.COMM_WORLD
 		self.comm = comm
 	def zip(self, *args):
 		"""x = DOF.zip(arr1, arr2, ...)."""

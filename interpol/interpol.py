@@ -2,7 +2,7 @@ import numpy as np, time
 from enlib import utils
 import fortran_32, fortran_64
 
-def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_obox=False, return_status=False, *args, **kwargs):
+def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_obox=False, return_status=False, verbose=False, nstart=None, *args, **kwargs):
 	"""Given a function func([nin,...]) => [nout,...] and
 	an interpolator class interpolator(box,[nout,...]),
 	(where the input array is regularly spaced in each direction),
@@ -13,7 +13,8 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_ob
 	box     = np.asfarray(box)
 	errlim  = np.asfarray(errlim)
 	idim    = box.shape[1]
-	n       = np.array([4]*idim) # starting mesh size
+	n       = [4]*idim if nstart is None else nstart
+	n       = np.array(n) # starting mesh size
 	x       = utils.grid(box, n)
 	obox    = [np.inf,-np.inf]
 
@@ -51,7 +52,8 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_ob
 				ytrue  = func(x)
 				if np.any(np.isnan(ytrue)):
 					raise ValueError("Function to interpolate returned invalid value")
-				err = np.std((ytrue-yinter).reshape(ytrue.shape[0],-1), 1)
+				err = np.max(np.abs((ytrue-yinter).reshape(ytrue.shape[0],-1)), 1)
+				if verbose: print x.shape, x.size, err/errlim
 				if any(err > errlim):
 					# Not good enough, so accept improvement
 					ip = interpolator(box, ytrue, *args, **kwargs)
@@ -88,6 +90,7 @@ class ip_linear(Interpolator):
 		self.ys  = lin_derivs_forward(y, self.npre)
 	def __call__(self, x):
 		flatx = x.reshape(x.shape[0],-1)
+		# Get the float cell index of each sample
 		px = ((flatx.T-self.box[0])/(self.box[1]-self.box[0])*np.array(self.ys.shape[-self.n:])).T
 		ix = (np.floor(px)).astype(int)
 		ix = np.maximum(0,np.minimum(np.array(self.ys.shape[-self.n:])[:,None]-1,ix))
@@ -99,22 +102,43 @@ class ip_linear(Interpolator):
 		return res.reshape(res.shape[:-1]+x.shape[1:])
 
 class ip_grad(Interpolator):
+	# General linear interpolation. This does the same as ndimage interpolation
+	# using order=1, but is about 3 times slower.
 	def __init__(self, box, y, *args, **kwargs):
 		y = np.asarray(y)
 		self.box = np.array(box)
 		self.n, self.npre = self.box.shape[1], y.ndim-self.box.shape[1]
-		self.dy  = grad_forward(y, self.npre)
-		self.y   = y[(slice(None,-1),)*y.nsim]
+		self.ys  = lin_derivs_forward(y, self.npre)
 	def __call__(self, x):
 		flatx = x.reshape(x.shape[0],-1)
+		# Get the float cell index of each sample
 		px = ((flatx.T-self.box[0])/(self.box[1]-self.box[0])*np.array(self.ys.shape[-self.n:])).T
 		ix = (np.floor(px)).astype(int)
 		ix = np.maximum(0,np.minimum(np.array(self.ys.shape[-self.n:])[:,None]-1,ix))
 		fx = px-ix
-		res = self.y[tuple(ix)]
-		for i in range(self.n):
-			res += self.dy[tuple(ix)]*fx[i]
+		res = np.zeros(self.ys.shape[self.n:self.n+self.npre]+fx.shape[1:2])
+		inds = np.concatenate([np.zeros(self.n,dtype=int)[None], np.eye(self.n,dtype=int)],0)
+		for I in inds:
+			res += self.ys[tuple(I)][(slice(None),)*self.npre+tuple(ix)]*np.prod(fx**(np.array(I)[:,None]),0)
 		return res.reshape(res.shape[:-1]+x.shape[1:])
+
+#class ip_grad(Interpolator):
+#	def __init__(self, box, y, *args, **kwargs):
+#		y = np.asarray(y)
+#		self.box = np.array(box)
+#		self.n, self.npre = self.box.shape[1], y.ndim-self.box.shape[1]
+#		self.dy  = grad_forward(y, self.npre)
+#		self.y   = y[(slice(None,-1),)*y.nsim]
+#	def __call__(self, x):
+#		flatx = x.reshape(x.shape[0],-1)
+#		px = ((flatx.T-self.box[0])/(self.box[1]-self.box[0])*np.array(self.ys.shape[-self.n:])).T
+#		ix = (np.floor(px)).astype(int)
+#		ix = np.maximum(0,np.minimum(np.array(self.ys.shape[-self.n:])[:,None]-1,ix))
+#		fx = px-ix
+#		res = self.y[tuple(ix)]
+#		for i in range(self.n):
+#			res += self.dy[tuple(ix)]*fx[i]
+#		return res.reshape(res.shape[:-1]+x.shape[1:])
 
 def lin_derivs_forward(y, npre=0):
 	"""Given an array y with npre leading dimensions and n following dimensions,

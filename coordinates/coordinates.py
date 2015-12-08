@@ -19,7 +19,7 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 	with the same shape as the input. The coordinates are in ra,dec-ordering."""
 	# Make ourselves case insensitive, and look up the corresponding objects
 	unit = getunit(unit)
-	coords = np.asarray(coords)
+	coords = np.array(coords)
 	if time is not None: time = np.asarray(time)
 	(from_sys,from_ref), (to_sys,to_ref) = getsys_full(from_sys,unit,time,site), getsys_full(to_sys,unit,time,site)
 	# Handle polarization by calling ourselves twice wtih slightly differing positions.
@@ -52,12 +52,12 @@ def transform(from_sys, to_sys, coords, unit="rad", time=None, site=None, pol=No
 	if from_sys != to_sys:
 		if from_sys == c.AltAz:
 			if unit != u.rad: coords = coords * unit.in_units(u.rad)
-			coords = hor2cel(coords, time, site)
+			coords = hor2cel(coords, time, site, copy=False)
 			if unit != u.rad: coords = coords / unit.in_units(u.rad)
 		coords = transform_astropy(nohor(from_sys), nohor(to_sys), coords, unit)
 		if to_sys == c.AltAz:
 			if unit != u.rad: coords = coords * unit.in_units(u.rad)
-			coords = cel2hor(coords, time, site)
+			coords = cel2hor(coords, time, site, copy=False)
 			if unit != u.rad: coords = coords / unit.in_units(u.rad)
 	if to_ref is not None: coords = recenter(coords, to_ref, unit)
 	return coords
@@ -73,8 +73,8 @@ def transform_astropy(from_sys, to_sys, coords, unit):
 		getattr(getattr(coords, names[0]),unit.name),
 		getattr(getattr(coords, names[1]),unit.name)])
 
-def hor2cel(coord, time, site):
-	coord  = np.asarray(coord)
+def hor2cel(coord, time, site, copy=True):
+	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]
 	info   = iers.lookup(trepr)
 	as2rad = np.pi/180/60/60
@@ -83,12 +83,12 @@ def hor2cel(coord, time, site):
 		299792.458/site.freq, site.lapse)
 	am = slalib.sla_mappa(2000.0, trepr)
 	# This involves a transpose operation, which is not optimal
-	res = pyfsla.aomulti(time, coord, ao, am)
-	return res
+	pyfsla.aomulti(time, coord.T, ao, am)
+	return coord
 
-def cel2hor(coord, time, site):
+def cel2hor(coord, time, site, copy=True):
 	# This is very slow for objects near the horizon!
-	coord  = np.asarray(coord)
+	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]
 	info   = iers.lookup(trepr)
 	as2rad = np.pi/180/60/60
@@ -97,7 +97,8 @@ def cel2hor(coord, time, site):
 		299792.458/site.freq, site.lapse)
 	am = slalib.sla_mappa(2000.0, trepr)
 	# This involves a transpose operation, which is not optimal
-	return pyfsla.oamulti(time, coord, ao, am)
+	pyfsla.oamulti(time, coord.T, ao, am)
+	return coord
 
 def rotmatrix(ang, axis, unit):
 	unit = getunit(unit)

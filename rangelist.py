@@ -3,7 +3,7 @@ providing both a mask-like (numpy bool array) and list of from:to interface.
 It also provides a convenience class for handling multiple of these range lists."""
 import numpy as np
 from enlib.slice import expand_slice, split_slice
-from enlib.utils import mask2range, cumsum, range_union
+from enlib.utils import mask2range, cumsum, range_union, range_normalize
 
 class Rangelist:
 	def __init__(self, ranges, n=None, copy=True):
@@ -18,7 +18,9 @@ class Rangelist:
 				self.ranges = mask2range(ranges)
 			else:
 				self.n      = int(n)
-				self.ranges = ranges
+				# Since this class is supposed to be a sparese representation of a mask,
+				# only non-overlapping non-empty ranges make sense.
+				self.ranges = range_union(range_normalize(ranges))
 	def __getitem__(self, sel):
 		"""This function operates on the rangelist as if it were a dense numpy array.
 		It returns either a sliced Rangelist or a bool."""
@@ -43,6 +45,9 @@ class Rangelist:
 	@staticmethod
 	def empty(nsamp):
 		return Rangelist(np.zeros([0,2],dtype=int),n=nsamp,copy=False)
+	@staticmethod
+	def ones(nsamp):
+		return Rangelist(np.array([[0,nsamp]],dtype=int),n=nsamp,copy=False)
 	def sum(self): return np.sum(self.ranges[:,1]-self.ranges[:,0])
 	def __len__(self): return self.n
 	def __repr__(self): return "Rangelist("+str(self.ranges)+",n="+repr(self.n)+")"
@@ -62,7 +67,14 @@ class Rangelist:
 		if isinstance(rlist, Multirange):
 			return rlist + self
 		else:
-			return Rangelist(range_union(np.concatenate([self.ranges, Rangelist(rlist,self.n).ranges],0)), self.n)
+			return Rangelist(np.concatenate([self.ranges, Rangelist(rlist,self.n).ranges],0), self.n)
+	def widen(self, n):
+		n = np.zeros(2,dtype=int)+n
+		if np.all(n == 0): return self
+		ranges = self.ranges.copy()
+		ranges[:,0] = np.maximum(ranges[:,0]-n[0], 0)
+		ranges[:,1] = np.minimum(ranges[:,1]+n[1], self.n)
+		return Rangelist(ranges, self.n, copy=False)
 
 class Multirange:
 	"""Multirange makes it easier to work with large numbers of rangelists.
@@ -97,12 +109,19 @@ class Multirange:
 	@staticmethod
 	def empty(ndet, nsamp):
 		return Multirange([Rangelist.empty(nsamp) for det in xrange(ndet)])
+	@staticmethod
+	def ones(ndet,nsamp):
+		return Multirange([Rangelist.ones(nsamp) for det in xrange(ndet)])
 	def sum(self, flat=True):
 		getsum = np.vectorize(lambda x: x.sum(), 'i')
 		res = getsum(self.data)
 		return np.sum(res) if flat else res
 	@property
-	def shape(self): return self.data.shape + (self.data.reshape(-1)[0].n,)
+	def shape(self):
+		if self.data.size > 0:
+			return self.data.shape + (self.data.reshape(-1)[0].n,)
+		else:
+			return self.data.shape + (0,)
 	@property
 	def size(self): return np.product(self.shape)
 	def copy(self): return Multirange(self.data, copy=True)
@@ -129,6 +148,9 @@ class Multirange:
 			return Multirange([a+b for a,b in zip(self.data, rlist.data)])
 		else:
 			return Multirange([a+rlist for a in self.data])
+	def widen(self, n):
+		if np.all(np.asarray(n) == 0): return self
+		return Multirange([d.widen(n) for d in self.data], copy=False)
 
 def zeros(shape):
 	assert(len(shape)==2)
@@ -191,3 +213,8 @@ def multify(f):
 			return f(arr, multi, *args, **kwargs)
 	multif.__doc__ = "Multified version of function with docstring:\n" + f.__doc__
 	return multif
+
+def stack_ranges(multiranges, axis=0):
+	"""Return a multirange which is the result of stacking the input
+	multiranges along the selected (non-sample) axis."""
+	return Multirange(np.concatenate([m.data for m in multiranges],axis))

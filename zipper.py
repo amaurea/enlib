@@ -29,8 +29,8 @@ class SingleZipper:
 
 def getcomm(comm, shared):
 	if comm is not None or shared: return comm
-	from mpi4py import MPI
-	return MPI.COMM_WORLD
+	from enlib import mpi
+	return mpi.COMM_WORLD
 
 class ArrayZipper(SingleZipper):
 	"""Zipper for numpy arrays and derived classes."""

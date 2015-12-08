@@ -3,8 +3,11 @@
 *.o
 *.f90
 *.a
+*.swp
+*.swo
 iers/finals.all
 iers/iers.c
 iers/iers.py
 iers/iers2struct
 iers/iers_wrap.c
+pmat/test.F90
