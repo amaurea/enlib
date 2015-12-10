@@ -13,7 +13,7 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_ob
 	box     = np.asfarray(box)
 	errlim  = np.asfarray(errlim)
 	idim    = box.shape[1]
-	n       = [4]*idim if nstart is None else nstart
+	n       = [3]*idim if nstart is None else nstart
 	n       = np.array(n) # starting mesh size
 	x       = utils.grid(box, n)
 	obox    = [np.inf,-np.inf]
@@ -81,17 +81,16 @@ class ip_ndimage(Interpolator):
 		return utils.interpol(self.y, ix, *self.args, **self.kwargs)
 
 class ip_linear(Interpolator):
-	# General linear interpolation. This does the same as ndimage interpolation
+	# General bilinear interpolation. This does the same as ndimage interpolation
 	# using order=1, but is about 3 times slower.
 	def __init__(self, box, y, *args, **kwargs):
-		y = np.asarray(y)
-		self.box = np.array(box)
+		Interpolator.__init__(self, box, y, *args, **kwargs)
 		self.n, self.npre = self.box.shape[1], y.ndim-self.box.shape[1]
-		self.ys  = lin_derivs_forward(y, self.npre)
+		self.ys = lin_derivs_forward(y, self.npre)
 	def __call__(self, x):
 		flatx = x.reshape(x.shape[0],-1)
 		# Get the float cell index of each sample
-		px = ((flatx.T-self.box[0])/(self.box[1]-self.box[0])*np.array(self.ys.shape[-self.n:])).T
+		px = ((flatx.T-self.box[0])/(self.box[1]-self.box[0])*(np.array(self.ys.shape[-self.n:]))).T
 		ix = (np.floor(px)).astype(int)
 		ix = np.maximum(0,np.minimum(np.array(self.ys.shape[-self.n:])[:,None]-1,ix))
 		fx = px-ix
@@ -102,16 +101,13 @@ class ip_linear(Interpolator):
 		return res.reshape(res.shape[:-1]+x.shape[1:])
 
 class ip_grad(Interpolator):
-	# General linear interpolation. This does the same as ndimage interpolation
-	# using order=1, but is about 3 times slower.
+	"""Gradient interpolation. Faster but less accurate than bilinear"""
 	def __init__(self, box, y, *args, **kwargs):
-		y = np.asarray(y)
-		self.box = np.array(box)
+		Interpolator.__init__(self, box, y, *args, **kwargs)
 		self.n, self.npre = self.box.shape[1], y.ndim-self.box.shape[1]
 		self.ys  = lin_derivs_forward(y, self.npre)
 	def __call__(self, x):
 		flatx = x.reshape(x.shape[0],-1)
-		# Get the float cell index of each sample
 		px = ((flatx.T-self.box[0])/(self.box[1]-self.box[0])*np.array(self.ys.shape[-self.n:])).T
 		ix = (np.floor(px)).astype(int)
 		ix = np.maximum(0,np.minimum(np.array(self.ys.shape[-self.n:])[:,None]-1,ix))
@@ -143,8 +139,9 @@ class ip_grad(Interpolator):
 def lin_derivs_forward(y, npre=0):
 	"""Given an array y with npre leading dimensions and n following dimensions,
 	compute all combinations of the 0th and 1st derivatives along the n last
-	dimensions, returning an array of shape (2,)*n+(:,)*npre+(:-1,)*n. Derivatives
-	are computed using forward difference."""
+	dimensions, returning an array of shape (2,)*n+(:,)*npre+(:-1,)*n. That is,
+	it is one shorter in each direction along which the derivative is taken.
+	Derivatives are computed using forward difference."""
 	y        = np.asfarray(y)
 	nin      = y.ndim-npre
 	ys = np.zeros((2,)*nin+y.shape)

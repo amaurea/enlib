@@ -822,3 +822,8 @@ def split_outside(a, sep, start, end):
 			res[-1] += toks[0]
 			res += toks[1:]
 	return res
+
+def minmax(a, axis=None):
+	"""Shortcut for np.array([np.min(a),np.max(a)]), since I do this
+	a lot."""
+	return np.array([np.min(a, axis=axis),np.max(a, axis=axis)])
