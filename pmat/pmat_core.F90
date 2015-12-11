@@ -50,470 +50,6 @@ contains
 	! save on memory, of course. Scaling is quite good. We get a bit more than
 	! half the max possible speedup when going from 1 to 16 cores. We are slightly
 	! faster than ninkasi here, but not much: 2.25 s vs. 2.84 s (26% faster)
-	subroutine pmat_nearest( &
-			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
-			tmul, mmul,                &! Consts to multiply tod/map by
-			tod, map,                  &! Main inputs/outpus
-			bore, det_pos, det_comps,  &! Input pointing
-			comps,                     &! Ignored. Supporting arbitrary component ordering was too expensive
-			rbox, nbox, yvals, pbox    &! Coordinate transformation
-		)
-		use omp_lib
-		implicit none
-		! Parameters
-		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), comps(:)
-		real(_),    intent(in)    :: bore(:,:), yvals(:,:)
-		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:), tmul, mmul
-		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
-		! Work
-		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic
-		integer(4) :: steps(size(rbox,1)), psize(2)
-		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
-		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:), ys(:,:,:)
-		real(_)    :: xrel(3), point(4), phase(3)
-		integer(4) :: xind(3), ig, ig2, pix(2), ix, iy
-
-		nsamp   = size(tod, 1)
-		ndet    = size(tod, 2)
-		ncomp   = size(map, 3)
-		psize   = pbox(:,2)-pbox(:,1)
-		nproc   = omp_get_max_threads()
-		! In C order, yvals has pixel axes t,ra,dec, so nbox = [nt,nra,ndec]
-		! Index mapping is therefore given by [nra*ndec,ndec,1]
-		steps(size(steps)) = 1
-		do ic = size(steps)-1, 1, -1
-			steps(ic) = steps(ic+1)*nbox(ic+1)
-		end do
-		! inv_dx uses (nbox-1) because we use an endpoint-inclusive
-		! grid here: Last data point is exactly at rbox(:,2) --
-		! it isn't a cell that just ends there.
-		x0 = rbox(:,1); inv_dx = (nbox-1)/(rbox(:,2)-rbox(:,1))
-
-		! Precompute derivatives of yvals, called ys. This will be very
-		! fast, as we're only talking about at most 1e6 samples or so.
-		allocate(ys(size(yvals,1),3,size(yvals,2)))
-		!$omp parallel do private(ig,ic,ig2)
-		do ig = 1, size(yvals,2)
-			do ic = 1, 3
-				! This is only valid up to nbox-1 of the interpolation grid, but
-				! that's the only part we will use when we use these derivatives
-				ig2 = min(size(yvals,2),ig+steps(ic))
-				ys(:,ic,ig) = yvals(:,ig2)-yvals(:,ig)
-			end do
-		end do
-
-		if(dir > 0) then
-			! Forward transform - no worry of clobbering, so we can use a
-			! single work map
-			allocate(wmap3(3,psize(2),psize(1)))
-			!$omp parallel do collapse(2)
-			do iy = 1, size(wmap3,3)
-				do ix = 1, size(wmap3,2)
-					wmap3(1:ncomp,ix,iy) = map(ix+pbox(2,1),iy+pbox(1,1),1:ncomp)
-					wmap3(ncomp+1:3,ix,iy) = 0
-				end do
-			end do
-			if(mmul .ne. 1) then
-				!$omp parallel workshare
-				wmap3 = wmap3 * mmul
-				!$omp end parallel workshare
-			end if
-			if(tmul .eq. 0) then
-				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
-				do di = 1, ndet
-					do si = 1, nsamp
-						! Compute interpolated pointing. This used to be done via a function
-						! call, but that proved too costly.
-						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
-						xind = floor(xrel)
-						xrel = xrel - xind
-						ig   = sum(xind*steps)+1
-						! Pointing is done via gradient interpolation, which is one
-						! step simpler than multilinear interpolation because it
-						! ignores cross terms. This means that pointing will be
-						! discontinuous at some corners. In my tests, bilinear interpolation
-						! has about 100 times better accuracy for the same mesh.
-						!
-						! For practical mesh sizes, gradient interpolation can't go
-						! beyond about 1" accuracy.
-						!
-						! Costs of some approaches (assuming we already have xrel and ig)
-						!                      mul add
-						! 1. Nearest neighbor    0  0  equivalent to precomputing all pixels
-						! 2. Gradient3          12 12  discontinuous
-						! 2. Gradient2           8  8
-						! 3. Implicit grad3     12 24  same as above, but more general storage
-						! 3. Implicit grad2      8 16
-						! 4. Bigradient3        12 15  continuous
-						! 4. Bigradient2         8 10
-						! 5. Impl. Bigrad3      12 27  as above, more general storage
-						! 5. Impl. Bigrad2       9 18
-						! 6. Bilinear3          56 28  differentiable in cell
-						! 6. Bilinear2          24 12
-						! 7. Linear 1d          -3 -8  may be infeasible. Per-detector
-						! Elevation support is quite costly for the more advanced methods.
-						! But without it, we need ~1000 times more interpolation points,
-						! and can't handle elevation jitter. And a typical tod has elevation
-						! variation of +/- 1". So If we are trying to get better accuracy than
-						! this, we must support elevation.
-						point = yvals(:,ig) + xrel(1)*ys(:,1,ig) + xrel(2)*ys(:,2,ig) + xrel(3)*ys(:,3,ig)
-						!if(di==1 .and. si==1) write(*,*) point
-						!if(di==1 .and. si==1) write(*,*) ys(:,2,ig)
-						!if(di==1 .and. si==1) write(*,*) ys(1,:,ig)
-						pix = nint(point(1:2))+1 - pbox(:,1)
-						! Bounds checking. Costs 2% performance. Worth it
-						pix(1) = min(psize(1),max(1,pix(1)))
-						pix(2) = min(psize(2),max(1,pix(2)))
-						! Compute signal polarization projection parameters.
-						! Checking which components to compute takes 17% longer than just computing
-						! all of them, which takes about the same time as computing one.
-						phase(1) = det_comps(1,di)
-						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
-						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
-						! If tests are not free, despite branch prediction. Adding a test
-						! for dir here takes the time from 0.85 to 1.15, a 35% increase!
-						tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
-					end do
-				end do
-			else
-				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
-				do di = 1, ndet
-					do si = 1, nsamp
-						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
-						xind = floor(xrel)
-						xrel = xrel - xind
-						ig   = sum(xind*steps)+1
-						point = yvals(:,ig) + xrel(1)*ys(:,1,ig) + xrel(2)*ys(:,2,ig) + xrel(3)*ys(:,3,ig)
-						pix = nint(point(1:2))+1 - pbox(:,1)
-						pix(1) = min(psize(1),max(1,pix(1)))
-						pix(2) = min(psize(2),max(1,pix(2)))
-						phase(1) = det_comps(1,di)
-						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
-						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
-						tod(si,di) = tod(si,di) + sum(wmap3(:,pix(2),pix(1))*phase)
-					end do
-				end do
-			end if
-			deallocate(wmap3)
-		else
-			! Backwards transform. Here there is a risk of multiple
-			! threads clobbering each other, so we either need separate
-			! work spaces or critical sections.
-			allocate(wmap4(3,psize(2),psize(1),nproc))
-			!$omp parallel private(di, si, xrel, xind, ig, point, pix, phase,id)
-			id = omp_get_thread_num()+1
-			!$omp workshare
-			wmap4 = 0
-			!$omp end workshare
-			!$omp do
-			do di = 1, ndet
-				do si = 1, nsamp
-					xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
-					xind = floor(xrel)
-					xrel = xrel - xind
-					ig   = sum(xind*steps)+1
-					point = yvals(:,ig) + xrel(1)*ys(:,1,ig) + xrel(2)*ys(:,2,ig) + xrel(3)*ys(:,3,ig)
-					pix = nint(point(1:2))+1 - pbox(:,1)
-					pix(1) = min(psize(1),max(1,pix(1)))
-					pix(2) = min(psize(2),max(1,pix(2)))
-					phase(1) = det_comps(1,di)
-					phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
-					phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
-					wmap4(:,pix(2),pix(1),id) = wmap4(:,pix(2),pix(1),id) + tod(si,di)*phase
-				end do
-			end do
-			!$omp end parallel
-			! Copy out result. Applying mmul and tmul here costs 1%
-			!$omp parallel do collapse(1) private(iy,ix,ic)
-			do iy = 1, size(wmap4,3)
-				do ix = 1, size(wmap4,2)
-					do ic = 1, ncomp
-						map(ix+pbox(2,1),iy+pbox(1,1),ic) = map(ix+pbox(2,1),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
-					end do
-				end do
-			end do
-			deallocate(wmap4)
-		end if
-	end subroutine
-
-	subroutine pmat_nearest_old( &
-			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
-			tmul, mmul,                &! Consts to multiply tod/map by
-			tod, map,                  &! Main inputs/outpus
-			bore, det_pos, det_comps,  &! Input pointing
-			comps,                     &! Ignored. Supporting arbitrary component ordering was too expensive
-			rbox, nbox, ys, pbox       &! Coordinate transformation
-		)
-		use omp_lib
-		implicit none
-		! Parameters
-		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), comps(:)
-		real(_),    intent(in)    :: bore(:,:), ys(:,:,:)
-		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:), tmul, mmul
-		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
-		! Work
-		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic
-		integer(4) :: steps(size(rbox,1)), psize(2)
-		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
-		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
-		real(_)    :: xrel(3), point(4), phase(3)
-		integer(4) :: xind(3), ig, ig2, pix(2), ix, iy
-
-		nsamp   = size(tod, 1)
-		ndet    = size(tod, 2)
-		ncomp   = size(map, 3)
-		psize   = pbox(:,2)-pbox(:,1)
-		nproc   = omp_get_max_threads()
-		! In C order, yvals has pixel axes t,ra,dec, so nbox = [nt,nra,ndec]
-		! Index mapping is therefore given by [nra*ndec,ndec,1]
-		steps(size(steps)) = 1
-		do ic = size(steps)-1, 1, -1
-			steps(ic) = steps(ic+1)*nbox(ic+1)
-		end do
-		! inv_dx uses (nbox-1) because we use an endpoint-inclusive
-		! grid here: Last data point is exactly at rbox(:,2) --
-		! it isn't a cell that just ends there.
-		x0 = rbox(:,1); inv_dx = (nbox)/(rbox(:,2)-rbox(:,1))
-
-		! Precompute derivatives of yvals, called ys. This will be very
-		! fast, as we're only talking about at most 1e6 samples or so.
-		if(dir > 0) then
-			! Forward transform - no worry of clobbering, so we can use a
-			! single work map
-			allocate(wmap3(3,psize(2),psize(1)))
-			!$omp parallel do collapse(2)
-			do iy = 1, size(wmap3,3)
-				do ix = 1, size(wmap3,2)
-					wmap3(1:ncomp,ix,iy) = map(ix+pbox(2,1),iy+pbox(1,1),1:ncomp)
-					wmap3(ncomp+1:3,ix,iy) = 0
-				end do
-			end do
-			if(mmul .ne. 1) then
-				!$omp parallel workshare
-				wmap3 = wmap3 * mmul
-				!$omp end parallel workshare
-			end if
-			if(tmul .eq. 0) then
-				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
-				do di = 1, ndet
-					do si = 1, nsamp
-						! Compute interpolated pointing. This used to be done via a function
-						! call, but that proved too costly.
-						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
-						xind = floor(xrel)
-						xrel = xrel - xind
-						ig   = sum(xind*steps)+1
-						! Pointing is done via gradient interpolation, which is one
-						! step simpler than multilinear interpolation because it
-						! ignores cross terms. This means that pointing will be
-						! discontinuous at some corners. In my tests, bilinear interpolation
-						! has about 100 times better accuracy for the same mesh.
-						!
-						! For practical mesh sizes, gradient interpolation can't go
-						! beyond about 1" accuracy.
-						!
-						! Costs of some approaches (assuming we already have xrel and ig)
-						!                      mul add
-						! 1. Nearest neighbor    0  0  equivalent to precomputing all pixels
-						! 2. Gradient3          12 12  discontinuous
-						! 2. Gradient2           8  8
-						! 3. Implicit grad3     12 24  same as above, but more general storage
-						! 3. Implicit grad2      8 16
-						! 4. Bigradient3        12 15  continuous
-						! 4. Bigradient2         8 10
-						! 5. Impl. Bigrad3      12 27  as above, more general storage
-						! 5. Impl. Bigrad2       9 18
-						! 6. Bilinear3          56 28  differentiable in cell
-						! 6. Bilinear2          24 12
-						! 7. Linear 1d          -3 -8  may be infeasible. Per-detector
-						! Elevation support is quite costly for the more advanced methods.
-						! But without it, we need ~1000 times more interpolation points,
-						! and can't handle elevation jitter. And a typical tod has elevation
-						! variation of +/- 1". So If we are trying to get better accuracy than
-						! this, we must support elevation.
-						point = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
-						!if(di==1 .and. si==1) write(*,*) point
-						!if(di==1 .and. si==1) write(*,*) ys(:,2,ig)
-						!if(di==1 .and. si==1) write(*,*) ys(1,:,ig)
-						pix = nint(point(1:2))+1 - pbox(:,1)
-						! Bounds checking. Costs 2% performance. Worth it
-						pix(1) = min(psize(1),max(1,pix(1)))
-						pix(2) = min(psize(2),max(1,pix(2)))
-						! Compute signal polarization projection parameters.
-						! Checking which components to compute takes 17% longer than just computing
-						! all of them, which takes about the same time as computing one.
-						phase(1) = det_comps(1,di)
-						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
-						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
-						! If tests are not free, despite branch prediction. Adding a test
-						! for dir here takes the time from 0.85 to 1.15, a 35% increase!
-						tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
-					end do
-				end do
-			else
-				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
-				do di = 1, ndet
-					do si = 1, nsamp
-						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
-						xind = floor(xrel)
-						xrel = xrel - xind
-						ig   = sum(xind*steps)+1
-						point = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
-						pix = nint(point(1:2))+1 - pbox(:,1)
-						pix(1) = min(psize(1),max(1,pix(1)))
-						pix(2) = min(psize(2),max(1,pix(2)))
-						phase(1) = det_comps(1,di)
-						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
-						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
-						tod(si,di) = tod(si,di) + sum(wmap3(:,pix(2),pix(1))*phase)
-					end do
-				end do
-			end if
-			deallocate(wmap3)
-		else
-			! Backwards transform. Here there is a risk of multiple
-			! threads clobbering each other, so we either need separate
-			! work spaces or critical sections.
-			allocate(wmap4(3,psize(2),psize(1),nproc))
-			!$omp parallel private(di, si, xrel, xind, ig, point, pix, phase,id)
-			id = omp_get_thread_num()+1
-			!$omp workshare
-			wmap4 = 0
-			!$omp end workshare
-			!$omp do
-			do di = 1, ndet
-				do si = 1, nsamp
-					xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
-					xind = floor(xrel)
-					xrel = xrel - xind
-					ig   = sum(xind*steps)+1
-					point = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
-					pix = nint(point(1:2))+1 - pbox(:,1)
-					pix(1) = min(psize(1),max(1,pix(1)))
-					pix(2) = min(psize(2),max(1,pix(2)))
-					phase(1) = det_comps(1,di)
-					phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
-					phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
-					wmap4(:,pix(2),pix(1),id) = wmap4(:,pix(2),pix(1),id) + tod(si,di)*phase
-				end do
-			end do
-			!$omp end parallel
-			! Copy out result. Applying mmul and tmul here costs 1%
-			!$omp parallel do collapse(1) private(iy,ix,ic)
-			do iy = 1, size(wmap4,3)
-				do ix = 1, size(wmap4,2)
-					do ic = 1, ncomp
-						map(ix+pbox(2,1),iy+pbox(1,1),ic) = map(ix+pbox(2,1),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
-					end do
-				end do
-			end do
-			deallocate(wmap4)
-		end if
-	end subroutine
-
-	subroutine pmat_nearest_implicit( &
-			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
-			tmul, mmul,                &! Consts to multiply tod/map by
-			tod, map,                  &! Main inputs/outpus
-			bore, det_pos, det_comps,  &! Input pointing
-			comps,                     &! Ignored. Supporting arbitrary component ordering was too expensive
-			rbox, nbox, yvals, pbox    &! Coordinate transformation
-		)
-		use omp_lib
-		implicit none
-		! Parameters
-		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), comps(:)
-		real(_),    intent(in)    :: bore(:,:), yvals(:,:)
-		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:), tmul, mmul
-		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
-		! Work
-		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic
-		integer(4) :: steps(size(rbox,1)), psize(2)
-		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
-		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
-		real(_)    :: xrel(3), point(4), phase(3)
-		integer(4) :: xind(3), ig, pix(2), ix, iy
-
-		nsamp   = size(tod, 1)
-		ndet    = size(tod, 2)
-		ncomp   = size(map, 3)
-		psize   = pbox(:,2)-pbox(:,1)
-		nproc   = omp_get_max_threads()
-		! In C order, yvals has pixel axes t,ra,dec, so nbox = [nt,nra,ndec]
-		! Index mapping is therefore given by [nra*ndec,ndec,1]
-		steps(size(steps)) = 1
-		do ic = size(steps)-1, 1, -1
-			steps(ic) = steps(ic+1)*nbox(ic+1)
-		end do
-		x0 = rbox(:,1); inv_dx = (nbox-1)/(rbox(:,2)-rbox(:,1))
-
-		if(dir > 0) then
-			! Forward transform - no worry of clobbering, so we can use a
-			! single work map
-			allocate(wmap3(3,psize(2),psize(1)))
-			!$omp parallel do collapse(2)
-			do iy = 1, size(wmap3,3)
-				do ix = 1, size(wmap3,2)
-					wmap3(1:ncomp,ix,iy) = map(ix+pbox(2,1),iy+pbox(1,1),1:ncomp)
-					wmap3(ncomp+1:3,ix,iy) = 0
-				end do
-			end do
-			if(mmul .ne. 1) then
-				!$omp parallel workshare
-				wmap3 = wmap3 * mmul
-				!$omp end parallel workshare
-			end if
-			if(tmul .eq. 0) then
-				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
-				do di = 1, ndet
-					do si = 1, nsamp
-						! Compute interpolated pointing. This used to be done via a function
-						! call, but that proved too costly.
-						!write(*,*) "bore", bore(:,si)
-						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
-						!write(*,*) "dbore", bore(:,si)-x0
-						!write(*,*) "xrel0", xrel
-						!write(*,*) "xrelmax", (rbox(:,2)-x0)*inv_dx
-						xind = floor(xrel)
-						xrel = xrel - xind
-						!write(*,*) "xind", xind, nbox
-						!write(*,*) "steps", steps
-						!write(*,*) "next", sum((xind+1)*steps)+1
-						ig   = sum(xind*steps)+1
-						!point = &
-						!	+ ys(:,ig)*(1-xrel(1))+ys(:,ig+steps(1))*xrel(1) &
-						!	+ ys(:,ig)*(1-xrel(2))+ys(:,ig+steps(2))*xrel(2) &
-						!	+ ys(:,ig)*(1-xrel(3))+ys(:,ig+steps(3))*xrel(3)
-						point = yvals(:,ig) + &
-							(yvals(:,ig+steps(1))-yvals(:,ig))*xrel(1) + &
-							(yvals(:,ig+steps(2))-yvals(:,ig))*xrel(2) + &
-							(yvals(:,ig+steps(3))-yvals(:,ig))*xrel(3)
-						!if(di==1 .and. si==1) write(*,*) point
-						!if(di==1 .and. si==1) write(*,*) ys(:,ig+steps(3))-ys(:,ig)
-						pix = nint(point(1:2))+1 - pbox(:,1)
-						! Bounds checking. Costs 2% performance. Worth it
-						pix(1) = min(psize(1),max(1,pix(1)))
-						pix(2) = min(psize(2),max(1,pix(2)))
-						! Compute signal polarization projection parameters.
-						! Checking which components to compute takes 17% longer than just computing
-						! all of them, which takes about the same time as computing one.
-						phase(1) = det_comps(1,di)
-						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
-						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
-						! If tests are not free, despite branch prediction. Adding a test
-						! for dir here takes the time from 0.85 to 1.15, a 35% increase!
-						tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
-					end do
-				end do
-			else
-				stop
-			end if
-			deallocate(wmap3)
-		else
-			stop
-		end if
-	end subroutine
-
 	subroutine pmat_nearest_bilinear( &
 			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
 			tmul, mmul,                &! Consts to multiply tod/map by
@@ -596,7 +132,11 @@ contains
 						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
 						! If tests are not free, despite branch prediction. Adding a test
 						! for dir here takes the time from 0.85 to 1.15, a 35% increase!
-						tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
+						if(tmul .eq. 0) then
+							tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
+						else
+							tod(si,di) = tod(si,di)*tmul + sum(wmap3(:,pix(2),pix(1))*phase)
+						end if
 					end do
 				end do
 			else
@@ -2024,6 +1564,468 @@ contains
 					end do
 				end do
 			end do
+		end if
+	end subroutine
+
+
+
+
+
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!  Old stuff - will be cleaned up eventually !!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+	subroutine pmat_nearest_grad_precomp( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			bore, det_pos, det_comps,  &! Input pointing
+			comps,                     &! Ignored. Supporting arbitrary component ordering was too expensive
+			rbox, nbox, ys, pbox       &! Coordinate transformation
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), comps(:)
+		real(_),    intent(in)    :: bore(:,:), ys(:,:,:)
+		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:), tmul, mmul
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		! Work
+		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic
+		integer(4) :: steps(size(rbox,1)), psize(2)
+		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
+		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
+		real(_)    :: xrel(3), point(4), phase(3)
+		integer(4) :: xind(3), ig, ig2, pix(2), ix, iy
+
+		nsamp   = size(tod, 1)
+		ndet    = size(tod, 2)
+		ncomp   = size(map, 3)
+		psize   = pbox(:,2)-pbox(:,1)
+		nproc   = omp_get_max_threads()
+		! In C order, yvals has pixel axes t,ra,dec, so nbox = [nt,nra,ndec]
+		! Index mapping is therefore given by [nra*ndec,ndec,1]
+		steps(size(steps)) = 1
+		do ic = size(steps)-1, 1, -1
+			steps(ic) = steps(ic+1)*nbox(ic+1)
+		end do
+		! inv_dx uses (nbox-1) because we use an endpoint-inclusive
+		! grid here: Last data point is exactly at rbox(:,2) --
+		! it isn't a cell that just ends there.
+		x0 = rbox(:,1); inv_dx = (nbox)/(rbox(:,2)-rbox(:,1))
+
+		! Precompute derivatives of yvals, called ys. This will be very
+		! fast, as we're only talking about at most 1e6 samples or so.
+		if(dir > 0) then
+			! Forward transform - no worry of clobbering, so we can use a
+			! single work map
+			allocate(wmap3(3,psize(2),psize(1)))
+			!$omp parallel do collapse(2)
+			do iy = 1, size(wmap3,3)
+				do ix = 1, size(wmap3,2)
+					wmap3(1:ncomp,ix,iy) = map(ix+pbox(2,1),iy+pbox(1,1),1:ncomp)
+					wmap3(ncomp+1:3,ix,iy) = 0
+				end do
+			end do
+			if(mmul .ne. 1) then
+				!$omp parallel workshare
+				wmap3 = wmap3 * mmul
+				!$omp end parallel workshare
+			end if
+			if(tmul .eq. 0) then
+				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						! Compute interpolated pointing. This used to be done via a function
+						! call, but that proved too costly.
+						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+						xind = floor(xrel)
+						xrel = xrel - xind
+						ig   = sum(xind*steps)+1
+						! Pointing is done via gradient interpolation, which is one
+						! step simpler than multilinear interpolation because it
+						! ignores cross terms. This means that pointing will be
+						! discontinuous at some corners. In my tests, bilinear interpolation
+						! has about 100 times better accuracy for the same mesh.
+						!
+						! For practical mesh sizes, gradient interpolation can't go
+						! beyond about 1" accuracy.
+						!
+						! Costs of some approaches (assuming we already have xrel and ig)
+						!                      mul add
+						! 1. Nearest neighbor    0  0  equivalent to precomputing all pixels
+						! 2. Gradient3          12 12  discontinuous
+						! 2. Gradient2           8  8
+						! 3. Implicit grad3     12 24  same as above, but more general storage
+						! 3. Implicit grad2      8 16
+						! 4. Bigradient3        12 15  continuous
+						! 4. Bigradient2         8 10
+						! 5. Impl. Bigrad3      12 27  as above, more general storage
+						! 5. Impl. Bigrad2       9 18
+						! 6. Bilinear3          56 28  differentiable in cell
+						! 6. Bilinear2          24 12
+						! 7. Linear 1d          -3 -8  may be infeasible. Per-detector
+						! Elevation support is quite costly for the more advanced methods.
+						! But without it, we need ~1000 times more interpolation points,
+						! and can't handle elevation jitter. And a typical tod has elevation
+						! variation of +/- 1". So If we are trying to get better accuracy than
+						! this, we must support elevation.
+						point = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
+						!if(di==1 .and. si==1) write(*,*) point
+						!if(di==1 .and. si==1) write(*,*) ys(:,2,ig)
+						!if(di==1 .and. si==1) write(*,*) ys(1,:,ig)
+						pix = nint(point(1:2))+1 - pbox(:,1)
+						! Bounds checking. Costs 2% performance. Worth it
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						! Compute signal polarization projection parameters.
+						! Checking which components to compute takes 17% longer than just computing
+						! all of them, which takes about the same time as computing one.
+						phase(1) = det_comps(1,di)
+						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+						! If tests are not free, despite branch prediction. Adding a test
+						! for dir here takes the time from 0.85 to 1.15, a 35% increase!
+						tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
+			else
+				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+						xind = floor(xrel)
+						xrel = xrel - xind
+						ig   = sum(xind*steps)+1
+						point = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
+						pix = nint(point(1:2))+1 - pbox(:,1)
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						phase(1) = det_comps(1,di)
+						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+						tod(si,di) = tod(si,di) + sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
+			end if
+			deallocate(wmap3)
+		else
+			! Backwards transform. Here there is a risk of multiple
+			! threads clobbering each other, so we either need separate
+			! work spaces or critical sections.
+			allocate(wmap4(3,psize(2),psize(1),nproc))
+			!$omp parallel private(di, si, xrel, xind, ig, point, pix, phase,id)
+			id = omp_get_thread_num()+1
+			!$omp workshare
+			wmap4 = 0
+			!$omp end workshare
+			!$omp do
+			do di = 1, ndet
+				do si = 1, nsamp
+					xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+					xind = floor(xrel)
+					xrel = xrel - xind
+					ig   = sum(xind*steps)+1
+					point = ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
+					pix = nint(point(1:2))+1 - pbox(:,1)
+					pix(1) = min(psize(1),max(1,pix(1)))
+					pix(2) = min(psize(2),max(1,pix(2)))
+					phase(1) = det_comps(1,di)
+					phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+					phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+					wmap4(:,pix(2),pix(1),id) = wmap4(:,pix(2),pix(1),id) + tod(si,di)*phase
+				end do
+			end do
+			!$omp end parallel
+			! Copy out result. Applying mmul and tmul here costs 1%
+			!$omp parallel do collapse(1) private(iy,ix,ic)
+			do iy = 1, size(wmap4,3)
+				do ix = 1, size(wmap4,2)
+					do ic = 1, ncomp
+						map(ix+pbox(2,1),iy+pbox(1,1),ic) = map(ix+pbox(2,1),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
+					end do
+				end do
+			end do
+			deallocate(wmap4)
+		end if
+	end subroutine
+
+	subroutine pmat_nearest_grad_precomp_internal( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			bore, det_pos, det_comps,  &! Input pointing
+			comps,                     &! Ignored. Supporting arbitrary component ordering was too expensive
+			rbox, nbox, yvals, pbox    &! Coordinate transformation
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), comps(:)
+		real(_),    intent(in)    :: bore(:,:), yvals(:,:)
+		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:), tmul, mmul
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		! Work
+		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic
+		integer(4) :: steps(size(rbox,1)), psize(2)
+		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
+		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:), ys(:,:,:)
+		real(_)    :: xrel(3), point(4), phase(3)
+		integer(4) :: xind(3), ig, ig2, pix(2), ix, iy
+
+		nsamp   = size(tod, 1)
+		ndet    = size(tod, 2)
+		ncomp   = size(map, 3)
+		psize   = pbox(:,2)-pbox(:,1)
+		nproc   = omp_get_max_threads()
+		! In C order, yvals has pixel axes t,ra,dec, so nbox = [nt,nra,ndec]
+		! Index mapping is therefore given by [nra*ndec,ndec,1]
+		steps(size(steps)) = 1
+		do ic = size(steps)-1, 1, -1
+			steps(ic) = steps(ic+1)*nbox(ic+1)
+		end do
+		! inv_dx uses (nbox-1) because we use an endpoint-inclusive
+		! grid here: Last data point is exactly at rbox(:,2) --
+		! it isn't a cell that just ends there.
+		x0 = rbox(:,1); inv_dx = (nbox-1)/(rbox(:,2)-rbox(:,1))
+
+		! Precompute derivatives of yvals, called ys. This will be very
+		! fast, as we're only talking about at most 1e6 samples or so.
+		allocate(ys(size(yvals,1),3,size(yvals,2)))
+		!$omp parallel do private(ig,ic,ig2)
+		do ig = 1, size(yvals,2)
+			do ic = 1, 3
+				! This is only valid up to nbox-1 of the interpolation grid, but
+				! that's the only part we will use when we use these derivatives
+				ig2 = min(size(yvals,2),ig+steps(ic))
+				ys(:,ic,ig) = yvals(:,ig2)-yvals(:,ig)
+			end do
+		end do
+
+		if(dir > 0) then
+			! Forward transform - no worry of clobbering, so we can use a
+			! single work map
+			allocate(wmap3(3,psize(2),psize(1)))
+			!$omp parallel do collapse(2)
+			do iy = 1, size(wmap3,3)
+				do ix = 1, size(wmap3,2)
+					wmap3(1:ncomp,ix,iy) = map(ix+pbox(2,1),iy+pbox(1,1),1:ncomp)
+					wmap3(ncomp+1:3,ix,iy) = 0
+				end do
+			end do
+			if(mmul .ne. 1) then
+				!$omp parallel workshare
+				wmap3 = wmap3 * mmul
+				!$omp end parallel workshare
+			end if
+			if(tmul .eq. 0) then
+				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						! Compute interpolated pointing. This used to be done via a function
+						! call, but that proved too costly.
+						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+						xind = floor(xrel)
+						xrel = xrel - xind
+						ig   = sum(xind*steps)+1
+						! Pointing is done via gradient interpolation, which is one
+						! step simpler than multilinear interpolation because it
+						! ignores cross terms. This means that pointing will be
+						! discontinuous at some corners. In my tests, bilinear interpolation
+						! has about 100 times better accuracy for the same mesh.
+						!
+						! For practical mesh sizes, gradient interpolation can't go
+						! beyond about 1" accuracy.
+						!
+						! Costs of some approaches (assuming we already have xrel and ig)
+						!                      mul add
+						! 1. Nearest neighbor    0  0  equivalent to precomputing all pixels
+						! 2. Gradient3          12 12  discontinuous
+						! 2. Gradient2           8  8
+						! 3. Implicit grad3     12 24  same as above, but more general storage
+						! 3. Implicit grad2      8 16
+						! 4. Bigradient3        12 15  continuous
+						! 4. Bigradient2         8 10
+						! 5. Impl. Bigrad3      12 27  as above, more general storage
+						! 5. Impl. Bigrad2       9 18
+						! 6. Bilinear3          56 28  differentiable in cell
+						! 6. Bilinear2          24 12
+						! 7. Linear 1d          -3 -8  may be infeasible. Per-detector
+						! Elevation support is quite costly for the more advanced methods.
+						! But without it, we need ~1000 times more interpolation points,
+						! and can't handle elevation jitter. And a typical tod has elevation
+						! variation of +/- 1". So If we are trying to get better accuracy than
+						! this, we must support elevation.
+						point = yvals(:,ig) + xrel(1)*ys(:,1,ig) + xrel(2)*ys(:,2,ig) + xrel(3)*ys(:,3,ig)
+						!if(di==1 .and. si==1) write(*,*) point
+						!if(di==1 .and. si==1) write(*,*) ys(:,2,ig)
+						!if(di==1 .and. si==1) write(*,*) ys(1,:,ig)
+						pix = nint(point(1:2))+1 - pbox(:,1)
+						! Bounds checking. Costs 2% performance. Worth it
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						! Compute signal polarization projection parameters.
+						! Checking which components to compute takes 17% longer than just computing
+						! all of them, which takes about the same time as computing one.
+						phase(1) = det_comps(1,di)
+						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+						! If tests are not free, despite branch prediction. Adding a test
+						! for dir here takes the time from 0.85 to 1.15, a 35% increase!
+						tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
+			else
+				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+						xind = floor(xrel)
+						xrel = xrel - xind
+						ig   = sum(xind*steps)+1
+						point = yvals(:,ig) + xrel(1)*ys(:,1,ig) + xrel(2)*ys(:,2,ig) + xrel(3)*ys(:,3,ig)
+						pix = nint(point(1:2))+1 - pbox(:,1)
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						phase(1) = det_comps(1,di)
+						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+						tod(si,di) = tod(si,di) + sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
+			end if
+			deallocate(wmap3)
+		else
+			! Backwards transform. Here there is a risk of multiple
+			! threads clobbering each other, so we either need separate
+			! work spaces or critical sections.
+			allocate(wmap4(3,psize(2),psize(1),nproc))
+			!$omp parallel private(di, si, xrel, xind, ig, point, pix, phase,id)
+			id = omp_get_thread_num()+1
+			!$omp workshare
+			wmap4 = 0
+			!$omp end workshare
+			!$omp do
+			do di = 1, ndet
+				do si = 1, nsamp
+					xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+					xind = floor(xrel)
+					xrel = xrel - xind
+					ig   = sum(xind*steps)+1
+					point = yvals(:,ig) + xrel(1)*ys(:,1,ig) + xrel(2)*ys(:,2,ig) + xrel(3)*ys(:,3,ig)
+					pix = nint(point(1:2))+1 - pbox(:,1)
+					pix(1) = min(psize(1),max(1,pix(1)))
+					pix(2) = min(psize(2),max(1,pix(2)))
+					phase(1) = det_comps(1,di)
+					phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+					phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+					wmap4(:,pix(2),pix(1),id) = wmap4(:,pix(2),pix(1),id) + tod(si,di)*phase
+				end do
+			end do
+			!$omp end parallel
+			! Copy out result. Applying mmul and tmul here costs 1%
+			!$omp parallel do collapse(1) private(iy,ix,ic)
+			do iy = 1, size(wmap4,3)
+				do ix = 1, size(wmap4,2)
+					do ic = 1, ncomp
+						map(ix+pbox(2,1),iy+pbox(1,1),ic) = map(ix+pbox(2,1),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
+					end do
+				end do
+			end do
+			deallocate(wmap4)
+		end if
+	end subroutine
+
+	subroutine pmat_nearest_grad_implicit( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			bore, det_pos, det_comps,  &! Input pointing
+			comps,                     &! Ignored. Supporting arbitrary component ordering was too expensive
+			rbox, nbox, yvals, pbox    &! Coordinate transformation
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), comps(:)
+		real(_),    intent(in)    :: bore(:,:), yvals(:,:)
+		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:), tmul, mmul
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		! Work
+		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic
+		integer(4) :: steps(size(rbox,1)), psize(2)
+		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
+		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
+		real(_)    :: xrel(3), point(4), phase(3)
+		integer(4) :: xind(3), ig, pix(2), ix, iy
+
+		nsamp   = size(tod, 1)
+		ndet    = size(tod, 2)
+		ncomp   = size(map, 3)
+		psize   = pbox(:,2)-pbox(:,1)
+		nproc   = omp_get_max_threads()
+		! In C order, yvals has pixel axes t,ra,dec, so nbox = [nt,nra,ndec]
+		! Index mapping is therefore given by [nra*ndec,ndec,1]
+		steps(size(steps)) = 1
+		do ic = size(steps)-1, 1, -1
+			steps(ic) = steps(ic+1)*nbox(ic+1)
+		end do
+		x0 = rbox(:,1); inv_dx = (nbox-1)/(rbox(:,2)-rbox(:,1))
+
+		if(dir > 0) then
+			! Forward transform - no worry of clobbering, so we can use a
+			! single work map
+			allocate(wmap3(3,psize(2),psize(1)))
+			!$omp parallel do collapse(2)
+			do iy = 1, size(wmap3,3)
+				do ix = 1, size(wmap3,2)
+					wmap3(1:ncomp,ix,iy) = map(ix+pbox(2,1),iy+pbox(1,1),1:ncomp)
+					wmap3(ncomp+1:3,ix,iy) = 0
+				end do
+			end do
+			if(mmul .ne. 1) then
+				!$omp parallel workshare
+				wmap3 = wmap3 * mmul
+				!$omp end parallel workshare
+			end if
+			if(tmul .eq. 0) then
+				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						! Compute interpolated pointing. This used to be done via a function
+						! call, but that proved too costly.
+						!write(*,*) "bore", bore(:,si)
+						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+						xind = floor(xrel)
+						xrel = xrel - xind
+						ig   = sum(xind*steps)+1
+						point = yvals(:,ig) + &
+							(yvals(:,ig+steps(1))-yvals(:,ig))*xrel(1) + &
+							(yvals(:,ig+steps(2))-yvals(:,ig))*xrel(2) + &
+							(yvals(:,ig+steps(3))-yvals(:,ig))*xrel(3)
+						pix = nint(point(1:2))+1 - pbox(:,1)
+						! Bounds checking. Costs 2% performance. Worth it
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						! Compute signal polarization projection parameters.
+						! Checking which components to compute takes 17% longer than just computing
+						! all of them, which takes about the same time as computing one.
+						phase(1) = det_comps(1,di)
+						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+						! If tests are not free, despite branch prediction. Adding a test
+						! for dir here takes the time from 0.85 to 1.15, a 35% increase!
+						tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
+			else
+				stop
+			end if
+			deallocate(wmap3)
+		else
+			stop
 		end if
 	end subroutine
 

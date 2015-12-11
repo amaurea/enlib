@@ -630,7 +630,7 @@ def create_wcs(shape, box=None, proj="cea"):
 	if box is None: box = np.array([[-1,-1],[1,1]])*0.5*10*np.pi/180
 	return enlib.wcs.build(box*180/np.pi, shape=shape, rowmajor=True, system=proj)
 
-def spec2flat(shape, wcs, cov, exp=1.0, mode="nearest", oversample=1, smooth="auto"):
+def spec2flat(shape, wcs, cov, exp=1.0, mode="constant", oversample=1, smooth="auto"):
 	"""Given a (ncomp,ncomp,l) power spectrum, expand it to harmonic map space,
 	returning (ncomp,ncomp,y,x). This involves a rescaling which converts from
 	power in terms of multipoles, to power in terms of 2d frequency.
@@ -657,6 +657,7 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="nearest", oversample=1, smooth="au
 		smooth = 0.5*(ls[1,0]+ls[0,1])
 		smooth /= 3.41 # 3.41 is an empirical factor
 	if smooth > 0:
+		print "smooth", smooth
 		cov = smooth_spectrum(cov, kernel="gauss", weight="mode", width=smooth)
 	# Translate from steradians to pixels
 	cov = cov * np.prod(shape[-2:])/area(shape,wcs)
@@ -668,6 +669,42 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="nearest", oversample=1, smooth="au
 	res = ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape),mode=mode, mask_nan=False, order=1),wcs)
 	res = downgrade(res, oversample)
 	return res
+
+def spec2flat_corr(shape, wcs, cov, exp=1.0, mode="constant"):
+	oshape= tuple(shape)
+	if len(oshape) == 2: oshape = (1,)+oshape
+	if exp != 1.0: cov = multi_pow(cov, exp)
+	cov[~np.isfinite(cov)] = 0
+	cov = cov[:oshape[-3],:oshape[-3]]
+	# Convert power spectrum to correlation
+	ext  = extent(shape,wcs)
+	rmax = np.sum(ext**2)**0.5
+	res  = np.max(ext/shape[-2:])
+	nr   = rmax/res
+	r    = np.arange(nr)*rmax/nr
+	print "r", r*180/np.pi
+	corrfun = enlib.powspec.spec2corr(cov, r)
+	np.savetxt("a.txt", corrfun[0,0])
+	# Interpolate it 2d. First get the pixel positions
+	# (remember to move to the corner because this is
+	# a correlation function)
+	dpos = posmap(shape, wcs)
+	dpos -= dpos[:,None,None,dpos.shape[-2]/2,dpos.shape[-1]/2]
+	ipos = np.arccos(np.cos(dpos[0])*np.cos(dpos[1]))*nr/rmax
+	#ipos = np.sum(dpos**2,0)**0.5*nr/rmax
+	write_map("corr_ip/imap.fits", ipos)
+	print corrfun.shape
+	corr2d = enlib.utils.interpol(corrfun, ipos.reshape((-1,)+ipos.shape), mode=mode, mask_nan=False, order=1)
+	corr2d = np.roll(corr2d, -corr2d.shape[-2]/2, -2)
+	corr2d = np.roll(corr2d, -corr2d.shape[-1]/2, -1)
+	np.savetxt("b.txt", np.diag(corr2d[0,0]))
+	print "b.txt"
+	corr2d = ndmap(corr2d, wcs)
+	write_map("corr_ip/test.fits", corr2d)
+	print corr2d
+	print corr2d.shape, corr2d.dtype
+	print area(shape, wcs)
+	return fft(corr2d).real * np.product(shape[-2:])**0.5
 
 def smooth_spectrum(ps, kernel="gauss", weight="mode", width=1.0):
 	"""Smooth the spectrum ps with the given kernel, using the given weighting."""

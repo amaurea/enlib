@@ -1,4 +1,5 @@
-import numpy as np, enlib.utils
+import numpy as np
+from enlib import utils
 
 def sym_compress(mat, which=None, n=None, scheme=None, axes=[0,1]):
 	"""Extract the unique elements of a symmetric matrix, and
@@ -138,3 +139,19 @@ def read_camb_scalar(fname, inds=True, scale=True, expand=True, ncmb=3):
 	ps_cmb  = read_spectrum(fname, inds=inds, scale=scale, expand=expand, ncol=ncmb, ncomp=3)
 	ps_lens = read_lensing_spectrum(fname, inds=inds, scale=scale, expand=expand, coloff=ncmb)
 	return ps_cmb, ps_lens
+
+def spec2corr(spec, pos, iscos=False, symmetric=True):
+	"""Compute the correlation function sum(2l+1)/4pi Cl Pl(cos(theta))
+	corresponding to the given power spectrum at the given positions."""
+	spec = np.asarray(spec)
+	pos  = np.asarray(pos)
+	if not iscos: pos = np.cos(pos)
+	if symmetric: fspec = sym_compress(spec)
+	else: fspec = spec.reshape(-1,spec.shape[-1])
+	l = np.arange(spec.shape[-1])
+	weight = (2*l+1)/(4*np.pi)
+	res = np.zeros(fspec.shape[:1]+pos.shape)
+	for i, cl in enumerate(fspec):
+		res[i] = np.polynomial.legendre.legval(pos, weight*cl)
+	if symmetric: res = sym_expand(res)
+	return res
