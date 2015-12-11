@@ -2,54 +2,6 @@ module pmat_core
 
 contains
 
-! Performance for tod[445,262000] on laptop with OMP_NUM_THREADS=4
-!  dp_all   bounds tri Ofast   : 3.6131 3.6265 3.6019
-!  dp_bore  bounds tri Ofast   : 3.8680 3.8867 3.8988
-!  sp_all   bounds tri Ofast   : 3.3886 3.3987 3.3839
-!  sp_all   bounds tri Ofast   : 3.4127 3.3815 3.4020
-!  sp_all  !bounds tri Ofast   : 3.3271 3.3300 3.3494
-!  sp_all   bounds grd Ofast   : 2.4928 2.4915 2.5022
-!  sp_all   bounds ner Ofast   : 2.1450 2.1151 2.1395
-!  sp_all   bounds tri native  : 3.5933 3.6151 3.6027 Slower??
-!  sp_all   bounds tri O2      : 3.5449 3.5517 3.5351
-!  sp_all   bounds tri Os      : 4.1127 4.1443 4.1305
-!  sp_all   bounds tri Of omit : 3.3724 3.4091 3.3960
-!  sp_all   bounds tri Of col1 : 3.3961 3.4003 3.4068
-!
-! Interpolation accuracy at 1e-3,1e-3,arcsec,arcsec
-!  std(tri-grd): 4.76968216E-06   2.86180921E-06   1.63026237E-09   9.31578481E-10
-! No point in using the 35% slower tridiagonal interpolation. In that case,
-! is there a point in using the clunky ys interface?
-!
-! nint is 5% slower than floor
-
-	! Implements projection from tod to map and vice versa.
-	! Please forgive all the repeated code in it. If statements
-	! in the loops proved too expensive, as did function calls.
-	! But the logic is actually pretty simple. We reorder the
-	! maps for better memory locality, and then loop over each
-	! tod sample, computing its pixel and polarization information
-	! on the fly.
-	!
-	! For my last benchmark [602,262144] tod on scinet, this one took
-	!  1.05  1.20 s @ dp 16 cores gfortran
-	!  1.33  1.48 s @ dp  8 cores gfortran
-	!  2.67  3.18 s @ dp  4 cores gfortran
-	! 10.31 11.03 s @ dp  1 core  gfortran
-	!  0.96  1.11 s @ sp 16 cores gfortran
-	!  1.15  1.35 s @ sp  8 cores gfortran
-	!  2.31  2.60 s @ sp  4 cores gfortran
-	!  8.82  9.36 s @ sp  1 core  gfortran
-	!  0.83  1.30 s @ dp 16 cores ifort after adding --noopt to f2py
-	!  0.66  1.12 s @ dp 16 cores ifort after removing collapse statements
-	!  0.63  0.90 s @ sp 16 cores
-	!  --------------------------
-	!  1.77  1.07 s @ dp 16 cores ninkasi
-	! Since precision does not save much on speed, probably due to the majority
-	! of the logic here being in pointing, which isn't affected. But it does
-	! save on memory, of course. Scaling is quite good. We get a bit more than
-	! half the max possible speedup when going from 1 to 16 cores. We are slightly
-	! faster than ninkasi here, but not much: 2.25 s vs. 2.84 s (26% faster)
 	subroutine pmat_nearest_bilinear( &
 			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
 			tmul, mmul,                &! Consts to multiply tod/map by
@@ -62,15 +14,16 @@ contains
 		implicit none
 		! Parameters
 		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), comps(:)
-		real(_),    intent(in)    :: bore(:,:), yvals(:,:)
-		real(_),    intent(in)    :: det_pos(:,:), det_comps(:,:), rbox(:,:), tmul, mmul
+		real(8),    intent(in)    :: bore(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
+		real(_),    intent(in)    :: det_comps(:,:), tmul, mmul
 		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
 		! Work
 		integer(4) :: ndet, nsamp, ncomp, nproc, di, si, id, ic
 		integer(4) :: steps(size(rbox,1)), psize(2)
-		real(_)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
+		real(8)    :: x0(size(rbox,1)), inv_dx(size(rbox,1))
+		real(8)    :: xrel(3), point(4), work(size(yvals,1),4)
 		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
-		real(_)    :: xrel(3), point(4), phase(3), work(size(yvals,1),6)
+		real(_)    :: phase(3)
 		integer(4) :: xind(3), ig, pix(2), ix, iy
 
 		nsamp   = size(tod, 1)
@@ -102,46 +55,42 @@ contains
 				wmap3 = wmap3 * mmul
 				!$omp end parallel workshare
 			end if
-			if(tmul .eq. 0) then
-				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase, work)
-				do di = 1, ndet
-					do si = 1, nsamp
-						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
-						xind = floor(xrel)
-						xrel = xrel - xind
-						ig   = sum(xind*steps)+1
-						! Manual expansion of bilinear interpolation. Pretty bad memory
-						! access pattern, sadly. But despite the huge number of operations
-						! compared to gradient interpolation, it's about the same speed.
-						work(:,1) = yvals(:,ig)*(1-xrel(1)) + yvals(:,ig+steps(1))*xrel(1)
-						work(:,2) = yvals(:,ig+steps(2))*(1-xrel(1)) + yvals(:,ig+steps(2)+steps(1))*xrel(1)
-						work(:,3) = yvals(:,ig+steps(3))*(1-xrel(1)) + yvals(:,ig+steps(3)+steps(1))*xrel(1)
-						work(:,4) = yvals(:,ig+steps(2)+steps(3))*(1-xrel(1)) + yvals(:,ig+steps(2)+steps(3)+steps(1))*xrel(1)
-						work(:,5) = work(:,1)*(1-xrel(2)) + work(:,2)*xrel(2)
-						work(:,6) = work(:,3)*(1-xrel(2)) + work(:,4)*xrel(2)
-						point = work(:,5)*(1-xrel(3)) + work(:,6)*xrel(3)
-						pix = nint(point(1:2))+1 - pbox(:,1)
-						! Bounds checking. Costs 2% performance. Worth it
-						pix(1) = min(psize(1),max(1,pix(1)))
-						pix(2) = min(psize(2),max(1,pix(2)))
-						! Compute signal polarization projection parameters.
-						! Checking which components to compute takes 17% longer than just computing
-						! all of them, which takes about the same time as computing one.
-						phase(1) = det_comps(1,di)
-						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
-						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
-						! If tests are not free, despite branch prediction. Adding a test
-						! for dir here takes the time from 0.85 to 1.15, a 35% increase!
-						if(tmul .eq. 0) then
-							tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
-						else
-							tod(si,di) = tod(si,di)*tmul + sum(wmap3(:,pix(2),pix(1))*phase)
-						end if
-					end do
+			!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase, work)
+			do di = 1, ndet
+				do si = 1, nsamp
+					xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+					xind = floor(xrel)
+					xrel = xrel - xind
+					ig   = sum(xind*steps)+1
+					! Manual expansion of bilinear interpolation. Pretty bad memory
+					! access pattern, sadly. But despite the huge number of operations
+					! compared to gradient interpolation, it's about the same speed.
+					work(:,1) = yvals(:,ig)*(1-xrel(1)) + yvals(:,ig+steps(1))*xrel(1)
+					work(:,2) = yvals(:,ig+steps(2))*(1-xrel(1)) + yvals(:,ig+steps(2)+steps(1))*xrel(1)
+					work(:,3) = yvals(:,ig+steps(3))*(1-xrel(1)) + yvals(:,ig+steps(3)+steps(1))*xrel(1)
+					work(:,4) = yvals(:,ig+steps(2)+steps(3))*(1-xrel(1)) + yvals(:,ig+steps(2)+steps(3)+steps(1))*xrel(1)
+					work(:,1) = work(:,1)*(1-xrel(2)) + work(:,2)*xrel(2)
+					work(:,2) = work(:,3)*(1-xrel(2)) + work(:,4)*xrel(2)
+					point = work(:,1)*(1-xrel(3)) + work(:,2)*xrel(3)
+					pix = nint(point(1:2))+1 - pbox(:,1)
+					! Bounds checking. Costs 2% performance. Worth it
+					pix(1) = min(psize(1),max(1,pix(1)))
+					pix(2) = min(psize(2),max(1,pix(2)))
+					! Compute signal polarization projection parameters.
+					! Checking which components to compute takes 17% longer than just computing
+					! all of them, which takes about the same time as computing one.
+					phase(1) = det_comps(1,di)
+					phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+					phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+					! If tests are not free, despite branch prediction. Adding a test
+					! for dir here takes the time from 0.85 to 1.15, a 35% increase!
+					if(tmul .eq. 0) then
+						tod(si,di) = sum(wmap3(:,pix(2),pix(1))*phase)
+					else
+						tod(si,di) = tod(si,di)*tmul + sum(wmap3(:,pix(2),pix(1))*phase)
+					end if
 				end do
-			else
-				stop
-			end if
+			end do
 			deallocate(wmap3)
 		else
 			stop
@@ -1576,6 +1525,55 @@ contains
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !!!!  Old stuff - will be cleaned up eventually !!!!
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+! Performance for tod[445,262000] on laptop with OMP_NUM_THREADS=4
+!  dp_all   bounds tri Ofast   : 3.6131 3.6265 3.6019
+!  dp_bore  bounds tri Ofast   : 3.8680 3.8867 3.8988
+!  sp_all   bounds tri Ofast   : 3.3886 3.3987 3.3839
+!  sp_all   bounds tri Ofast   : 3.4127 3.3815 3.4020
+!  sp_all  !bounds tri Ofast   : 3.3271 3.3300 3.3494
+!  sp_all   bounds grd Ofast   : 2.4928 2.4915 2.5022
+!  sp_all   bounds ner Ofast   : 2.1450 2.1151 2.1395
+!  sp_all   bounds tri native  : 3.5933 3.6151 3.6027 Slower??
+!  sp_all   bounds tri O2      : 3.5449 3.5517 3.5351
+!  sp_all   bounds tri Os      : 4.1127 4.1443 4.1305
+!  sp_all   bounds tri Of omit : 3.3724 3.4091 3.3960
+!  sp_all   bounds tri Of col1 : 3.3961 3.4003 3.4068
+!
+! Interpolation accuracy at 1e-3,1e-3,arcsec,arcsec
+!  std(tri-grd): 4.76968216E-06   2.86180921E-06   1.63026237E-09   9.31578481E-10
+! No point in using the 35% slower tridiagonal interpolation. In that case,
+! is there a point in using the clunky ys interface?
+!
+! nint is 5% slower than floor
+
+	! Implements projection from tod to map and vice versa.
+	! Please forgive all the repeated code in it. If statements
+	! in the loops proved too expensive, as did function calls.
+	! But the logic is actually pretty simple. We reorder the
+	! maps for better memory locality, and then loop over each
+	! tod sample, computing its pixel and polarization information
+	! on the fly.
+	!
+	! For my last benchmark [602,262144] tod on scinet, this one took
+	!  1.05  1.20 s @ dp 16 cores gfortran
+	!  1.33  1.48 s @ dp  8 cores gfortran
+	!  2.67  3.18 s @ dp  4 cores gfortran
+	! 10.31 11.03 s @ dp  1 core  gfortran
+	!  0.96  1.11 s @ sp 16 cores gfortran
+	!  1.15  1.35 s @ sp  8 cores gfortran
+	!  2.31  2.60 s @ sp  4 cores gfortran
+	!  8.82  9.36 s @ sp  1 core  gfortran
+	!  0.83  1.30 s @ dp 16 cores ifort after adding --noopt to f2py
+	!  0.66  1.12 s @ dp 16 cores ifort after removing collapse statements
+	!  0.63  0.90 s @ sp 16 cores
+	!  --------------------------
+	!  1.77  1.07 s @ dp 16 cores ninkasi
+	! Since precision does not save much on speed, probably due to the majority
+	! of the logic here being in pointing, which isn't affected. But it does
+	! save on memory, of course. Scaling is quite good. We get a bit more than
+	! half the max possible speedup when going from 1 to 16 cores. We are slightly
+	! faster than ninkasi here, but not much: 2.25 s vs. 2.84 s (26% faster)
 
 	subroutine pmat_nearest_grad_precomp( &
 			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
