@@ -1574,6 +1574,31 @@ contains
 	! save on memory, of course. Scaling is quite good. We get a bit more than
 	! half the max possible speedup when going from 1 to 16 cores. We are slightly
 	! faster than ninkasi here, but not much: 2.25 s vs. 2.84 s (26% faster)
+	!
+	! Update: I can't reproduce these times. The code may have changed, but
+	! I don't see what could have caused such a bit change. I suspect that
+	! the numbers above used downsampling and lower accuracy than my current
+	! default. If I halve the length and set accuracy to 0.1 pixel, then I
+	! get a speed of 0.64 using 16 cores sp ifort using implicit gradient.
+	! Accuracy 0.01 pixel brings that to 0.89. And bilin makes it 0.975.
+	! 1 pixel accuracy target brings us to an standard deviation of 0.15
+	! pixels, which may be acceptable, and a time of 0.502 using 32 threads
+	! on 16 cores.
+	!
+	! The transpose operation seems to have lost even more speed.
+	! Even with downsampling and lower accuracy, it takes 1.6 s with
+	! igrad, and does not seem to scale with number of cores, indicating
+	! a huge memory bottleneck. Atmoic is slitghly faster for very high
+	! numbers of threads, but not worth it in general.
+	! I recover the original speed by using a smaller map. So map size
+	! has a huge effect here. This argues in favour of a tiled approach.
+	!
+	! So compared to max speed, high accuracy + bilinear makes us 80%
+	! slower. As long as point sources are treated separately, this
+	! accuracy may be ok. So there is quite a bit of speed to gain.
+	!
+	! This means that the ninkasi comparison was unfair, as it was
+	! run with twice as many samples.
 
 	subroutine pmat_nearest_grad_precomp( &
 			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)

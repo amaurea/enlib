@@ -205,6 +205,11 @@ def delaxes(a, axes):
 	return a[inds]
 
 class flatview:
+	"""Produce a read/writable flattened view of the given array,
+	via with flatview(arr) as farr:
+		do stuff with farr
+	Changes to farr are propagated into the original array.
+	See partial_flatten for details on the flattening."""
 	def __init__(self, array, axes=[], mode="rwc"):
 		self.array = array
 		self.axes  = axes
