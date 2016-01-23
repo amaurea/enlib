@@ -181,3 +181,12 @@ def finalize(w, pos, res, shape, ref=None):
 
 def angdist(lon1,lat1,lon2,lat2):
 	return np.arccos(np.cos(lat1)*np.cos(lat2)*(np.cos(lon1)*np.cos(lon2)+np.sin(lon1)*np.sin(lon2))+np.sin(lat1)*np.sin(lat2))
+
+def fix_wcs(wcs, axis=0):
+	"""Returns a new WCS object which has had the reference pixel moved to the
+	middle of the possible pixel space."""
+	res = wcs.deepcopy()
+	off = np.abs(360/wcs.wcs.cdelt[axis])/2 - res.wcs.crpix[axis]
+	res.wcs.crpix[axis] += off
+	res.wcs.crval[axis] += off*res.wcs.cdelt[axis]
+	return res

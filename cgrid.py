@@ -4,12 +4,29 @@ import numpy as np, time, os
 from PIL import Image, ImageDraw, ImageFont
 from enlib import utils
 
-def calc_line_segs(pixs, steplim=10.):
-	# Split on huge jumps
+def calc_line_segs(pixs, steplim=10.0, extrapolate=2.0):
+	"""Given a sequence of points, split into subsequences
+	where huge jumps in values occur. Extrapolate from each
+	edge of the cut to avoid ----|   |---- effects."""
 	lens = np.sum((pixs[1:]-pixs[:-1])**2,1)**0.5
 	typical = np.median(lens)
 	jump = np.where(lens > typical*steplim)[0]
-	return np.split(pixs, jump+1)
+	segs = np.split(pixs, jump+1)
+	# Extrapolate into the gaps left from splitting
+	def extrap(seg):
+		if len(seg) < 2: return seg
+		return np.concatenate([seg,[seg[-1]+(seg[-1]-seg[-2])*extrapolate]])
+	nseg = len(segs)
+	for i in range(nseg-1): segs[i] = extrap(segs[i])
+	for i in range(1,nseg): segs[i] = extrap(segs[i][::-1])[::-1]
+	return segs
+
+#def calc_line_segs(pixs, steplim=10.0):
+#	# Split on huge jumps
+#	lens = np.sum((pixs[1:]-pixs[:-1])**2,1)**0.5
+#	typical = np.median(lens)
+#	jump = np.where(lens > typical*steplim)[0]
+#	return np.split(pixs, jump+1)
 
 class Gridinfo: pass
 
@@ -28,12 +45,12 @@ def calc_gridinfo(shape, wcs, steps=[2,2], nstep=[200,200]):
 	gridinfo.lat = []
 	# Draw lines of longitude
 	for phi in np.arange(nphi)*steps[1]:
-		pixs = np.array(wcs.wcs_world2pix(phi, np.linspace(-90,90,nstep[0],endpoint=True), 0)).T.astype(int)
+		pixs = np.array(wcs.wcs_world2pix(phi, np.linspace(-90,90,nstep[0],endpoint=True), 0)).T
 		gridinfo.lon.append((utils.rewind(phi,0,360),calc_line_segs(pixs)))
 
 	# Draw lines of latitude
 	for theta in np.arange(ntheta)*steps[0]-90:
-		pixs = np.array(wcs.wcs_world2pix(np.linspace(0,360,nstep[1],endpoint=True), theta, 0)).T.astype(int)
+		pixs = np.array(wcs.wcs_world2pix(np.linspace(0,360.9,nstep[1],endpoint=True), theta, 0)).T
 		gridinfo.lat.append((theta,calc_line_segs(pixs)))
 	return gridinfo
 
@@ -50,41 +67,104 @@ def draw_grid(img, gridinfo, color="00000020"):
 	return Image.alpha_composite(img, grid)
 
 def calc_label_pos(linesegs, shape):
-	# For each grid line, identify where we enter and exit the
-	# image. If these points exist, draw coorinates there. If they
-	# do not, check if the 0 coordinate is in the image. If it is,
-	# draw the coordinate there. Otherwise there is no point in
-	# drawing.
-	shape = np.array(shape)
-	label_pos = []
-	for cval, segs in linesegs:
-		for seg in segs:
-			# Check if we cross 0
-			seg = np.array(seg)
-			edges = np.array(np.where((seg[1:]*seg[:-1] < 0)|((seg[1:]-shape)*(seg[:-1]-shape) < 0)))
-			# Mask those outside the image
-			ocoord = edges.copy(); ocoord[1] = 1-ocoord[1]
-			other = seg[tuple(ocoord)]
-			outside = (other<0)|(other>shape[1-edges[1]])
-			edges = edges[:,~outside]
-			if edges.size > 0:
-				# Ok, we cross an edge. Interpolate the position for each
-				for ei,ec in edges.T:
-					x = seg[([ei,ei+1],[ec,ec])]
-					y = seg[([ei,ei+1],[1-ec,1-ec])]
-					xcross = float(0 if x[0]*x[1] <= 0 else shape[ec])
-					ycross = y[0] + (y[1]-y[0])*(xcross-x[0])/(x[1]-x[0])
-					entry  = [cval,0,0]
-					entry[2-ec] = ycross
-					entry[1+ec] = xcross
-					label_pos.append(entry)
+	"""Given linegegs = [values, curves], where values[ncurve]
+	is a float array containing a coordinate label for each curve,
+	and pixels[ncurve][nsub][npoint,{x,y}] contains the pixel coordinates
+	for the points makeing up each curve, computes
+	[nlabel,{label,x,y}] for each label to place on the image.
+	Labels are placed where curves cross the edge of the image."""
+	lables = []
+	shape  = np.array(shape)
+	for label_value, curveset in linesegs:
+		# Loop over subsegments, which are generated due to angle wrapping
+		for curve in curveset:
+			if label_value == 0:
+				print label_value, shape
+				print curve
+			# Check if we cross one of the edges of the image. We want
+			# the crossing to happen between the selected position and the next
+			ldist  = curve + 0.5
+			rdist  = shape - 0.5 - curve
+			cross1 = np.sign(ldist[1:]) != np.sign(ldist[:-1])
+			cross2 = np.sign(rdist[1:]) != np.sign(rdist[:-1])
+			cands  = np.array(np.where(cross1 | cross2))
+			# Cands is [2,ncand] indices into curve. The second index indicates
+			# whether the crossing happened in the x or y coordinate.
+			# Remove crossings that happen entirely outside the image. We
+			# approximate this as happening when the non-crossing coordinate
+			# of each candidate is outside the image.
+			other = curve[cands[0],1-cands[1]]
+			outside = (other<0)|(other>shape[1-cands[1]])
+			matches = cands[:,~outside]
+			# Do we have any matches? If so, compute the exact crossing point
+			# and place the label there
+			if matches.size > 0:
+				for ind, dim in matches.T:
+					# Here "a" indicates the pixel coordiante that crossed the
+					# edge, and "b" is the other one. For example, if we crosses
+					# in the horizontal direction, a=x and b=y.
+					a = curve[[ind,ind+1],[dim,dim]]
+					b = curve[[ind,ind+1],[1-dim,1-dim]]
+					# Crossing point
+					across = float(0 if a[0]*a[1] <= 0 else shape[dim])
+					bcross = b[0] + (b[1]-b[0])*(across-a[0])/(a[1]-a[0])
+					label  = [label_value,0,0]
+					# Unshuffle from a,b to x,y
+					label[1+dim] = across
+					label[2-dim] = bcross
+					lables.append(label)
 			else:
 				# No edge crossing. But perhaps that's because everything is
 				# happening inside the image. If so, the first point should
 				# be inside.
-				if np.all(seg[0]>=0) and np.all(seg[0]<shape):
-					label_pos.append([cval,seg[0,0],seg[0,1]])
-	return label_pos
+				if np.all(curve[0]>=0) and np.all(curve[0]<shape):
+					lables.append([label_value,curve[0,0],curve[0,1]])
+	return lables
+
+#def calc_label_pos(linesegs, shape):
+#	# For each grid line, identify where we enter and exit the
+#	# image. If these points exist, draw coorinates there. If they
+#	# do not, check if the 0 coordinate is in the image. If it is,
+#	# draw the coordinate there. Otherwise there is no point in
+#	# drawing.
+#	shape = np.array(shape)
+#	label_pos = []
+#	for cval, segs in linesegs:
+#		for seg in segs:
+#			seg = np.array(seg)
+#			edges = np.array(np.where((seg[1:]*seg[:-1] < 0)|((seg[1:]-shape)*(seg[:-1]-shape) < 0)))
+#			# Mask those outside the image
+#			ocoord = edges.copy(); ocoord[1] = 1-ocoord[1]
+#			other = seg[tuple(ocoord)]
+#			outside = (other<0)|(other>shape[1-edges[1]])
+#			edges = edges[:,~outside]
+#
+#			## Also look for cases where we're right on top of an image edge
+#			#onedge = (seg == 0) | (seg == shape)
+#			## Some lines run along an edge in parallel to it. Disqualify these
+#			#good = ~np.any(np.all(onedge,0))
+#			#onedge &= good
+#			#onedge = np.array(np.where(onedge))
+#			#edges = np.concatenate([edges,onedge],1)
+#
+#			if edges.size > 0:
+#				# Ok, we cross an edge. Interpolate the position for each
+#				for ei,ec in edges.T:
+#					x = seg[([ei,ei+1],[ec,ec])]
+#					y = seg[([ei,ei+1],[1-ec,1-ec])]
+#					xcross = float(0 if x[0]*x[1] <= 0 else shape[ec])
+#					ycross = y[0] + (y[1]-y[0])*(xcross-x[0])/(x[1]-x[0])
+#					entry  = [cval,0,0]
+#					entry[2-ec] = ycross
+#					entry[1+ec] = xcross
+#					label_pos.append(entry)
+#			else:
+#				# No edge crossing. But perhaps that's because everything is
+#				# happening inside the image. If so, the first point should
+#				# be inside.
+#				if np.all(seg[0]>=0) and np.all(seg[0]<shape):
+#					label_pos.append([cval,seg[0,0],seg[0,1]])
+#	return label_pos
 
 def calc_bounds(boxes, size):
 	"""Compute bounding box for a set of boxes [:,{from,to},{x,y}].
@@ -96,7 +176,7 @@ def expand_image(img, bounds):
 	res.paste(img, tuple(-bounds[0]))
 	return res
 
-def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%g", color="000000"):
+def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%g", color="000000", return_bounds=False):
 	# For each label, determine the size the text would be, and
 	# displace it left, right, up or down depending on which edge
 	# of the image it is at
@@ -128,4 +208,7 @@ def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%g", color="00
 	draw = ImageDraw.Draw(img)
 	for label, box in zip(labels, boxes):
 		draw.text(box[0], label, col, font=font)
-	return img
+	if return_bounds:
+		return img, bounds
+	else:
+		return img

@@ -58,30 +58,8 @@ contains
 			!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase, work)
 			do di = 1, ndet
 				do si = 1, nsamp
-					xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
-					xind = floor(xrel)
-					xrel = xrel - xind
-					ig   = sum(xind*steps)+1
-					! Manual expansion of bilinear interpolation. Pretty bad memory
-					! access pattern, sadly. But despite the huge number of operations
-					! compared to gradient interpolation, it's about the same speed.
-					work(:,1) = yvals(:,ig)*(1-xrel(1)) + yvals(:,ig+steps(1))*xrel(1)
-					work(:,2) = yvals(:,ig+steps(2))*(1-xrel(1)) + yvals(:,ig+steps(2)+steps(1))*xrel(1)
-					work(:,3) = yvals(:,ig+steps(3))*(1-xrel(1)) + yvals(:,ig+steps(3)+steps(1))*xrel(1)
-					work(:,4) = yvals(:,ig+steps(2)+steps(3))*(1-xrel(1)) + yvals(:,ig+steps(2)+steps(3)+steps(1))*xrel(1)
-					work(:,1) = work(:,1)*(1-xrel(2)) + work(:,2)*xrel(2)
-					work(:,2) = work(:,3)*(1-xrel(2)) + work(:,4)*xrel(2)
-					point = work(:,1)*(1-xrel(3)) + work(:,2)*xrel(3)
-					pix = nint(point(1:2))+1 - pbox(:,1)
-					! Bounds checking. Costs 2% performance. Worth it
-					pix(1) = min(psize(1),max(1,pix(1)))
-					pix(2) = min(psize(2),max(1,pix(2)))
-					! Compute signal polarization projection parameters.
-					! Checking which components to compute takes 17% longer than just computing
-					! all of them, which takes about the same time as computing one.
-					phase(1) = det_comps(1,di)
-					phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
-					phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+					include 'helper_bilin.f90'
+					include 'helper_pixphase.f90'
 					! If tests are not free, despite branch prediction. Adding a test
 					! for dir here takes the time from 0.85 to 1.15, a 35% increase!
 					if(tmul .eq. 0) then
@@ -93,7 +71,34 @@ contains
 			end do
 			deallocate(wmap3)
 		else
-			stop
+			! Backwards transform. Here there is a risk of multiple
+			! threads clobbering each other, so we either need separate
+			! work spaces or critical sections.
+			allocate(wmap4(3,psize(2),psize(1),nproc))
+			!$omp parallel private(di, si, xrel, xind, ig, point, pix, phase, work, id)
+			id = omp_get_thread_num()+1
+			!$omp workshare
+			wmap4 = 0
+			!$omp end workshare
+			!$omp do
+			do di = 1, ndet
+				do si = 1, nsamp
+					include 'helper_bilin.f90'
+					include 'helper_pixphase.f90'
+					wmap4(:,pix(2),pix(1),id) = wmap4(:,pix(2),pix(1),id) + tod(si,di)*phase
+				end do
+			end do
+			!$omp end parallel
+			! Copy out result. Applying mmul and tmul here costs 1%
+			!$omp parallel do private(iy,ix,ic)
+			do iy = 1, size(wmap4,3)
+				do ix = 1, size(wmap4,2)
+					do ic = 1, ncomp
+						map(ix+pbox(2,1),iy+pbox(1,1),ic) = map(ix+pbox(2,1),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
+					end do
+				end do
+			end do
+			deallocate(wmap4)
 		end if
 	end subroutine
 
@@ -921,16 +926,16 @@ contains
 		integer, intent(in)    :: dir
 		real(_), intent(in)    :: tmul, pmul
 		real(_), intent(inout) :: tod(:,:), srcs(:,:,:)
-		real(_), intent(in)    :: bore(:,:), det_pos(:,:), det_comps(:,:)
-		real(_), intent(in)    :: rbox(:,:), yvals(:,:), cbox(:,:)
-		real(_), intent(in)    :: beam(:), rbeam, rmax
+		real(8), intent(in)    :: bore(:,:), det_pos(:,:), rbox(:,:), yvals(:,:)
+		real(8), intent(in)    :: cbox(:,:), beam(:), rbeam, rmax
+		real(_), intent(in)    :: det_comps(:,:)
 		integer, intent(in)    :: nbox(:), cell_srcs(:,:,:,:), cell_nsrc(:,:,:)
 		! Work
 		integer :: nsamp, ndet, nsrc, nproc
 		integer :: ic, i, id, di, si, xind(3), ig, ig2, cell(2), cell_ind, cid, sdir, ndir
 		integer :: steps(3), bind
-		real(_) :: x0(3), inv_dx(3), c0(2), inv_dc(2), xrel(3)
-		real(_) :: point(4), phase(3), dec, ra, ddec, dra, ibeam(3)
+		real(8) :: x0(3), inv_dx(3), c0(2), inv_dc(2), xrel(3), work(size(yvals,1),4)
+		real(8) :: point(4), phase(3), dec, ra, ddec, dra, ibeam(3)
 		real(_) :: inv_bres, bx,by,br,brel,bval, c2p,s2p,c1p,s1p
 		real(_), parameter   :: pi = 3.14159265359d0
 		real(_), allocatable :: amps(:,:,:,:), cosdec(:,:), ys(:,:,:)
@@ -997,11 +1002,7 @@ contains
 			do si = 1, nsamp
 				sdir = scandir(si)
 				! Transform from hor to cel
-				xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
-				xind = floor(xrel)
-				xrel = xrel - xind
-				ig   = sum(xind*steps)+1
-				point= ys(:,1,ig) + xrel(1)*ys(:,2,ig) + xrel(2)*ys(:,3,ig) + xrel(3)*ys(:,4,ig)
+				include 'helper_bilin.f90'
 				! Find which point source lookup cell we are in.
 				! dec,ra -> cy,cx
 				cell = floor((point(1:2)-c0)*inv_dc)+1
@@ -1042,9 +1043,6 @@ contains
 					if(bind >= size(beam)-1) cycle
 					brel = brel-bind
 					bval = beam(bind)*(1-brel) + beam(bind+1)*brel
-					!if(bval > 0.3) then
-					!	write(*,'(a,i4,i8,i4,13f13.6,e15.7,f13.6)') 'A ', di, si, cid-1, bore(1,si), bore(2:3,si)*180/pi, (bore(2:3,si)+det_pos(2:3,di))*180/pi, det_pos(2:3,di)*180/pi, point(1:2)*180/pi, dec*180/pi, ra*180/pi, ddec*180*60/pi, dra*180*60/pi, tod(si,di), bval
-					!end if
 					! And perform the actual projection
 					if(dir > 0) then
 						tod(si,di) = tod(si,di) + sum(amps(:,sdir,cid,1)*phase)*bval
@@ -2019,11 +2017,84 @@ contains
 					end do
 				end do
 			else
-				stop
+				!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase)
+				do di = 1, ndet
+					do si = 1, nsamp
+						! Compute interpolated pointing. This used to be done via a function
+						! call, but that proved too costly.
+						!write(*,*) "bore", bore(:,si)
+						xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+						xind = floor(xrel)
+						xrel = xrel - xind
+						ig   = sum(xind*steps)+1
+						point = yvals(:,ig) + &
+							(yvals(:,ig+steps(1))-yvals(:,ig))*xrel(1) + &
+							(yvals(:,ig+steps(2))-yvals(:,ig))*xrel(2) + &
+							(yvals(:,ig+steps(3))-yvals(:,ig))*xrel(3)
+						pix = nint(point(1:2))+1 - pbox(:,1)
+						! Bounds checking. Costs 2% performance. Worth it
+						pix(1) = min(psize(1),max(1,pix(1)))
+						pix(2) = min(psize(2),max(1,pix(2)))
+						! Compute signal polarization projection parameters.
+						! Checking which components to compute takes 17% longer than just computing
+						! all of them, which takes about the same time as computing one.
+						phase(1) = det_comps(1,di)
+						phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+						phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+						! If tests are not free, despite branch prediction. Adding a test
+						! for dir here takes the time from 0.85 to 1.15, a 35% increase!
+						tod(si,di) = tod(si,di)*tmul + sum(wmap3(:,pix(2),pix(1))*phase)
+					end do
+				end do
 			end if
 			deallocate(wmap3)
 		else
-			stop
+			allocate(wmap4(3,psize(2),psize(1),nproc))
+			!$omp parallel private(di, si, xrel, xind, ig, point, pix, phase, id)
+			!$omp workshare
+			wmap4 = 0
+			!$omp end workshare
+			id = omp_get_thread_num()+1
+			!$omp do
+			do di = 1, ndet
+				do si = 1, nsamp
+					! Compute interpolated pointing. This used to be done via a function
+					! call, but that proved too costly.
+					!write(*,*) "bore", bore(:,si)
+					xrel = (bore(:,si)+det_pos(:,di)-x0)*inv_dx
+					xind = floor(xrel)
+					xrel = xrel - xind
+					ig   = sum(xind*steps)+1
+					point = yvals(:,ig) + &
+						(yvals(:,ig+steps(1))-yvals(:,ig))*xrel(1) + &
+						(yvals(:,ig+steps(2))-yvals(:,ig))*xrel(2) + &
+						(yvals(:,ig+steps(3))-yvals(:,ig))*xrel(3)
+					pix = nint(point(1:2))+1 - pbox(:,1)
+					! Bounds checking. Costs 2% performance. Worth it
+					pix(1) = min(psize(1),max(1,pix(1)))
+					pix(2) = min(psize(2),max(1,pix(2)))
+					! Compute signal polarization projection parameters.
+					! Checking which components to compute takes 17% longer than just computing
+					! all of them, which takes about the same time as computing one.
+					phase(1) = det_comps(1,di)
+					phase(2) = point(3)*det_comps(2,di) - point(4)*det_comps(3,di)
+					phase(3) = point(4)*det_comps(2,di) + point(3)*det_comps(3,di)
+					! If tests are not free, despite branch prediction. Adding a test
+					! for dir here takes the time from 0.85 to 1.15, a 35% increase!
+					wmap4(:,pix(2),pix(1),id) = tod(si,di)*phase
+				end do
+			end do
+			!$omp end parallel
+			! Copy out result. Applying mmul and tmul here costs 1%
+			!$omp parallel do collapse(1) private(iy,ix,ic)
+			do iy = 1, size(wmap4,3)
+				do ix = 1, size(wmap4,2)
+					do ic = 1, ncomp
+						map(ix+pbox(2,1),iy+pbox(1,1),ic) = map(ix+pbox(2,1),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
+					end do
+				end do
+			end do
+			deallocate(wmap4)
 		end if
 	end subroutine
 

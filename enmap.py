@@ -76,6 +76,7 @@ class ndmap(np.ndarray):
 	def pixmap(self): return pixmap(self.shape, self.wcs)
 	def lmap(self, oversample=1): return lmap(self.shape, self.wcs, oversample=oversample)
 	def area(self): return area(self.shape, self.wcs)
+	def pixsize(self): return self.area()/self.npix
 	def extent(self): return extent(self.shape, self.wcs)
 	@property
 	def preflat(self):

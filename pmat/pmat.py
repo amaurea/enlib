@@ -45,7 +45,7 @@ class PmatMap(PointingMatrix):
 		transform = pos2pix(scan,template,sys)
 
 		# Build pointing interpolator
-		errlim = np.array([1e-3,1e-3,utils.arcmin,utils.arcmin])*acc
+		errlim = np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*acc
 		ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, errlim, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
 		if not ok: print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, scan.entry.id)
 
@@ -61,11 +61,10 @@ class PmatMap(PointingMatrix):
 		self.dtype = template.dtype
 		self.core = get_core(self.dtype)
 		if order == 0:
-			self.func = self.core.pmat_nearest
-		elif order == 1:
-			self.func = self.core.pmat_linear
+			self.func = self.core.pmat_nearest_bilinear
+			#self.func = self.core.pmat_nearest_grad_implicit
 		else:
-			raise NotImplementedError("order > 1 is not implemented")
+			raise NotImplementedError("order > 0 is not implemented")
 		self.transform = transform
 		self.ipol = ipol
 	def forward(self, tod, m, tmul=1, mmul=1):
@@ -294,7 +293,9 @@ class PmatCut(PointingMatrix):
 		return [{"none":0,"full":1,"bin":2,"exp":3,"poly":4}[kind]]+[int(arg) for arg in args]
 
 class pos2pix:
-	"""Transforms from scan coordinates to pixel-center coordinates."""
+	"""Transforms from scan coordinates to pixel-center coordinates.
+	This becomes discontinuous for scans that wrap from one side of the
+	sky to another for full-sky pixelizations."""
 	def __init__(self, scan, template, sys, ref_phi=0):
 		self.scan, self.template, self.sys = scan, template, sys
 		self.ref_phi = ref_phi
