@@ -78,9 +78,6 @@ def calc_label_pos(linesegs, shape):
 	for label_value, curveset in linesegs:
 		# Loop over subsegments, which are generated due to angle wrapping
 		for curve in curveset:
-			if label_value == 0:
-				print label_value, shape
-				print curve
 			# Check if we cross one of the edges of the image. We want
 			# the crossing to happen between the selected position and the next
 			ldist  = curve + 0.5
