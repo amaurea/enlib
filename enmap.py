@@ -132,7 +132,8 @@ class ndmap(np.ndarray):
 		# pixel-center coordinates to pixel-edge coordinates,
 		# which we need to distinguish between fully or partially
 		# included pixels
-		bpix = self.wcs.wcs_world2pix(box[:,::-1]*180/np.pi,0)[:,::-1]+0.5
+		bpix = self.sky2pix(box.T).T
+		#bpix = self.wcs.wcs_world2pix(box[:,::-1]*180/np.pi,0)[:,::-1]+0.5
 		dir  = 2*(bpix[1]>bpix[0])-1
 		# If we are inclusive, find a bounding box, otherwise,
 		# an internal box
@@ -269,8 +270,8 @@ def project(map, shape, wcs, order=3, mode="nearest", cval=0.0):
 	return ndmap(pmap, wcs)
 
 def at(map, pos, order=3, mode="nearest", cval=0.0, unit="coord"):
-	if unit == "pix": pos = sky2pix(map.shape, map.wcs, pos)
-	return enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval)
+	if unit != "pix": pos = sky2pix(map.shape, map.wcs, pos)
+	return enlib.utils.interpol(map, pos, order=order, mode=mode, cval=cval)
 
 def argmax(map, unit="coord"):
 	"""Return the coordinates of the maximum value in the specified map.

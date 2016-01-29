@@ -65,14 +65,12 @@ def transform(from_sys, to_sys, coords, time=55500, site=default_site, pol=None,
 def transform_meta(transfun, coords, fields=["ang","mag"], offset=5e-7):
 	"""Computes metadata for the coordinate transformation functor
 	transfun applied to the coordinate array coords[2,...],
-	such as the induced rotation, magnification and shear.
-	Works by transforming two helper points for each input
-	point, making this 3 times slower than a plain transformation.
+	such as the induced rotation, magnification.
 
 	Currently assumes that input and output coordinates are in
 	non-zenith polar coordinates. Might generalize this later.
 	"""
-	if "mag" in fields: ntrans = 3
+	if "mag_brute" in fields: ntrans = 3
 	elif "ang" in fields: ntrans = 2
 	else: ntrans = 1
 	coords  = np.asarray(coords)
@@ -105,6 +103,8 @@ def transform_meta(transfun, coords, fields=["ang","mag"], offset=5e-7):
 		phiscale = np.cos(ocoords[0,1])
 		res.ang = np.arctan2(diff[0,1],diff[0,0]*phiscale)
 	if "mag" in fields:
+		res.mag = np.cos(res.icoord[1])/np.cos(res.ocoord[1])
+	if "mag_brute" in fields:
 		# Compute the ratio of the areas of the triangles
 		# made up by the three point-sets in the input and
 		# output coordinates. This ratio is always 1 when
