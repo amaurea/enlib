@@ -4,6 +4,7 @@ cimport numpy as np
 cimport cactgetdata
 from libc.stdint cimport uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t, uint64_t
 from libc.stdlib cimport malloc, free
+from libc.stdio  cimport printf
 
 typemap = {
 	"s":np.int16,
@@ -40,7 +41,7 @@ cdef class dirfile:
 		self.close()
 	@property
 	def fields(self):
-		return self.fieldinfo.keys()
+		return sorted(self.fieldinfo.keys())
 	@property
 	def nfield(self):
 		return len(self.fieldinfo)

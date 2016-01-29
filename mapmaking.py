@@ -71,8 +71,10 @@ class SignalMap(Signal):
 		self.dtype= area.dtype
 		self.data = {scan: pmat.PmatMap(scan, area, order=pmat_order, sys=eqsys) for scan in scans}
 	def forward(self, scan, tod, work):
+		if scan not in self.data: return
 		self.data[scan].forward(tod, work)
 	def backward(self, scan, tod, work):
+		if scan not in self.data: return
 		self.data[scan].backward(tod, work)
 	def finish(self, m, work):
 		self.dof.comm.Allreduce(work, m)
@@ -99,9 +101,11 @@ class SignalDmap(Signal):
 	def prepare(self, m):
 		return m.tile2work()
 	def forward(self, scan, tod, work):
+		if scan not in self.data: return
 		mat, ind = self.data[scan]
 		mat.forward(tod, work[ind])
 	def backward(self, scan, tod, work):
+		if scan not in self.data: return
 		mat, ind = self.data[scan]
 		mat.backward(tod, work[ind])
 	def finish(self, m, work):
@@ -126,9 +130,11 @@ class SignalCut(Signal):
 		self.njunk = cutrange[1]
 		self.dof = zipper.ArrayZipper(np.zeros(self.njunk, self.dtype), shared=False, comm=comm)
 	def forward(self, scan, tod, junk):
+		if scan not in self.data: return
 		mat, cutrange = self.data[scan]
 		mat.forward(tod, junk[cutrange[0]:cutrange[1]])
 	def backward(self, scan, tod, junk):
+		if scan not in self.data: return
 		mat, cutrange = self.data[scan]
 		mat.backward(tod, junk[cutrange[0]:cutrange[1]])
 	def zeros(self): return np.zeros(self.njunk, self.dtype)
@@ -180,9 +186,11 @@ class SignalPhase(Signal):
 	def prepare(self, ms):
 		return [m.copy() for m in ms]
 	def forward(self, scan, tod, work):
+		if scan not in self.data: return
 		pid, mat = self.data[scan]
 		mat.forward(tod, work[pid])
 	def backward(self, scan, tod, work):
+		if scan not in self.data: return
 		pid, mat = self.data[scan]
 		mat.backward(tod, work[pid])
 	def finish(self, ms, work):
