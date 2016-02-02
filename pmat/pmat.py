@@ -45,11 +45,11 @@ class PmatMap(PointingMatrix):
 		transform = pos2pix(scan,template,sys)
 
 		# Build pointing interpolator
-		errlim = np.array([1e-3,1e-3,utils.arcmin,utils.arcmin])*acc
+		errlim = np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*acc
 		ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, errlim, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
 		if not ok: print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, scan.entry.id)
 
-		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, template.dtype)
+		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
 		# Use obox to extract a pixel bounding box for this scan.
 		# These are the only pixels pmat needs to concern itself with.
 		# Reducing the number of pixels makes us more memory efficient
@@ -61,19 +61,18 @@ class PmatMap(PointingMatrix):
 		self.dtype = template.dtype
 		self.core = get_core(self.dtype)
 		if order == 0:
-			self.func = self.core.pmat_nearest
-		elif order == 1:
-			self.func = self.core.pmat_linear
+			self.func = self.core.pmat_nearest_bilinear
+			#self.func = self.core.pmat_nearest_grad_implicit
 		else:
-			raise NotImplementedError("order > 1 is not implemented")
+			raise NotImplementedError("order > 0 is not implemented")
 		self.transform = transform
 		self.ipol = ipol
 	def forward(self, tod, m, tmul=1, mmul=1):
 		"""m -> tod"""
-		self.func( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
+		self.func( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T)
 	def backward(self, tod, m, tmul=1, mmul=1):
 		"""tod -> m"""
-		self.func(-1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.pixbox.T)
+		self.func(-1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -85,7 +84,7 @@ class PmatMap(PointingMatrix):
 		dtype = self.dtype
 		pix   = np.empty([ndet,nsamp,2],dtype=dtype)
 		phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
-		self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T)
+		self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T)
 		return pix, phase
 
 def get_moby_pointing(entry, bore, dets, downgrade=1):
@@ -294,7 +293,9 @@ class PmatCut(PointingMatrix):
 		return [{"none":0,"full":1,"bin":2,"exp":3,"poly":4}[kind]]+[int(arg) for arg in args]
 
 class pos2pix:
-	"""Transforms from scan coordinates to pixel-center coordinates."""
+	"""Transforms from scan coordinates to pixel-center coordinates.
+	This becomes discontinuous for scans that wrap from one side of the
+	sky to another for full-sky pixelizations."""
 	def __init__(self, scan, template, sys, ref_phi=0):
 		self.scan, self.template, self.sys = scan, template, sys
 		self.ref_phi = ref_phi
@@ -344,7 +345,7 @@ class PmatPtsrc(PointingMatrix):
 		params   = params.copy()
 		params[:2] = utils.rewind(params[:2].T,self.ref).T
 
-		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, self.dtype)
+		self.rbox, self.nbox, self.vals = extract_interpol_params(ipol, self.dtype)
 		self.comps = np.arange(params.shape[0]-5)
 		self.scan  = scan
 		self.core = pmat_core_32.pmat_core if self.dtype == np.float32 else pmat_core_64.pmat_core
@@ -364,10 +365,10 @@ class PmatPtsrc(PointingMatrix):
 		# Measure ranges. May need to iterate if initial allocation was too small
 		nrange = np.zeros([nsrc,ndet],dtype=np.int32)
 		ranges = np.zeros([nsrc,ndet,100,2],dtype=np.int32)
-		self.core.pmat_ptsrc_prepare(params, rhit, rmax, det_ivars, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
+		self.core.pmat_ptsrc_prepare(params, rhit, rmax, det_ivars, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.yvals.T)
 		if np.max(nrange) > ranges.shape[2]:
 			ranges = np.zeros([nsrc,ndet,np.max(nrange),2],dtype=np.int32)
-			self.core.pmat_ptsrc_prepare(params, rhit, rmax, det_ivars, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.ys.T)
+			self.core.pmat_ptsrc_prepare(params, rhit, rmax, det_ivars, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.yvals.T)
 		self.ranges, self.rangesets, self.offsets = compress_ranges(ranges, nrange, scan.cut, scan.nsamp)
 		self.src_ivars = src_ivars
 		self.nhit = np.sum(self.ranges[:,1]-self.ranges[:,0])
@@ -381,7 +382,7 @@ class PmatPtsrc(PointingMatrix):
 		if pmul is None: pmul = self.pmul
 		pcopy = params.copy()
 		pcopy[:2] = utils.rewind(pcopy[:2].T,self.ref).T
-		self.core.pmat_ptsrc(tmul, pmul, tod.T, pcopy, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.ys.T, self.ranges.T, self.rangesets, self.offsets.T)
+		self.core.pmat_ptsrc(tmul, pmul, tod.T, pcopy, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.ranges.T, self.rangesets, self.offsets.T)
 
 	def extract(self, tod, cut=None, raw=0):
 		"""Extract precomputed pointing and phase information for the selected samples.
@@ -405,21 +406,21 @@ class PmatPtsrc(PointingMatrix):
 		oranges= np.zeros(self.ranges.shape, dtype=np.int32)
 		self.core.pmat_ptsrc_extract(tod.T, srctod, point.T, phase.T, oranges.T, self.scan.boresight.T,
 				self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
-				self.ys.T, self.ranges.T, self.rangesets, self.offsets.T, raw)
+				self.yvals.T, self.ranges.T, self.rangesets, self.offsets.T, raw)
 		if cut:
 			# Cuts are handled by setting the phase (response) to zero
 			mtod = cut.to_mask().astype(self.dtype)
 			mask = np.zeros([self.nhit],dtype=self.dtype)
 			self.core.pmat_ptsrc_extract(mtod.T, mask, point.T, phase.T, oranges.T, self.scan.boresight.T,
 					self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
-					self.ys.T, self.ranges.T, self.rangesets, self.offsets.T, raw)
+					self.yvals.T, self.ranges.T, self.rangesets, self.offsets.T, raw)
 			mask = np.rint(mask)==1
 			phase[mask] = 0
 		# Store the raw pointing offsets, so we can ensure that the point fit does everything the same
 		# way the main mapmaker does.
 		mean_point = np.mean(self.scan.boresight.T[1:],1)
 		raw_offsets = coordinates.recenter(mean_point[:,None] + self.scan.offsets.T[1:], np.concatenate([mean_point,mean_point*0])).T
-		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets, rbox=self.rbox, nbox=self.nbox, ys=self.ys, point_offset=raw_offsets, ivars=np.ones(len(self.scan.dets)))
+		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets, rbox=self.rbox, nbox=self.nbox, yvals=self.yvals, point_offset=raw_offsets, ivars=np.ones(len(self.scan.dets)))
 		return res
 
 config.default("pmat_ptsrc_cell_res", 5, "Cell size in arcmin to use for fast source lookup.")
@@ -448,20 +449,25 @@ class PmatPtsrc2(PointingMatrix):
 
 		# Build interpolator (dec,ra output ordering)
 		ipol, obox = build_pos_interpol(scan, sys)
-		self.rbox, self.nbox, self.ys = extract_interpol_params(ipol, self.dtype)
+		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, self.dtype)
 		# Build source hit grid
 		cbox    = obox[:,:2]
-		cshape  = tuple(((cbox[1]-cbox[0])/cres).astype(int))
+		cshape  = tuple(np.ceil(((cbox[1]-cbox[0])/cres)).astype(int))
 		self.ref = np.mean(cbox,0)
 		srcs[:,:,:2] = utils.rewind(srcs[:,:,:2], self.ref)
 		# A cell is hit if it overlaps both horizontall any vertically
 		# with the point source +- rmax
 		ncell = np.zeros((ndir,)+cshape,dtype=np.int32)
 		cells = np.zeros((ndir,)+cshape+(maxcell,),dtype=np.int32)
+		c0 = cbox[0]; inv_dc = cshape/(cbox[1]-cbox[0])
 		for si, dsrc in enumerate(srcs):
 			for sdir, src in enumerate(dsrc):
-				i1 = np.maximum(0,((src[:2]-rmax-cbox[0])/cres).astype(int))
-				i2 = np.minimum(cshape,((src[:2]+rmax-cbox[0])/cres).astype(int)+1)
+				i1 = (src[:2]-rmax-c0)*inv_dc
+				i2 = (src[:2]+rmax-c0)*inv_dc+1 # +1 because this is a half-open interval
+				# Truncate to edges - any source outside of our region
+				# will be put on one of the edge cells
+				i2 = np.maximum(i1.astype(int), 0)
+				i2 = np.minimum(i2.astype(int), np.cshape-1)
 				if np.any(i1 >= cshape) or np.any(i2 < 0): continue
 				sel= (sdir,slice(i1[0],i2[0]),slice(i1[1],i2[1]))
 				cells[sel][:,:,ncell[sel]] = si
@@ -481,7 +487,7 @@ class PmatPtsrc2(PointingMatrix):
 		t1 = time.time()
 		self.core.pmat_ptsrc2(dir, tmul, pmul, tod.T, wsrcs.T,
 				self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T,
-				self.rbox.T, self.nbox.T, self.ys.T,
+				self.rbox.T, self.nbox.T, self.yvals.T,
 				self.scan.beam[1], self.scan.beam[0,-1], self.rmax,
 				self.cells.T, self.ncell.T, self.cbox.T)
 		# Copy out any amplitudes that may have changed
@@ -506,9 +512,15 @@ def build_pos_interpol(scan, sys):
 	ip_size= config.get("pmat_interpol_max_size")
 	ip_time= config.get("pmat_interpol_max_time")
 	transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
-	# With acc=1, this seems to achieve 0.015" accuracy, which is 10 times worse than what one would
-	# naively expect.
-	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, np.array([0.01*utils.arcsec, 0.01*utils.arcsec ,utils.arcmin,utils.arcmin])*acc, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
+	# The default interpol mesh size may not be enough to reach the
+	# target accuracy here. My tests indicate that a grid max of
+	# 1000000 only succeeds in reaching about 0.1" accuracy. It previously
+	# looked like I could go further because I was using bilinear
+	# interpolation to evaluate the accuracy, not the gradient interpolation
+	# I actually use.
+	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box,
+			np.array([0.1*utils.arcsec, 0.1*utils.arcsec ,utils.arcmin,utils.arcmin])*acc,
+			maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
 	return ipol, obox
 
 class PmatScan(PointingMatrix):
@@ -586,8 +598,27 @@ def compress_ranges(ranges, nrange, cut, nsamp):
 def extract_interpol_params(ipol, dtype):
 	"""Extracts flattend interpolation parameters from an Interpolator object
 	in a form suitable for passing to fortran. Returns rbox[{from,to},nparam],
-	nbox[nparam] (grid size along each input parameter), ys[nout,{cval,dx,dy,dz,...},gridsize]."""
-	rbox = ipol.box
+	nbox[nparam] (grid size along each input parameter)"""
+	rbox  = ipol.box
+	nbox  = np.array(ipol.y.shape[1:])
+	yvals = np.ascontiguousarray(ipol.y.reshape(ipol.y.shape[0],-1).T)
+	return rbox, nbox, yvals
+	#nbox = np.array(ipol.ys.shape[4:])
+	## ipol.ys has shape [2t,2az,2el,{ra,dec,cos,sin},t,az,el]
+	## fortran expects [{ra,dec,cos,sin},{y,dy/dt,dy/daz,dy,del,...},pix]
+	## This format allows us to avoid hard-coding the number of input dimensions,
+	## and is forward compatible for higher order interpolation later.
+	## The disadvantage is that the ordering becomes awkard at higher order.
+	#n = rbox.shape[1]
+	#ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
+	#ys = np.rollaxis(ys.reshape(ys.shape[:2]+(-1,)),-1).astype(dtype)
+	#return rbox, nbox, ys
+
+def extract_interpol_params_old(ipol, dtype):
+	"""Extracts flattend interpolation parameters from an Interpolator object
+	in a form suitable for passing to fortran. Returns rbox[{from,to},nparam],
+	nbox[nparam] (grid size along each input parameter)"""
+	rbox  = ipol.box
 	nbox = np.array(ipol.ys.shape[4:])
 	# ipol.ys has shape [2t,2az,2el,{ra,dec,cos,sin},t,az,el]
 	# fortran expects [{ra,dec,cos,sin},{y,dy/dt,dy/daz,dy,del,...},pix]

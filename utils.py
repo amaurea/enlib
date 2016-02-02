@@ -205,6 +205,11 @@ def delaxes(a, axes):
 	return a[inds]
 
 class flatview:
+	"""Produce a read/writable flattened view of the given array,
+	via with flatview(arr) as farr:
+		do stuff with farr
+	Changes to farr are propagated into the original array.
+	See partial_flatten for details on the flattening."""
 	def __init__(self, array, axes=[], mode="rwc"):
 		self.array = array
 		self.axes  = axes
@@ -233,6 +238,11 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 	float indices into a, inds[len(y),{z}],
 	returns interpolated values at these positions
 	as [{x},{z}]."""
+	a    = np.asanyarray(a)
+	inds = np.asanyarray(inds)
+	inds_orig_nd = inds.ndim
+	if inds.ndim == 1: inds = inds[:,None]
+
 	npre = a.ndim - inds.shape[0]
 	res = np.empty(a.shape[:npre]+inds.shape[1:],dtype=a.dtype)
 	fa, fr = partial_flatten(a, range(npre,a.ndim)), partial_flatten(res, range(npre, res.ndim))
@@ -246,6 +256,7 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 		for i in range(mask.shape[0]):
 			fmask[i] = scipy.ndimage.map_coordinates(mask[i], inds, order=0, mode=mode, cval=cval)
 		fr[fmask] = np.nan
+	if inds_orig_nd == 1: res = res[...,0]
 	return res
 
 def grid(box, shape, endpoint=True, axis=0, flat=False):
@@ -736,12 +747,14 @@ def rect2ang(rect, zenith=True):
 	else:      theta = np.arctan2(z,r)
 	return np.array([phi,theta])
 
-def angdist(a, b, zenith=True):
+def angdist(a, b, zenith=True, lim=1e-7):
 	ra = ang2rect(a, zenith)
 	rb = ang2rect(b, zenith)
 	c = np.sum(ra.T*rb.T,-1).T
 	res = np.zeros(c.shape)
-	res[c < 1] = np.arccos(c[c<1])
+	res[c>=1-lim] = 0
+	res[c<=-(1-lim)] = np.pi
+	res[(c>-(1-lim))&(c<1-lim)] = np.arccos(c[(c>-(1-lim))&(c<1-lim)])
 	return res
 
 def label_unique(a, axes=(), rtol=1e-5, atol=1e-8):
@@ -848,3 +861,8 @@ def find_equal_groups(a, tol=0):
 				res[-1].append(xj)
 				done[j] = True
 	return res
+
+def minmax(a, axis=None):
+	"""Shortcut for np.array([np.min(a),np.max(a)]), since I do this
+	a lot."""
+	return np.array([np.min(a, axis=axis),np.max(a, axis=axis)])

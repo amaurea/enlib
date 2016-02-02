@@ -4,6 +4,7 @@ cimport numpy as np
 cimport cactgetdata
 from libc.stdint cimport uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t, uint64_t
 from libc.stdlib cimport malloc, free
+from libc.stdio  cimport printf
 
 typemap = {
 	"s":np.int16,
@@ -19,14 +20,17 @@ cdef class dirfile:
 	"""This class is a wrapper for the ACTpolDirfile class."""
 	cdef cactgetdata.ACTpolDirfile * dfile
 	cdef dict fieldinfo
+	cdef str _fname
 	def __cinit__(self, fname=None):
 		"""Construdt a dirfile object by opening the specified file fname"""
 		self.dfile = NULL
 		self.fieldinfo = None
+		self._fname = None
 		if fname is not None: self.open(fname)
 	def open(self, fname):
 		if self.is_open(): self.close()
 		self.dfile = cactgetdata.ACTpolDirfile_open(fname)
+		self._fname = fname
 		if self.dfile is NULL:
 			raise IOError("Error opening dirfile '%s'" % fname)
 		self.fieldinfo = self._list_()
@@ -40,10 +44,13 @@ cdef class dirfile:
 		self.close()
 	@property
 	def fields(self):
-		return self.fieldinfo.keys()
+		return sorted(self.fieldinfo.keys())
 	@property
 	def nfield(self):
 		return len(self.fieldinfo)
+	@property
+	def fname(self):
+		return self._fname
 	def category(self, field): return self.fieldinfo[field][0]
 	def native_type(self, field): return chr(self.fieldinfo[field][1])
 	def _list_(self):
