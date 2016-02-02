@@ -783,7 +783,7 @@ def rescale(a, range=[0,1]):
 	return (a-mi)/(ma-mi)*(range[1]-range[0])+range[0]
 
 def split_by_group(a, start, end):
-	"""Split string a info non-group and group sections,
+	"""Split string a into non-group and group sections,
 	where a group is defined as a set of characters from
 	a start character to a corresponding end character."""
 	res, ind, n = [], 0, 0
