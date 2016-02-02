@@ -20,14 +20,17 @@ cdef class dirfile:
 	"""This class is a wrapper for the ACTpolDirfile class."""
 	cdef cactgetdata.ACTpolDirfile * dfile
 	cdef dict fieldinfo
+	cdef str _fname
 	def __cinit__(self, fname=None):
 		"""Construdt a dirfile object by opening the specified file fname"""
 		self.dfile = NULL
 		self.fieldinfo = None
+		self._fname = None
 		if fname is not None: self.open(fname)
 	def open(self, fname):
 		if self.is_open(): self.close()
 		self.dfile = cactgetdata.ACTpolDirfile_open(fname)
+		self._fname = fname
 		if self.dfile is NULL:
 			raise IOError("Error opening dirfile '%s'" % fname)
 		self.fieldinfo = self._list_()
@@ -45,6 +48,9 @@ cdef class dirfile:
 	@property
 	def nfield(self):
 		return len(self.fieldinfo)
+	@property
+	def fname(self):
+		return self._fname
 	def category(self, field): return self.fieldinfo[field][0]
 	def native_type(self, field): return chr(self.fieldinfo[field][1])
 	def _list_(self):
