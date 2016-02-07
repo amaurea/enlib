@@ -309,9 +309,9 @@ def ephem_pos(name, mjd):
 def interpol_pos(from_sys, to_sys, name_or_pos, mjd, site=None, dt=10):
 	"""Given the name of an ephemeris object or a [ra,dec]-type position
 	in radians in from_sys, compute its position in the specified coordinate system for
-	each mjd. The mjds are assumed to cover a short
-	enough range that positions can be effectively
-	interpolated."""
+	each mjd. The mjds are assumed to be sampled densely enough that
+	interpolation will work. For ephemeris objects, positions are
+	computed in steps of 10 seconds by default (controlled by the dt argument)."""
 	box  = utils.widen_box([np.min(mjd),np.max(mjd)], 1e-2)
 	sub_nsamp = max(3,int((box[1]-box[0])*24.*3600/dt))
 	sub_mjd = np.linspace(box[0], box[1], sub_nsamp, endpoint=True)

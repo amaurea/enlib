@@ -796,7 +796,7 @@ def rescale(a, range=[0,1]):
 	return (a-mi)/(ma-mi)*(range[1]-range[0])+range[0]
 
 def split_by_group(a, start, end):
-	"""Split string a info non-group and group sections,
+	"""Split string a into non-group and group sections,
 	where a group is defined as a set of characters from
 	a start character to a corresponding end character."""
 	res, ind, n = [], 0, 0
@@ -834,6 +834,32 @@ def split_outside(a, sep, start, end):
 			toks = seg.split(sep)
 			res[-1] += toks[0]
 			res += toks[1:]
+	return res
+
+def find_equal_groups(a, tol=0):
+	"""Given a[nsamp,ndim], return groups[ngroup][{ind,ind,ind,...}]
+	of indices into a for which all the values in the second index
+	of a is the same. group_equal([[0,1],[1,2],[0,1]]) -> [[0,2],[1]]."""
+	a = np.asarray(a)
+	n = len(a)
+	inds = np.argsort(a[:,0])
+	done = np.full(n, False, dtype=bool)
+	res = []
+	for i in xrange(n):
+		if done[i]: continue
+		xi = inds[i]
+		res.append([xi])
+		done[i] = True
+		for j in xrange(i+1,n):
+			if done[j]: continue
+			xj = inds[j]
+			if a[xj,0] - a[xi,0] > tol:
+				# Current group is done
+				break
+			if np.sum((a[xj]-a[xi])**2) <= tol**2:
+				# Close enough
+				res[-1].append(xj)
+				done[j] = True
 	return res
 
 def minmax(a, axis=None):
