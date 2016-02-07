@@ -540,6 +540,7 @@ class FilterAddSrcs:
 		self.data = {}
 		for scan in scans:
 			self.data[scan] = pmat.PmatPtsrc2(scan, params, sys=eqsys, pmul=mul)
+			#self.data[scan] = pmat.PmatPtsrc(scan, params, sys=eqsys, pmul=mul)
 	def __call__(self, scan, tod):
 		pmat = self.data[scan]
 		pmat.forward(tod, self.params.astype(tod.dtype))

@@ -345,7 +345,7 @@ class PmatPtsrc(PointingMatrix):
 		params   = params.copy()
 		params[:2] = utils.rewind(params[:2].T,self.ref).T
 
-		self.rbox, self.nbox, self.vals = extract_interpol_params(ipol, self.dtype)
+		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, self.dtype)
 		self.comps = np.arange(params.shape[0]-5)
 		self.scan  = scan
 		self.core = pmat_core_32.pmat_core if self.dtype == np.float32 else pmat_core_64.pmat_core
@@ -356,6 +356,10 @@ class PmatPtsrc(PointingMatrix):
 		# rhit is the inverse of the squared amplitude-weighted inverse beam for
 		# some reason. But it is basically going to be our beam size.
 		print "FIXME: Point source format incompatible with PmatPtsrc"
+		# To be precise, this function assumes that point sources are [param,nsrc]
+		# rathar than [nsrc,param], that PmatPtsrc2 assumes. I should decide which
+		# one I want. The whole point source stuff is messy at the moment.
+
 		rhit = np.zeros(nsrc)+(np.sum(1./params[-3]*params[2]**2)/np.sum(params[2]**2))**0.5
 		rmax = rhit*rmul
 		try: det_ivars = scan.noise.ivar
@@ -438,7 +442,7 @@ class PmatPtsrc2(PointingMatrix):
 		ndir       = srcs.shape[1]
 		self.core  = get_core(self.dtype)
 		self.scan  = scan
-		maxcell    = 10 # max numer of sources per cell
+		maxcell    = 50 # max numer of sources per cell
 
 		# Investigate the beam to find the max relevant radius
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
@@ -455,6 +459,7 @@ class PmatPtsrc2(PointingMatrix):
 		cshape  = tuple(np.ceil(((cbox[1]-cbox[0])/cres)).astype(int))
 		self.ref = np.mean(cbox,0)
 		srcs[:,:,:2] = utils.rewind(srcs[:,:,:2], self.ref)
+
 		# A cell is hit if it overlaps both horizontall any vertically
 		# with the point source +- rmax
 		ncell = np.zeros((ndir,)+cshape,dtype=np.int32)
@@ -466,8 +471,8 @@ class PmatPtsrc2(PointingMatrix):
 				i2 = (src[:2]+rmax-c0)*inv_dc+1 # +1 because this is a half-open interval
 				# Truncate to edges - any source outside of our region
 				# will be put on one of the edge cells
-				i2 = np.maximum(i1.astype(int), 0)
-				i2 = np.minimum(i2.astype(int), np.cshape-1)
+				i1 = np.maximum(i1.astype(int), 0)
+				i2 = np.minimum(i2.astype(int), np.array(cshape)-1)
 				if np.any(i1 >= cshape) or np.any(i2 < 0): continue
 				sel= (sdir,slice(i1[0],i2[0]),slice(i1[1],i2[1]))
 				cells[sel][:,:,ncell[sel]] = si

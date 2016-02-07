@@ -25,7 +25,7 @@ possible. Parametrizing them in a standard format may be difficult.
 import numpy as np
 from enlib import utils
 
-def read(fname, format="auto", exact=None, default_beam=1*utils.arcmin, amp_factor=1/395.11):
+def read(fname, format="auto", exact=None, default_beam=1*utils.arcmin, amp_factor=None):
 	"""Try to read a point source file in any format."""
 	if format == "skn": return read_skn(fname, default_beam=default_beam)
 	elif format == "rahul_marius": return read_rahul_marius(fname, exact=exact, default_beam=default_beam, amp_factor=amp_factor)
@@ -42,28 +42,33 @@ def write(fname, srcs, format="auto"):
 		write_skn_standard(fname, srcs)
 	else: ValueError("Unrecognized format '%s'" % format)
 
-def read_rahul_marius(fname, exact=None, default_beam=1*utils.arcmin, amp_factor=1/395.11):
+def read_rahul_marius(fname, exact=None, default_beam=1*utils.arcmin, amp_factor=None):
 	"""This format has no beam information, and lists only T amps in Jy/steradian.
 	Beams will be set to a default 1', and the amps will be converted
 	to amplitude. Default is to read only the
 	data for which confirmed exact positions are available, as that is the
 	purpose of the rahul marius lists."""
 	vals = []
-	if exact is None: exact = True
+	if amp_factor is None: amp_factor = 1
+	if exact is None: exact = False
 	with open(fname, "r") as f:
 		for line in f:
+			line = line.strip()
 			if len(line) == 0 or line[0] == '#': continue
 			toks = line.split()
-			if len(toks) != 13 and len(toks) != 15: raise IOError("File is not in rahul marius format")
+			if len(toks) != 10 and len(toks) != 13 and len(toks) != 15: raise IOError("File is not in rahul marius format")
 			ra, dec = [float(toks[i]) for i in [2,3]]
 			amp = np.array([float(toks[4]), 0, 0])
 			if exact:
-				has_exact = int(toks[10]) >= 0
+				has_exact = len(toks) > 10 and int(toks[10]) >= 0
 				if not has_exact: continue
 				ra_true, dec_true = float(toks[13]), float(toks[14])
 				ra, dec = ra_true, dec_true
 			vals.append([dec*utils.degree, ra*utils.degree]+list(amp*amp_factor)+[default_beam,default_beam,0])
 	return np.array(vals)
+
+def read_rahul_marius_old(fname, exact=None, default_beam=1*utils.arcmin, amp_factor=1/395.11):
+	return read_rahul_marius(fname, exact=None, default_beam=default_beam, amp_factor=amp_factor)
 
 def read_skn(fname, default_beam=1*utils.arcmin):
 	tmp = np.loadtxt(fname)
