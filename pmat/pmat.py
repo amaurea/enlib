@@ -8,6 +8,7 @@ to incrementally project different parts of the signal.
 """
 import numpy as np, bunch, time
 from enlib import enmap, interpol, utils, coordinates, config, errors, array_ops
+from enlib import parallax
 import pmat_core_32
 import pmat_core_64
 def get_core(dtype):
@@ -45,7 +46,7 @@ class PmatMap(PointingMatrix):
 		transform = pos2pix(scan,template,sys)
 
 		# Build pointing interpolator
-		errlim = np.array([1e-2,1e-2,utils.arcmin,utils.arcmin])*acc
+		errlim = np.array([1e-3,1e-3,utils.arcmin,utils.arcmin])*acc
 		ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, errlim, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
 		if not ok: print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, scan.entry.id)
 
@@ -292,6 +293,7 @@ class PmatCut(PointingMatrix):
 		if kind in ["bin","exp","poly"]: args[0] = args[0]*srate+0.5
 		return [{"none":0,"full":1,"bin":2,"exp":3,"poly":4}[kind]]+[int(arg) for arg in args]
 
+config.default("pmat_parallax_au", 0, "Sun distance to use for parallax correction in pointing matrices, in AU. 0 disables parallax.")
 class pos2pix:
 	"""Transforms from scan coordinates to pixel-center coordinates.
 	This becomes discontinuous for scans that wrap from one side of the
@@ -304,6 +306,13 @@ class pos2pix:
 		ipos  = ipos.reshape(ipos.shape[0],-1)
 		time  = self.scan.mjd0 + ipos[0]/utils.day2sec
 		opos = coordinates.transform(self.scan.sys, self.sys, ipos[1:], time=time, site=self.scan.site, pol=True)
+		# Parallax correction
+		sundist = config.get("pmat_parallax_au")
+		if sundist:
+			# Transform to a sun-centered coordinate system, assuming all objects
+			# are at a distance of sundist from the sun
+			opos[1::-1] = parallax.earth2sun(opos[1::-1], self.scan.mjd0, sundist)
+
 		opix = np.zeros((4,)+ipos.shape[1:])
 		if self.template is not None:
 			opix[:2] = self.template.sky2pix(opos[1::-1],safe=True)
@@ -438,11 +447,17 @@ class PmatPtsrc2(PointingMatrix):
 		# srcs is [ndir,nsrc,{dec,ra,T,Q,U,ibeams}]
 		sys   = config.get("map_eqsys", sys)
 		cres  = config.get("pmat_ptsrc_cell_res")*utils.arcmin
-		self.dtype = srcs.dtype
 		ndir       = srcs.shape[1]
-		self.core  = get_core(self.dtype)
 		self.scan  = scan
 		maxcell    = 50 # max numer of sources per cell
+
+		# Compute parallax displacement if necessary
+		sundist = config.get("pmat_parallax_au")
+		self.dpos = 0
+		if sundist:
+			# Transformation to a sun-centered system
+			self.dpos = parallax.earth2sun(srcs.T[:2], self.scan.mjd0, sundist, diff=True).T
+		srcs[:,:,:2] += self.dpos
 
 		# Investigate the beam to find the max relevant radius
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
@@ -453,7 +468,7 @@ class PmatPtsrc2(PointingMatrix):
 
 		# Build interpolator (dec,ra output ordering)
 		ipol, obox = build_pos_interpol(scan, sys)
-		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, self.dtype)
+		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, srcs.dtype)
 		# Build source hit grid
 		cbox    = obox[:,:2]
 		cshape  = tuple(np.ceil(((cbox[1]-cbox[0])/cres)).astype(int))
@@ -488,9 +503,10 @@ class PmatPtsrc2(PointingMatrix):
 		if srcs.ndim == 2: srcs = srcs[:,None]
 		# Handle angle wrapping without modifying the original srcs array
 		wsrcs = srcs.copy()
-		wsrcs[:,:,:2] = utils.rewind(srcs[:,:,:2], self.ref)
+		wsrcs[:,:,:2] = utils.rewind(srcs[:,:,:2], self.ref) + self.dpos
 		t1 = time.time()
-		self.core.pmat_ptsrc2(dir, tmul, pmul, tod.T, wsrcs.T,
+		core = get_core(tod.dtype)
+		core.pmat_ptsrc2(dir, tmul, pmul, tod.T, wsrcs.T,
 				self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T,
 				self.rbox.T, self.nbox.T, self.yvals.T,
 				self.scan.beam[1], self.scan.beam[0,-1], self.rmax,

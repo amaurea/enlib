@@ -543,10 +543,10 @@ class FilterAddSrcs:
 			#self.data[scan] = pmat.PmatPtsrc(scan, params, sys=eqsys, pmul=mul)
 	def __call__(self, scan, tod):
 		pmat = self.data[scan]
-		pmat.forward(tod, self.params.astype(tod.dtype))
+		pmat.forward(tod, self.params)
 
 class FilterWindow:
-	# Windowing filter tapers the stard and end of the TOD
+	# Windowing filter tapers the start and end of the TOD
 	def __init__(self, width):
 		self.width = width
 	def __call__(self, scan, tod):

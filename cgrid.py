@@ -197,6 +197,8 @@ def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%g", color="00
 		labels.append(label)
 		boxes.append(box)
 	boxes  = np.array(boxes).astype(int)
+	# Image might contain no lines at all.
+	if boxes.size == 0: boxes = np.array([[0,0],[0,0]])
 	# Pad image to be large enough to hold the displaced labels
 	bounds = calc_bounds(boxes, img.size)
 	img    = expand_image(img, bounds)

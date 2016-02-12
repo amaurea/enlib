@@ -60,6 +60,7 @@ contains
 				do si = 1, nsamp
 					include 'helper_bilin.f90'
 					include 'helper_pixphase.f90'
+					!write(*,*) di, si, pix
 					! If tests are not free, despite branch prediction. Adding a test
 					! for dir here takes the time from 0.85 to 1.15, a 35% increase!
 					if(tmul .eq. 0) then
@@ -925,7 +926,8 @@ contains
 			implicit none
 			integer, intent(in)    :: dir
 			real(_), intent(in)    :: tmul, pmul
-			real(_), intent(inout) :: tod(:,:), srcs(:,:,:)
+			real(_), intent(inout) :: tod(:,:)
+			real(8), intent(inout) :: srcs(:,:,:)
 			real(8), intent(in)    :: bore(:,:), det_pos(:,:), rbox(:,:), yvals(:,:)
 			real(8), intent(in)    :: cbox(:,:), beam(:), rbeam, rmax
 			real(_), intent(in)    :: det_comps(:,:)
@@ -938,7 +940,7 @@ contains
 			real(8) :: point(4), phase(3), dec, ra, ddec, dra, ibeam(3)
 			real(_) :: inv_bres, bx,by,br,brel,bval, c2p,s2p,c1p,s1p
 			real(_), parameter   :: pi = 3.14159265359d0
-			real(_), allocatable :: amps(:,:,:,:), cosdec(:,:), ys(:,:,:)
+			real(8), allocatable :: amps(:,:,:,:), cosdec(:,:), ys(:,:,:)
 			integer, allocatable :: scandir(:)
 			nsamp   = size(tod, 1)
 			ndet    = size(tod, 2)
@@ -995,7 +997,7 @@ contains
 			else
 				amps = 0
 			end if
-			!$omp parallel private(id,di,si,xrel,xind,ig,point,phase,cell,cell_ind,cid,dec,ra,ibeam,ddec,dra,sdir,c2p,s2p,c1p,s1p,bx,by,br,brel,bind,bval)
+			!$omp parallel private(id,di,si,xrel,xind,ig,work,point,phase,cell,cell_ind,cid,dec,ra,ibeam,ddec,dra,sdir,c2p,s2p,c1p,s1p,bx,by,br,brel,bind,bval)
 			id = omp_get_thread_num()+1
 			!$omp do
 			do di = 1, ndet

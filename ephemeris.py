@@ -5,6 +5,7 @@ from enlib import utils
 def mjd2djd(mjd): return np.asarray(mjd) + 2400000.5 - 2415020
 def define_subsamples(t, dt=10):
 	t = np.asarray(t)
+	if t.ndim == 0: return np.array([t]), np.array([0])
 	if dt == 0: return t, np.arange(len(t))
 	box       = utils.widen_box([np.min(t),np.max(t)], 1e-2)
 	sub_nsamp = max(3,int((box[1]-box[0])/dt))
@@ -16,14 +17,17 @@ def ephem_raw(objname, mjd):
 	"""Simple wrapper around pyephem. Returns astrometric ra, dec, rad (AU)
 	for each specified modified julian date for the given object name
 	(case sensitive)."""
-	djd = mjd2djd(mjd)
-	obj = getattr(ephem, objname)()
-	res = np.zeros([3,len(djd)])
-	for i, t in enumerate(djd):
-		obj.compute(t)
-		res[0,i] = obj.a_ra
-		res[1,i] = obj.a_dec
-		res[2,i] = obj.earth_distance
+	mjd = np.asarray(mjd)
+	with utils.flatview(mjd, mode="r"):
+		djd = mjd2djd(mjd)
+		obj = getattr(ephem, objname)()
+		res = np.zeros([3,len(djd)])
+		for i, t in enumerate(djd):
+			obj.compute(t)
+			res[0,i] = obj.a_ra
+			res[1,i] = obj.a_dec
+			res[2,i] = obj.earth_distance
+	res.reshape((3,)+mjd.shape)
 	return res
 
 def ephem_vec(objname, mjd, dt=10):
