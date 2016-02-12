@@ -43,6 +43,8 @@ def calc_gridinfo(shape, wcs, steps=[2,2], nstep=[200,200]):
 
 	gridinfo.lon = []
 	gridinfo.lat = []
+	gridinfo.shape = shape[-2:]
+	gridinfo.wcs = wcs
 	# Draw lines of longitude
 	for phi in np.arange(nphi)*steps[1]:
 		pixs = np.array(wcs.wcs_world2pix(phi, np.linspace(-90,90,nstep[0],endpoint=True), 0)).T
@@ -54,9 +56,9 @@ def calc_gridinfo(shape, wcs, steps=[2,2], nstep=[200,200]):
 		gridinfo.lat.append((theta,calc_line_segs(pixs)))
 	return gridinfo
 
-def draw_grid(img, gridinfo, color="00000020"):
+def draw_grid(gridinfo, color="00000020", background=None):
 	col = tuple([int(color[i:i+2],16) for i in range(0,len(color),2)])
-	grid = Image.new("RGBA", img.size)
+	grid = Image.new("RGBA", gridinfo.shape[-2:][::-1])
 	draw = ImageDraw.Draw(grid, "RGBA")
 	for cval, segs in gridinfo.lon:
 		for seg in segs:
@@ -64,7 +66,9 @@ def draw_grid(img, gridinfo, color="00000020"):
 	for cval, segs in gridinfo.lat:
 		for seg in segs:
 			draw.line([tuple(i) for i in seg], fill=col)
-	return Image.alpha_composite(img, grid)
+	if background is not None:
+		grid = Image.alpha_composite(background, grid)
+	return grid
 
 def calc_label_pos(linesegs, shape):
 	"""Given linegegs = [values, curves], where values[ncurve]
