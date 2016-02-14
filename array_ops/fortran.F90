@@ -260,5 +260,60 @@ subroutine ang2rect(ang, rect)
 	end do
 end subroutine
 
+! Find areas in imap where values cross from below to above each
+! value in vals, which must be sorted in ascending order. omap
+! will be 0 in pixels where no crossing happens, and i where
+! a crossing for vals(i) happens.
+subroutine find_contours(imap, vals, omap)
+	implicit none
+	real(_), intent(in) :: imap(:,:), vals(:)
+	integer, intent(inout) :: omap(:,:)
+	integer, allocatable   :: work(:,:)
+	real(_) :: v
+	integer :: y, x, ip, i, ny, nx, nv
+	logical :: left, right
+	ny = size(imap,1)
+	nx = size(imap,2)
+	nv = size(vals)
+	allocate(work(ny,nx))
+	do x = 1, nx
+		do y = 1, ny
+			ip = 1
+			! Find which "bin" each value belongs in: 0 for for less
+			! than vals(1), and so on
+			v = imap(y,x)
+			! nan is a pretty common case
+			if(.not. (v .eq. v)) then
+				work(y,x) = 1
+				cycle
+			end if
+			left  = .true.
+			right = .true.
+			if(ip >   1) left  = v >= vals(ip-1)
+			if(ip <= nv) right = v <  vals(ip)
+			if(left .and. right) then
+				i = ip
+			else
+				! Full search. No binary for now.
+				do i = 1, nv
+					if(v < vals(i)) exit
+				end do
+			end if
+			work(y,x) = i
+			ip = i
+		end do
+	end do
+	! Edge detection
+	omap = 0
+	do x = 1, nx-1
+		do y = 1, ny-1
+			if(work(y,x) .ne. work(y+1,x)) then
+				omap(y,x) = min(work(y,x),work(y+1,x))
+			elseif(work(y,x) .ne. work(y,x+1)) then
+				omap(y,x) = min(work(y,x),work(y,x+1))
+			end if
+		end do
+	end do
+end subroutine
 
 end module

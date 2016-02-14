@@ -20,6 +20,10 @@ class Colorscheme:
 		except AttributeError:
 			pass
 		toks = desc.split(",")
+		if len(toks) == 1:
+			# Constant color mode
+			desc = "0:%s,1:%s" % (desc,desc)
+			toks = desc.split(",")
 		# Construct the output arrays
 		vals = np.zeros((len(toks)))
 		cols = np.zeros((len(toks),4))

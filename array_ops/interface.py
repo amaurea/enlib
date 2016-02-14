@@ -183,3 +183,12 @@ def matmul(A,B,axes=[-2,-1]):
 	if mustadd: Xf = utils.delaxes(Xf, [1])
 	X = utils.partial_expand(Xf, B.shape, bax)
 	return X
+
+# This one might belong in a different module.
+# In general array_ops needs to be cleaned up.
+def find_contours(imap, vals, omap=None):
+	core = get_core(imap.dtype)
+	if omap is None:
+		omap = imap.astype(np.int32)*0
+	core.find_contours(imap.T, vals, omap.T)
+	return omap

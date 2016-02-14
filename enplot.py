@@ -1,5 +1,6 @@
 import numpy as np, argparse, time, sys, warnings, os, shlex, glob, PIL.Image
-from enlib import enmap, colorize, mpi, cgrid, utils
+from scipy import ndimage
+from enlib import enmap, colorize, mpi, cgrid, utils, array_ops, memory
 
 class Printer:
 	def __init__(self, level=1, prefix=""):
@@ -7,6 +8,7 @@ class Printer:
 		self.prefix = prefix
 	def write(self, desc, level, exact=False, newline=True, prepend=""):
 		if level == self.level or not exact and level <= self.level:
+			prepend = "%6.2f " % (memory.max()/1024.**3) + prepend
 			sys.stderr.write(prepend + self.prefix + desc + ("\n" if newline else ""))
 	def push(self, desc):
 		return Printer(self.level, self.prefix + desc)
@@ -119,6 +121,9 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser.add_argument("-a", "--autocrop", action="store_true")
 	parser.add_argument("-A", "--autocrop-each", action="store_true")
 	parser.add_argument("-L", "--layers", action="store_true")
+	parser.add_argument("-C", "--contours", type=str, default=None)
+	parser.add_argument("--contour-color", type=str, default="000000")
+	parser.add_argument("--contour-width", type=int, default=1)
 	if isinstance(args, basestring):
 		oargs = []
 		for tok in shlex.split(args):
@@ -188,14 +193,21 @@ def draw_map_field(map, args, crange=None, return_layers=False, return_info=Fals
 	returned instead of an image, wich each entry being a component of the image,
 	such as the base image, the coordinate grid, the labels, etc. If return_bounds
 	is True, then the """
-	map = prepare_map_field(map, args, crange, printer=printer)
+	map, color = prepare_map_field(map, args, crange, printer=printer)
 	layers = []
 	names  = []
 	# Image layer
 	with printer.time("to image", 3):
-		img = PIL.Image.fromarray(utils.moveaxis(map,0,2)).convert('RGBA')
+		img = PIL.Image.fromarray(utils.moveaxis(color,0,2)).convert('RGBA')
 	layers.append((img,[[0,0],img.size]))
 	names.append("img")
+	# Contours
+	if args.contours:
+		with printer.time("draw contours", 3):
+			contour_levels = calc_contours(crange, args)
+			cimg = draw_contours(map, contour_levels, args)
+			layers.append((cimg, [[0,0],cimg.size]))
+			names.append("cont")
 	# Coordinate grid
 	if args.grid % 2:
 		with printer.time("draw grid", 3):
@@ -223,7 +235,7 @@ def draw_map_field_mpl(map, args, crange=None, printer=noprint):
 	"""Render a map field using matplotlib. Less tested and
 	maintained than draw_map_field, and supports fewer features.
 	Returns an object one can call savefig on to draw."""
-	map = prepare_map_field(map, args, crange, printer=printer)
+	map, color = prepare_map_field(map, args, crange, printer=printer)
 	# Set up matplotlib. We do it locally here to
 	# avoid having it as a dependency in general
 	with printer.time("matplotplib", 3):
@@ -235,7 +247,7 @@ def draw_map_field_mpl(map, args, crange=None, printer=noprint):
 		winch, hinch = map.shape[2]/dpi, map.shape[1]/dpi
 		fig  = pyplot.figure(figsize=(winch+pad,hinch+pad))
 		box  = map.box()*180/np.pi
-		pyplot.imshow(utils.moveaxis(map,0,2), extent=[box[0,1],box[1,1],box[1,0],box[0,0]])
+		pyplot.imshow(utils.moveaxis(color,0,2), extent=[box[0,1],box[1,1],box[1,0],box[0,0]])
 		# Make conformal in center of image
 		pyplot.axes().set_aspect(1/np.cos(np.mean(map.box()[:,0])))
 		if args.grid % 2:
@@ -335,6 +347,48 @@ def draw_grid_labels(ginfo, args):
 	labels, bounds = cgrid.draw_labels(canvas, linfo, fname=args.font, fsize=args.font_size, color=args.font_color, return_bounds=True)
 	return labels, bounds
 
+def calc_contours(crange, args):
+	"""Returns a list of values at which to place contours based on
+	the valure range of the map crange[{from,to}] and the contour
+	specification in args.
+
+	Contour specifications:
+		base:step or val,val,val...
+	base: number
+	step: number (explicit), -number (relative)
+	"""
+	if args.contours is None: return None
+	vals = args.contours.split(",")
+	if len(vals) > 1:
+		# Explicit values
+		return np.array([float(v) for v in vals if len(v) > 0])
+	else:
+		# base:step
+		toks = args.contours.split(":")
+		if len(toks) == 1:
+			base, step = 0, float(toks[0])
+		else:
+			base, step = float(toks[0]), float(toks[1])
+		if step < 0:
+			step = (crange[1]-crange[0])/(-step)
+		# expand to fill crange
+		a = int(np.ceil ((crange[0]-base)/step))
+		b = int(np.floor((crange[1]-base)/step))+1
+		return np.arange(a,b)*step + base
+
+def draw_contours(map, contours, args):
+	img  = PIL.Image.new("RGBA", map.shape[-2:][::-1])
+	cmap = array_ops.find_contours(map[0], contours)
+	cmap = contour_widen(cmap, args.contour_width)
+	# Make non-contour areas transparent
+	cmap = (cmap-1).astype(float)
+	cmap[cmap<0] = np.nan
+	# Rescale to 0:1
+	if len(contours) > 1:
+		cmap /= len(contours)-1
+	color = colorize.colorize(cmap, desc=args.contour_color, method=args.method)
+	return PIL.Image.fromarray(color).convert('RGBA')
+
 def standardize_images(tuples):
 	"""Given a list of (img,bounds), composite them on top of each other
 	(first at the bottom), and return the total image and its new bounds."""
@@ -367,15 +421,16 @@ def prepare_map_field(map, args, crange=None, printer=noprint):
 	if args.autocrop_each:
 		map = enmap.autocrop(map)
 	with printer.time("colorize", 3):
-		map = map_to_color(map, crange, args)
-	return map
+		color = map_to_color(map, crange, args)
+	return map, color
 
-class dprint:
-	def __init__(self, desc, args):
-		self.desc = desc
-		self.args = args
-	def __enter__(self):
-		self.t1 = time.time()
-	def __exit__(self, type, value, traceback):
-		if self.args.verbosity >= 3:
-			sys.stderr.write("%6.2f %s\n" % (time.time()-self.t1,self.desc))
+def makefoot(n):
+	b = np.full((2*n+1,2*n+1),1)
+	b[n,n] = 0
+	b = ndimage.distance_transform_edt(b)
+	return b[1::2,1::2] < n
+
+def contour_widen(cmap, width):
+	if width <= 1: return cmap
+	foot = makefoot(width)
+	return ndimage.grey_dilation(cmap, footprint=foot)
