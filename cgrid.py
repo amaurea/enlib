@@ -177,16 +177,20 @@ def expand_image(img, bounds):
 	res.paste(img, tuple(-bounds[0]))
 	return res
 
-def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%g", color="000000", return_bounds=False):
-	# For each label, determine the size the text would be, and
-	# displace it left, right, up or down depending on which edge
-	# of the image it is at
-	col = tuple([int(color[i:i+2],16) for i in range(0,len(color),2)])
+def get_font(fsize=16, fname="arial.ttf"):
 	try:
 		font = ImageFont.truetype(font=fname, size=fsize)
 	except IOError:
 		# Load fallback font
 		font = ImageFont.truetype(font="arial.ttf", size=fsize, filename=os.path.join(os.path.dirname(__file__), "arial.ttf"))
+	return font
+
+def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%g", color="000000", return_bounds=False):
+	# For each label, determine the size the text would be, and
+	# displace it left, right, up or down depending on which edge
+	# of the image it is at
+	col = tuple([int(color[i:i+2],16) for i in range(0,len(color),2)])
+	font = get_font(fsize, fname)
 	labels = []
 	boxes  = []
 	for cval, x, y in label_pos:

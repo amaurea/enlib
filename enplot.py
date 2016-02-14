@@ -1,4 +1,4 @@
-import numpy as np, argparse, time, sys, warnings, os, shlex, glob, PIL.Image
+import numpy as np, argparse, time, sys, warnings, os, shlex, glob, PIL.Image, PIL.ImageDraw
 from scipy import ndimage
 from enlib import enmap, colorize, mpi, cgrid, utils, array_ops, memory
 
@@ -124,6 +124,7 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser.add_argument("-C", "--contours", type=str, default=None)
 	parser.add_argument("--contour-color", type=str, default="000000")
 	parser.add_argument("--contour-width", type=int, default=1)
+	parser.add_argument("--annotate",      type=str, default=None)
 	if isinstance(args, basestring):
 		oargs = []
 		for tok in shlex.split(args):
@@ -208,6 +209,13 @@ def draw_map_field(map, args, crange=None, return_layers=False, return_info=Fals
 			cimg = draw_contours(map, contour_levels, args)
 			layers.append((cimg, [[0,0],cimg.size]))
 			names.append("cont")
+	# Annotations
+	if args.annotate:
+		with printer.time("draw annotations", 3):
+			annots = parse_annotations(args.annotate)
+			aimg = draw_annotations(map, annots, args)
+			layers.append((aimg, [[0,0],aimg.size]))
+			names.append("annot")
 	# Coordinate grid
 	if args.grid % 2:
 		with printer.time("draw grid", 3):
@@ -389,6 +397,55 @@ def draw_contours(map, contours, args):
 	color = colorize.colorize(cmap, desc=args.contour_color, method=args.method)
 	return PIL.Image.fromarray(color).convert('RGBA')
 
+def parse_annotations(afile):
+	with open(afile,"r") as f:
+		return [shlex.split(line) for line in f]
+
+def draw_annotations(map, annots, args):
+	"""Draw a set of annotations on the map. These are specified
+	as a list of ["type",param,param,...]. The recognized formats
+	are:
+		c[ircle] lat lon dy dx [rad [width [color]]]
+		t[ext]   lat lon dy dx text [size [color]]
+		l[ine]   lat lon dy dx lat lon dy dx [width [color]]
+	dy and dx are pixel-unit offsets from the specified lat/lon.
+	This is useful for e.g. placing text next to circles."""
+	img  = PIL.Image.new("RGBA", map.shape[-2:][::-1])
+	draw = PIL.ImageDraw.Draw(img, "RGBA")
+	font = None
+	font_size_prev = 0
+	def topix(pos_off):
+		pix = map.sky2pix(np.array([float(w) for w in pos_off[:2]])*utils.degree)
+		pix += np.array([float(w) for w in pos_off[2:]])
+		return pix[::-1].astype(int)
+	for annot in annots:
+		atype = annot[0].lower()
+		color = "black"
+		width = 2
+		if atype in ["c","circle"]:
+			x,y = topix(annot[1:5])
+			rad = 8
+			if len(annot) > 5: rad   = int(annot[5])
+			if len(annot) > 6: width = int(annot[6])
+			if len(annot) > 7: color = annot[7]
+			antialias = 1 if width < 1 else 4
+			draw_ellipse(img,
+					(x-rad,y-rad,x+rad,y+rad),
+					outline=color,width=width, antialias=antialias)
+		elif atype in ["t", "text"]:
+			x,y  = topix(annot[1:5])
+			text = annot[5]
+			size = 16
+			if len(annot) > 6: size  = int(annot[6])
+			if len(annot) > 7: color = annot[7]
+			if font is None or size != font_sze_prev:
+				font = cgrid.get_font(size)
+				font_size_prev = size
+			draw.text((x, y), text, color, font=font)
+		else:
+			raise NotImplementedError
+	return img
+
 def standardize_images(tuples):
 	"""Given a list of (img,bounds), composite them on top of each other
 	(first at the bottom), and return the total image and its new bounds."""
@@ -434,3 +491,35 @@ def contour_widen(cmap, width):
 	if width <= 1: return cmap
 	foot = makefoot(width)
 	return ndimage.grey_dilation(cmap, footprint=foot)
+
+def draw_ellipse(image, bounds, width=1, outline='white', antialias=1):
+	"""Improved ellipse drawing function, based on PIL.ImageDraw.
+	Improved from
+	http://stackoverflow.com/questions/32504246/draw-ellipse-in-python-pil-with-line-thickness"""
+	print "A", bounds
+	bounds = np.asarray(bounds)
+	# Create small coordinate system around ellipse, with a
+	# margin of width on each side
+	esize  = bounds[2:]-bounds[:2] + 2*width
+	ebounds= bounds - bounds[[0,1,0,1]] + width
+	print "B", esize
+	# Use a single channel image (mode='L') as mask.
+	# The size of the mask can be increased relative to the imput image
+	# to get smoother looking results. 
+	mask = PIL.Image.new(size=esize*antialias, mode='L', color='black')
+	print "C", mask.size
+	draw = PIL.ImageDraw.Draw(mask)
+	# draw outer shape in white (color) and inner shape in black (transparent)
+	for offset, fill in (width/-2.0, 'white'), (width/2.0, 'black'):
+		a = (ebounds[:2] + offset)*antialias
+		b = (ebounds[2:] - offset)*antialias
+		print "a", a
+		print "b", b
+		draw.ellipse([a[0],a[1],b[0],b[1]], fill=fill)
+	# downsample the mask using PIL.Image.LANCZOS 
+	# (a high-quality downsampling filter).
+	mask = mask.resize(esize, PIL.Image.LANCZOS)
+	print "D", mask.size
+	# paste outline color to input image through the mask
+	print "E", tuple(bounds[:2]-width)
+	image.paste(outline, tuple(bounds[:2]-width), mask=mask)
