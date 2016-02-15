@@ -41,6 +41,7 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 		ifile = ifiles[fi]
 		with printer.time("read %s" % ifile, 3):
 			map   = get_map(ifile, args)
+			ifile = ifile.split(":")[0]
 		with printer.time("ranges", 3):
 			crange= get_color_range(map, args)
 		for ci, cr in enumerate(crange.T):
@@ -438,10 +439,11 @@ def draw_annotations(map, annots, args):
 			size = 16
 			if len(annot) > 6: size  = int(annot[6])
 			if len(annot) > 7: color = annot[7]
-			if font is None or size != font_sze_prev:
+			if font is None or size != font_size_prev:
 				font = cgrid.get_font(size)
 				font_size_prev = size
-			draw.text((x, y), text, color, font=font)
+			tbox = font.getsize(text)
+			draw.text((x-tbox[0]/2, y-tbox[1]/2), text, color, font=font)
 		else:
 			raise NotImplementedError
 	return img
