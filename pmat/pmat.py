@@ -54,7 +54,7 @@ class PmatMap(PointingMatrix):
 		# Use obox to extract a pixel bounding box for this scan.
 		# These are the only pixels pmat needs to concern itself with.
 		# Reducing the number of pixels makes us more memory efficient
-		self.pixbox = build_pixbox(obox[:,:2], template.shape[-2:])
+		self.pixbox, self.nphi = build_pixbox(obox[:,:2], template)
 
 		self.comps= np.arange(template.shape[0])
 		self.scan  = scan
@@ -70,10 +70,10 @@ class PmatMap(PointingMatrix):
 		self.ipol = ipol
 	def forward(self, tod, m, tmul=1, mmul=1):
 		"""m -> tod"""
-		self.func( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T)
+		self.func( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
 	def backward(self, tod, m, tmul=1, mmul=1):
 		"""tod -> m"""
-		self.func(-1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T)
+		self.func(-1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -315,7 +315,12 @@ class pos2pix:
 
 		opix = np.zeros((4,)+ipos.shape[1:])
 		if self.template is not None:
-			opix[:2] = self.template.sky2pix(opos[1::-1],safe=True)
+			opix[:2] = self.template.sky2pix(opos[1::-1],safe=2)
+			# When mapping the full sky, angle wraps can't be hidden
+			# ouside the image. We must therefore unwind along each
+			# interpolation axis to avoid discontinuous interpolation
+			nx = int(np.abs(360/self.template.wcs.wcs.cdelt[0]))
+			opix[1] = utils.unwind(opix[1].reshape(shape), period=nx, axes=range(len(shape))).reshape(-1)
 		else:
 			# If we have no template, output angles instead of pixels.
 			# Make sure the angles don't have any jumps in them
@@ -651,12 +656,23 @@ def extract_interpol_params_old(ipol, dtype):
 	ys = np.rollaxis(ys.reshape(ys.shape[:2]+(-1,)),-1).astype(dtype)
 	return rbox, nbox, ys
 
-def build_pixbox(obox, n, margin=10):
-	res = np.array([np.maximum(0,np.floor(obox[0]-margin)),np.minimum(n,np.floor(obox[1]+margin))]).astype(np.int32)
+def build_pixbox(obox, template, margin=10):
+	# We allow negative and positive overshoot to allow the
+	# pointing matrix to handle pixel wraparound.
+	res = np.array([np.floor(obox[0]-margin),np.floor(obox[1]+margin)]).astype(np.int32)
 	# If the original box extends outside [[0,0],n], this box may
 	# have empty ranges. If so, return a single-pixel box
-	if np.any(res[1]<=res[0]): return np.array([[0,0],[1,1]],dtype=np.int32)
-	else: return res
+	if np.any(res[1]<=res[0]):
+		res = np.array([[0,0],[1,1]],dtype=np.int32)
+	nphi = int(np.abs(360./template.wcs.wcs.cdelt[0]))
+	return res, nphi
+
+#def build_pixbox(obox, n, margin=10):
+#	res = np.array([np.maximum(0,np.floor(obox[0]-margin)),np.minimum(n,np.floor(obox[1]+margin))]).astype(np.int32)
+#	# If the original box extends outside [[0,0],n], this box may
+#	# have empty ranges. If so, return a single-pixel box
+#	if np.any(res[1]<=res[0]): return np.array([[0,0],[1,1]],dtype=np.int32)
+#	else: return res
 
 def pmat_phase(dir, tod, map, az, dets, az0, daz):
 	core = get_core(tod.dtype)
@@ -665,3 +681,39 @@ def pmat_phase(dir, tod, map, az, dets, az0, daz):
 def pmat_plain(dir, tod, map, pix):
 	core = get_core(tod.dtype)
 	core.pmat_plain(dir, tod.T, map.T, pix.T)
+
+#class WorkMap:
+#	"""Class for handling copying between local workspace
+#	and global one. This is needed to handle angle wrapping."""
+#	def __init__(self, pbox, shape, wcs, margin=10):
+#		# Handle wrapping by having 3 pixel boxes:
+#		# left-wrap, normal, right-wrap. This assumes
+#		# a cylindrical projection
+#		pbox = np.array([pbox[0]-margin,pbox[1]+margin])
+#		nphi = np.abs(360./wcs.wcs.cdelt[0])
+#		subs = []
+#		for i in range(-1,2):
+#			sub = pbox.copy()
+#			sub[:,1] = np.minimum(shape[-1],np.maximum(0,sub[:,1] - i*nphi)).astype(np.int32)
+#			if np.product(sub[1]-sub[0]) > 0:
+#				subs.append(sub)
+#		if len(subs) == 0:
+#			# This tod is totally outside our area. Use a single-pixel
+#			# submap
+#			subs = np.array([[0,0],[1,1]])
+#		lens = [s[1,1]-s[1,0] for s in subs]
+#		offs = utils.cumsum(lens, endpoint=True)
+#		self.subs, self.offs = subs, offs
+#		self.shape = (shape[-2],offs[-1])
+#	def map2work(self, map, work=None):
+#		if work is None:
+#			work = enmap.zeros(map.shape[:-2]+self.shape, map.wcs, map.dtype)
+#		# Copy over each segment
+#		for i, sub in enumerate(self.subs):
+#			work[...,:,self.offs[i]:self.offs[i+1]] = map[...,sub[0,0]:sub[1,0],sub[0,1]:sub[1,1]]
+#		return work
+#	def work2map(self, work, map):
+#		# Copy over each segment
+#		for i, sub in enumerate(self.subs):
+#			map[...,sub[0,0]:sub[1,0],sub[0,1]:sub[1,1]] = work[...,:,self.offs[i]:self.offs[i+1]]
+#		return map

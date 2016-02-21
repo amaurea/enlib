@@ -1,4 +1,4 @@
-import numpy as np, argparse, time, sys, warnings, os, shlex, glob, PIL.Image, PIL.ImageDraw
+import numpy as np, argparse, time, sys, warnings, os, shlex, glob, PIL.Image, PIL.ImageDraw, bunch
 from scipy import ndimage
 from enlib import enmap, colorize, mpi, cgrid, utils, array_ops, memory
 
@@ -40,8 +40,7 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 	for fi in range(comm.rank,len(ifiles),comm.size):
 		ifile = ifiles[fi]
 		with printer.time("read %s" % ifile, 3):
-			map   = get_map(ifile, args)
-			ifile = ifile.split(":")[0]
+			map, minfo = get_map(ifile, args, return_info=True)
 		with printer.time("ranges", 3):
 			crange= get_color_range(map, args)
 		for ci, cr in enumerate(crange.T):
@@ -53,17 +52,17 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 			# Construct default out format
 			ndigit   = get_num_digits(ncomp)
 			subprint = printer.push(("%%0%dd/%%d " % ndigit) % (i+1,ncomp))
-			dir, base, ext = split_file_name(ifile)
+			dir, base, ext = split_file_name(minfo.fname)
 			map_field = map[i:i+ngroup]
 			# Build output file name
 			oinfo = {"dir":"" if dir == "." else dir + "/", "base":base, "iext":ext,
 					"fi":fi, "fn":len(args.ifiles), "ci":i, "cn":ncomp, "pi":comm.rank, "pn":comm.size,
-					"pre":args.prefix, "suf":args.suffix, "comp": "_%0*d" % (ndigit,i) if map.ndim > 2 else "",
+					"pre":args.prefix, "suf":args.suffix, "comp": "_%0*d" % (ndigit,i) if len(minfo.ishape) > 2 else "",
 					"ext":args.ext, "layer":""}
 			oname = args.oname.format(**oinfo)
 			# Draw the map
 			if args.driver.lower() == "pil":
-				img, info = draw_map_field(map_field, args, crange, return_info=True, return_layers=args.layers, printer=subprint)
+				img, info = draw_map_field(map_field, args, crange[:,i:i+ngroup], return_info=True, return_layers=args.layers, printer=subprint)
 				padding = np.array([-info.bounds[0,::-1],info.bounds[1,::-1]-map_field.shape[-2:]],dtype=int)
 				printer.write("padded by %d %d %d %d" % tuple(padding.reshape(-1)), 4)
 				if args.layers:
@@ -76,7 +75,7 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 					with subprint.time("write to %s" % oname, 3):
 						img.save(oname)
 			elif args.driver.lower() in ["matplotlib","mpl"]:
-				figure = draw_map_field_mpl(map_field, args, crange, printer=subprint)
+				figure = draw_map_field_mpl(map_field, args, crange[:,i:i+ngroup], printer=subprint)
 				with subprint.time("write to %s" % oname, 3):
 					figure.savefig(oname,bbox_inches="tight",dpi=args.mpl_dpi)
 			# Progress report
@@ -138,7 +137,7 @@ def parse_args(args=sys.argv[1:], noglob=False):
 		args = oargs
 	return parser.parse_args(args)
 
-def get_map(ifile, args):
+def get_map(ifile, args, return_info=False):
 	"""Read the specified map, and massage it according to the options
 	in args. Relevant ones are sub, autocrop, slice, op, downgrade, scale,
 	mask. Retuns with shape [:,ny,nx], where any extra dimensions have been
@@ -187,7 +186,10 @@ def get_map(ifile, args):
 	if flip[0]: mf = mf[:,::-1,:]
 	if flip[1]: mf = mf[:,:,::-1]
 	# Done
-	return mf
+	if not return_info: return mf
+	else:
+		info = bunch.Bunch(fname=ifile, ishape=m.shape)
+		return mf, info
 
 def draw_map_field(map, args, crange=None, return_layers=False, return_info=False, printer=noprint):
 	"""Draw a single map field, resulting in a single image. Adds a coordinate grid
@@ -498,30 +500,23 @@ def draw_ellipse(image, bounds, width=1, outline='white', antialias=1):
 	"""Improved ellipse drawing function, based on PIL.ImageDraw.
 	Improved from
 	http://stackoverflow.com/questions/32504246/draw-ellipse-in-python-pil-with-line-thickness"""
-	print "A", bounds
 	bounds = np.asarray(bounds)
 	# Create small coordinate system around ellipse, with a
 	# margin of width on each side
 	esize  = bounds[2:]-bounds[:2] + 2*width
 	ebounds= bounds - bounds[[0,1,0,1]] + width
-	print "B", esize
 	# Use a single channel image (mode='L') as mask.
 	# The size of the mask can be increased relative to the imput image
 	# to get smoother looking results. 
 	mask = PIL.Image.new(size=esize*antialias, mode='L', color='black')
-	print "C", mask.size
 	draw = PIL.ImageDraw.Draw(mask)
 	# draw outer shape in white (color) and inner shape in black (transparent)
 	for offset, fill in (width/-2.0, 'white'), (width/2.0, 'black'):
 		a = (ebounds[:2] + offset)*antialias
 		b = (ebounds[2:] - offset)*antialias
-		print "a", a
-		print "b", b
 		draw.ellipse([a[0],a[1],b[0],b[1]], fill=fill)
 	# downsample the mask using PIL.Image.LANCZOS 
 	# (a high-quality downsampling filter).
 	mask = mask.resize(esize, PIL.Image.LANCZOS)
-	print "D", mask.size
 	# paste outline color to input image through the mask
-	print "E", tuple(bounds[:2]-width)
 	image.paste(outline, tuple(bounds[:2]-width), mask=mask)

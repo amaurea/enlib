@@ -8,12 +8,12 @@ contains
 			tod, map,                  &! Main inputs/outpus
 			bore, det_pos, det_comps,  &! Input pointing
 			comps,                     &! Ignored. Supporting arbitrary component ordering was too expensive
-			rbox, nbox, yvals, pbox    &! Coordinate transformation
+			rbox, nbox, yvals, pbox, nphi &! Coordinate transformation
 		)
 		use omp_lib
 		implicit none
 		! Parameters
-		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), comps(:)
+		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), comps(:), nphi
 		real(8),    intent(in)    :: bore(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
 		real(_),    intent(in)    :: det_comps(:,:), tmul, mmul
 		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
@@ -24,7 +24,8 @@ contains
 		real(8)    :: xrel(3), point(4), work(size(yvals,1),4)
 		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
 		real(_)    :: phase(3)
-		integer(4) :: xind(3), ig, pix(2), ix, iy
+		integer(4) :: xind(3), ig, pix(2), ix, iy, ox
+		integer(4), allocatable :: xmap(:)
 
 		nsamp   = size(tod, 1)
 		ndet    = size(tod, 2)
@@ -38,6 +39,11 @@ contains
 			steps(ic) = steps(ic+1)*nbox(ic+1)
 		end do
 		x0 = rbox(:,1); inv_dx = (nbox-1)/(rbox(:,2)-rbox(:,1))
+		allocate(xmap(psize(2)))
+		do ix = 1, psize(2)
+			ox = modulo(ix+pbox(2,1)-1,nphi)+1
+			xmap(ix) = max(1,min(size(map,1),ox))
+		end do
 
 		if(dir > 0) then
 			! Forward transform - no worry of clobbering, so we can use a
@@ -46,7 +52,7 @@ contains
 			!$omp parallel do collapse(2)
 			do iy = 1, size(wmap3,3)
 				do ix = 1, size(wmap3,2)
-					wmap3(1:ncomp,ix,iy) = map(ix+pbox(2,1),iy+pbox(1,1),1:ncomp)
+					wmap3(1:ncomp,ix,iy) = map(xmap(ix),iy+pbox(1,1),1:ncomp)
 					wmap3(ncomp+1:3,ix,iy) = 0
 				end do
 			end do
@@ -91,11 +97,11 @@ contains
 			end do
 			!$omp end parallel
 			! Copy out result. Applying mmul and tmul here costs 1%
-			!$omp parallel do private(iy,ix,ic)
+			!$omp parallel do private(iy,ix,ic,ox)
 			do iy = 1, size(wmap4,3)
 				do ix = 1, size(wmap4,2)
 					do ic = 1, ncomp
-						map(ix+pbox(2,1),iy+pbox(1,1),ic) = map(ix+pbox(2,1),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
+						map(xmap(ix),iy+pbox(1,1),ic) = map(xmap(ix),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
 					end do
 				end do
 			end do

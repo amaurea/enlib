@@ -56,16 +56,17 @@ def dict_apply_listfun(dict, function):
 	res  = function(vals)
 	return {key: res[i] for i, key in enumerate(keys)}
 
-def unwind(a, period=2*np.pi):
+def unwind(a, period=2*np.pi, axes=[-1], ref=0):
 	"""Given a list of angles or other cyclic coordinates
 	where a and a+period have the same physical meaning,
 	make a continuous by removing any sudden jumps due to
 	period-wrapping. I.e. [0.07,0.02,6.25,6.20] would
 	become [0.07,0.02,-0.03,-0.08] with the default period
 	of 2*pi."""
-	res = np.array(a)
-	res[...,0] = rewind(res[...,0],ref=0,period=period)
-	res[...,1:] -= np.cumsum(np.round((res[...,1:]-res[...,:-1])/period),-1)*period
+	res = rewind(a, period=period, ref=ref)
+	for axis in axes:
+		with flatview(res, axes=[axis]) as flat:
+			flat[:,1:]-= np.cumsum(np.round((flat[:,1:]-flat[:,:-1])/period),-1)*period
 	return res
 
 def rewind(a, ref=0, period=2*np.pi):
@@ -210,13 +211,14 @@ class flatview:
 		do stuff with farr
 	Changes to farr are propagated into the original array.
 	See partial_flatten for details on the flattening."""
-	def __init__(self, array, axes=[], mode="rwc"):
+	def __init__(self, array, axes=[], mode="rwc", pos=0):
 		self.array = array
 		self.axes  = axes
 		self.flat  = None
 		self.mode  = mode
+		self.pos   = pos
 	def __enter__(self):
-		self.flat = partial_flatten(self.array, self.axes)
+		self.flat = partial_flatten(self.array, self.axes, pos=self.pos)
 		if "c" in self.mode:
 			self.flat = np.ascontiguousarray(self.flat)
 		return self.flat
@@ -226,7 +228,7 @@ class flatview:
 		if "w" not in self.mode: return
 		if np.may_share_memory(self.array, self.flat): return
 		# We need to copy back out
-		self.array[:] = partial_expand(self.flat, self.array.shape, self.axes)
+		self.array[:] = partial_expand(self.flat, self.array.shape, self.axes, pos=self.pos)
 
 def dedup(a):
 	"""Removes consecutive equal values from a 1d array, returning the result.
