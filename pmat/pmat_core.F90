@@ -64,8 +64,8 @@ contains
 			!$omp parallel do private(di, si, xrel, xind, ig, point, pix, phase, work)
 			do di = 1, ndet
 				do si = 1, nsamp
-					include 'helper_bilin.f90'
-					include 'helper_pixphase.f90'
+					include 'helper_bilin.F90'
+					include 'helper_pixphase.F90'
 					!write(*,*) di, si, pix
 					! If tests are not free, despite branch prediction. Adding a test
 					! for dir here takes the time from 0.85 to 1.15, a 35% increase!
@@ -90,8 +90,8 @@ contains
 			!$omp do
 			do di = 1, ndet
 				do si = 1, nsamp
-					include 'helper_bilin.f90'
-					include 'helper_pixphase.f90'
+					include 'helper_bilin.F90'
+					include 'helper_pixphase.F90'
 					wmap4(:,pix(2),pix(1),id) = wmap4(:,pix(2),pix(1),id) + tod(si,di)*phase
 				end do
 			end do
@@ -1010,7 +1010,7 @@ contains
 				do si = 1, nsamp
 					sdir = scandir(si)
 					! Transform from hor to cel
-					include 'helper_bilin.f90'
+					include 'helper_bilin.F90'
 					! Find which point source lookup cell we are in.
 					! dec,ra -> cy,cx
 					cell = floor((point(1:2)-c0)*inv_dc)+1
