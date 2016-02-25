@@ -1,6 +1,6 @@
-import numpy as np, argparse, time, sys, warnings, os, shlex, glob, PIL.Image, PIL.ImageDraw, bunch
+import numpy as np, argparse, time, sys, warnings, os, shlex, glob, PIL.Image, PIL.ImageDraw
 from scipy import ndimage
-from enlib import enmap, colorize, mpi, cgrid, utils, array_ops, memory
+from enlib import enmap, colorize, mpi, cgrid, utils, array_ops, memory, bunch
 
 class Printer:
 	def __init__(self, level=1, prefix=""):

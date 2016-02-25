@@ -6,9 +6,9 @@ forward will update tod based on m, and backward will update m based on tod.
 The reason for allowing the other argument to be modified is to make it easier
 to incrementally project different parts of the signal.
 """
-import numpy as np, bunch, time
+import numpy as np, time
 from enlib import enmap, interpol, utils, coordinates, config, errors, array_ops
-from enlib import parallax
+from enlib import parallax, bunch
 import pmat_core_32
 import pmat_core_64
 def get_core(dtype):

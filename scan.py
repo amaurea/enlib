@@ -40,8 +40,8 @@ values in boresight to determine the effective duration of each sample.
 I therefore go with option #1 above, and explicitly do not provide a way
 of skipping samples here.
 """
-import numpy as np, enlib.slice, copy as cpy, h5py, bunch, os
-from enlib import rangelist, nmat, config, resample, utils
+import numpy as np, enlib.slice, copy as cpy, h5py, os
+from enlib import rangelist, nmat, config, resample, utils, bunch
 
 class Scan:
 	"""This defines the minimal interface for a Scan. It will usually be

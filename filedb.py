@@ -4,7 +4,8 @@ an object containing the paths to all the files corresponding to that "id".
 For example, for the actpol data set, querying with "1376512459.1376536951.ar1"
 would respond with an object giving the location of the TOD, cuts, gains, etc.
 for that id."""
-import glob, shlex, pipes, re, bunch, itertools
+import glob, shlex, pipes, re, itertools
+from enlib import bunch
 
 class Basedb:
 	def __init__(self, file=None, data=None):
@@ -154,6 +155,7 @@ class FormatDB(Basedb):
 		self.rules = []
 		self.static = bunch.Bunch()
 		for line in data.splitlines():
+			line = line.strip()
 			if len(line) < 1 or line[0] == "#": continue
 			# Split into part before first : and the rest
 			toks = pre_split(line)
@@ -175,6 +177,8 @@ class FormatDB(Basedb):
 				assert len(format) == 1, "FormatDB conditional must have a single argument"
 				if name == "@end":
 					selected.pop()
+				elif name == "@else":
+					selected[-1] = not selected[-1]
 				else:
 					selected.append(("{%s}"%name[1:]).format(**info) == format[0])
 			elif all(selected):
