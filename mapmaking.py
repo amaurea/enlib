@@ -508,7 +508,7 @@ class PostPickup:
 
 class FilterAddMap:
 	def __init__(self, scans, map, eqsys=None, mul=1, tmul=1, pmat_order=None):
-		self.map, self.eqsys, self.mul = map, eqsys, mul
+		self.map, self.eqsys, self.mul, self.tmul = map, eqsys, mul, tmul
 		self.data = {scan: pmat.PmatMap(scan, map, order=pmat_order, sys=eqsys) for scan in scans}
 	def __call__(self, scan, tod):
 		pmat = self.data[scan]

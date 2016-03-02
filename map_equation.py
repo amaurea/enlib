@@ -1,9 +1,9 @@
 """This module represents the map-making equation P'N"Px = P'N"d.
 At this level of abstraction, we still deal mostly with maps and cuts etc.
 directly."""
-import numpy as np, bunch, time, h5py, copy, logging, sys
+import numpy as np, time, h5py, copy, logging, sys
 from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim
-from enlib import bench, todfilter, dmap, zipper, mpi
+from enlib import bench, todfilter, dmap, zipper, mpi, bunch
 from scipy import ndimage
 
 L = logging.getLogger(__name__)
