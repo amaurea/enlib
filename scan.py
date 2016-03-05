@@ -61,6 +61,7 @@ class Scan:
 		self.mjd0      = mjd0                   # time basis
 		self.dets      = np.arange(len(self.comps)) if dets is None else dets
 		self.dgrid     = (1,np.max(self.dets)+1)
+		self.hwp       = None
 		# Not part of the general interface
 		self._tod      = np.asfarray(tod)       # [ndet,nsamp]
 	def get_samples(self):
@@ -91,6 +92,8 @@ class Scan:
 		res.offsets   = np.ascontiguousarray(res.offsets[detslice])
 		res.comps     = np.ascontiguousarray(res.comps[detslice])
 		res.dets      = res.dets[detslice]
+		res.hwp       = np.ascontiguousarray(enlib.slice.slice_downgrade(res.hwp, sampslice, axis=0))
+		res.hwp_phase = np.ascontiguousarray(enlib.slice.slice_downgrade(res.hwp_phase, sampslice, axis=0))
 		res.cut       = res.cut[sel]
 		res.noise     = res.noise[sel]
 		return res, detslice, sampslice

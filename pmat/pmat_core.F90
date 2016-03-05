@@ -68,7 +68,7 @@ contains
 		real(_),    intent(in)    :: map(:,:,:), mmul
 		real(_),    intent(inout), allocatable :: wmap(:,:,:)
 		integer(4), intent(inout), allocatable :: xmap(:)
-		integer(4) :: psize(2), ix, iy, ox, oy, ic
+		integer(4) :: psize(2), ix, iy, ox, oy, ic, pcut
 		! Set up our work map based on the relevant subset of pixels.
 		! We use a shared map across all threads for map2tod, but
 		! one per thread for tod2map to avoid clobbering. The
@@ -78,8 +78,9 @@ contains
 		allocate(wmap(3,psize(2),psize(1)))
 		! Set up the pixel wrap remapper
 		allocate(xmap(psize(2)))
+		pcut = -(nphi-size(map,1))/2
 		do ix = 1, psize(2)
-			ox = modulo(ix+pbox(2,1)-1,nphi)+1
+			ox = modulo(ix-1+pbox(2,1)-pcut,nphi)+pcut+1
 			xmap(ix) = max(1,min(size(map,1),ox))
 		end do
 		!$omp parallel workshare
@@ -90,7 +91,7 @@ contains
 			! 5% of total cost
 			!$omp parallel do private(iy,ix,ic,oy)
 			do iy = 1, size(wmap,3)
-				oy = iy+pbox(1,1)
+				oy = max(1,min(size(map,2),iy+pbox(1,1)))
 				do ic = 1, size(map,3)
 					do ix = 1, size(wmap,2)
 						wmap(ic,ix,iy) = map(xmap(ix),oy,ic)*mmul
@@ -113,7 +114,7 @@ contains
 			! usually bigger than wmap, so optimize loop for it
 			!$omp parallel do private(iy,ix,ic,ox,oy)
 			do iy = 1, size(wmap,3)
-				oy = iy+pbox(1,1)
+				oy = max(1,min(size(map,2),iy+pbox(1,1)))
 				do ic = 1, size(map,3)
 					do ix = 1, size(wmap,2)
 						map(xmap(ix),oy,ic) = map(xmap(ix),oy,ic)*mmul + wmap(ic,ix,iy)
@@ -209,7 +210,7 @@ contains
 					p = nint(pix(:,si))
 					do ci = 1, size(map,1)
 						v = (tod(si)*tmul)*phase(ci,si)
-						! Atomic wins out over multiple buffers at 16 threads, and
+						! Atomic wins over multiple buffers at 16 threads, and
 						! keeps scaling with number of threads where buffers stops.
 						! But atomic has a large fixed cost, so don't use it when
 						! there is only one thread.
@@ -255,7 +256,7 @@ contains
 		real(8)    :: xrel(3), point(4), work(size(yvals,1),4)
 		real(_),    allocatable :: wmap3(:,:,:), wmap4(:,:,:,:)
 		real(_)    :: phase(3)
-		integer(4) :: xind(3), ig, pix(2), ix, iy, ox
+		integer(4) :: xind(3), ig, pix(2), ix, iy, ox, oy, pcut
 		integer(4), allocatable :: xmap(:)
 
 		nsamp   = size(tod, 1)
@@ -271,8 +272,10 @@ contains
 		end do
 		x0 = rbox(:,1); inv_dx = (nbox-1)/(rbox(:,2)-rbox(:,1))
 		allocate(xmap(psize(2)))
+		! place the wrap as far as possible from the center of the map
+		pcut = -(nphi-size(map,1))/2
 		do ix = 1, psize(2)
-			ox = modulo(ix+pbox(2,1)-1,nphi)+1
+			ox = modulo(ix-1+pbox(2,1)-pcut,nphi)+pcut+1
 			xmap(ix) = max(1,min(size(map,1),ox))
 		end do
 
@@ -280,10 +283,11 @@ contains
 			! Forward transform - no worry of clobbering, so we can use a
 			! single work map
 			allocate(wmap3(3,psize(2),psize(1)))
-			!$omp parallel do collapse(2)
+			!$omp parallel do private(iy,oy,ix)
 			do iy = 1, size(wmap3,3)
+				oy = max(1,min(size(map,2),iy+pbox(1,1)))
 				do ix = 1, size(wmap3,2)
-					wmap3(1:ncomp,ix,iy) = map(xmap(ix),iy+pbox(1,1),1:ncomp)
+					wmap3(1:ncomp,ix,iy) = map(xmap(ix),oy,1:ncomp)
 					wmap3(ncomp+1:3,ix,iy) = 0
 				end do
 			end do
@@ -330,9 +334,10 @@ contains
 			! Copy out result. Applying mmul and tmul here costs 1%
 			!$omp parallel do private(iy,ix,ic,ox)
 			do iy = 1, size(wmap4,3)
+				oy = max(1,min(size(map,2),iy+pbox(1,1)))
 				do ix = 1, size(wmap4,2)
 					do ic = 1, ncomp
-						map(xmap(ix),iy+pbox(1,1),ic) = map(xmap(ix),iy+pbox(1,1),ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
+						map(xmap(ix),oy,ic) = map(xmap(ix),oy,ic)*mmul + sum(wmap4(ic,ix,iy,:))*tmul
 					end do
 				end do
 			end do

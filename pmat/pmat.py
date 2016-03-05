@@ -61,19 +61,22 @@ class PmatMap(PointingMatrix):
 		self.order = order
 		self.dtype = template.dtype
 		self.core = get_core(self.dtype)
-		if order == 0:
-			self.func = self.core.pmat_nearest_bilinear
-			#self.func = self.core.pmat_nearest_grad_implicit
-		else:
-			raise NotImplementedError("order > 0 is not implemented")
+		#if order == 0:
+		#	self.func = self.core.pmat_nearest_bilinear
+		#	#self.func = self.core.pmat_nearest_grad_implicit
+		#else:
+		#	raise NotImplementedError("order > 0 is not implemented")
+		self.func = self.core.pmat_map
 		self.transform = transform
 		self.ipol = ipol
 	def forward(self, tod, m, tmul=1, mmul=1):
 		"""m -> tod"""
-		self.func( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
+		self.func( 1, 1, 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
+		#self.func( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
 	def backward(self, tod, m, tmul=1, mmul=1):
 		"""tod -> m"""
-		self.func(-1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
+		self.func(-1, 1, 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
+		#self.func(-1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -660,6 +663,9 @@ def build_pixbox(obox, template, margin=10):
 	# We allow negative and positive overshoot to allow the
 	# pointing matrix to handle pixel wraparound.
 	res = np.array([np.floor(obox[0]-margin),np.floor(obox[1]+margin)]).astype(np.int32)
+	# Argh, I get stuff like [[826 -22346],[3887 -19398]]. This entire file
+	# should be cleaned up after I'm done with pmat_core!
+
 	# If the original box extends outside [[0,0],n], this box may
 	# have empty ranges. If so, return a single-pixel box
 	if np.any(res[1]<=res[0]):

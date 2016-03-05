@@ -697,14 +697,21 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	instead."""
 	def calc_blanks(m, value):
 		value   = np.asarray(value)
+		# Find which rows and cols consist entirely of the given value
 		hitmask = np.all(np.isclose(m.T, value.T, equal_nan=True, rtol=1e-6, atol=0).T,axis=tuple(range(m.ndim-2)))
 		hitrows = np.all(hitmask,1)
 		hitcols = np.all(hitmask,0)
-		blanks  = np.array([np.where(~hitrows)[0][[0,-1]],np.where(~hitcols)[0][[0,-1]]]).T
+		# Find the first and last row and col which aren't all the value
+		blanks  = np.array([
+			np.where(~hitrows)[0][[0,-1]],
+			np.where(~hitcols)[0][[0,-1]]]
+			).T
 		blanks[1] = m.shape[-2:]-blanks[1]-1
 		return blanks
 	if value == "auto":
-		bs = [calc_blanks(m, m[...,i,j]) for  i in [0,-1] for j in [0,-1]]
+		# Find the median value along each edge
+		medians = [np.median(m[...,:,i],-1) for i in [0,-1]] + [np.median(m[...,i,:],-1) for i in [0,-1]]
+		bs = [calc_blanks(m, med) for med in medians]
 		nb = [np.product(np.sum(b,0)) for b in bs]
 		blanks = bs[np.argmax(nb)]
 	else:

@@ -458,10 +458,10 @@ class PriorProjectOut:
 #     messy.
 
 class FilterPickup:
-	def __init__(self, naz=None, nt=None, niter=None):
-		self.naz, self.nt, self.niter = naz, nt, niter
+	def __init__(self, naz=None, nt=None, nhwp=None, niter=None):
+		self.naz, self.nt, self.nhwp, self.niter = naz, nt, nhwp, niter
 	def __call__(self, scan, tod):
-		todfilter.filter_poly_jon(tod, scan.boresight[:,1], naz=self.naz, nt=self.nt, niter=self.niter, cuts=scan.cut)
+		todfilter.filter_poly_jon(tod, scan.boresight[:,1], hwp=scan.hwp, naz=self.naz, nt=self.nt, nhwp=self.nhwp, niter=self.niter, cuts=scan.cut)
 
 class PostPickup:
 	def __init__(self, scans, signal_map, signal_cut, prec_ptp, naz=None, nt=None, weighted=False):

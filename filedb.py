@@ -148,8 +148,9 @@ class FormatDB(Basedb):
 	These are then inserted into the format strings listed in the
 	parameter file using string.format. This should allow, compact,
 	readable and flexible parameter files."""
-	def __init__(self, file=None, data=None, funcs={"id":lambda id:id}):
+	def __init__(self, file=None, data=None, funcs={"id":lambda id:id}, override=None):
 		self.funcs = funcs.items()
+		self.override = override
 		Basedb.__init__(self, file=file, data=data)
 	def load(self, data, funcs={}):
 		self.rules = []
@@ -185,6 +186,11 @@ class FormatDB(Basedb):
 				tmp = [fmt.format(**info) for fmt in rule["format"]]
 				res[rule["name"]] = tmp if multi else tmp[0]
 		res.id = id
+		# Apply override if specified:
+		if self.override and self.override != "none":
+			for tok in self.override.split(","):
+				name, val = tok.split(":")
+				res[name] = [val] if multi else val
 		return res
 	def dump(self):
 		lines = []
