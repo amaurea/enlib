@@ -85,7 +85,7 @@ class ndmap(np.ndarray):
 	@property
 	def npix(self): return np.product(self.shape[-2:])
 	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode, cval=0)
-	def at(self, pos, order=3, mode="nearest", cval=0.0, unit="coord"): return at(self, pos, order, mode=mode, cval=0, unit=unit)
+	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord"): return at(self, pos, order, mode=mode, cval=0, unit=unit)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width): return apod(self, width)
 	def __getitem__(self, sel):
@@ -270,7 +270,7 @@ def project(map, shape, wcs, order=3, mode="nearest", cval=0.0):
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval)
 	return ndmap(pmap, wcs)
 
-def at(map, pos, order=3, mode="nearest", cval=0.0, unit="coord"):
+def at(map, pos, order=3, mode="constant", cval=0.0, unit="coord"):
 	if unit != "pix": pos = sky2pix(map.shape, map.wcs, pos)
 	return enlib.utils.interpol(map, pos, order=order, mode=mode, cval=cval)
 
@@ -552,7 +552,6 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="constant", oversample=1, smooth="a
 		smooth = 0.5*(ls[1,0]+ls[0,1])
 		smooth /= 3.41 # 3.41 is an empirical factor
 	if smooth > 0:
-		print "smooth", smooth
 		cov = smooth_spectrum(cov, kernel="gauss", weight="mode", width=smooth)
 	# Translate from steradians to pixels
 	cov = cov * np.prod(shape[-2:])/area(shape,wcs)
