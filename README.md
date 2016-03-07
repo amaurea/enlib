@@ -41,5 +41,5 @@ Mapmaking
 ---------
 * Primary modules: `zgetdata`, `map_equation`, `scan`, `scansim`, `gapfill`, `rangelist`
 * Internal dependencies: [misc. utils, coordinate transformation, flat-sky maps]
-* External dependencies: `mpi4py`, `pygetdata`, `zipfile`, `tempfile`, `shutil`, `bunch`
+* External dependencies: `mpi4py`, `pygetdata`, `zipfile`, `tempfile`, `shutil`
 * To build: `make`

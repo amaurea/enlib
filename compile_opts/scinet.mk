@@ -1,8 +1,10 @@
-export LAPACK_LINK = -L$(MKLPATH) -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -lpthread
+export LAPACK_LINK = -L$(MKLPATH) -lmkl_rt -lpthread -lm
 export OMP_LINK    = -liomp5
-export F90FLAGS    = -openmp -Ofast -fPIC
-export FFLAGS      = $(F90FLAGS)
+export FFLAGS      = -openmp -Ofast -fPIC -xhost # -vec-report -opt-report
+export FSAFE       = -openmp -O3 -fPIC -xhost
 export FC          = ifort
 export F2PY        = f2py
 export F2PYCOMP    = intelem
-
+export PYTHON      = python
+export SED         = sed
+export CC          = icc

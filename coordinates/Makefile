@@ -1,14 +1,19 @@
 include ../compile_opts/$(ENLIB_COMP).mk
+slasrc=$(wildcard slalib/*.f)
+slaobj=$(slasrc:.f=.o)
 
 all: pyfsla.so tidy
 
-pyfsla.so: pyfsla.f90 libsla.so
-	python setup.py build_ext --inplace --fcompiler=$(F2PYCOMP)
+pyfsla.so: pyfsla.f90 libsla.a
+	$(F2PY) --fcompiler=$(F2PYCOMP) --noopt -c -m $(basename $<) $< $(OMP_LINK) -L. -lsla
 
-libsla.so:
-	$(FC) -shared -fPIC -o $@ slalib/*.f
+libsla.a: $(slaobj)
+	ar rcs $@ $^
+
+%.o: %.f
+	$(FC) $(FFLAGS) -c -o $@ $<
 
 clean: tidy
-	rm -rf pyfsla.so libsla.so *.pyc
+	rm -rf pyfsla.so libsla.a *.pyc slalib/*.o
 tidy:
 	rm -rf build

@@ -1,30 +1,152 @@
 """This module represents the map-making equation P'N"Px = P'N"d.
 At this level of abstraction, we still deal mostly with maps and cuts etc.
 directly."""
-import numpy as np, bunch, time, h5py, copy, logging, sys
-from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim, bench
-from enlib.degrees_of_freedom import DOF, Arg
+import numpy as np, time, h5py, copy, logging, sys
+from enlib import pmat, config, nmat, enmap, array_ops, fft, cg, utils, rangelist, scansim
+from enlib import bench, todfilter, dmap, zipper, mpi, bunch
 from scipy import ndimage
-from mpi4py import MPI
 
 L = logging.getLogger(__name__)
+
+# Map parallelization
+# ===================
+# With the large patches, a significant fraction of the time
+# is being spent on even the simple preconditioner, and the maps
+# are also starting to take up a large amount of space. This
+# prevents us from scaling to larger clusters and larger patches.
+# We need to spread the pixels out, like we do with the samples.
+#
+# 1. Divide the full pixel space into blocks. Each block has a
+#    single mpi task as its owner, but each block will contain
+#    samples from multiple mpi tasks.
+#    a) Each task needs to know who owns the blocks it hits
+#    b) Each task needs to know who hits each of its blocks
+# 2. Because there is no 1-1 mapping from tods to pixels, each
+#    mpi tasks needs a local pixel workspace that is larger than
+#    the blocks it owns, and has room for all its TODs.
+#    Parts that fall outside its ownership must be communicated
+#    to the owner.
+# 3. Our local workspace should be as small as possible to avoid
+#    wasting memory, and to avoid random access slowness. Therefore
+#    the TODs each mpi task owns should be as close together as possible.
+# 4. We also want each mpi task to take the same time for each step,
+#    so they don't have to wait for each other.
+#
+# Given a set of bounding boxes, our task is basically to determine
+# a partitioning of those bounding boxes such that the maximum total
+# box is minimized. But we also want the total time difference to
+# be minimized too. This requires us to try for a compromise. Define
+# score(areas,times) = A*max(areas)+B*max(times). We wish to minimize
+# this score.
+#
+# How will a greedy algorithm perform here?  Start with N bins.
+# Sort each box by the score it would have in isolation, with the
+# highest scores first. For each box, sompute what score putting
+# it in each bin would reulst in. Then assign it to the bin that
+# minimizes that score. Repeat until done.
+#
+# This algorithm sounds pretty straighforward, and will probably give
+# pretty good results, though not optimal ones.
+#
+# After determininig which MPI task owns which TODs, determine the
+# task that owns the most tods in each block. Assign ownership to
+# that task.
+#
+# The overall cycle is then:
+#
+# A matrix
+#  1. transfer from blocks to workspaces (mpi communication)
+#  2. project from workspaces to tod
+#  3. apply noise matrix
+#  4. project from tod to workspaces
+#  5. coadd workspaces into blocks
+#
+# dot product
+#  1. compute dot of my blocks
+#  2. mpi reduce across tasks
+#
+# Binned preconditioner:
+#  1. apply to the blocks I own
+#
+# Cyclic preconditioner needs some thinking. We probably don't
+# want to apply it globally, since that would require enormous
+# FFTs, and data ownership for FFTs doesn't really mesh with
+# the blocks I want to use. Apply a limited-range version of a
+# reduced pixel space, and stitch? That failed before, but perhaps
+# I can get it to work.
 
 class LinearSystem:
 	def A(self): raise NotImplementedError
 	def M(self): raise NotImplementedError
 	def b(self): raise NotImplementedError
 	def dot(self, x, y): raise NotImplementedError
-	def expand(self, x): raise NotImplementedError
-	def flatten(self, params): raise NotImplementedError
 	def level(self): return 0
 	def up(self, x=None): raise NotImplementedError
 	def down(self): raise NotImplementedError
 
+# In general we want to be able to
+#  1. Solve for a list of signals in paralell
+#  2. Subtract from the TOD when building RHS, or replace it with something else.
+#  3. Don't make any unnecessary overhead. Make no
+#     more passes through the data than necessary.
+# I suggest an interface something like this:
+#   eq = LinearSystemScans(scans, signals=[sky, cuts, azbin], data=[raw,srcsub])
+# sky, cuts, azbin etc. are objects containing enough informatino to solve for
+# these components. They should each have members
+#  .name # Name for identifying this component
+#  .dof  # DOF object representing its degrees of freedom
+#  .hits # hitcount map per degree of freedom. Can be expanded using dof
+#  .div  # white noise estimate
+#  .b    # right-hand size. Empty before being built
+#  .M(x) # preconditioner, approximate solution of system
+#  .P (s, x, tod) # project from signal to tod for scan s
+#  .PT(s, tod, x) # project from tod to signal for scan s
+#  .init(scans) # Perform any initialization needed. Pass in all scans
+#
+# These objects should construct the preconditioner internally. But how to do
+# that? The binned preconditioner needs P'NdiagP, which is relatively cheap,
+# while the cyclic one needs P'NP. For all the other stuff, these objects
+# have not needed to care about N at all, that was the job of the LinearSystemScan
+# itself. But for the preconditioner N matters.
+#
+# Now, technically N *is* available as part of scan. So perhaps this isn't
+# a problem. The job of LinearSystemScan is to do all the fancy joint, subtracted
+# solving in a CG-friendly manner. That doesn't mean that internal stuff can't
+# do extra full loops the scans when building the preconditioner. But when should
+# this happen? Easiest thing: .init(scans), which sets up the preconditinoer as needed.
+#
+# Building the right-hand side:
+#
+# for scan in scans:
+# 	tod = zeros
+# 	for dsource in data:
+# 		dsource(scan, tod)
+# 	nmat.apply(tod)
+# 	for signal in signals:
+# 		signal.PT(scan, tod, signal.b)
+# for signal in signals:
+# 	signal.b = signal.dof.reduce(signal.b)
+# b = tot_dof.zip(sum([signal.dof.unzip(signal.b) for signal in signals]))
+#
+# Memory overhead. The scheme above stores the map redundantly, both as part of
+# global array and as part of a local one for one of the signals. This wastes a bit
+# of memory, up to a few hundred megabytes for a boss map.
+#
+# The sources are objects that need to provide __call__(scan, tod) and modifies
+# tod. For example:
+# def raw(scan, tod): tod[...] = scan.get_samples()
+#
+# PROBLEMS WITH THIS SCHEME:
+#  * Cuts should be taken into account in preconditioner and hitcount map for
+#    each signal, but should only correspond to a single signal itself
+#  * Preconditioners need to access each signal as a full equation system, so
+#    must define full A for the signals and pass them to precon.
+
 # Abstract interface to the Map-making system.
 class LinearSystemMap(LinearSystem):
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, precon="bin"):
+	def __init__(self, scans, area, comm=mpi.COMM_WORLD, precon="bin", imap=None, isrc=None, azmap=None, azfilter=None, subinds=None):
 		L.info("Building preconditioner")
-		self.mapeq  = MapEquation(scans, area, comm=comm)
+		self.mapeq  = MapEquation(scans, area, comm=comm, imap=imap, isrc=isrc, azmap=azmap, azfilter=azfilter, subinds=subinds)
 		if precon == "bin":
 			self.precon = PrecondBinned(self.mapeq)
 		elif precon == "cyc":
@@ -46,18 +168,25 @@ class LinearSystemMap(LinearSystem):
 			test_symmetry(self.mapeq, 0, verbose=False, shuf=False)
 			sys.exit(0)
 		self.mask   = self.precon.mask
-		self.dof    = DOF(Arg(mask=self.mask),Arg(shape=(self.mapeq.njunk,),distributed=True))
+		zippers = [
+				dmap.DmapZipper(area,self.mask),
+				zipper.ArrayZipper(np.zeros(self.mapeq.njunk,dtype=area.dtype),shared=False,comm=comm)
+				]
+		if azmap:
+			zippers.append(zipper.ArrayZipper(np.zeros(self.mapeq.azshape,dtype=area.dtype),shared=azmap.shared,comm=comm))
+		self.dof = zipper.MultiZipper(zippers, comm=comm)
 		L.info("Building right-hand side")
-		self.b      = self.dof.zip(*self.mapeq.b())
+		self.b      = self.dof.zip(self.mapeq.b())
 		self.scans, self.area, self.comm = scans, area, comm
+		self.isrc   = isrc
 		# Store a copy of the next level, which
 		# we will use when going up and down in levels.
 		self._upsys = None
 	def A(self, x):
-		res = self.dof.zip(*self.mapeq.A(*self.dof.unzip(x)))
+		res = self.dof.zip(self.mapeq.A(*self.dof.unzip(x)))
 		return res
 	def M(self, x):
-		res = self.dof.zip(*self.precon.apply(*self.dof.unzip(x)))
+		res = self.dof.zip(self.precon.apply(*self.dof.unzip(x)))
 		return res
 	def dot(self, x, y):
 		res = self.dof.dot(x,y)
@@ -89,107 +218,178 @@ class LinearSystemMap(LinearSystem):
 			rebin = pmat.PmatCutRebin(hdata.pcut, ldata.pcut)
 			rebin.backward(hjunk[hdata.cutrange[0]:hdata.cutrange[1]], ljunk[ldata.cutrange[0]:ldata.cutrange[1]])
 		return self.dof.zip(hmap,hjunk)
-	def write(self, prefix=""):
-		if self.comm.rank > 0: return
-		enmap.write_map(prefix + "rhs.fits", self.dof.unzip(self.b)[0])
-		self.precon.write(prefix)
-
-# FIXME: How should I get the noise matrix? As an argument?
-# Should it already be measured, or should it be measured internally?
-# If already measured, one would have to pass an array of nmats
-# of the same length as scans. That's probably best - we may
-# want to move to storing nmats in files at some point.
-# Perhaps the constructor should take a single array with
-# entries of [.scan, .pmap, .pcut, .nmat]. That would
-# free us up to make this more general, and would let us put
-# the part that creates the argument array in a part of the
-# code that is allowed to use enact stuff.
-#
-# Yes, let's plan for noise matrices being read from disk
-# and stored as an element in Scan. Then scan contains all
-# the information needed to initialize a MapSystem.
-#
-# There is a circular dependency the way I'm doing this here
-# M(x) depends on A(x), but the A(x) interpretation of the plain
-# array x depends on the mask derived from M(x).
-#
-# I think the solution is to seperate the plain array (x) stuff
-# (which needs masking, flattening and expanding) from the
-# underlying A(map,junk), M(map), M(junk), etc.
-# This lower layer will be tied to maps etc. while the upper level
-# is a general abstraction. Built from these.
+	def write(self, prefix="", ext="fits"):
+		rhs = self.dof.unzip(self.b)[0]
+		dmap.write_map(prefix + "rhs." + ext, rhs)
+		self.precon.write(prefix, ext=ext)
+		if self.isrc:
+			dmap.write_map(prefix + "srcs." + ext, self.isrc.map)
 
 class MapEquation:
-	def __init__(self, scans, area, comm=MPI.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None):
+	def __init__(self, scans, area, comm=mpi.COMM_WORLD, pmat_order=None, cut_type=None, eqsys=None, imap=None, isrc=None, azmap=None, azfilter=None, subinds=None):
+		# Adding ad-hoc simultaneous solving for an azimuth signal. This should really be done
+		# in a more ordely fashion, which mapmaking.py will do. But I'm adding it here first
+		# as a quick test. azmap should have the following members if present:
+		# .npix (int), .shared (bool), .mode ("azimuth", "phase" or None for default)
 		data = []
 		njunk = 0
-		for scan in scans:
+		for si, scan in enumerate(scans):
 			d = bunch.Bunch()
 			d.scan = scan
-			d.pmap = pmat.PmatMap(scan, area, order=pmat_order, sys=eqsys)
+			# Subinds indicates which local workspace to use for this scan
+			d.sub = 0 if subinds is None else subinds[si]
+			try:
+				d.pmap = pmat.PmatMap(scan, area.work[d.sub], order=pmat_order, sys=eqsys)
+			except OverflowError:
+				L.debug("Failed to set up pointing interpolation for scan #%d. Skipping" % si)
+				continue
 			d.pcut = pmat.PmatCut(scan, cut_type)
 			d.cutrange = [njunk,njunk+d.pcut.njunk]
 			njunk = d.cutrange[1]
 			d.nmat = scan.noise
+			d.window = int(d.scan.srate * config.get("tod_window"))
+			# Make maps from data projected from input map instead of real data
+			if imap: d.pmat_imap = pmat.PmatMap(scan, imap.map, order=pmat_order, sys=imap.sys)
+			if isrc: d.pmat_isrc = pmat.PmatPtsrc(scan, isrc.model.params.astype(area.dtype), sys=isrc.sys, tmul=isrc.tmul, pmul=isrc.pmul)
+			if azmap: d.pmat_azmap = pmat.PmatScan(scan, area.shape[0], azmap.npix, mode=azmap.mode)
 			data.append(d)
 		self.area = area.copy()
 		self.njunk = njunk
 		self.dtype = area.dtype
 		self.comm  = comm
 		self.data  = data
+		self.imap  = imap
+		self.isrc  = isrc
+		self.azfilter = azfilter
+		self.azmap = azmap
+		if self.azmap:
+			npre = 1 if azmap.shared else len(scans)
+			self.azshape = (npre, area.shape[0], azmap.npix)
 	def b(self):
-		rhs_map  = enmap.zeros(self.area.shape, self.area.wcs, dtype=self.dtype)
+		rhs_map  = self.area.copy()
 		rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
-		for d in self.data:
+		if self.azmap:
+			rhs_azmap= np.zeros(self.azshape, dtype=self.dtype)
+		for di, d in enumerate(self.data):
+			azdi = 0 if not self.azmap or len(rhs_azmap) <= 1 else di
 			with bench.mark("meq_b_get"):
-				tod = d.scan.get_samples()
-				tod-= np.mean(tod,1)[:,None]
-				tod = tod.astype(self.dtype)
+				# Only read data if necessary, as it's a pretty heavy operation
+				if (self.imap is None or self.imap.tmul != 0) and (self.isrc is None or self.isrc.tmul != 0):
+					tod = d.scan.get_samples()
+					# To avoid losing precision, we only reduce precision after subtracting
+					# the mean.
+					tod-= np.mean(tod,1)[:,None]
+					tod = tod.astype(self.dtype)
+				else:
+					tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
+				if self.imap is not None:
+					d.pmat_imap.forward(tod, self.imap.map, tmul=self.imap.tmul, mmul=self.imap.mmul)
+					utils.deslope(tod, inplace=True)
+				if self.isrc is not None:
+					d.pmat_isrc.forward(tod, self.isrc.model.params)
+				# Optional azimuth filter. This should probably happen in enact.data.calibrate,
+				# as it should happen before the noise estimation. It might be best to make a
+				# new function that handles all these extra things.
+				if self.azfilter is not None:
+					todfilter.filter_poly_jon(tod, d.scan.boresight[:,1], naz=self.azfilter.naz, nt=self.azfilter.nt, deslope=True)
+				pmat.apply_window(tod, d.window)
 			with bench.mark("meq_b_N"):
 				d.nmat.apply(tod)
 			with bench.mark("meq_b_P'"):
-				d.pmap.backward(tod,rhs_map)
 				d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
+				if self.azmap: d.pmat_azmap.backward(tod, rhs_azmap[azdi])
+				d.pmap.backward(tod,rhs_map.work[d.sub])
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["meq_b_get","meq_b_N","meq_b_P'"]]
-			L.debug("meq b get %5.1f N %4.1f P' %4.1f" % tuple(times))
+			L.debug("meq b get %5.1f N %5.3f P' %5.3f" % tuple(times))
 		with bench.mark("meq_b_red"):
-			rhs_map = reduce(rhs_map, self.comm)
-		return rhs_map, rhs_junk
-	def A(self, map, junk, white=False):
-		map, junk = map.copy(), junk.copy()
-		omap, ojunk = map*0, junk*0
-		for d in self.data:
+			rhs_map.work2tile()
+			if self.azmap and self.azmap.shared:
+				rhs_azmap = reduce(rhs_azmap, self.comm)
+		if self.azmap:
+			return rhs_map, rhs_junk, rhs_azmap
+		else:
+			return rhs_map, rhs_junk
+	def A(self, map, junk, azmap=None, white=False):
+		with bench.mark("meq_A_expand"):
+			map, junk = map.copy(), junk.copy()
+			omap, ojunk = map.copy().fill(0), junk*0
+			# Project map tiles down to local workspaces
+			map.tile2work()
+			if self.azmap:
+				azmap = azmap.copy()
+				oazmap = azmap*0
+		for di, d in enumerate(self.data):
+			azdi = 0 if azmap is not None and len(azmap) <= 1 else di
 			with bench.mark("meq_A_P"):
 				tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
-				d.pmap.forward(tod,map)
+				d.pmap.forward(tod,map.work[d.sub])
+				if self.azmap: d.pmat_azmap.forward(tod,azmap[azdi])
 				d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
+				pmat.apply_window(tod, d.window)
 			with bench.mark("meq_A_N"):
 				if white:
 					d.nmat.white(tod)
 				else:
 					d.nmat.apply(tod)
 			with bench.mark("meq_A_P'"):
+				pmat.apply_window(tod, d.window)
 				d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
-				d.pmap.backward(tod,omap)
+				if self.azmap: d.pmat_azmap.backward(tod,oazmap[azdi])
+				d.pmap.backward(tod,omap.work[d.sub])
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["meq_A_P","meq_A_N","meq_A_P'"]]
-			L.debug("meq A P %4.1f N %4.1f P' %4.1f" % tuple(times))
+			L.debug("meq A P %5.3f N %5.3f P' %5.3f" % tuple(times))
 		with bench.mark("meq_A_red"):
-			omap = reduce(omap, self.comm)
-		return omap, ojunk
-	def white(self, map, junk):
-		return self.A(map, junk, white=True)
+			omap.work2tile()
+			if self.azmap and self.azmap.shared:
+				oazmap = reduce(oazmap, self.comm)
+		if self.azmap:
+			return omap, ojunk, oazmap
+		else:
+			return omap, ojunk
+	def white(self, map, junk, azmap=None):
+		return self.A(map, junk, azmap=azmap, white=True)
 	def hitcount(self):
-		hitmap = enmap.zeros(self.area.shape, self.area.wcs, self.dtype)
+		"""Compute the number of samples that hit each pixel. Note that
+		this will be smaller if downsampling is used, so take care if
+		comparing with other hitcount maps."""
+		hitmap = self.area.copy()
 		junk   = np.zeros(self.njunk, self.dtype)
 		for d in self.data:
 			tod = np.full([d.scan.ndet,d.scan.nsamp],1,dtype=self.dtype)
 			d.pcut.backward(tod,junk)
-			d.pmap.backward(tod,hitmap)
-		hitmap = reduce(hitmap[0].astype(np.int32),self.comm)
+			d.pmap.backward(tod,hitmap.work[d.sub])
+		hitmap.work2tile()
+		hitmap = hitmap[0].astype(np.int32)
 		return hitmap
-
+	def postprocess(self, map, div):
+		"""Prepare map for output. Add back things that have been temporarily
+		subtracted, and finish any pending filtering operations."""
+		omap = map.copy()
+		if self.azfilter:
+			map.tile2work()
+			omap.fill(0)
+			rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
+			for di, d in enumerate(self.data):
+				tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
+				d.pmap.forward(tod,map.work[d.sub])
+				pmat.apply_window(tod, d.window)
+				todfilter.filter_poly_jon(tod, d.scan.boresight[:,1], naz=self.azfilter.naz, nt=self.azfilter.nt, deslope=False)
+				d.nmat.white(tod)
+				pmat.apply_window(tod, d.window)
+				# We don't care about cuts, but they were used in div, so we must remove them here too
+				d.pcut.backward(tod,rhs_junk)
+				d.pmap.backward(tod,omap.work[d.sub])
+				del tod
+			omap.work2tile()
+			for otile, dtile in zip(omap.tiles, div.tiles):
+				otile[...] = array_ops.solve_masked(dtile, otile, [0,1])
+		if self.isrc and self.isrc.tmul != 0:
+			for otile, stile in zip(omap.tiles, self.isrc.map.tiles):
+				otile += stile
+			#omap += self.isrc.model.draw(map.shape, map.wcs, window=True)
+		return omap
 
 class PrecondBinned:
 	"""This class implements a simple "binned" preconditioner, which
@@ -198,32 +398,61 @@ class PrecondBinned:
 	the different signal components inside each pixel, though."""
 	def __init__(self, mapeq):
 		ncomp     = mapeq.area.shape[0]
-		# Compute the per pixel approximate inverse covmat
-		div_map   = enmap.zeros((ncomp,ncomp)+mapeq.area.shape[1:],mapeq.area.wcs, mapeq.area.dtype)
+		# Compute the per pixel approximate inverse covmat. Constructing a dmap based on an existing
+		# one needs to be simplified! 6 arguments all the time is too much.
+		div_map   = dmap.Dmap((ncomp,ncomp)+mapeq.area.shape[-2:],mapeq.area.wcs, mapeq.area.bbpix, tshape=mapeq.area.tshape, comm=mapeq.area.comm, dtype=mapeq.area.dtype)
 		div_junk  = np.zeros(mapeq.njunk, dtype=mapeq.area.dtype)
+		if mapeq.azmap:
+			div_azmap = np.zeros((ncomp,)+mapeq.azshape, dtype=mapeq.area.dtype)
 		for ci in range(ncomp):
-			div_map[ci,ci] = 1
+			for dtile in div_map.tiles: dtile[ci,ci] = 1
 			div_junk[...]  = 1
-			div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
+			# Don't set azmap to one here. We get our one value from map.
+			# All these special cases are very ugly, and will be handled better
+			# in mapmaking.py later.
+			if mapeq.azmap:
+				div_map[ci], div_junk, div_azmap[ci] = mapeq.white(div_map[ci], div_junk, div_azmap[ci])
+			else:
+				div_map[ci], div_junk = mapeq.white(div_map[ci], div_junk)
 		# Make sure we're symmetric in the TQU-direction
-		div_map = 0.5*(div_map+np.rollaxis(div_map,1))
+		for dtile in div_map.tiles:
+			dtile[:] = 0.5*(dtile+np.rollaxis(dtile,1))
 		self.div_map, self.div_junk = div_map, div_junk
 		self.hitmap = mapeq.hitcount()
 		self.mapeq  = mapeq
-
 		# Compute the pixel component masks, and use it to mask out the
 		# corresonding parts of the map preconditioner
 		self.mask = makemask(self.div_map)
-		self.div_map *= self.mask[None,:]*self.mask[:,None]
-	def apply(self, map, junk):
+		if self.mask is not None:
+			for dtile, mtile in zip(self.div_map.tiles, self.mask.tiles):
+				dtile *= mtile[None,:]*mtile[:,None]
+		self.idiv_map = self.div_map.copy()
+		for dtile in self.idiv_map.tiles:
+			dtile[:] = array_ops.eigpow(dtile, -1, axes=[0,1])
+		if mapeq.azmap:
+			# Reshape div_azmap to sensible shape
+			div_azmap = np.rollaxis(div_azmap, 2)
+			div_azmap = 0.5*(div_azmap+np.rollaxis(div_azmap,1))
+			azmask = makemask(div_azmap)
+			if azmask is not None:
+				div_azmap *= azmask[None,:]*azmask[:,None]
+			self.div_azmap = np.rollaxis(div_azmap, 2)
+			self.idiv_azmap = array_ops.matmul(self.div_azmap, -1, axes=[0,1])
+	def apply(self, map, junk, azmap=None):
 		with bench.mark("prec_bin"):
-			res = array_ops.solve_masked(self.div_map, map, [0,1]), junk/self.div_junk
+			rmap = map.copy()
+			for rtile, idtile, mtile in zip(rmap.tiles, self.idiv_map.tiles, map.tiles):
+				rtile[:] = array_ops.matmul(idtile, mtile, axes=[0,1])
+			if azmap is not None:
+				res = rmap, junk/self.div_junk, array_ops.matmul(self.idiv_azmap, azmap, axes=[1,2])
+			else:
+				res = rmap, junk/self.div_junk
 		return res
-	def write(self, prefix=""):
-		if self.mapeq.comm.rank > 0: return
-		enmap.write_map(prefix + "div.fits", self.div_map)
-		enmap.write_map(prefix + "hits.fits", self.hitmap)
-		enmap.write_map(prefix + "mask.fits", self.mask.astype(np.uint8))
+	def write(self, prefix="", ext="fits"):
+		dmap.write_map(prefix + "div." + ext, self.div_map)
+		dmap.write_map(prefix + "hits." + ext, self.hitmap)
+		if self.mask is not None:
+			dmap.write_map(prefix + "mask." + ext, self.mask.astype(np.uint8))
 
 config.default("precon_cyc_npoint", 1, "Number of points to sample in cyclic preconditioner.")
 class PrecondCirculant:
@@ -232,6 +461,7 @@ class PrecondCirculant:
 	and C is a position-independent correlation pattern.
 	It works well for maps with uniform scanning patterns."""
 	def __init__(self, mapeq):
+		raise NotImplementedError("PrecondCirculant needs to be adapted to distributed maps")
 		ncomp, h,w = mapeq.area.shape
 		binned = PrecondBinned(mapeq)
 
@@ -252,6 +482,7 @@ class PrecondCirculant:
 		self.Arow = enmap.samewcs(Arow, binned.div_map)
 		self.S, self.C = S, C
 		self.div_junk = binned.div_junk
+		self.div_map  = binned.div_map
 		self.mask = binned.mask
 		self.binned = binned
 		self.mapeq = mapeq
@@ -265,10 +496,10 @@ class PrecondCirculant:
 			m  = fft.ifft(mf, axes=[-2,-1], normalize=True).real
 			m  = enmap.map_mul(self.S, m)
 		return m, junk/self.div_junk
-	def write(self, prefix=""):
+	def write(self, prefix="", ext="fits"):
 		if self.mapeq.comm.rank > 0: return
-		enmap.write_map(prefix + "arow.fits", self.Arow)
-		self.binned.write(prefix)
+		enmap.write_map(prefix + "arow." + ext, self.Arow)
+		self.binned.write(prefix, ext=ext)
 
 def pick_ref_points(hitmap, npoint):
 	pix = []
@@ -292,6 +523,123 @@ def pick_ref_points(hitmap, npoint):
 		mask = ndimage.distance_transform_edt(mask)>r_mask
 		w *= mask
 	return np.array(pix)+1
+
+config.default("precond_condition_lim", 0, "Maximum allowed condition number in per-pixel polarization matrices.")
+def makemask(div):
+	lim  = config.get("precond_condition_lim")
+	if lim == 0: return None
+	masks = div[0].copy().astype(bool)
+	for dtile, mtile in zip(div.tiles, masks.tiles):
+		condition = array_ops.condition_number_multi(dtile, [0,1])
+		tmask = dtile[0,0] > 0
+		pmask = (condition >= 1)*(condition < lim)
+		mtile[0]  = tmask
+		mtile[1:] = pmask[None]
+		del condition
+	return masks
+
+def reduce(a, comm=mpi.COMM_WORLD):
+	res = a.copy()
+	comm.Allreduce(a, res)
+	return res
+
+def measure_corr_cyclic(mapeq, S, pixels):
+	# Measure the typical correlation pattern by using multiple
+	# pixels at the same time.
+	ncomp,h,w = mapeq.area.shape
+	d = enmap.zeros([ncomp,ncomp,h,w],mapeq.area.wcs, dtype=mapeq.area.dtype)
+	junk = np.zeros(mapeq.njunk, dtype=mapeq.area.dtype)
+	for p in pixels:
+		Arow = d*0
+		for ci in range(ncomp):
+			#Arow[ci,:,p[0],p[1]] = S[ci,:,p[0],p[1]]
+			Arow[ci,ci,p[0],p[1]] = 1
+			junk[...] = 0
+			Arow[ci,:],_ = mapeq.A(Arow[ci], junk)
+		Sref = S.copy(); S[...] = S[:,:,p[0],p[1]][:,:,None,None]
+		Arow = enmap.map_mul(Arow, S)
+		Arow = enmap.map_mul(Sref, Arow)
+		Arow = np.roll(Arow, -p[0], 2)
+		Arow = np.roll(Arow, -p[1], 3)
+		d += Arow
+	d /= len(pixels)
+	# We should be symmetric from the beginning, but it turns out
+	# we're not. Should investigate that. In the mean while,
+	# symmetrize so that conjugate gradients doesn't break down.
+	return d
+	#return sympos(d)
+
+def sympos(arow):
+	f = fft.fft(arow, axes=[-2,-1])
+	print "sympos A", np.min(f.real), np.min(f.imag), np.max(f.real), np.max(f.imag)
+	# Make us symmetric in real space by killing the imaginary part
+	f = f.real
+	# Make us symmetric in component space
+	f = 0.5*(f+np.rollaxis(f,1))
+	# Remove negative eigenvalues
+	f = array_ops.eigflip(f, axes=[0,1])
+	x = fft.ifft(f+0j, axes=[-2,-1], normalize=True).real
+	return x
+
+
+def normalize(A):
+	# Normalize to unit diagonal
+	D = np.maximum(1e-30,np.abs(np.diag(A)))**-0.5
+	A = A * D[:,None]
+	A *= D[None,:]
+	return A
+
+def checksym(A):
+	A = normalize(A)
+	n = len(A)
+	res = np.zeros(n)
+	for i in range(n):
+		res[i] = np.max(np.abs(A[:,i]-A[i,:]))
+	return res
+
+def checkeig(A):
+	A = normalize(A)
+	e,v = np.linalg.eig(A)
+	return e/np.max(e)
+
+def test_symmetry(mapeq, nmax=0, shuf=True, verbose=True, prec=None):
+	# Measure the typical correlation pattern by using multiple
+	# pixels at the same time.
+	mask = mapeq.area.astype(bool)+True
+	dof  = DOF(Arg(mask=mask),Arg(shape=(mapeq.njunk,),distributed=True))
+	a = np.random.standard_normal(dof.n).astype(mapeq.dtype)
+	mask = mapeq.A(*dof.unzip(a))[0] != 0
+	dof  = DOF(Arg(mask=mask),Arg(shape=(mapeq.njunk,),distributed=True))
+	fun = mapeq.A
+	if prec:
+		def fun(*args): return prec.apply(*mapeq.A(*mapeq.A(*prec.apply(*args))))
+		#def fun(*args): return prec.apply(*args)
+	if nmax == 0: nmax = dof.n-mapeq.njunk
+	rows = []
+	if shuf:
+		inds = np.random.permutation(dof.n-mapeq.njunk)[:nmax]
+		inds = mapeq.comm.bcast(inds)
+	else:
+		inds = np.arange(nmax)
+	for i, ind in enumerate(inds):
+		a = np.zeros(dof.n,dtype=mapeq.dtype); a[ind] = 1
+		rows.append(dof.zip(fun(*dof.unzip(a))))
+		if verbose:
+			b = np.array(rows)[:,np.array(inds[:i+1])]
+			sym = checksym(b)
+			eig = checkeig(b)
+			print "sym %4d %15.7e %15.7e" % (i, np.max(sym), np.min(eig))
+	if mapeq.comm.rank == 0:
+		A = np.array(rows)[:,inds[:nmax]]
+		with h5py.File("A.hdf","w") as hfile:
+			hfile["data"] = A
+
+
+
+
+# Submap preconditioner stuff below here. I never got this to work,
+# but it's still an interesting idea.
+# =================================================================
 
 class PrecondSubmap:
 	"""This preconditioner splits the scans into
@@ -341,8 +689,8 @@ class PrecondSubmap:
 			#enmap.write_map("sub%03d.hdf" % solver.i, map)
 		map, _ = eq.dof.unzip(solver.x)
 		return map, junk
-	def write(self, prefix=""):
-		self.binned.write(prefix)
+	def write(self, prefix="", ext="fits"):
+		self.binned.write(prefix, ext=ext)
 
 		# 1. Solve the equation sum_sub(A_sub) x = sum_sub b_sub
 		# by reading off the pixels from each, unapplying the noise
@@ -363,146 +711,6 @@ class PrecondSubmap:
 		# N"(f,d1,d2)= iU(f,d1) delta(d1,d2) - Q(f,d1,b)Q(f,d2,b)
 		# The interaction between phase and Q will ensure that the polarized
 		# noise ends up lower.
-
-config.default("precond_condition_lim", 10., "Maximum allowed condition number in per-pixel polarization matrices.")
-def makemask(div):
-	condition = array_ops.condition_number_multi(div, [0,1])
-	tmask = div[0,0] > 0
-	lim   = config.get("precond_condition_lim")
-	pmask = (condition >= 1)*(condition < lim)
-	masks = enmap.zeros(div.shape[1:], div.wcs, dtype=bool)
-	masks[0]  = tmask
-	masks[1:] = pmask[None]
-	del condition
-	return masks
-
-def reduce(a, comm=MPI.COMM_WORLD):
-	res = a.copy()
-	comm.Allreduce(a, res)
-	return res
-
-def measure_Arow(mapeq, pix):
-	ncomp,h,w = mapeq.area.shape
-	Arow = enmap.zeros([ncomp,ncomp,h,w],mapeq.area.wcs, dtype=mapeq.area.dtype)
-	junk = np.zeros(mapeq.njunk, dtype=mapeq.area.dtype)
-	for ci in range(ncomp):
-		Arow[ci,ci,pix[0],pix[1]] = 1
-		junk[...]         = 0
-		Arow[ci], _ = mapeq.A(Arow[ci], junk)
-	return Arow
-
-def cov2corr(iC, S, ref, beam):
-	Sref = S.copy(); S[...] = S[:,:,ref[0],ref[1]][:,:,None,None]
-	iC = array_ops.matmul(iC,    S, axes=[0,1])
-	iC = array_ops.matmul(Sref, iC, axes=[0,1])
-	# Shift the reference pixel to 0,0:
-	iC = np.roll(iC, -ref[0], 2)
-	iC = np.roll(iC, -ref[1], 3)
-	# Regularize by damping long-distance correlations
-	if beam > 0: apply_gaussian(iC, beam)
-	# And store in fourier domain
-	res = np.conj(fft.fft(iC, axes=[-2,-1]))
-	## Overnormalize in order to avoid later normalization
-	#res /= np.prod(iC.shape[-2:])**2
-	return res
-
-def apply_gaussian(fa, sigma):
-	flat  = fa.reshape(-1,fa.shape[-2],fa.shape[-1])
-	gauss = [np.exp(-0.5*(np.arange(n)/sigma)**2) for n in flat.shape[-2:]]
-	gauss = [g + g[::-1] for g in gauss]
-	flat *= gauss[0][None,:,None]
-	flat *= gauss[1][None,None,:]
-
-def sympos(arow):
-	f = fft.fft(arow, axes=[-2,-1])
-	print "sympos A", np.min(f.real), np.min(f.imag), np.max(f.real), np.max(f.imag)
-	# Make us symmetric in real space by killing the imaginary part
-	f = f.real
-	# Make us symmetric in component space
-	f = 0.5*(f+np.rollaxis(f,1))
-	# Remove negative eigenvalues
-	f = array_ops.eigflip(f, axes=[0,1])
-	x = fft.ifft(f+0j, axes=[-2,-1], normalize=True).real
-	return x
-
-def measure_corr_cyclic(mapeq, S, pixels):
-	# Measure the typical correlation pattern by using multiple
-	# pixels at the same time.
-	ncomp,h,w = mapeq.area.shape
-	d = enmap.zeros([ncomp,ncomp,h,w],mapeq.area.wcs, dtype=mapeq.area.dtype)
-	junk = np.zeros(mapeq.njunk, dtype=mapeq.area.dtype)
-	for p in pixels:
-		Arow = d*0
-		for ci in range(ncomp):
-			#Arow[ci,:,p[0],p[1]] = S[ci,:,p[0],p[1]]
-			Arow[ci,ci,p[0],p[1]] = 1
-			junk[...] = 0
-			Arow[ci,:],_ = mapeq.A(Arow[ci], junk)
-		Sref = S.copy(); S[...] = S[:,:,p[0],p[1]][:,:,None,None]
-		Arow = enmap.map_mul(Arow, S)
-		Arow = enmap.map_mul(Sref, Arow)
-		Arow = np.roll(Arow, -p[0], 2)
-		Arow = np.roll(Arow, -p[1], 3)
-		d += Arow
-	d /= len(pixels)
-	# We should be symmetric from the beginning, but it turns out
-	# we're not. Should investigate that. In the mean while,
-	# symmetrize so that conjugate gradients doesn't break down.
-	#return d
-	return d
-	#return sympos(d)
-
-def normalize(A):
-	# Normalize to unit diagonal
-	D = np.maximum(1e-30,np.abs(np.diag(A)))**-0.5
-	A = A * D[:,None]
-	A *= D[None,:]
-	return A
-
-def checksym(A):
-	A = normalize(A)
-	n = len(A)
-	res = np.zeros(n)
-	for i in range(n):
-		res[i] = np.max(np.abs(A[:,i]-A[i,:]))
-	return res
-
-def checkeig(A):
-	A = normalize(A)
-	e,v = np.linalg.eig(A)
-	return e/np.max(e)
-
-def test_symmetry(mapeq, nmax=0, shuf=True, verbose=True, prec=None):
-	# Measure the typical correlation pattern by using multiple
-	# pixels at the same time.
-	mask = mapeq.area.astype(bool)+True
-	dof  = DOF(Arg(mask=mask),Arg(shape=(mapeq.njunk,),distributed=True))
-	a = np.random.standard_normal(dof.n).astype(mapeq.dtype)
-	mask = mapeq.A(*dof.unzip(a))[0] != 0
-	dof  = DOF(Arg(mask=mask),Arg(shape=(mapeq.njunk,),distributed=True))
-	fun = mapeq.A
-	if prec:
-		def fun(*args): return prec.apply(*mapeq.A(*mapeq.A(*prec.apply(*args))))
-		#def fun(*args): return prec.apply(*args)
-	if nmax == 0: nmax = dof.n-mapeq.njunk
-	rows = []
-	if shuf:
-		inds = np.random.permutation(dof.n-mapeq.njunk)[:nmax]
-		inds = mapeq.comm.bcast(inds)
-	else:
-		inds = np.arange(nmax)
-	for i, ind in enumerate(inds):
-		a = np.zeros(dof.n,dtype=mapeq.dtype); a[ind] = 1
-		rows.append(dof.zip(*fun(*dof.unzip(a))))
-		if verbose:
-			b = np.array(rows)[:,np.array(inds[:i+1])]
-			sym = checksym(b)
-			eig = checkeig(b)
-			print "sym %4d %15.7e %15.7e" % (i, np.max(sym), np.min(eig))
-	if mapeq.comm.rank == 0:
-		A = np.array(rows)[:,inds[:nmax]]
-		with h5py.File("A.hdf","w") as hfile:
-			hfile["data"] = A
 
 def analyze_scan(d):
 	"""Computes bounding boxes for d.scan in both input and output
@@ -687,3 +895,111 @@ def build_effective_noise_model(group, nsamp):
 
 	# Build a dense binned noise model based on this
 	return nmat.NmatBinned(iC, bins)
+
+
+# Az stuff. Adding this was surprisingly cumbersome. I need to rethink
+# this module.
+
+class LinearSystemAz(LinearSystem):
+	def __init__(self, scans, area, ordering=None, comm=mpi.COMM_WORLD, cut_type=None):
+		L.info("Building preconditioner")
+		self.azeq  = AzEquation(scans, area, ordering=ordering, comm=comm, cut_type=cut_type)
+		self.precon = PrecondAz(self.azeq)
+		zippers = [
+				zipper.ArrayZipper(area, shared=True, comm=comm),
+				zipper.ArrayZipper(np.zeros(self.azeq.njunk,dtype=area.dtype),shared=False,comm=comm)
+				]
+		self.dof = zipper.MultiZipper(zippers, comm=comm)
+		L.info("Building right-hand side")
+		self.b  = self.dof.zip(self.azeq.b())
+		self.comm, self.scans = comm, scans
+	def A(self, x):
+		res = self.dof.zip(self.azeq.A(*self.dof.unzip(x)))
+		return res
+	def M(self, x):
+		res = self.dof.zip(self.precon.apply(*self.dof.unzip(x)))
+		return res
+	def dot(self, x, y):
+		res = self.dof.dot(x,y)
+		return res
+	def write(self, prefix="", ext="fits"):
+		rhs = self.dof.unzip(self.b)[0]
+		if self.comm.rank == 0:
+			enmap.write_map(prefix + "rhs.fits", rhs)
+		self.precon.write(prefix, ext=ext)
+
+class AzEquation:
+	def __init__(self, scans, area, ordering=None, comm=mpi.COMM_WORLD, cut_type=None):
+		data = []
+		njunk = 0
+		for si, scan in enumerate(scans):
+			d = bunch.Bunch()
+			d.scan = scan
+			d.pcut = pmat.PmatCut(scan, cut_type)
+			dets   = scan.dets if ordering is None else ordering[scan.dets]
+			d.paz  = pmat.PmatScan(scan, area, dets)
+			d.cutrange = [njunk,njunk+d.pcut.njunk]
+			njunk = d.cutrange[1]
+			d.nmat = scan.noise
+			data.append(d)
+		self.data, self.area = data, area
+		self.njunk, self.comm, self.dtype = njunk, comm, area.dtype
+	def b(self):
+		rhs_map  = self.area.copy()
+		rhs_junk = np.zeros(self.njunk, dtype=self.dtype)
+		for di, d in enumerate(self.data):
+			with bench.mark("aeq_b_get"):
+				tod = d.scan.get_samples()
+				# To avoid losing precision, we only reduce precision
+				# after subtracting the mean.
+				tod-= np.mean(tod,1)[:,None]
+				tod = tod.astype(self.dtype)
+			with bench.mark("aeq_b_N"):
+				d.nmat.apply(tod)
+			# Project down on az box
+			with bench.mark("aeq_b_P"):
+				d.pcut.backward(tod,rhs_junk[d.cutrange[0]:d.cutrange[1]])
+				d.paz.backward(tod,rhs_map)
+			times = [bench.stats[s]["time"].last for s in ["aeq_b_get","aeq_b_N","aeq_b_P'"]]
+			L.debug("aeq b get %5.1f N %5.3f P' %5.3f" % tuple(times))
+		rhs_map = reduce(rhs_map, self.comm)
+		return rhs_map, rhs_junk
+	def A(self, map, junk, white=False):
+		with bench.mark("aeq_A_expand"):
+			map, junk = map.copy(), junk.copy()
+			omap, ojunk = map*0, junk*0
+		for di, d in enumerate(self.data):
+			with bench.mark("aeq_A_P"):
+				tod = np.zeros([d.scan.ndet,d.scan.nsamp],dtype=self.dtype)
+				d.paz.forward(tod, map)
+				d.pcut.forward(tod,junk[d.cutrange[0]:d.cutrange[1]])
+			with bench.mark("aeq_A_N"):
+				if white:
+					d.nmat.white(tod)
+				else:
+					d.nmat.apply(tod)
+			with bench.mark("aeq_A_P'"):
+				d.pcut.backward(tod,ojunk[d.cutrange[0]:d.cutrange[1]])
+				d.paz.backward(tod,omap)
+			del tod
+			times = [bench.stats[s]["time"].last for s in ["aeq_A_P","aeq_A_N","aeq_A_P'"]]
+			L.debug("aeq A P %5.3f N %5.3f P' %5.3f" % tuple(times))
+		omap = reduce(omap, self.comm)
+		return omap, ojunk
+	def white(self, map, junk):
+		return self.A(map, junk, white=True)
+
+class PrecondAz:
+	def __init__(self, azeq):
+		div_az = azeq.area * 0 + 1
+		div_junk  = np.zeros(azeq.njunk, dtype=azeq.area.dtype)+1
+		div_az, div_junk = azeq.white(div_az, div_junk)
+		self.azeq = azeq
+		self.div_az, self.div_junk = div_az, div_junk
+		self.idiv_az = azeq.area*0
+		self.idiv_az[div_az != 0] = 1/div_az[div_az!=0]
+	def apply(self, map, junk):
+		return self.idiv_az*map, junk/self.div_junk
+	def write(self, prefix="", ext=None):
+		if self.azeq.comm.rank == 0:
+			enmap.write_map(prefix + "div.fits", self.div_az)

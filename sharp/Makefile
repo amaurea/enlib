@@ -1,6 +1,7 @@
+include ../compile_opts/$(ENLIB_COMP).mk
 all: sharp.so tidy
 sharp.so: sharp.pyx csharp.pxd csharp.h
-	python setup.py build_ext --inplace
+	$(PYTHON) setup.py build_ext --inplace
 clean:
 	rm -rf *.so *.pyc
 tidy:

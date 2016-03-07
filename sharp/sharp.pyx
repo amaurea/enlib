@@ -63,7 +63,7 @@ def map_info_healpix(int nside, int stride=1, weights=None):
 	specifying weights."""
 	nring = 4*nside-1
 	if weights is None: weights = np.zeros(nring)+1
-	assert len(weights) < nring, "incorrect length of weights array. need 4*nside-1"
+	assert len(weights) >= nring, "incorrect length of weights array. need 4*nside-1"
 	cdef np.ndarray[np.float64_t,ndim=1] w = weights
 	cdef csharp.sharp_geom_info * geom
 	csharp.sharp_make_weighted_healpix_geom_info (nside, stride, &w[0], &geom)
@@ -194,7 +194,7 @@ cdef class alm_info:
 			assert self.nelem == nalm, "lmax must be explicitly specified when lmax != mmax"
 		self.mstart= mstart
 		self.mstart.flags.writeable = False
-	def lm2ind(self, np.ndarray[int,ndim=1] l,np.ndarray[int,ndim=1] m):
+	def lm2ind(self, l, m):
 		return self.mstart[m]+l*self.stride
 	def transpose_alm(self, alm, out=None):
 		"""In order to accomodate l-major ordering, which is not directoy

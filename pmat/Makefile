@@ -1,17 +1,17 @@
 include ../compile_opts/$(ENLIB_COMP).mk
-
+skip := skip: map_block_prepare map_block_finish :
 all: pmat_core_32.so pmat_core_64.so
 
 %.so: %.f90
-	#$(F2PY) --fcompiler=$(F2PYCOMP) -c -m $(basename $<) $< $(OMP_LINK)
+	$(F2PY) --fcompiler=$(F2PYCOMP) --noopt -c -m $(basename $<) $< $(skip) $(OMP_LINK)
 	# ifort is a bit slower than gfortran here
-	FFLAGS="-fopenmp -fPIC -Ofast -ffree-line-length-none" $(F2PY) --fcompiler=gfortran -c -m $(basename $<) $< -lgomp
-	#FFLAGS="-fopenmp -fPIC -O0 -fbounds-check -ffree-line-length-none" $(F2PY) --fcompiler=gfortran -c -m $(basename $<) $< -lgomp
+	#FFLAGS="-fopenmp -fPIC -Ofast -ffree-line-length-none -Wtabs" $(F2PY) --fcompiler=gfortran -c -m $(basename $<) $< -lgomp
+	#FFLAGS="-fopenmp -fPIC -O0 -fbounds-check -ffree-line-length-none" $(F2PY) --fcompiler=gfortran -c -m $(basename $<) $< $(skip) -lgomp
 
 pmat_core_32.f90: pmat_core.F90
-	sed 's/\<_\>/4/g' < $< > $@
+	$(SED) 's/\<_\>/4/g' < $< > $@
 pmat_core_64.f90: pmat_core.F90
-	sed 's/\<_\>/8/g' < $< > $@
+	$(SED) 's/\<_\>/8/g' < $< > $@
 
 clean:
 	rm -rf *.pyc *.so

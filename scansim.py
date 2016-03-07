@@ -1,5 +1,5 @@
-import numpy as np, bunch, copy, warnings
-from enlib import scan, rangelist, coordinates, utils, nmat, pmat, array_ops, enmap
+import numpy as np, copy, warnings
+from enlib import scan, rangelist, coordinates, utils, nmat, pmat, array_ops, enmap, bunch
 from enlib.bins import linbin
 from scipy import ndimage
 warnings.filterwarnings("ignore")
@@ -97,7 +97,7 @@ def nocut(ndet, nsamp):
 	return rangelist.Multirange([rangelist.Rangelist(np.zeros([0,2],dtype=int),n=nsamp) for i  in range(ndet)])
 
 class SimSrcs(scan.Scan):
-	def __init__(self, scanpattern, dets, srcs, noise, simsys="equ", cache=False, seed=0, nonoise=False):
+	def __init__(self, scanpattern, dets, srcs, noise, simsys="equ", cache=False, seed=0, noise_scale=1, nsigma=4):
 		# Set up the telescope
 		self.boresight = scanpattern.boresight
 		self.sys       = scanpattern.sys
@@ -111,8 +111,9 @@ class SimSrcs(scan.Scan):
 		self.seed  = seed
 		self.dets  = np.arange(len(self.comps))
 		self.site  = scanpattern.site
-		self.nonoise = nonoise
+		self.noise_scale = noise_scale
 		self.simsys  = simsys
+		self.nsigma = nsigma
 
 		if cache: self._tod = None
 
@@ -121,8 +122,9 @@ class SimSrcs(scan.Scan):
 		if hasattr(self, "_tod") and self._tod is not None:
 			return self._tod.copy()
 		np.random.seed(self.seed)
-		tod = np.random.standard_normal([self.ndet,self.nsamp]).astype(np.float32)
-		if not self.nonoise:
+		tod = np.zeros([self.ndet,self.nsamp]).astype(np.float32)
+		if self.noise_scale != 0:
+			tod  = np.random.standard_normal([self.ndet,self.nsamp]).astype(np.float32)*self.noise_scale
 			covs = array_ops.eigpow(self.noise.icovs, -0.5, axes=[-2,-1])
 			N12  = nmat.NmatBinned(covs, self.noise.bins, self.noise.dets)
 			N12.apply(tod)
@@ -135,7 +137,7 @@ class SimSrcs(scan.Scan):
 				point = (self.boresight+self.offsets[di,None,:])[:,1:]
 				point = coordinates.transform(self.sys, self.simsys, point, time=self.boresight[:,0]+self.mjd0, site=self.site)
 				r2 = np.sum((point-pos[None,:])**2,1)/beam**2
-				I  = np.where(r2 < 4**2)[0]
+				I  = np.where(r2 < self.nsigma**2)[0]
 				tod[di,I] += np.exp(-0.5*r2[I])*np.sum(amp*self.comps[di])
 		if hasattr(self, "_tod"):
 			self._tod = tod.copy()
@@ -154,7 +156,7 @@ class SimSrcs(scan.Scan):
 		return res
 
 class SimMap(scan.Scan):
-	def __init__(self, scanpattern, dets, map, noise, simsys="equ", cache=False, seed=0, nonoise=False):
+	def __init__(self, scanpattern, dets, map, noise, simsys="equ", cache=False, seed=0, noise_scale=1):
 		# Set up the telescope
 		self.boresight = scanpattern.boresight
 		self.sys       = scanpattern.sys
@@ -168,15 +170,15 @@ class SimMap(scan.Scan):
 		self.seed  = seed
 		self.dets  = np.arange(len(self.comps))
 		self.site  = scanpattern.site
-		self.nonoise = nonoise
+		self.noise_scale = noise_scale
 		self.simsys  = simsys
 		self.pmat  = pmat.PmatMap(self, self.map, sys=simsys)
 	def get_samples(self):
 		np.random.seed(self.seed)
-		tod = np.random.standard_normal([self.ndet,self.nsamp]).astype(self.map.dtype)
+		tod = np.zeros([self.ndet,self.nsamp]).astype(self.map.dtype)
 		self.pmat.forward(tod, self.map)
-		if not self.nonoise:
-			noise = np.random.standard_normal([self.ndet,self.nsamp]).astype(self.map.dtype)
+		if self.noise_scale:
+			noise = np.random.standard_normal([self.ndet,self.nsamp]).astype(self.map.dtype)*self.noise_scale
 			covs = array_ops.eigpow(self.noise.icovs, -0.5, axes=[-2,-1])
 			N12  = nmat.NmatBinned(covs, self.noise.bins, self.noise.dets)
 			N12.apply(noise)

@@ -1,9 +1,99 @@
 import numpy as np
-from enlib import enmap, utils, powspec, sharp, curvedsky
+from enlib import enmap, utils, powspec, sharp, curvedsky, interpol
+
+####### Flat sky lensing #######
+
+def lens_map(imap, grad_phi, order=3, mode="spline", border="cyclic", trans=False, deriv=False, h=1e-7):
+	"""Lens map imap[{pre},ny,nx] according to grad_phi[2,ny,nx], where phi is the
+	lensing potential, and grad_phi, which can be computed as enmap.grad(phi), simply
+	is the coordinate displacement for each pixel. order, mode and border specify
+	details of the interpolation used. See enlib.interpol.map_coordinates for details.
+	If trans is true, the transpose operation is performed. This is NOT equivalent to
+	delensing.
+
+	If the same lensing field needs to be reused repeatedly, then higher efficiency
+	can be gotten from calling displace_map directly with precomputed pixel positions."""
+	# Converting from grad_phi to pix has roughly the same cost as calling displace_map.
+	# So almost a factor 2 in speed can be won from calling displace_map directly.
+	pos = imap.posmap() + grad_phi
+	pix = imap.sky2pix(pos, safe=False)
+	if not deriv:
+		return displace_map(imap, pix, order=order, mode=mode, border=border, trans=trans)
+	else:
+		# displace_map deriv gives us ndim,{pre},ny,nx
+		dlens_pix = displace_map(imap, pix, order=order, mode=mode, border=border, trans=trans, deriv=True)
+		res = dlens_pix[0]*0
+		pad = (slice(None),)+(None,)*(imap.ndim-2)+(slice(None),slice(None))
+		for i in range(2):
+			pos2 = pos.copy()
+			pos2[i] += h
+			pix2 = imap.sky2pix(pos2, safe=False)
+			dpix = (pix2-pix)/h
+			res += np.sum(dlens_pix * dpix[pad],0)
+		return res
+
+def delens_map(imap, grad_phi, nstep=3, order=3, mode="spline", border="cyclic"):
+	"""The inverse of lens_map, such that delens_map(lens_map(imap, dpos), dpos) = imap
+	for well-behaved fields. The inverse does not always exist, in which case the
+	equation above will only be approximately fulfilled. The inverse is computed by
+	iteration, with the number of steps in the iteration controllable through the
+	nstep parameter. See enlib.interpol.map_coordinates for details on the other
+	parameters."""
+	grad_phi = delens_grad(grad_phi, nstep=nstep, order=order, mode=mode, border=border)
+	return lens_map(imap, -grad_phi, order=order, mode=mode, border=border)
+
+def delens_grad(grad_phi, nstep=3, order=3, mode="spline", border="cyclic"):
+	"""Helper function for delens_map. Attempts to find the undisplaced gradient
+	given one that has been displaced by itself."""
+	alpha = grad_phi
+	for i in range(nstep):
+		alpha = lens_map(grad_phi, -alpha, order=order, mode=mode, border=border)
+	return alpha
+
+def displace_map(imap, pix, order=3, mode="spline", border="cyclic", trans=False, deriv=False):
+	"""Displace map m[{pre},ny,nx] by pix[2,ny,nx], where pix indicates the location
+	in the input map each output pixel should get its value from (float). The output
+	is [{pre},ny,nx]."""
+	iwork = np.empty(imap.shape[-2:]+imap.shape[:-2],imap.dtype)
+	if not deriv:
+		out = imap.copy()
+	else:
+		out = enmap.empty((2,)+imap.shape, imap.wcs, imap.dtype)
+	# Why do we have to manually allocate outputs and juggle whcih is copied over here?
+	# Because it is in general not possible to infer from odata what shape idata should have.
+	# So the map_coordinates can't allocate the output array automatically in the transposed
+	# case. But in this function we know that they will have the same shape, so we can.
+	if not trans:
+		iwork[:] = utils.moveaxes(imap, (-2,-1), (0,1))
+		owork = interpol.map_coordinates(iwork, pix, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
+		out[:] = utils.moveaxes(owork, (0,1), (-2,-1))
+	else:
+		if not deriv:
+			owork = iwork.copy()
+		else:
+			owork = np.empty(imap.shape[-2:]+(2,)+imap.shape[:-2],imap.dtype)
+		owork[:] = utils.moveaxes(imap, (-2,-1), (0,1))
+		interpol.map_coordinates(iwork, pix, owork, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
+		out[:] = utils.moveaxes(iwork, (0,1), (-2,-1))
+	return out
+
+# Compatibility function. Not quite equivalent lens_map above due to taking phi rather than
+# its gradient as an argument.
+def lens_map_flat(cmb_map, phi_map):
+	raw_pix  = cmb_map.pixmap() + enmap.grad_pix(phi_map)
+	# And extract the interpolated values. Because of a bug in map_pixels with
+	# mode="wrap", we must handle wrapping ourselves.
+	npad = int(np.ceil(max(np.max(-raw_pix),np.max(raw_pix-np.array(cmb_map.shape[-2:])[:,None,None]))))
+	pmap = enmap.pad(cmb_map, npad, wrap=True)
+	return enmap.samewcs(utils.interpol(pmap, raw_pix+npad, order=4, mode="wrap"), cmb_map)
+
+######## Curved sky lensing ########
 
 def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False):
 	ctype   = np.result_type(dtype,0j)
 	ncomp   = ps_cmb.shape[0]
+	if ps_lens.ndim == 3 and ps_lens.shape[:2] == (1,1): ps_lens = ps_lens[0,0]
+	else: raise ValueError("The lensing spectrum must be scalar, but got " + ps_lens.shape)
 	# First draw a random lensing field, and use it to compute the undeflected positions
 	if verbose: print "Computing observed coordinates"
 	obs_pos = enmap.posmap(shape, wcs)
@@ -11,11 +101,9 @@ def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None
 	phi_alm = curvedsky.rand_alm(ps_lens, lmax=lmax, seed=seed, dtype=ctype)
 	if "p" in output:
 		if verbose: print "Computing phi map"
-		phi_map = curvedsky.alm2map(phi_alm, obs_pos, oversample=oversample)
+		phi_map = curvedsky.alm2map(phi_alm, enmap.zeros(shape, wcs, dtype=dtype))
 	if verbose: print "Computing grad map"
-	# This gradient uses zenith coordinates, so the y-sign is flipped
-	grad    = curvedsky.alm2map(phi_alm, obs_pos, oversample=oversample, deriv=True)
-	grad[0] = -grad[0]
+	grad = curvedsky.alm2map(phi_alm, enmap.zeros((2,)+shape[-2:], wcs, dtype=dtype), deriv=True)
 	if verbose: print "Computing alpha map"
 	raw_pos = enmap.samewcs(offset_by_grad(obs_pos, grad, pol=ncomp>1, geodesic=geodesic), obs_pos)
 	del phi_alm
@@ -24,9 +112,9 @@ def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None
 	cmb_alm = curvedsky.rand_alm(ps_cmb, lmax=lmax, dtype=ctype) # already seeded
 	if "u" in output:
 		if verbose: print "Computing unlensed map"
-		cmb_raw = curvedsky.alm2map(cmb_alm, obs_pos, oversample=oversample, spin=spin)
+		cmb_raw = curvedsky.alm2map(cmb_alm, enmap.zeros(shape, wcs, dtype=dtype), spin=spin)
 	if verbose: print "Computing lensed map"
-	cmb_obs = curvedsky.alm2map(cmb_alm, raw_pos[:2], oversample=oversample, spin=spin)
+	cmb_obs = curvedsky.alm2map_pos(cmb_alm, raw_pos[:2], oversample=oversample, spin=spin)
 	if raw_pos.shape[0] > 2 and np.any(raw_pos[2]):
 		if verbose: print "Rotating polarization"
 		cmb_obs = enmap.rotate_pol(cmb_obs, raw_pos[2])
@@ -39,18 +127,6 @@ def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None
 		elif c == "p": res.append(phi_map)
 		elif c == "a": res.append(grad)
 	return tuple(res)
-
-def lens_map_flat(cmb_map, phi_map):
-	obs_pos  = cmb_map.posmap()
-	grad_phi = enmap.ifft(enmap.map2harm(phi_map)*phi_map.lmap()*1j).real
-	raw_pos  = obs_pos + grad_phi
-	# Convert to pixel positions
-	raw_pix  = cmb_map.sky2pix(raw_pos, safe=False)
-	# And extract the interpolated values. Because of a bug in map_pixels with
-	# mode="wrap", we must handle wrapping ourselves.
-	npad = int(np.ceil(max(np.max(-raw_pix),np.max(raw_pix-np.array(cmb_map.shape[-2:])[:,None,None]))))
-	pmap = enmap.pad(cmb_map, npad, wrap=True)
-	return enmap.samewcs(utils.interpol(pmap, raw_pix+npad, order=4, mode="wrap"), cmb_map)
 
 def offset_by_grad(ipos, grad, geodesic=True, pol=None):
 	"""Given a set of coordinates ipos[{dec,ra},...] and a gradient
@@ -115,3 +191,43 @@ def pole_wrap(pos):
 	a[0,bad] = -np.pi - a[0,bad]
 	a[1,bad] = a[1,bad]+np.pi
 	return a
+
+
+
+#def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False):
+#	ctype   = np.result_type(dtype,0j)
+#	ncomp   = ps_cmb.shape[0]
+#	if ps_lens.ndim == 3: ps_lens = ps_lens[0,0]
+#	# First draw a random lensing field, and use it to compute the undeflected positions
+#	if verbose: print "Computing observed coordinates"
+#	obs_pos = enmap.posmap(shape, wcs)
+#	if verbose: print "Generating phi alms"
+#	phi_alm = curvedsky.rand_alm(ps_lens, lmax=lmax, seed=seed, dtype=ctype)
+#	if "p" in output:
+#		if verbose: print "Computing phi map"
+#		phi_map = curvedsky.alm2map_pos(phi_alm, obs_pos, oversample=oversample)
+#	if verbose: print "Computing grad map"
+#	grad    = curvedsky.alm2map_pos(phi_alm, obs_pos, oversample=oversample, deriv=True)
+#	if verbose: print "Computing alpha map"
+#	raw_pos = enmap.samewcs(offset_by_grad(obs_pos, grad, pol=ncomp>1, geodesic=geodesic), obs_pos)
+#	del phi_alm
+#	# Then draw a random CMB realization at the raw positions
+#	if verbose: print "Generating cmb alms"
+#	cmb_alm = curvedsky.rand_alm(ps_cmb, lmax=lmax, dtype=ctype) # already seeded
+#	if "u" in output:
+#		if verbose: print "Computing unlensed map"
+#		cmb_raw = curvedsky.alm2map_pos(cmb_alm, obs_pos, oversample=oversample, spin=spin)
+#	if verbose: print "Computing lensed map"
+#	cmb_obs = curvedsky.alm2map_pos(cmb_alm, raw_pos[:2], oversample=oversample, spin=spin)
+#	if raw_pos.shape[0] > 2 and np.any(raw_pos[2]):
+#		if verbose: print "Rotating polarization"
+#		cmb_obs = enmap.rotate_pol(cmb_obs, raw_pos[2])
+#	del cmb_alm
+#	# Output in same order as specified in output argument
+#	res = []
+#	for c in output:
+#		if c == "l": res.append(cmb_obs)
+#		elif c == "u": res.append(cmb_raw)
+#		elif c == "p": res.append(phi_map)
+#		elif c == "a": res.append(grad)
+#	return tuple(res)

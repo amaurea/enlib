@@ -12,6 +12,11 @@ from enlib import slice
 # have to be 1 rather than the 0 one would expect. For example,
 # if wcs is CAR(crval=(0,0),crpix=(0,0),cdelt=(1,1)), then
 # pix2world(0,0,1) is (0,0) while pix2world(0,0,0) is (-1,-1).
+#
+# No! the problem is that everythin in the fits header counts from 1,
+# so the default crpix should be (1,1), not (0,0). With
+# CAR(crval(0,0),crpix(1,1),cdelt(1,1)) we get
+# pix2world(1,1,1) = (0,0) and pix2world(0,0,0) = (0,0)
 
 # Useful stuff to be able to do:
 #  * Create a wcs from (point,res)
@@ -34,6 +39,31 @@ from enlib import slice
 deg2rad = np.pi/180
 rad2deg = 1/deg2rad
 
+def describe(wcs):
+	"""Since astropy.wcs.WCS objects do not have a useful
+	str implementation, this function provides a relpacement."""
+	sys  = wcs.wcs.ctype[0][-3:].lower()
+	n    = wcs.naxis
+	fields = ("cdelt:["+",".join(["%.3g"]*n)+"],crval:["+",".join(["%.3g"]*n)+"],crpix:["+",".join(["%.3g"]*n)+"]") % (tuple(wcs.wcs.cdelt) + tuple(wcs.wcs.crval) + tuple(wcs.wcs.crpix))
+	pv = wcs.wcs.get_pv()
+	for p in pv:
+		fields += ",pv[%d,%d]=%.3g" % p
+	return "%s:{%s}" % (sys, fields)
+# Add this to all WCSes in this class
+WCS.__repr__ = describe
+
+def scale(wcs, scale=1, rowmajor=False):
+	"""Scales the linear pixel sensity of a wcs by the given factor, which can be specified
+	per axis. This is the same as dividing the pixel size by the same number."""
+	scale = np.zeros(2)+scale
+	if rowmajor: scale = scale[::-1]
+	wcs = wcs.deepcopy()
+	wcs.wcs.crpix -= 0.5
+	wcs.wcs.crpix *= scale
+	wcs.wcs.cdelt /= scale
+	wcs.wcs.crpix += 0.5
+	return wcs
+
 def car(pos, res=None, shape=None, rowmajor=False, ref=None):
 	"""Set up a plate carree system. See the build function for details."""
 	pos, res, shape, mid = validate(pos, res, shape, rowmajor)
@@ -55,7 +85,8 @@ def cea(pos, res=None, shape=None, rowmajor=False, lam=None, ref=None):
 
 def zea(pos, res=None, shape=None, rowmajor=False, ref=None):
 	"""Setups up an oblate Lambert's azimuthal equal area system.
-	See the build function for details."""
+	See the build function for details. Don't use this if you want
+	a polar projection."""
 	pos, res, shape, mid = validate(pos, res, shape, rowmajor)
 	w = WCS(naxis=2)
 	w.wcs.ctype = ["RA---ZEA", "DEC--ZEA"]
@@ -116,7 +147,7 @@ def validate(pos, res, shape, rowmajor=False):
 def finalize(w, pos, res, shape, ref=None):
 	"""Common logic for the various wcs builders. Fills in the reference
 	pixel and resolution."""
-	w.wcs.crpix = [0,0]
+	w.wcs.crpix = [1,1]
 	if res is None:
 		# Find the resolution that gives our box the required extent.
 		w.wcs.cdelt = [1,1]
@@ -128,10 +159,10 @@ def finalize(w, pos, res, shape, ref=None):
 	if pos.ndim == 1:
 		if shape is not None:
 			# Place pixel origin at corner of shape centered on crval
-			w.wcs.crpix = np.array(shape)/2-0.5
+			w.wcs.crpix = np.array(shape)/2.0+0.5
 	else:
-		# Make pos[0] the corner of the (0,0) pixel
-		off = w.wcs_world2pix(pos[0,None],1)[0]+0.5
+		# Make pos[0] the corner of the (0,0) pixel (counting from 0 for simplicity)
+		off = w.wcs_world2pix(pos[0,None],0)[0]+0.5
 		w.wcs.crpix -= off
 	if ref is not None:
 		# Tweak wcs so that crval is an integer number of pixels
@@ -139,7 +170,7 @@ def finalize(w, pos, res, shape, ref=None):
 		# on ref, measuring the pixel coordinates of crval in this system
 		# and truncating it to a whole pixel number.
 		wtmp = w.deepcopy()
-		wtmp.wcs.crpix = (0,0)
+		wtmp.wcs.crpix = (1,1)
 		wtmp.wcs.crval = ref
 		w.wcs.crval = wtmp.wcs_pix2world(np.round(wtmp.wcs_world2pix(w.wcs.crval[None],1)),1)[0]
 		# We can then simply round the crpix to the closest integer. Together with the
@@ -148,122 +179,14 @@ def finalize(w, pos, res, shape, ref=None):
 		w.wcs.crpix = np.round(w.wcs.crpix)
 	return w
 
-def describe(wcs):
-	"""Since astropy.wcs.WCS objects do not have a useful
-	str implementation, this function provides a relpacement."""
-	sys  = wcs.wcs.ctype[0][-3:].lower()
-	n    = wcs.naxis
-	return ("%s:{cdelt:["+",".join(["%.3g"]*n)+"],crval:["+",".join(["%.3g"]*n)+"],crpix:["+",".join(["%.3g"]*n)+"]}") % ((sys,) + tuple(wcs.wcs.cdelt) + tuple(wcs.wcs.crval) + tuple(wcs.wcs.crpix))
-
 def angdist(lon1,lat1,lon2,lat2):
 	return np.arccos(np.cos(lat1)*np.cos(lat2)*(np.cos(lon1)*np.cos(lon2)+np.sin(lon1)*np.sin(lon2))+np.sin(lat1)*np.sin(lat2))
 
-# Old stuff below
-
-def car_old(shape, box):
-	"""Set up a plate carree system with bounds
-	box=[[ra0,dec0],[ra1,dec1]] and pixels in each
-	direciton given by shape=[nra,ndec]. Box indicates
-	the edge of pixels, not centers, so all pixels will
-	be wholly inside the box."""
-	box = np.asfarray(box)*rad2deg
-	w = WCS(naxis=2)
-	# Reference point must be on equator to
-	# get an unrotated plate carree.
-	w.wcs.cdelt = (box[1]-box[0])/shape[-2:]
-	w.wcs.crval = np.array([0.,0.])
-	# The 0.5 handles the pixel center vs. edge issue
-	w.wcs.crpix = (w.wcs.crval-box[0])/w.wcs.cdelt+0.5
-	w.wcs.ctype = ["RA---CAR", "DEC--CAR"]
-	return w
-
-# cea has
-# ra  = x
-# dec = asin(lambda*y)
-# with lambda specified by PV2_1.
-# The projection will be conformal at theta_c,
-# lambda = cos(theta_c)**2.
-# Must find bounds in y
-# y = sin(dec)/lambda
-def cea_old(shape, box):
-	"""Set up a cylindrical equal area system with bounds
-	box=[[ra0,dec0],[ra1,dec1]] and pixels in each
-	direciton given by shape=[nra,ndec]. Box indicates
-	the edge of pixels, not centers, so all pixels will
-	be wholly inside the box. The center of the box will be
-	conformal."""
-	box = np.asfarray(box)
-	lam = np.cos(np.mean(box[:,1]))**2
-	xybox = np.array([box[:,0],np.sin(box[:,1])/lam]).T*rad2deg
-	w = WCS(naxis=2)
-	w.wcs.cdelt = (xybox[1]-xybox[0])/shape[-2:]
-	w.wcs.crval = np.array([0.,0.])
-	# The 0.5 handles the pixel center vs. edge issue
-	w.wcs.crpix = (w.wcs.crval-xybox[0])/w.wcs.cdelt+0.5
-	w.wcs.set_pv([(2,1,lam)])
-	w.wcs.ctype = ["RA---CEA", "DEC--CEA"]
-	return w
-
-def zea_old(shape, box):
-	"""Setups up an oblate Lambert's azimuthal equal area
-	system with bounds box=[[ra0,dec0],[ra1,dec1]] and pixels
-	in each direciton given by shape=[nra,ndec]. Box indicates
-	the edge of pixels, not centers, so all pixels will be
-	wholly inside the box."""
-	return autobox(shape, box, "ZEA")
-
-def air_old(shape, box):
-	"""Setups up an Airy system with bounds
-	box=[[ra0,dec0],[ra1,dec1]] and pixels in each direciton
-	given by shape=[nra,ndec]. Box indicates the edge of pixels,
-	not centers, so all pixels will be wholly inside the box."""
-	# Compute approximate ratius of box
-	mra, mdec = np.mean(box,0)
-	w = angdist(mra,box[0,1],mra,box[1,1])
-	h = angdist(box[0,0],mdec,box[1,0],mdec)
-	#d = angdist(box[0,0],box[0,1],box[1,0],box[1,1])
-	rad = (w+h)/4 * 180/np.pi
-	w = WCS(naxis=2)
-	w.wcs.ctype = ["RA---AIR","DEC--AIR"]
-	w.wcs.set_pv([(2,1,90-rad)])
-	return autobox(shape, box, w)
-
-def autobox(shape, box, name_or_wcs):
-	"""Sets up a wcs with the given bounding box
-	for an image of the given shape for the named
-	coordinate system, provided no fancy options are
-	needed. crval will be in the center of the box,
-	so this function produces oblique projections."""
-	box = np.asfarray(box)
-	if isinstance(name_or_wcs, basestring):
-		w = WCS(naxis=2)
-		w.wcs.ctype = ["RA---"+name_or_wcs, "DEC--"+name_or_wcs]
-	else:
-		w = name_or_wcs
-	# Set up temporary pixel coordinates.
-	w.wcs.cdelt = np.array([1.,1.])
-	w.wcs.crval = np.mean(box,0)*rad2deg
-	w.wcs.crpix = np.array([0.,0.])
-	corners = w.wcs_world2pix(box*rad2deg,1)-0.5
-	# Shift crpix to make the corner the pixel origin
-	w.wcs.crpix -= corners[0]
-	# Scale cdelt so that the number of pixels inside
-	# is correct
-	w.wcs.crpix -= 0.5
-	scale = shape[:2]/(corners[1]-corners[0])
-	w.wcs.cdelt /= scale
-	w.wcs.crpix *= scale
-	w.wcs.crpix += 0.5
-	return w
-
-systems_old = {"car": car_old, "cea": cea_old, "air": air_old, "zea": zea_old }
-
-def from_bounds(shape, box, system="cea"):
-	"""Construct a WCS object based with bounds
-	box=[[ra0,dec0],[ra1,dec1]] and pixels in each
-	direciton given by shape=[nra,ndec]. Box indicates
-	the edge of pixels, not centers, so all pixels will
-	be wholly inside the box. The optional system
-	argument determines which WCS to use. The default
-	is "cea": cylindrical equal area"."""
-	return systems_old[system.lower()](shape, box)
+def fix_wcs(wcs, axis=0):
+	"""Returns a new WCS object which has had the reference pixel moved to the
+	middle of the possible pixel space."""
+	res = wcs.deepcopy()
+	off = np.abs(360/wcs.wcs.cdelt[axis])/2 - res.wcs.crpix[axis]
+	res.wcs.crpix[axis] += off
+	res.wcs.crval[axis] += off*res.wcs.cdelt[axis]
+	return res

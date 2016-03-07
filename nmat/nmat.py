@@ -3,8 +3,9 @@ Individual experiments can inherit from this - other functions
 in enlib will work as long as this interface is followed.
 For performance and memory reasons, the noise matrix
 overwrites its input array."""
-import numpy as np, enlib.fft, copy, enlib.slice, enlib.array_ops, h5py
+import numpy as np, enlib.fft, copy, enlib.slice, enlib.array_ops, enlib.utils, h5py
 import nmat_core_32, nmat_core_64
+from scipy.optimize import minimize
 
 def get_core(dtype):
 	if dtype == np.float32:
@@ -22,6 +23,11 @@ class NoiseMatrix:
 		of the inverse noise matrix to tod. tod is overwritten, but also
 		returned for convenience."""
 		return tod
+	def update(self, tod, srate):
+		"""Returns a noise matrix fit to tod. Often this will be a no-op,
+		but calling this method allows us to support delayed computation of
+		the noise model."""
+		return self
 	def __getitem__(self, sel):
 		"""Restrict noise matrix to a subset of detectors (first index)
 		or a lower sampling rate (second slice). The last one must be
@@ -43,6 +49,12 @@ class NoiseMatrix:
 		assert isinstance(sampslice,slice), "Sample part of slice must be slice object"
 		res = copy.deepcopy(self)
 		return res, detslice, sampslice
+
+class NmatNull(NoiseMatrix):
+	def apply(self, tod):
+		tod[:] = 0
+		return tod
+	def white(self, tod): return self.apply(tod)
 
 class NmatBinned(NoiseMatrix):
 	"""TOD noise matrices where power is assumed to be constant
@@ -68,7 +80,7 @@ class NmatBinned(NoiseMatrix):
 		fft_norm = tod.shape[1]
 		core = get_core(tod.dtype)
 		core.nmat_covs(ft.T, self.get_ibins(tod.shape[1]).T, self.icovs.T/fft_norm)
-		enlib.fft.irfft(ft, tod)
+		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
 	def white(self, tod):
 		tod *= self.tdiag[:,None]
@@ -91,7 +103,8 @@ class NmatBinned(NoiseMatrix):
 		# Slice covs, not icovs
 		covs  = enlib.array_ops.eigpow(icovs, -1, axes=[-2,-1])[mask][:,detslice][:,:,detslice]
 		icovs = enlib.array_ops.eigpow(covs,  -1, axes=[-2,-1])
-		return BinnedNmat(dets, bins, icovs)
+		# Downsampling changes the noise per sample
+		return BinnedNmat(dets, bins, icovs*step)
 	def __mul__(self, a):
 		return NmatBinned(self.icovs/a, self.bins, self.dets)
 	def write(self, fname, group=None):
@@ -111,6 +124,10 @@ class NmatDetvecs(NmatBinned):
 		 these specify the covariance in the bins, such that
 		 cov[bin,d1,d2] = D[bin,d1]*delta(d1,d2)+sum(V[vs,d1]*V[vs,d2]*E[es],es=ebins[bin,0]:ebins[bin,1])
 		That is, for each bin, cov = diag(D) + V.T.dot(np.diag(E)).dot(V).
+
+		The units of D and E should be variance for each fourier mode, not sum
+		for each fourier mode. I.e. a longer tod should not yield larger D and E
+		values. Hence, they should have the same units as fft(d)**2/nsamp.
 
 		Note that D, V and E correspond to the normal covmat, *not* the inverse!
 		"""
@@ -134,19 +151,33 @@ class NmatDetvecs(NmatBinned):
 	def calc_inverse(self):
 		return woodbury_invert(self.D, self.V, self.E, self.ebins)
 	@property
-	def icovs(self):
-		nbin, ndet = self.iD.shape
-		res = np.empty([nbin,ndet,ndet])
-		for bi,(d,eb) in enumerate(zip(self.iD, self.ebins)):
-			v, e = self.iV[eb[0]:eb[1]], self.iE[eb[0]:eb[1]]
-			res[bi] = np.diag(d) + (v.T*e[None,:]).dot(v)
-		return res
-	def apply(self, tod):
+	def icovs(self): return expand_detvecs(self.iD, self.iE, self.iV, self.ebins)
+	@property
+	def covs(self): return expand_detvecs(self.D, self.E, self.V, self.ebins)
+	def apply(self, tod, nofft=False):
 		ft = enlib.fft.rfft(tod)
 		fft_norm = tod.shape[1]
+		# Unit of noise model we apply:
+		#  Assume we start from white noise with stddev s.
+		#  FFT giving sum of N random numbers with dev s per mode:
+		#  each mode will have dev s sqrt(N).
+		#  Divide by sqrt(N) before estimating noise: each mode has dev s.
+		#  So unit of iN is 1/s^2.
+		#  We apply as ifft(iN fft(d))/N, which for white simlifies to ifft(fft(d))/N /s^2.
+		#  Since our ifft/N is the real, normalized ifft, so this simplifies to d/s^2. Good.
+		# What happens when we downgrade by factor D:
+		#  The noise variance per sample in the TOD should go down by factor D, which means
+		#  that we want iN to multiply d by D/s^2
+		#  We don't do that here.
+		#  That means that our iN is D times too small, and hence RHS is D times too small.
+		#  The same applies to div, so bin should come out OK. And the unit of iN does not
+		#  really matter for the rest of the mapmaker.
+		# To summarize, iN, RHS and div are all D times too small because we don't properly
+		# rescale the noise when downsampling.
+		# FIXED: I now scale D and E when downsampling.
 		core = get_core(tod.dtype)
 		core.nmat_detvecs(ft.T, self.get_ibins(tod.shape[-1]).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
-		enlib.fft.irfft(ft, tod)
+		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
@@ -157,8 +188,9 @@ class NmatDetvecs(NmatBinned):
 		mask = res.bins[:,0] < fmax
 		bins, ebins = res.bins[mask], res.ebins[mask]
 		bins[-1,-1] = fmax
-		# Slice covs, not icovs
-		return NmatDetvecs(res.D[mask][:,detslice], res.V[:,detslice], res.E, bins, ebins, dets)
+		# Slice covs, not icovs. Downsampling changes the noise per sample, which is why we divide
+		# the variances here.
+		return NmatDetvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, dets)
 	def __mul__(self, a):
 		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.dets)
 	def write(self, fname, group=None):
@@ -191,6 +223,8 @@ class NmatSharedvecs(NmatDetvecs):
 		NmatDetvecs.__init__(self, D, V, E, bins, ebins, dets=dets)
 	def calc_inverse(self):
 		return woodbury_invert(self.D, self.V, self.E, self.ebins, self.vbins)
+	@property
+	def covs(self): return expand_detvecs(self.D, self.E, self.V, self.ebins, self.vbins)
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
 		dets = res.dets[detslice]
@@ -201,7 +235,7 @@ class NmatSharedvecs(NmatDetvecs):
 		bins, ebins, vbins = res.bins[mask], res.ebins[mask], res.vbins[mask]
 		bins[-1,-1] = fmax
 		# Slice covs, not icovs
-		return NmatSharedvecs(res.D[mask][:,detslice], res.V[:,detslice], res.E, bins, ebins, vbins, dets)
+		return NmatSharedvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, vbins, dets)
 	def __mul__(self, a):
 		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.vbins, self.dets)
 	def write(self, fname, group=None):
@@ -242,7 +276,8 @@ def write_nmat_helper(fname, fields, group=None):
 	prefix = group + "/" if group else ""
 	for k, v in fields:
 		f[prefix+k] = v
-	f.close()
+	if isinstance(fname, basestring):
+		f.close()
 
 def woodbury_invert(D, V, E, ebins=None, vbins=None):
 	"""Given a compressed representation C = D + V'EV, compute a
@@ -272,3 +307,89 @@ def sichol(A):
 		return np.linalg.cholesky(iA), 1
 	except np.linalg.LinAlgError:
 		return np.linalg.cholesky(-iA), -1
+
+def expand_detvecs(D, E, V, ebins, vbins=None):
+	nbin, ndet = D.shape
+	res = np.empty([nbin,ndet,ndet])
+	if vbins is None: vbins = ebins
+	for bi,(d,eb,vb) in enumerate(zip(D, ebins, vbins)):
+		v, e = V[vb[0]:vb[1]], E[eb[0]:eb[1]]
+		res[bi] = np.diag(d) + (v.T*e[None,:]).dot(v)
+	return res
+
+def decomp_DVEV(cov, nmax=15, mineig=0, maxeval=0, tol=1e-2, _mode_ratios=False):
+	"""Decompose covariance matrix cov[n,n] into
+	D[n,n] + V[n,m] E[m,m] V'[m,n], where D and E
+	are diagonal and positive and V is orthogonal.
+	The number of columns in V will be nmax. If
+	mineig is specified, then modes with lower
+	amplitude than mineig*(max(E),max(sum(D**2)))
+	will be pruned. D,E,V are then recomputed from
+	scratch with this lower number of modes.
+
+	Returns D, E, V."""
+	if nmax == 0: return np.diag(cov), np.zeros([0]), np.zeros([len(cov),0])
+	if mineig > 0:
+		# If mineig is specified, then we will automatically trim the number
+		# of modes to those larger than mineig times the largest mode.
+		ratios = decomp_DVEV(cov, nmax, mineig=0, _mode_ratios=True)
+		nbig   = np.sum(ratios>mineig)
+		return decomp_DVEV(cov, nbig, mineig=0)
+	# We will work on the correlation matrix, as that gives all row and cols
+	# equal weight.
+	C, std = enlib.utils.cov2corr(cov)
+	Q = enlib.utils.eigsort(C, nmax=nmax, merged=True)
+	def dvev_chisq(x, shape, esc):
+		if np.any(~np.isfinite(x)): return np.inf
+		Q = x.reshape(shape)
+		D = np.diag(C)-np.einsum("ia,ia->i",Q,Q)
+		if np.any(D<=0): return np.inf
+		Ce = Q.dot(Q.T)
+		R = enlib.utils.nodiag(C-Ce)
+		chi = np.sum(R**2)
+		esc(chi, x)
+		return np.sum(R**2)
+	def dvev_jac(x, shape, esc):
+		Q = x.reshape(shape)
+		Ce = Q.dot(Q.T)
+		R = enlib.utils.nodiag(C-Ce)
+		dchi = -4*R.T.dot(Q)
+		esc()
+		return dchi.reshape(-1)
+	try:
+		sol = minimize(dvev_chisq, Q.reshape(-1), method="newton-cg", jac=dvev_jac, tol=tol, args=(Q.shape,MinimizeEscape(maxeval)))
+		Q = sol.x.reshape(Q.shape)
+	except MinimizeEscape as e:
+		Q = e.bval.reshape(Q.shape)
+	if _mode_ratios:
+		# Helper mode: Only return the relative contribution of each mode
+		e,v = enlib.utils.eigsort(Q.dot(Q.T), nmax=nmax)
+		d = np.diag(C)-np.einsum("ia,ia->i",Q,Q)
+		scale = max(np.max(e), np.sum(d**2))
+		return e/scale
+	# Rescale from corr to cov
+	Q *= std[:,None]
+	# And split into VEV
+	E, V = enlib.utils.eigsort(Q.dot(Q.T), nmax=nmax)
+	D  = np.diag(cov)-np.einsum("ia,a,ia->i",V,E,V)
+	return D,E,V
+
+class MinimizeEscape:
+	def __init__(self, maxeval):
+		self.i, self.n = 0, maxeval
+		self.bchi, self.bval = np.inf, None
+	def __call__(self, chi=None, val=None):
+		if chi is not None and chi < self.bchi:
+			self.bchi = chi
+			self.bval = np.array(val)
+		self.i += 1
+		if self.i > self.n: raise self
+
+def apply_window(tod, width, inverse=False):
+	"""Apply tapering window on width samples at each side of the tod.
+	For example, apply_window(tod, 5*srate) would apply a 5-second window
+	at each edge of the tod."""
+	width = int(width)
+	if width == 0: return
+	core = get_core(tod.dtype)
+	core.apply_window(tod.T, -width if inverse else width)

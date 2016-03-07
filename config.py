@@ -81,14 +81,15 @@ def init(config_file=None):
 	it if necessary. It also updates the file, adding any new parameters
 	that were missing."""
 	if config_file is None:
-		config_file = "$HOME/.enlibrc"
+		config_file = "$HOME/.enkirc"
 	if not config_file: return
 	config_file = os.path.expandvars(config_file)
 	try:
 		load(config_file)
 	except IOError: pass
 	try:
-		save(config_file)
+		#save(config_file)
+		pass
 	except IOError: pass
 
 def to_str():
@@ -122,7 +123,10 @@ def from_str(string):
 			except KeyError:
 				return type(ast.literal_eval(value))
 		ptype = deduce_ptype(name, value)
-		if ptype in [int,float,bool]: value = ptype(value)
+		if ptype in [int,float]:
+			value = ptype(value)
+		elif ptype is bool:
+			value = value == "True"
 		elif ptype is str:
 			if len(value) < 2 or value[0] != value[-1] or value[0] != "'" and value[0] != '"':
 				raise ValueError("Invalid string in config: %s" % line)
@@ -175,11 +179,14 @@ class ArgumentParser(argparse.ArgumentParser):
 		argparse.ArgumentParser.__init__(self, *args, **kwargs)
 		init(config_file)
 		for name in parameters:
-			self.add_argument("--"+name, type=type(parameters[name]["value"]))
+			typ = type(parameters[name]["value"])
+			self.add_argument("--"+name, type=str if typ is bool else typ)
 	def parse_args(self, argv=None):
 		args = argparse.ArgumentParser.parse_args(self, argv)
 		for name in parameters:
 			if name in args and getattr(args,name) != None:
-				set(name, getattr(args, name))
+				typ = type(parameters[name]["value"])
+				val = getattr(args, name)
+				set(name, val=="True" if typ is bool else val)
 				delattr(args, name)
 		return args

@@ -11,7 +11,7 @@ def linbin(n, nbin=None, nmin=None):
 	tmp  = np.arange(nbin+1)*n/nbin
 	return np.vstack((tmp[:-1],tmp[1:])).T
 
-def expbin(n, nbin=None, nmin=8):
+def expbin(n, nbin=None, nmin=8, nmax=0):
 	"""Given a number of points to bin and the number of exponentially spaced
 	bins to generate, returns [nbin_out,{from,to}].
 	nbin_out may be smaller than nbin. The nmin argument specifies
@@ -25,6 +25,24 @@ def expbin(n, nbin=None, nmin=8):
 			if tmp[j]-tmp[i] >= nmin:
 				fixed.append(tmp[j])
 				i = j
+	# Optionally split too large bins
+	if nmax:
+		tmp = [fixed[0]]
+		for v in fixed[1:]:
+			dv = v-tmp[-1]
+			nsplit = (dv+nmax-1)/nmax
+			tmp += [tmp[-1]+dv*(i+1)/nsplit for i in range(nsplit)]
+		fixed = tmp
 	tmp = np.array(fixed)
 	tmp[-1] = n
 	return np.vstack((tmp[:-1],tmp[1:])).T
+
+def bin_data(d, bins, op=np.mean):
+	"""Bin the data d into the specified bins along the last dimension. The result has
+	shape d.shape + (nbin,)."""
+	nbin  = bins.shape[0]
+	dflat = d.reshape(-1,d.shape[-1])
+	dbin  = np.zeros([dflat.shape[0], nbin])
+	for bi, b in enumerate(bins):
+		dbin[:,bi] = op(dflat[:,b[0]:b[1]],1)
+	return dbin.reshape(d.shape[:-1]+(nbin,))

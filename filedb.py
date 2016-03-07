@@ -4,7 +4,8 @@ an object containing the paths to all the files corresponding to that "id".
 For example, for the actpol data set, querying with "1376512459.1376536951.ar1"
 would respond with an object giving the location of the TOD, cuts, gains, etc.
 for that id."""
-import glob, shlex, pipes, re, bunch, itertools
+import glob, shlex, pipes, re, itertools
+from enlib import bunch
 
 class Basedb:
 	def __init__(self, file=None, data=None):
@@ -147,36 +148,53 @@ class FormatDB(Basedb):
 	These are then inserted into the format strings listed in the
 	parameter file using string.format. This should allow, compact,
 	readable and flexible parameter files."""
-	def __init__(self, file=None, data=None, funcs={"id":lambda id:id}):
+	def __init__(self, file=None, data=None, funcs={"id":lambda id:id}, override=None):
 		self.funcs = funcs.items()
+		self.override = override
 		Basedb.__init__(self, file=file, data=data)
 	def load(self, data, funcs={}):
 		self.rules = []
+		self.static = bunch.Bunch()
 		for line in data.splitlines():
+			line = line.strip()
 			if len(line) < 1 or line[0] == "#": continue
+			# Split into part before first : and the rest
 			toks = pre_split(line)
 			if len(toks) == 1: toks = toks + [""]
-			assert len(toks)==2
-			name, format   = toks[0], toks[1]
+			# There may be multiple formats on the same line, pipe-separated
+			name, format  = toks[0], toks[1:]
 			self.rules.append({"name":name, "format": format})
+			self.static[name] = format
 	def __getitem__(self, id):
+		return self.query(id)
+	def query(self, id, multi=False):
 		info = {name: fun(id) for name, fun in self.funcs}
 		res = bunch.Bunch()
 		selected=[True]
 		for rule in self.rules:
 			name, format = rule["name"], rule["format"]
 			if name[0] == "@":
+				# In this case, format is actually the conditional in the selector
+				assert len(format) == 1, "FormatDB conditional must have a single argument"
 				if name == "@end":
 					selected.pop()
+				elif name == "@else":
+					selected[-1] = not selected[-1]
 				else:
-					selected.append(("{%s}"%name[1:]).format(**info) == format)
+					selected.append(("{%s}"%name[1:]).format(**info) == format[0])
 			elif all(selected):
-				res[rule["name"]] = rule["format"].format(**info)
+				tmp = [fmt.format(**info) for fmt in rule["format"]]
+				res[rule["name"]] = tmp if multi else tmp[0]
 		res.id = id
+		# Apply override if specified:
+		if self.override and self.override != "none":
+			for tok in self.override.split(","):
+				name, val = tok.split(":")
+				res[name] = [val] if multi else val
 		return res
 	def dump(self):
 		lines = []
 		for rule in self.rules:
-			line = "%s: %s" %(rule["name"], pipes.quote(rule["format"]))
+			line = "%s: %s" %(rule["name"], " ".join([pipes.quote(fmt) for fmt in rule["format"]]))
 			lines.append(line)
 		return "\n".join(lines)

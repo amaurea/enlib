@@ -32,11 +32,14 @@ class EphemObj:
 		self.size = size
 	def match(self, point, margin=0):
 		return self.distance(point) - self.size - margin < 0
-	def distance(self, point):
+	def distance(self, point, exact=True):
 		mjd = point[0,0]
 		djd = mjd + 2400000.5 - 2415020
 		self.eph.compute(djd)
 		pos = np.array([float(self.eph.ra), float(self.eph.dec)])
+		
+
+
 		# We assume that only points close to the object are
 		# relevant, so use flat sky approximation
 		diff = utils.rewind(point[:,1:]-pos, 0, 2*np.pi)
@@ -77,3 +80,5 @@ class TargetDB:
 		if len(matches) == 0: return None
 		matches = sorted(matches)
 		return matches[-1][1]
+	def distance(self, point):
+		return [t.distance(point) for t in self.targets]

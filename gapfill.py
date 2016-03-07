@@ -47,12 +47,20 @@ def gapfill_copy(arr, ranges, overlap=10, inplace=False):
 	for r1,r2 in ranges.ranges:
 		filler = repeat_filler(arr[u1:u2], r2-r1+2*overlap)
 		# Reslope so that we match the overlap regions. For edge cases,
-		# use the other side.
-		left  = np.mean(arr[max(0,r1-overlap):r1]) if r1 > 0 else None
-		right = np.mean(arr[r2:min(len(arr),r2+overlap)]) if r2 < len(arr) else left
+		# use the other side. Do a cut-weighted average to avoid inluding
+		# data from other cuts in these means.
+		left  = mean_cut_range(arr, ranges, [max(0,r1-overlap),r1]) if r1 > 0 else None
+		right = mean_cut_range(arr, ranges, [r1,min(len(arr),r2+overlap)]) if r2 < len(arr) else left
 		if left == None:
 			left = right
 		uleft = np.mean(filler[:overlap])
 		uright= np.mean(filler[-overlap:])
 		arr[r1:r2] = filler[overlap:-overlap] + ((left-uleft) + np.arange(r2-r1)*((right-uright)-(left-uleft))/(r2-r1))
 	return arr
+
+def mean_cut_range(a, c, r=[None,None]):
+	a = a[r[0]:r[1]]
+	c = c[r[0]:r[1]]
+	mask = 1-c.to_mask()
+	n = np.sum(mask)
+	if n > 0: return np.sum(a*mask)/n

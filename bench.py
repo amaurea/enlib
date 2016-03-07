@@ -108,3 +108,16 @@ class mark:
 		self.clock2 = time.clock()
 		self.mem2   = memory.current()
 		stats.add(self.name, self.time2 -self.time1, self.clock2-self.clock1, self.mem1, self.mem2-self.mem1)
+
+class show:
+	def __init__(self, name):
+		self.name = name
+	def __enter__(self):
+		self.time1  = time.time()
+		self.clock1 = time.clock()
+		self.mem1   = memory.current()
+	def __exit__(self, type, value, traceback):
+		self.time2  = time.time()
+		self.clock2 = time.clock()
+		self.mem2   = memory.current()
+		print "%5.2f %s" % (self.time2-self.time1, self.name)
