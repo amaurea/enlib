@@ -179,10 +179,10 @@ def expand_image(img, bounds):
 
 def get_font(fsize=16, fname="arial.ttf"):
 	try:
-		font = ImageFont.truetype(font=fname, size=fsize)
+		font = ImageFont.truetype(fname, size=fsize)
 	except IOError:
 		# Load fallback font
-		font = ImageFont.truetype(font="arial.ttf", size=fsize, filename=os.path.join(os.path.dirname(__file__), "arial.ttf"))
+		font = ImageFont.truetype(os.path.join(os.path.dirname(__file__), "arial.ttf"), size=fsize)
 	return font
 
 def draw_labels(img, label_pos, fname="arial.ttf", fsize=16, fmt="%g", color="000000", return_bounds=False):
