@@ -88,6 +88,8 @@ class ndmap(np.ndarray):
 	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord"): return at(self, pos, order, mode=mode, cval=0, unit=unit)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width): return apod(self, width)
+	def stamps(self, pos, shape, aslist=False): return stamps(self, pos, shape, aslist=aslist)
+	def padslice(self, box, default=np.nan): return padslice(self, box, default=default)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
@@ -134,7 +136,6 @@ class ndmap(np.ndarray):
 		# which we need to distinguish between fully or partially
 		# included pixels
 		bpix = self.sky2pix(box.T).T
-		#bpix = self.wcs.wcs_world2pix(box[:,::-1]*180/np.pi,0)[:,::-1]+0.5
 		dir  = 2*(bpix[1]>bpix[0])-1
 		# If we are inclusive, find a bounding box, otherwise,
 		# an internal box
@@ -169,6 +170,10 @@ def slice_wcs(shape, wcs, sel):
 def scale_wcs(wcs, factor):
 	return enlib.wcs.scale(wcs, factor, rowmajor=True)
 
+def get_unit(wcs):
+	if enlib.wcs.is_plain(wcs): return 1
+	else: return enlib.utils.degree
+
 def box(shape, wcs, npoint=10):
 	"""Compute a bounding box for the given geometry."""
 	# Because of wcs's wrapping, we need to evaluate several
@@ -176,7 +181,10 @@ def box(shape, wcs, npoint=10):
 	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
 		np.linspace(0,shape[-1],num=npoint,endpoint=True)])-0.5
 	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
-	return enlib.utils.unwind(np.array(coords)*np.pi/180).T[[0,-1]]
+	if enlib.wcs.is_plain(wcs):
+		return np.array(coords).T[[0,-1]]
+	else:
+		return enlib.utils.unwind(np.array(coords)*enlib.utils.degree).T[[0,-1]]
 
 def enmap(arr, wcs=None, dtype=None, copy=True):
 	"""Construct an ndmap from data.
@@ -230,9 +238,10 @@ def pix2sky(shape, wcs, pix, safe=True, corner=False):
 	pix = np.asarray(pix).astype(float)
 	if corner: pix -= 0.5
 	pflat = pix.reshape(pix.shape[0], np.prod(pix.shape[1:]))
-	coords = np.asarray(wcs.wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*np.pi/180
+	coords = np.asarray(wcs.wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*get_unit(wcs)
 	coords = coords.reshape(pix.shape)
-	if safe: coords = enlib.utils.unwind(coords)
+	if safe and not enlib.wcs.is_plain(wcs):
+		coords = enlib.utils.unwind(coords)
 	return coords
 
 def sky2pix(shape, wcs, coords, safe=True, corner=False):
@@ -242,13 +251,13 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 	or pixel centers. This represents a shift of half a pixel.
 	If corner is False, then the integer pixel closest to a position
 	is round(sky2pix(...)). Otherwise, it is floor(sky2pix(...))."""
-	coords = np.asarray(coords)*180/np.pi
+	coords = np.asarray(coords)/get_unit(wcs)
 	cflat  = coords.reshape(coords.shape[0], np.prod(coords.shape[1:]))
 	# Quantities with a w prefix are in wcs ordering (ra,dec)
 	wpix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
 	wshape = shape[-2:][::-1]
 	if corner: wpix += 0.5
-	if safe:
+	if safe and not enlib.wcs.is_plain(wcs):
 		# Put the angle cut as far away from the map as possible.
 		# We do this by putting the reference point in the middle
 		# of the map.
@@ -505,7 +514,11 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs)
 	which the same resolution is used in each direction,
 	or [2]. If shape is specified, it must be [2]. All angles
 	are given in radians."""
-	scale = 1 if deg else 180/np.pi
+	# We use radians by default, while wcslib uses degrees, so need to rescale.
+	# The exception is when we are using a plain, non-spherical wcs, in which case
+	# both are unitless. So undo the scaling in this case.
+	scale = 1 if deg else 1/enlib.utils.degree
+	if proj == "plain": scale *= enlib.utils.degree
 	pos = np.asarray(pos)*scale
 	if res is not None: res = np.asarray(res)*scale
 	wcs = enlib.wcs.build(pos, res, shape, rowmajor=True, system=proj, **kwargs)
@@ -522,8 +535,10 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs)
 	return pre+tuple(shape), wcs
 
 def create_wcs(shape, box=None, proj="cea"):
-	if box is None: box = np.array([[-1,-1],[1,1]])*0.5*10*np.pi/180
-	return enlib.wcs.build(box*180/np.pi, shape=shape, rowmajor=True, system=proj)
+	if box is None:
+		box = np.array([[-1,-1],[1,1]])*0.5*10
+		if proj != "plain": box *= enlib.utils.degree
+	return enlib.wcs.build(box, shape=shape, rowmajor=True, system=proj)
 
 def spec2flat(shape, wcs, cov, exp=1.0, mode="constant", oversample=1, smooth="auto"):
 	"""Given a (ncomp,ncomp,l) power spectrum, expand it to harmonic map space,
@@ -801,6 +816,37 @@ def radial_average(map, center=[0,0], step=1.0):
 		mout[i] = (np.bincount(rinds, weights=m.reshape(-1))/np.bincount(rinds))[:n]
 	mout = mout.reshape(map.shape[:-2]+mout.shape[1:])
 	return mout, orads
+
+def padslice(map, box, default=np.nan):
+	"""Equivalent to map[...,box[0,0]:box[1,0],box[0,1]:box[1,1]], except that
+	pixels outside the map are treated as actually being present, but filled with
+	the value given by "default". Hence, ther esult will always have size box[1]-box[0]."""
+	box = np.asarray(box).astype(int)
+	# Construct our output map
+	wcs = map.wcs.deepcopy()
+	wcs.wcs.crpix -= box[0,::-1]
+	res = full(map.shape[:-2]+tuple(box[1]-box[0]), wcs, default, map.dtype)
+	# Get the (possibly smaller) box for the valid pixels of the input map
+	ibox = np.maximum(0,np.minimum(np.array(map.shape[-2:])[None],box))
+	# Copy over the relevant region
+	o, w = ibox[0]-box[0], ibox[1]-ibox[0]
+	res[...,o[0]:o[0]+w[0],o[1]:o[1]+w[1]] = map[...,ibox[0,0]:ibox[1,0],ibox[0,1]:ibox[1,1]]
+	return res
+
+def stamps(map, pos, shape, aslist=False):
+	"""Given a map, extract a set of identically shaped postage stamps with corners
+	at pos[ntile,2]. The result will be an enmap with shape [ntile,...,ny,nx]
+	and a wcs appropriate for the *first* tile only. If that is not the
+	behavior wanted, you can specify aslist=True, in which case the result
+	will be a list of enmaps, each with the correct wcs."""
+	shape = np.zeros(2)+shape
+	pos   = np.asarray(pos)
+	res   = []
+	for p in pos:
+		res.append(padslice(map, [p,p+shape]))
+	if aslist: return res
+	res = samewcs(np.array(res),res[0])
+	return res
 
 ############
 # File I/O #

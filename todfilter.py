@@ -25,7 +25,7 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	#print hwp
 	# No point in iterating if we aren't gapfilling
 	if not do_gapfill: niter = 1
-	if hwp is None: nhwp = 0
+	if hwp is None or np.all(hwp==0): nhwp = 0
 	naz, asign = np.abs(naz), np.sign(naz)
 	nt,  tsign = np.abs(nt),  np.sign(nt)
 	nhwp,hsign = np.abs(nhwp),np.sign(nhwp)

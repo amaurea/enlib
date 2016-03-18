@@ -4,23 +4,27 @@ from enlib.utils import repeat_filler
 from enlib.rangelist import Rangelist, Multirange, multify
 
 @multify
-def gapfill_linear(arr, ranges, inplace=False):
+def gapfill_linear(arr, ranges, inplace=False, context=1):
 	"""Returns arr with the ranges given by ranges, which can be [:,{from,to}] or
 	a Rangelist, filled using linear interpolation."""
 	ranges = Rangelist(ranges, len(arr), copy=False)
 	if not inplace: arr = np.array(arr)
-	for r1,r2 in ranges.ranges:
+	nr = len(ranges.ranges)
+	n  = ranges.n
+	for i, (r1,r2) in enumerate(ranges.ranges):
+		left  = max(0 if i == 0    else ranges.ranges[i-1,1],r1-context)
+		right = min(n if i == nr-1 else ranges.ranges[i+1,0],r2+context)
 		# If the cut coveres the whole array, fill with 0
 		if r1 == 0 and r2 == len(arr):
 			arr[r1:r2] = 0
 		# If it goes all the way to one end, use the value from one side
 		elif r1 == 0:
-			arr[r1:r2] = arr[r2]
+			arr[r1:r2] = np.mean(arr[r2:right])
 		elif r2 == len(arr):
-			arr[r1:r2] = arr[r1-1]
+			arr[r1:r2] = np.mean(arr[left:r1])
 		# Otherwise use linear interpolation
 		else:
-			arr[r1-1:r2] = np.linspace(arr[r1-1],arr[r2],r2-r1+1,endpoint=False)
+			arr[r1-1:r2] = np.linspace(np.mean(arr[left:r1]), np.mean(arr[r2:right]), r2-r1+1,endpoint=False)
 	return arr
 
 @multify

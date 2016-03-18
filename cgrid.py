@@ -1,8 +1,8 @@
 """This module implements functions for drawing a coordinate grid and
 coordinate axes on an image, for example for use with enmap."""
-import numpy as np, time, os
+import numpy as np, time, os, enlib.wcs
 from PIL import Image, ImageDraw, ImageFont
-from enlib import utils
+from enlib import utils, enmap
 
 def calc_line_segs(pixs, steplim=10.0, extrapolate=2.0):
 	"""Given a sequence of points, split into subsequences
@@ -38,21 +38,27 @@ def calc_gridinfo(shape, wcs, steps=[2,2], nstep=[200,200]):
 	nstep = np.zeros([2],dtype=int)+nstep
 
 	gridinfo = Gridinfo()
-	ntheta = np.floor(180./steps[0])+1
-	nphi   = np.floor(360./steps[1])+1
+	if enlib.wcs.is_plain(wcs):
+		box = np.sort(enmap.box(shape, wcs),0)
+		start = np.floor(box[0]/steps)*steps
+		nline = np.floor(box[1]/steps)-np.floor(box[0]/steps)+1
+	else:
+		box   = np.array([[-90.,0.],[90.,360.]])
+		start = np.array([-90.,0.])
+		nline = np.array([180.,360.])/steps+1
 
 	gridinfo.lon = []
 	gridinfo.lat = []
 	gridinfo.shape = shape[-2:]
 	gridinfo.wcs = wcs
 	# Draw lines of longitude
-	for phi in np.arange(nphi)*steps[1]:
-		pixs = np.array(wcs.wcs_world2pix(phi, np.linspace(-90,90,nstep[0],endpoint=True), 0)).T
-		gridinfo.lon.append((utils.rewind(phi,0,360),calc_line_segs(pixs)))
-
+	for phi in start[1] + np.arange(nline[1])*steps[1]:
+		pixs = np.array(wcs.wcs_world2pix(phi, np.linspace(box[0,1],box[1,1],nstep[0],endpoint=True), 0)).T
+		if not enlib.wcs.is_plain(wcs): phi = utils.rewind(phi, 0, 360)
+		gridinfo.lon.append((phi,calc_line_segs(pixs)))
 	# Draw lines of latitude
-	for theta in np.arange(ntheta)*steps[0]-90:
-		pixs = np.array(wcs.wcs_world2pix(np.linspace(0,360.9,nstep[1],endpoint=True), theta, 0)).T
+	for theta in start[0] + np.arange(nline[0])*steps[0]:
+		pixs = np.array(wcs.wcs_world2pix(np.linspace(box[0,0],box[1,0]+0.9,nstep[1],endpoint=True), theta, 0)).T
 		gridinfo.lat.append((theta,calc_line_segs(pixs)))
 	return gridinfo
 

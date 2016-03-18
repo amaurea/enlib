@@ -261,6 +261,13 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 	if inds_orig_nd == 1: res = res[...,0]
 	return res
 
+def bin_multi(pix, shape, weights=None):
+	"""Simple multidimensional binning. Not very fast."""
+	pix  = np.maximum(np.minimum(pix, (np.array(shape)-1)[:,None]),0)
+	inds = np.ravel_multi_index(tuple(pix), tuple(shape))
+	size = np.product(shape)
+	return np.bincount(inds, weights=None, minlength=size).reshape(shape)
+
 def grid(box, shape, endpoint=True, axis=0, flat=False):
 	"""Given a bounding box[{from,to},ndim] and shape[ndim] in each
 	direction, returns an array [ndim,shape[0],shape[1],...] array

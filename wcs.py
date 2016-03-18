@@ -44,13 +44,18 @@ def describe(wcs):
 	str implementation, this function provides a relpacement."""
 	sys  = wcs.wcs.ctype[0][-3:].lower()
 	n    = wcs.naxis
-	fields = ("cdelt:["+",".join(["%.3g"]*n)+"],crval:["+",".join(["%.3g"]*n)+"],crpix:["+",".join(["%.3g"]*n)+"]") % (tuple(wcs.wcs.cdelt) + tuple(wcs.wcs.crval) + tuple(wcs.wcs.crpix))
+	fields = ("cdelt:["+",".join(["%.4g"]*n)+"],crval:["+",".join(["%.4g"]*n)+"],crpix:["+",".join(["%.4g"]*n)+"]") % (tuple(wcs.wcs.cdelt) + tuple(wcs.wcs.crval) + tuple(wcs.wcs.crpix))
 	pv = wcs.wcs.get_pv()
 	for p in pv:
 		fields += ",pv[%d,%d]=%.3g" % p
 	return "%s:{%s}" % (sys, fields)
 # Add this to all WCSes in this class
 WCS.__repr__ = describe
+
+def is_plain(wcs):
+	"""Determines whether the given wcs represents plain, non-specific,
+	non-wrapping coordinates or some angular coordiante system."""
+	return wcs.wcs.ctype[0] == ""
 
 def scale(wcs, scale=1, rowmajor=False):
 	"""Scales the linear pixel sensity of a wcs by the given factor, which can be specified
@@ -63,6 +68,13 @@ def scale(wcs, scale=1, rowmajor=False):
 	wcs.wcs.cdelt /= scale
 	wcs.wcs.crpix += 0.5
 	return wcs
+
+def plain(pos, res=None, shape=None, rowmajor=False, ref=None):
+	"""Set up a plain coordinate system (non-cyclical)"""
+	pos, res, shape, mid = validate(pos, res, shape, rowmajor)
+	w = WCS(naxis=2)
+	w.wcs.crval = mid
+	return finalize(w, pos, res, shape, ref=ref)
 
 def car(pos, res=None, shape=None, rowmajor=False, ref=None):
 	"""Set up a plate carree system. See the build function for details."""
@@ -109,7 +121,7 @@ def air(pos, res=None, shape=None, rowmajor=False, rad=None, ref=None):
 	w.wcs.set_pv([(2,1,90-rad)])
 	return finalize(w, pos, res, shape, ref=ref)
 
-systems = {"car": car, "cea": cea, "air": air, "zea": zea }
+systems = {"car": car, "cea": cea, "air": air, "zea": zea, "plain": plain }
 
 def build(pos, res=None, shape=None, rowmajor=False, system="cea", ref=None, **kwargs):
 	"""Set up the WCS system named by the "system" argument.

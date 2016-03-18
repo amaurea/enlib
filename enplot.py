@@ -49,15 +49,24 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 		ncomp  = map.shape[0]
 		ngroup = 3 if args.rgb else 1
 		for i in range(0, ncomp, ngroup):
+			# The unflattened index of the current field
+			N = minfo.ishape[:-2]
+			I = np.unravel_index(i, N) if len(N) > 0 else []
 			# Construct default out format
 			ndigit   = get_num_digits(ncomp)
+			ndigits  = [get_num_digits(n) for n in N]
 			subprint = printer.push(("%%0%dd/%%d " % ndigit) % (i+1,ncomp))
 			dir, base, ext = split_file_name(minfo.fname)
 			map_field = map[i:i+ngroup]
+			if minfo.wcslist:
+				# HACK: If stamp extraction messed with the wcs, fix it here
+				map_field.wcs = minfo.wcslist[I[0]]
 			# Build output file name
 			oinfo = {"dir":"" if dir == "." else dir + "/", "base":base, "iext":ext,
 					"fi":fi, "fn":len(args.ifiles), "ci":i, "cn":ncomp, "pi":comm.rank, "pn":comm.size,
-					"pre":args.prefix, "suf":args.suffix, "comp": "_%0*d" % (ndigit,i) if len(minfo.ishape) > 2 else "",
+					"pre":args.prefix, "suf":args.suffix,
+					"comp": "_"+"_".join(["%0*d" % (ndig,ind) for ndig,ind in zip(ndigits,I)]) if len(N) > 0 else "",
+					"fcomp": "_%0*d" % (ndigit,i) if len(minfo.ishape) > 2 else "",
 					"ext":args.ext, "layer":""}
 			oname = args.oname.format(**oinfo)
 			# Draw the map
@@ -129,6 +138,7 @@ def parse_args(args=sys.argv[1:], noglob=False):
 		t[ext]   lat lon dy dx text [size [color]]
 		l[ine]   lat lon dy dx lat lon dy dx [width [color]]
 	dy and dx are pixel-unit offsets from the specified lat/lon.""")
+	parser.add_argument("--stamps", type=str, default=None, help="Plot stamps instead of the whole map. Format is srcfile:size:nmax, where the last two are optional. srcfile is a file with [dec ra] in degrees, size is the size in pixels of each stamp, and nmax is the max number of stamps to produce.")
 	if isinstance(args, basestring):
 		oargs = []
 		for tok in shlex.split(args):
@@ -148,54 +158,86 @@ def get_map(ifile, args, return_info=False):
 	in args. Relevant ones are sub, autocrop, slice, op, downgrade, scale,
 	mask. Retuns with shape [:,ny,nx], where any extra dimensions have been
 	flattened into a single one."""
-	toks = ifile.split(":")
-	ifile, slice = toks[0], ":".join(toks[1:])
-	m0 = enmap.read_map(ifile)
-	# Save the original map, so we can compare its wcs later
-	m  = m0
-	# Submap slicing currently has wrapping issues
-	if args.sub is not None:
-		default = [[-90,-180],[90,180]]
-		sub  = np.array([[(default[j][i] if q == '' else float(q))*np.pi/180 for j,q in enumerate(w.split(":"))]for i,w in enumerate(args.sub.split(","))]).T
-		m = m.submap(sub)
-	# Perform a common autocrop across all fields
-	if args.autocrop:
-		m = enmap.autocrop(m)
-	# Downgrade
-	downgrade = [int(w) for w in args.downgrade.split(",")]
-	m = enmap.downgrade(m, downgrade)
-	# Slicing, either at the file name level or though the slice option
-	m = eval("m"+slice)
-	if args.slice is not None:
-		m = eval("m"+args.slice)
-	flip = (m.wcs.wcs.cdelt*m0.wcs.wcs.cdelt)[::-1]<0
-	assert m.ndim >= 2, "Image must have at least 2 dimensions"
-	# Apply arbitrary map operations
-	if args.op is not None:
-		m = eval(args.op, {"m":m},np.__dict__)
-	# Scale if requested
-	scale = [int(w) for w in args.scale.split(",")]
-	if np.any(np.array(scale)>1):
-		m = enmap.upgrade(m, scale)
-	# Flatten pre-dimensions
-	mf = m.reshape((-1,)+m.shape[-2:])
-	# Mask bad data
-	if args.mask is not None:
-		if not np.isfinite(args.mask): mf[mf==args.mask] = np.nan
-		else: mf[np.abs(mf-args.mask)<=args.mask_tol] = np.nan
-	# Flip such that pixels are in PIL or matplotlib convention,
-	# such that RA increases towards the left and dec upwards in
-	# the final image. Unless a slicing operation on the image
-	# overrrode this.
-	if mf.wcs.wcs.cdelt[1] > 0: mf = mf[:,::-1,:]
-	if mf.wcs.wcs.cdelt[0] > 0: mf = mf[:,:,::-1]
-	if flip[0]: mf = mf[:,::-1,:]
-	if flip[1]: mf = mf[:,:,::-1]
-	# Done
-	if not return_info: return mf
-	else:
-		info = bunch.Bunch(fname=ifile, ishape=m.shape)
-		return mf, info
+	with warnings.catch_warnings():
+		warnings.filterwarnings("ignore")
+		toks = ifile.split(":")
+		ifile, slice = toks[0], ":".join(toks[1:])
+		m0 = enmap.read_map(ifile)
+		# Save the original map, so we can compare its wcs later
+		m  = m0
+		# Submap slicing currently has wrapping issues
+		if args.sub is not None:
+			default = [[-90,-180],[90,180]]
+			sub  = np.array([[(default[j][i] if q == '' else float(q))*np.pi/180 for j,q in enumerate(w.split(":"))]for i,w in enumerate(args.sub.split(","))]).T
+			m = m.submap(sub)
+		# Perform a common autocrop across all fields
+		if args.autocrop:
+			m = enmap.autocrop(m)
+		# If necessary, split into stamps. If no stamp splitting occurs,
+		# a list containing only the original map is returned
+		mlist = extract_stamps(m, args)
+		# The stamp stuff is a bit of an ugly hack. This loop and wcslist
+		# are parts of that hack.
+		for i, m in enumerate(mlist):
+			# Downgrade
+			downgrade = [int(w) for w in args.downgrade.split(",")]
+			m = enmap.downgrade(m, downgrade)
+			# Slicing, either at the file name level or though the slice option
+			m = eval("m"+slice)
+			if args.slice is not None:
+				m = eval("m"+args.slice)
+			flip = (m.wcs.wcs.cdelt*m0.wcs.wcs.cdelt)[::-1]<0
+			assert m.ndim >= 2, "Image must have at least 2 dimensions"
+			# Apply arbitrary map operations
+			if args.op is not None:
+				m = eval(args.op, {"m":m},np.__dict__)
+			# Scale if requested
+			scale = [int(w) for w in args.scale.split(",")]
+			if np.any(np.array(scale)>1):
+				m = enmap.upgrade(m, scale)
+			# Flip such that pixels are in PIL or matplotlib convention,
+			# such that RA increases towards the left and dec upwards in
+			# the final image. Unless a slicing operation on the image
+			# overrrode this.
+			if m.wcs.wcs.cdelt[1] > 0: m = m[...,::-1,:]
+			if m.wcs.wcs.cdelt[0] > 0: m = m[...,:,::-1]
+			if flip[0]: m = m[...,::-1,:]
+			if flip[1]: m = m[...,:,::-1]
+			# Update stamp list
+			mlist[i] = m
+		wcslist = [m.wcs for m in mlist]
+		m = enmap.samewcs(np.asarray(mlist),mlist[0])
+		if args.stamps is None:
+			m, wcslist = m[0], None
+		# Flatten pre-dimensions
+		mf = m.reshape((-1,)+m.shape[-2:])
+		# Mask bad data
+		if args.mask is not None:
+			if not np.isfinite(args.mask): mf[np.abs(mf)==args.mask] = np.nan
+			else: mf[np.abs(mf-args.mask)<=args.mask_tol] = np.nan
+		# Done
+		if not return_info: return mf
+		else:
+			info = bunch.Bunch(fname=ifile, ishape=m.shape, wcslist=wcslist)
+			return mf, info
+
+def extract_stamps(map, args):
+	"""Given a map, extract a set of identically sized postage stamps based on
+	args.stamps. Returns a new map consisting of a stack of these stamps, along
+	with a list of each of these' wcs object."""
+	if args.stamps is None: return [map]
+	# Stamps specified by format srcfile[:size[:nmax]], where the srcfile has
+	# lines of [dec, ra] in degrees
+	toks = args.stamps.split(":")
+	# Read in our positions, optionally truncating the list
+	srcs = np.loadtxt(toks[0]).T[:2]*utils.degree
+	size = int(toks[1]) if len(toks) > 1 else 16
+	nsrc = int(toks[2]) if len(toks) > 2 else len(srcs.T)
+	srcs = srcs[:,:nsrc]
+	# Convert to pixel coordinates of corners
+	pix  = np.round(map.sky2pix(srcs)-0.5*size).astype(int)
+	# Extract stamps
+	return map.stamps(pix.T, size, aslist=True)
 
 def draw_map_field(map, args, crange=None, return_layers=False, return_info=False, printer=noprint):
 	"""Draw a single map field, resulting in a single image. Adds a coordinate grid
