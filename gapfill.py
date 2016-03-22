@@ -4,7 +4,7 @@ from enlib.utils import repeat_filler
 from enlib.rangelist import Rangelist, Multirange, multify
 
 @multify
-def gapfill_linear(arr, ranges, inplace=False, context=1):
+def gapfill_linear(arr, ranges, inplace=False, overlap=1):
 	"""Returns arr with the ranges given by ranges, which can be [:,{from,to}] or
 	a Rangelist, filled using linear interpolation."""
 	ranges = Rangelist(ranges, len(arr), copy=False)
@@ -12,8 +12,8 @@ def gapfill_linear(arr, ranges, inplace=False, context=1):
 	nr = len(ranges.ranges)
 	n  = ranges.n
 	for i, (r1,r2) in enumerate(ranges.ranges):
-		left  = max(0 if i == 0    else ranges.ranges[i-1,1],r1-context)
-		right = min(n if i == nr-1 else ranges.ranges[i+1,0],r2+context)
+		left  = max(0 if i == 0    else ranges.ranges[i-1,1],r1-overlap)
+		right = min(n if i == nr-1 else ranges.ranges[i+1,0],r2+overlap)
 		# If the cut coveres the whole array, fill with 0
 		if r1 == 0 and r2 == len(arr):
 			arr[r1:r2] = 0
@@ -28,7 +28,7 @@ def gapfill_linear(arr, ranges, inplace=False, context=1):
 	return arr
 
 @multify
-def gapfill_constant(arr, ranges, inplace=False, value=0.0):
+def gapfill_constant(arr, ranges, inplace=False, value=0.0, overlap=None):
 	"""Returns arr with the ranges given by ranges, which can be [:,{from,to}] or
 	a Rangelist, filled using a constant value."""
 	ranges = Rangelist(ranges, len(arr), copy=False)
