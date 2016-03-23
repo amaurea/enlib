@@ -252,7 +252,9 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0):
 		mask = ~np.isfinite(fa)
 		fa[mask] = 0
 	for i in range(fa.shape[0]):
-		fr[i] = scipy.ndimage.map_coordinates(fa[i], inds, order=order, mode=mode, cval=cval)
+		fr[i].real = scipy.ndimage.map_coordinates(fa[i].real, inds, order=order, mode=mode, cval=cval)
+		if np.iscomplexobj(fa[i]):
+			fr[i].imag = scipy.ndimage.map_coordinates(fa[i].imag, inds, order=order, mode=mode, cval=cval)
 	if mask_nan and np.sum(mask) > 0:
 		fmask = np.empty(fr.shape,dtype=bool)
 		for i in range(mask.shape[0]):

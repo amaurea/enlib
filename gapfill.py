@@ -1,5 +1,6 @@
 """This module provides functions for filling gaps in an array based on ranges or masks."""
-import numpy as np
+import numpy as np, utils
+from enlib import fft
 from enlib.utils import repeat_filler
 from enlib.rangelist import Rangelist, Multirange, multify
 
@@ -25,6 +26,47 @@ def gapfill_linear(arr, ranges, inplace=False, overlap=1):
 		# Otherwise use linear interpolation
 		else:
 			arr[r1-1:r2] = np.linspace(np.mean(arr[left:r1]), np.mean(arr[r2:right]), r2-r1+1,endpoint=False)
+	return arr
+
+def fit_linear(arr, ref=0):
+	B = np.full((2,len(arr)),1.0)
+	B[1] = np.arange(len(arr))-ref*len(arr)
+	return np.linalg.solve(B.dot(B.T),B.dot(arr))
+def generate_cubic(p1, p2, n):
+	coeff = np.linalg.solve([
+		[   1,   0,   0,   0   ],
+		[   1,   n,   n**2,n**3],
+		[   0,   1,   0,   0   ],
+		[   0,   1, 2*n, 3*n**2]],
+		[p1[0],p2[0],p1[1],p2[1]])
+	inds = np.arange(n)
+	return coeff[0] + coeff[1]*inds + coeff[2]*inds**2 + coeff[3]*inds**3
+
+@multify
+def gapfill_cubic(arr, ranges, inplace=False, overlap=10):
+	"""Returns arr with the ranges given by ranges, which can be [:,{from,to}] or
+	a Rangelist, filled using cubic interpolation."""
+	ranges = Rangelist(ranges, len(arr), copy=False)
+	if not inplace: arr = np.array(arr)
+	nr = len(ranges.ranges)
+	n  = ranges.n
+	for i, (r1,r2) in enumerate(ranges.ranges):
+		left  = max(0 if i == 0    else ranges.ranges[i-1,1],r1-overlap)
+		right = min(n if i == nr-1 else ranges.ranges[i+1,0],r2+overlap)
+		# If the cut coveres the whole array, fill with 0
+		if r1 == 0 and r2 == len(arr):
+			arr[r1:r2] = 0
+		# If it goes all the way to one end, use the value from one side
+		elif r1 == 0:
+			p = fit_linear(arr[r2:right],0)
+			arr[r1:r2] = generate_cubic([p[0],0],p,r2-r1)
+		elif r2 == len(arr):
+			p = fit_linear(arr[left:r1],1)
+			arr[r1:r2] = generate_cubic(p, [p[0],0], r2-r1)
+		else:
+			p1 = fit_linear(arr[left:r1 ],1)
+			p2 = fit_linear(arr[r2:right],0)
+			arr[r1:r2] = generate_cubic(p1,p2,r2-r1)
 	return arr
 
 @multify
@@ -63,6 +105,16 @@ def gapfill_copy(arr, ranges, overlap=10, inplace=False):
 		uleft = np.mean(filler[:overlap])
 		uright= np.mean(filler[-overlap:])
 		arr[r1:r2] = filler[overlap:-overlap] + ((left-uleft) + np.arange(r2-r1)*((right-uright)-(left-uleft))/(r2-r1))
+	return arr
+
+def gapfill_values(arr, ranges, values, inplace=False):
+	"""Return arr with the gaps filled with values copied from the corresponding
+	locations in the given array."""
+	if not inplace: arr = np.array(arr)
+	ndet = arr.shape[0]
+	for d in range(ndet):
+		for i, (r1,r2) in enumerate(ranges[d].ranges):
+			arr[d,r1:r2] = values[d,r1:r2]
 	return arr
 
 def mean_cut_range(a, c, r=[None,None]):

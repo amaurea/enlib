@@ -6,7 +6,8 @@ config.default("gfilter_jon_nt",  10, "The number of time modes to fit/subtract 
 config.default("gfilter_jon_nhwp", 0, "The number of hwp modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_niter", 3, "The number of time modes to fit/subtract in Jon's polynomial ground filter.")
 
-config.default("gapfill", "linear", "TOD gapfill method. Can be 'copy' or 'linear'")
+config.default("gapfill", "cubic", "TOD gapfill method. Can be 'copy' or 'linear'")
+config.default("gapfill_context", 10, "Samples of context to use for matching up edges of cuts.")
 def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=None, hwp=None, nhwp=None):
 	"""Fix naz Legendre polynomials in az and nt other polynomials
 	in t jointly. Then subtract the best fit from the data.
@@ -19,7 +20,8 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	nt  = config.get("gfilter_jon_nt", nt)
 	nhwp= config.get("gfilter_jon_nhwp", nhwp)
 	niter = config.get("gfilter_jon_niter", niter)
-	gapfiller = {"copy":gapfill.gapfill_copy, "linear":gapfill.gapfill_linear}[config.get("gapfill")]
+	gapfiller = {"copy":gapfill.gapfill_copy, "linear":gapfill.gapfill_linear, "cubic":gapfill.gapfill_cubic}[config.get("gapfill")]
+	context = config.get("gapfill_context")
 	do_gapfill = cuts is not None
 	#print "Mos", naz, nt, nhwp
 	#print hwp
@@ -50,7 +52,7 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 			x = np.cos(j*hwp) if i%2 == 0 else np.sin(j*hwp)
 			B[naz+nt+i] = x
 	for it in range(niter):
-		if do_gapfill: gapfiller(d, cuts, inplace=True)
+		if do_gapfill: gapfiller(d, cuts, inplace=True, overlap=context)
 		# Solve for the best fit for each detector, [nbasis,ndet]
 		# B[b,n], d[d,n], amps[b,d]
 		if weights is None:
@@ -65,13 +67,5 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 		if asign > 0: d -= amps[:naz].T.dot(B[:naz])
 		if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[naz:naz+nt])
 		if hsign > 0: d -= amps[naz+nt:naz+nt+nhwp].T.dot(B[naz+nt:naz+nt+nhwp])
-	if do_gapfill: gapfiller(d, cuts, inplace=True)
-
-	#print nhwp
-	#cow = d[:8]
-	#with h5py.File("test.hdf","w") as hfile:
-	#	hfile["before"] = moomoo
-	#	hfile["after"]  = cow
-	#	hfile["B"] = B
-
+	if do_gapfill: gapfiller(d, cuts, inplace=True, overlap=context)
 	return d.reshape(tod.shape)
