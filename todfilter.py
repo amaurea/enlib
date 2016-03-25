@@ -8,7 +8,7 @@ config.default("gfilter_jon_niter", 3, "The number of time modes to fit/subtract
 
 config.default("gapfill", "cubic", "TOD gapfill method. Can be 'copy' or 'linear'")
 config.default("gapfill_context", 10, "Samples of context to use for matching up edges of cuts.")
-def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=None, hwp=None, nhwp=None):
+def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=None, hwp=None, nhwp=None, deslope=True):
 	"""Fix naz Legendre polynomials in az and nt other polynomials
 	in t jointly. Then subtract the best fit from the data.
 	The subtraction is inplace, so tod is modified. If naz or nt are
@@ -68,4 +68,5 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 		if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[naz:naz+nt])
 		if hsign > 0: d -= amps[naz+nt:naz+nt+nhwp].T.dot(B[naz+nt:naz+nt+nhwp])
 	if do_gapfill: gapfiller(d, cuts, inplace=True, overlap=context)
+	if deslope: utils.deslope(tod, w=8, inplace=True)
 	return d.reshape(tod.shape)

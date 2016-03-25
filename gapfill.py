@@ -29,9 +29,12 @@ def gapfill_linear(arr, ranges, inplace=False, overlap=1):
 	return arr
 
 def fit_linear(arr, ref=0):
-	B = np.full((2,len(arr)),1.0)
-	B[1] = np.arange(len(arr))-ref*len(arr)
-	return np.linalg.solve(B.dot(B.T),B.dot(arr))
+	if len(arr) == 0: return np.array([0,0])
+	elif len(arr) == 1: return np.array([arr[0],0])
+	else:
+		B = np.full((2,len(arr)),1.0)
+		B[1] = np.arange(len(arr))-ref*len(arr)
+		return np.linalg.solve(B.dot(B.T),B.dot(arr))
 def generate_cubic(p1, p2, n):
 	coeff = np.linalg.solve([
 		[   1,   0,   0,   0   ],
