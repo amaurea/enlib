@@ -6,7 +6,7 @@ config.default("gfilter_jon_nt",  10, "The number of time modes to fit/subtract 
 config.default("gfilter_jon_nhwp", 0, "The number of hwp modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_niter", 3, "The number of time modes to fit/subtract in Jon's polynomial ground filter.")
 
-config.default("gapfill", "cubic", "TOD gapfill method. Can be 'copy' or 'linear'")
+config.default("gapfill", "linear", "TOD gapfill method. Can be 'copy' or 'linear'")
 config.default("gapfill_context", 10, "Samples of context to use for matching up edges of cuts.")
 def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=None, hwp=None, nhwp=None):
 	"""Fix naz Legendre polynomials in az and nt other polynomials

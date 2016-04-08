@@ -28,10 +28,24 @@ def gapfill_linear(arr, ranges, inplace=False, overlap=1):
 			arr[r1-1:r2] = np.linspace(np.mean(arr[left:r1]), np.mean(arr[r2:right]), r2-r1+1,endpoint=False)
 	return arr
 
-def fit_linear(arr, ref=0):
+def fit_linear(arr, ref=0, nsigma=2):
+	"""Fit b+ax to the array centered on a point a fraction ref
+	along the array. Bias the slope towards zero by nsigma standard
+	deviations."""
+	N = np.mean((arr[1:]-arr[:-1])**2)/2
 	B = np.full((2,len(arr)),1.0)
-	B[1] = np.arange(len(arr))-ref*len(arr)
-	return np.linalg.solve(B.dot(B.T),B.dot(arr))
+	B[1] = np.arange(len(arr))-0.5*len(arr)
+	res = np.linalg.solve(B.dot(B.T),B.dot(arr))
+	# Estimate uncertainty
+	cov = np.linalg.inv(B.dot(B.T))*N
+	std = np.diag(cov)**0.5
+	# Reduce slope amplitude by up to 1 sigma, to avoid huge
+	# fluctuations in noisy regions
+	if res[1] > 0: res[1] = np.maximum(res[1]-nsigma*std[1],0)
+	else:          res[1] = np.minimum(res[1]+nsigma*std[1],0)
+	# Use the fixed slope to move us to the reference point
+	res[0] += res[1]*(ref-0.5)
+	return res
 def generate_cubic(p1, p2, n):
 	coeff = np.linalg.solve([
 		[   1,   0,   0,   0   ],
