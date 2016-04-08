@@ -79,6 +79,7 @@ contains
 		! Set up the pixel wrap remapper
 		allocate(xmap(psize(2)))
 		pcut = -(nphi-size(map,1))/2
+		!$omp simd
 		do ix = 1, psize(2)
 			ox = modulo(ix-1+pbox(2,1)-pcut,nphi)+pcut+1
 			xmap(ix) = max(1,min(size(map,1),ox))
@@ -92,6 +93,7 @@ contains
 			!$omp parallel do private(iy,ix,ic,oy)
 			do iy = 1, size(wmap,3)
 				oy = max(1,min(size(map,2),iy+pbox(1,1)))
+				!$omp simd
 				do ic = 1, size(map,3)
 					do ix = 1, size(wmap,2)
 						wmap(ic,ix,iy) = map(xmap(ix),oy,ic)*mmul
@@ -115,6 +117,7 @@ contains
 			!$omp parallel do private(iy,ix,ic,ox,oy)
 			do iy = 1, size(wmap,3)
 				oy = max(1,min(size(map,2),iy+pbox(1,1)))
+				!$omp simd
 				do ic = 1, size(map,3)
 					do ix = 1, size(wmap,2)
 						map(xmap(ix),oy,ic) = map(xmap(ix),oy,ic)*mmul + wmap(ic,ix,iy)
@@ -136,6 +139,7 @@ contains
 		real(8)    :: xrel(3), point(4), work(4,4), psize(2)
 		nsamp = size(bore,2)
 		psize = pbox(:,2)-pbox(:,1)
+		!$omp simd
 		do si = 1, nsamp
 			xrel = (bore(:,si)+det_pos(:)-x0)*inv_dx
 			xind = floor(xrel)
@@ -196,6 +200,7 @@ contains
 		integer(4) :: nsamp, si
 		nsamp = size(tod)
 		if(dir > 0) then
+			!$omp simd
 			do si = 1, nsamp
 				p = nint(pix(:,si))
 				if(tmul .eq. 0) then
@@ -206,6 +211,7 @@ contains
 			end do
 		elseif(tmul .ne. 0) then
 			if (omp_get_max_threads() > 1) then
+				!$omp simd
 				do si = 1, nsamp
 					p = nint(pix(:,si))
 					do ci = 1, size(map,1)
@@ -220,6 +226,7 @@ contains
 					end do
 				end do
 			else
+				!$omp simd
 				do si = 1, nsamp
 					p = nint(pix(:,si))
 					do ci = 1, size(map,1)
