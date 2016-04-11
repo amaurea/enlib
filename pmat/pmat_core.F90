@@ -211,7 +211,6 @@ contains
 			end do
 		elseif(tmul .ne. 0) then
 			if (omp_get_max_threads() > 1) then
-				!$omp simd
 				do si = 1, nsamp
 					p = nint(pix(:,si))
 					do ci = 1, size(map,1)

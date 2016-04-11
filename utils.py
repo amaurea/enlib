@@ -851,6 +851,9 @@ def find_equal_groups(a, tol=0):
 	"""Given a[nsamp,ndim], return groups[ngroup][{ind,ind,ind,...}]
 	of indices into a for which all the values in the second index
 	of a is the same. group_equal([[0,1],[1,2],[0,1]]) -> [[0,2],[1]]."""
+	def calc_diff(a1,a2):
+		if a1.dtype.char == 'S': return a1 != a2
+		else: return a1-a2
 	a = np.asarray(a)
 	n = len(a)
 	inds = np.argsort(a[:,0])
@@ -864,10 +867,10 @@ def find_equal_groups(a, tol=0):
 		for j in xrange(i+1,n):
 			if done[j]: continue
 			xj = inds[j]
-			if a[xj,0] - a[xi,0] > tol:
+			if calc_diff(a[xj,0], a[xi,0]) > tol:
 				# Current group is done
 				break
-			if np.sum((a[xj]-a[xi])**2) <= tol**2:
+			if np.sum(calc_diff(a[xj],a[xi])**2) <= tol**2:
 				# Close enough
 				res[-1].append(xj)
 				done[j] = True

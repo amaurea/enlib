@@ -70,3 +70,23 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	if do_gapfill: gapfiller(d, cuts, inplace=True, overlap=context)
 	if deslope: utils.deslope(tod, w=8, inplace=True)
 	return d.reshape(tod.shape)
+
+def filter_common_board(tod, dets, layout, name=None):
+	mapping = np.zeros(layout.ndet,dtype=int)-1
+	mapping[dets] = np.arange(len(dets))
+	groups = utils.find_equal_groups(layout.pcb[:,None])
+	groups = [mapping[g] for g in groups]
+	groups = [g[g>0] for g in groups]
+	vs = []
+	for gi, group in enumerate(groups):
+		if len(group) == 0: continue
+		d = tod[group]
+		w = 1/(np.mean((d[:,1:]-d[:,:-1])**2,1)/2)
+		v = np.sum(w[:,None]*d,0)/np.sum(w)
+		if name: vs.append(v)
+		tod[group] -= v[None]
+	vs = np.array(vs)
+	if name:
+		with h5py.File("v_"+name+".hdf","w") as hfile:
+			hfile["data"] = vs
+	return tod

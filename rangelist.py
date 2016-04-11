@@ -30,7 +30,10 @@ class Rangelist:
 			sel = sel[0]
 		if isinstance(sel,slice):
 			sel = expand_slice(sel, self.n)
-			if len(self.ranges) == 0: return self
+			if len(self.ranges) == 0:
+				# Can't just return self here, as I did, because .n needs to be updated even if
+				# ranges is empty.
+				return Rangelist(self.ranges, (sel.stop-sel.start)/sel.step)
 			if (sel.stop-sel.start)*sel.step < 0: return Rangelist(np.zeros([0,2],dtype=int),0)
 			if sel.step > 0:
 				return Rangelist(slice_helper(self.ranges, sel),(sel.stop-sel.start)/sel.step)
