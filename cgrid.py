@@ -92,8 +92,11 @@ def calc_label_pos(linesegs, shape):
 		for curve in curveset:
 			# Check if we cross one of the edges of the image. We want
 			# the crossing to happen between the selected position and the next
-			ldist  = curve + 0.5
-			rdist  = shape - 0.5 - curve
+			# Used to have curve + 0.5 for ldist and shape - 0.5 - curve for rdist
+			# here. Not sure why. It messed up polar coordinates, so I removed it
+			# for now.
+			ldist  = curve
+			rdist  = shape - curve
 			cross1 = np.sign(ldist[1:]) != np.sign(ldist[:-1])
 			cross2 = np.sign(rdist[1:]) != np.sign(rdist[:-1])
 			cands  = np.array(np.where(cross1 | cross2))
@@ -115,8 +118,9 @@ def calc_label_pos(linesegs, shape):
 					a = curve[[ind,ind+1],[dim,dim]]
 					b = curve[[ind,ind+1],[1-dim,1-dim]]
 					# Crossing point
+					slope = (b[1]-b[0])/(a[1]-a[0])
 					across = float(0 if a[0]*a[1] <= 0 else shape[dim])
-					bcross = b[0] + (b[1]-b[0])*(across-a[0])/(a[1]-a[0])
+					bcross = b[0] + slope*(across-a[0])
 					label  = [label_value,0,0]
 					# Unshuffle from a,b to x,y
 					label[1+dim] = across
