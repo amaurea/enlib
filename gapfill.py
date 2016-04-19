@@ -1,8 +1,20 @@
 """This module provides functions for filling gaps in an array based on ranges or masks."""
 import numpy as np, utils
-from enlib import fft
+from enlib import fft, config
 from enlib.utils import repeat_filler
 from enlib.rangelist import Rangelist, Multirange, multify
+
+config.default("gapfill", "linear", "TOD gapfill method. Can be 'copy' or 'linear'")
+config.default("gapfill_context", 10, "Samples of context to use for matching up edges of cuts.")
+
+def gapfill(arr, ranges, inplace=False, overlap=None):
+	gapfiller = {
+			"copy":gapfill_copy,
+			"linear":gapfill_linear,
+			"cubic":gapfill_cubic
+		}[config.get("gapfill")]
+	overlap = config.get("gapfill_context", overlap)
+	gapfiller(arr, ranges, inplace=inplace, overlap=overlap)
 
 @multify
 def gapfill_linear(arr, ranges, inplace=False, overlap=1):

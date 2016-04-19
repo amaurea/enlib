@@ -553,6 +553,19 @@ class FilterWindow:
 		nsamp = int(self.width*scan.srate)
 		nmat.apply_window(tod, nsamp)
 
+class FilterDedark:
+	def __init__(self, fit_highpass=0.1):
+		self.fit_highpass = fit_highpass
+	def __call__(self, scan, tod):
+		nmode = int(tod.shape[-1]/2*self.fit_highpass/scan.srate)
+		before = tod[:16].copy()
+		todfilter.deproject_vecs(tod, scan.dark_tod, nmode=nmode, inplace=True, cuts=scan.cut)
+		#with h5py.File("test_dedark2.hdf","w") as hfile:
+		#	hfile["tod"] = before
+		#	hfile["dark"] = scan.dark_tod
+		#	hfile["filter"] = tod[:16]
+		#1/0
+
 ######## Equation system ########
 
 class Eqsys:
