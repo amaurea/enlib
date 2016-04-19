@@ -144,6 +144,14 @@ class Multirange:
 		for i, d in enumerate(dflat):
 			res[i] = d.to_mask()
 		return res.reshape(self.data.shape+(-1,))
+	@staticmethod
+	def from_mask(mask):
+		fmask = mask.reshape(-1, mask.shape[-1])
+		data  = np.empty(fmask.shape[0],dtype=object)
+		for i in range(len(fmask)):
+			data[i] = Rangelist(fmask[i])
+		data = data.reshape(mask.shape[:-1])
+		return Multirange(data)
 	def clear(self):
 		for d in self.data: d.clear()
 	def __add__(self, rlist):

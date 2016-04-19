@@ -94,6 +94,12 @@ class Scan:
 		res.dets      = res.dets[detslice]
 		res.hwp       = np.ascontiguousarray(enlib.slice.slice_downgrade(res.hwp, sampslice, axis=0))
 		res.hwp_phase = np.ascontiguousarray(enlib.slice.slice_downgrade(res.hwp_phase, sampslice, axis=0))
+		try:
+			# The whole scan stuff is horrible and should be redesigned
+			res.dark_tod = np.ascontiguousarray(enlib.slice.slice_downgrade(res.dark_tod, sampslice, axis=1))
+			res.dark_cut = res.dark_cut[sel]
+		except AttributeError as e:
+			pass
 		res.cut       = res.cut[sel]
 		res.noise     = res.noise[sel]
 		return res, detslice, sampslice
