@@ -571,17 +571,18 @@ class PmatScan(PointingMatrix):
 	def backward(self, tod, m): self.apply(tod, m,-1)
 
 class PmatPhaseFlat(PointingMatrix):
-	def __init__(self, a0, daz, naz):
+	def __init__(self, az, a0, daz, naz):
+		self.az = az
 		self.a0, self.daz, self.naz = a0, daz, naz
 	def apply(self, tod, phase, dir, tmul=1):
-		map  = np.zeros((2,len(tod),self.naz))
+		map  = np.zeros((2,len(tod),self.naz),dtype=phase.dtype)
 		if dir > 0:
 			map[:] = phase[:,None,:]
 			if tmul != 1: tod[:] *= tmul
-		pmat.pmat_phase(dir, tod, map, az, np.arange(len(tod)), amin, daz)
+		pmat_phase(dir, tod, map, self.az, np.arange(len(tod)), self.a0, self.daz)
 		if dir < 0: phase[:] = np.sum(map,1)
 	def forward(self, tod, phase, tmul=1): return self.apply(tod, phase, 1, tmul=tmul)
-	def backward(self,tod, pahse, tmul=1): return self.apply(tod, phase,-1, tmul=tmul)
+	def backward(self,tod, phase, tmul=1): return self.apply(tod, phase,-1, tmul=tmul)
 
 def compress_ranges(ranges, nrange, cut, nsamp):
 	"""Given ranges[nsrc,ndet,nmax,2], nrange[nsrc,ndet] where ranges has

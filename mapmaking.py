@@ -558,13 +558,14 @@ class FilterDedark:
 		self.fit_highpass = fit_highpass
 	def __call__(self, scan, tod):
 		nmode = int(tod.shape[-1]/2*self.fit_highpass/scan.srate)
-		before = tod[:16].copy()
 		todfilter.deproject_vecs(tod, scan.dark_tod, nmode=nmode, inplace=True, cuts=scan.cut)
-		#with h5py.File("test_dedark2.hdf","w") as hfile:
-		#	hfile["tod"] = before
-		#	hfile["dark"] = scan.dark_tod
-		#	hfile["filter"] = tod[:16]
-		#1/0
+
+class FilterPhaseBlockwise:
+	def __init__(self, daz=None, niter=None):
+		self.daz, self.niter = daz, niter
+	def __call__(self, scan, tod):
+		blocks = utils.find_equal_groups(scan.layout.pcb[scan.dets])
+		todfilter.filter_phase_blockwise(tod, blocks, scan.boresight[:,1], daz=self.daz, cuts=scan.cut, niter=self.niter, inplace=True)
 
 ######## Equation system ########
 

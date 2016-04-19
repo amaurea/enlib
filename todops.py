@@ -1,7 +1,7 @@
 """This module handles deprojection of a set of arrays from another set of
 arrays. This is useful for cleaning TODs of unwanted signals, for example."""
 import numpy as np, scipy.signal
-from enlib import utils, pmat, rangelist
+from enlib import utils, pmat, rangelist, gapfill
 
 def estimate_white_noise(tod, nchunk=10, chunk_size=1000):
 	"""Robust time-domain estimation of white noise level."""
@@ -39,27 +39,36 @@ def project(tod, basis, weight=1):
 	amp = np.linalg.solve(div, rhs)
 	return np.conj(amp).T.dot(basis)
 
-def fit_phase_flat(tods, az, daz=1*utils.arcmin, cuts=None, niter=3, overlap=10, clean_tod=False):
+def fit_phase_flat(tods, az, daz=1*utils.arcmin, cuts=None, niter=None,
+		overlap=None, clean_tod=False, weight=None):
 	# for the given tods[ndet,nsamp], cuts (multirange[ndet,nsamp]) and az[nsamp],
 	if not clean_tod: tods = tods.copy()
+	if daz is None: daz = 1*utils.arcmin
+	if niter is None: niter = 3
+	if weight is None:
+		weight = np.full(len(tods), 1.0, dtype=tods.dtype)
+	elif weight is "auto":
+		weight = 1/estimate_white_noise(tods)
+		weight /= np.mean(weight)
 	# Set up phase pixels
 	amin = np.min(az)
 	amax = np.max(az)
 	naz = int((amax-amin)/daz)+1
-	pflat = pmat.PmatPhaseFlat(amin, daz, naz)
+	pflat = pmat.PmatPhaseFlat(az, amin, daz, naz)
 	# Output and work arrays
-	phase  = np.zeros((2,naz))
+	phase  = np.zeros((2,naz),tods.dtype)
 	dphase = phase.copy()
-	hits   = phase.copy()
+	div   = phase.copy()
 	# Precompute div
-	pflat.backard(tods*0+1, hits, -1)
-	hits[hits==0] = 1
+	pflat.backward(tods*0+weight[:,None], div, -1)
+	div[div==0] = 1
+	print np.mean(div)
 	for i in range(niter):
 		# Overall logic: gapfill -> bin -> subtract -> loop
 		if cuts is not None:
 			gapfill.gapfill_linear(tods, cuts, overlap=overlap, inplace=True)
-		pflat.backward(tods, dphase)
-		dphase /= hits
+		pflat.backward(tods*weight[:,None], dphase)
+		dphase /= div
 		phase += dphase
 		pflat.forward(tods, -dphase)
 	return phase

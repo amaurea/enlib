@@ -17,10 +17,11 @@ def gapfill(arr, ranges, inplace=False, overlap=None):
 	gapfiller(arr, ranges, inplace=inplace, overlap=overlap)
 
 @multify
-def gapfill_linear(arr, ranges, inplace=False, overlap=8):
+def gapfill_linear(arr, ranges, inplace=False, overlap=None):
 	"""Returns arr with the ranges given by ranges, which can be [:,{from,to}] or
 	a Rangelist, filled using linear interpolation."""
 	ranges = Rangelist(ranges, len(arr), copy=False)
+	overlap= config.get("gapfill_context", overlap)
 	if not inplace: arr = np.array(arr)
 	nr = len(ranges.ranges)
 	n  = ranges.n

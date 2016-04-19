@@ -117,15 +117,21 @@ def deproject_vecs(tods, dark, nmode=50, cuts=None, deslope=True, inplace=True):
 	if deslope: utils.deslope(tods, w=8, inplace=True)
 	return tods
 
-def filter_phase_blockwise(tods, blocks, az, daz=1*utils.arcmin, cuts=None, niter=3, inplace=True):
+def filter_phase_blockwise(tods, blocks, az, daz=None, cuts=None, niter=None,
+		deslope=True, inplace=True, weight="auto"):
 	"""Given a tod[ndet,nsamp], fit for a common azimuth phase signal
 	per block in blocks[nblock][dets], and subtract it. The binning size
 	is given in arc minutes."""
 	# Loop over and filter each block
+	#np.savetxt("moo0.txt", tods[0])
 	if not inplace: tods = tods.copy()
 	for bi, block in enumerate(blocks):
 		btod = np.ascontiguousarray(tods[block])
 		bcut = None if cuts is None else cuts[block]
-		phase = todops.fit_phase_flat(btod, az, daz=daz, cuts=bcut, niter=niter, clean_tod=True)
+		phase = todops.fit_phase_flat(btod, az, daz=daz, cuts=bcut, niter=niter,
+				clean_tod=True, weight=weight)
 		tods[block] = btod
+	if deslope: utils.deslope(tods, w=8, inplace=True)
+	#np.savetxt("moo.txt", tods[0])
+	#1/0
 	return tods

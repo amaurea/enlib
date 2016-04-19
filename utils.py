@@ -855,6 +855,7 @@ def find_equal_groups(a, tol=0):
 		if a1.dtype.char == 'S': return a1 != a2
 		else: return a1-a2
 	a = np.asarray(a)
+	if a.ndim == 1: a = a[:,None]
 	n = len(a)
 	inds = np.argsort(a[:,0])
 	done = np.full(n, False, dtype=bool)
