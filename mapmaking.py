@@ -565,6 +565,8 @@ class FilterPhaseBlockwise:
 		self.daz, self.niter = daz, niter
 	def __call__(self, scan, tod):
 		blocks = utils.find_equal_groups(scan.layout.pcb[scan.dets])
+		print "blocks"
+		print blocks
 		todfilter.filter_phase_blockwise(tod, blocks, scan.boresight[:,1], daz=self.daz, cuts=scan.cut, niter=self.niter, inplace=True)
 
 ######## Equation system ########
