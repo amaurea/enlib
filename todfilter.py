@@ -1,12 +1,12 @@
 import numpy as np, time, h5py
-from enlib import config, fft, utils, gapfill, todops
+from enlib import config, fft, utils, gapfill, todops, pmat, rangelist
 
 config.default("gfilter_jon_naz", 8, "The number of azimuth modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_nt",  10, "The number of time modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_nhwp", 0, "The number of hwp modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_niter", 3, "The number of time modes to fit/subtract in Jon's polynomial ground filter.")
 
-def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=None, hwp=None, nhwp=None, deslope=True):
+def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=None, hwp=None, nhwp=None, deslope=True, inplace=True):
 	"""Fix naz Legendre polynomials in az and nt other polynomials
 	in t jointly. Then subtract the best fit from the data.
 	The subtraction is inplace, so tod is modified. If naz or nt are
@@ -18,6 +18,7 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	nt  = config.get("gfilter_jon_nt", nt)
 	nhwp= config.get("gfilter_jon_nhwp", nhwp)
 	niter = config.get("gfilter_jon_niter", niter)
+	if not inplace: tod = tod.copy()
 	do_gapfill = cuts is not None
 	#print "Mos", naz, nt, nhwp
 	#print hwp
@@ -88,7 +89,7 @@ def filter_common_board(tod, dets, layout, name=None):
 			hfile["data"] = vs
 	return tod
 
-def deproject_vecs(tods, dark, nmode=50, cuts=None, deslope=True, inplace=False):
+def deproject_vecs(tods, dark, nmode=50, cuts=None, deslope=True, inplace=True):
 	"""Given a tod[ndet,nsamp] and a set of basis modes dark[nmode,nsamp], fit
 	each tod in to the basis modes and subtract them from the tod. The fit
 	ignores the lowest nmode fourier modes, and cut regions are approximately ignored."""
@@ -114,4 +115,17 @@ def deproject_vecs(tods, dark, nmode=50, cuts=None, deslope=True, inplace=False)
 		# Subtract from original tod
 		tods[di] -= fit
 	if deslope: utils.deslope(tods, w=8, inplace=True)
+	return tods
+
+def filter_phase_blockwise(tods, blocks, az, daz=1*utils.arcmin, cuts=None, niter=3, inplace=True):
+	"""Given a tod[ndet,nsamp], fit for a common azimuth phase signal
+	per block in blocks[nblock][dets], and subtract it. The binning size
+	is given in arc minutes."""
+	# Loop over and filter each block
+	if not inplace: tods = tods.copy()
+	for bi, block in enumerate(blocks):
+		btod = np.ascontiguousarray(tods[block])
+		bcut = None if cuts is None else cuts[block]
+		phase = todops.fit_phase_flat(btod, az, daz=daz, cuts=bcut, niter=niter, clean_tod=True)
+		tods[block] = btod
 	return tods
