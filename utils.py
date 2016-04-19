@@ -66,7 +66,13 @@ def unwind(a, period=2*np.pi, axes=[-1], ref=0):
 	res = rewind(a, period=period, ref=ref)
 	for axis in axes:
 		with flatview(res, axes=[axis]) as flat:
+			# Avoid trying to sum nans
+			mask = ~np.isfinite(flat)
+			bad = flat[mask]
+			flat[mask] = 0
 			flat[:,1:]-= np.cumsum(np.round((flat[:,1:]-flat[:,:-1])/period),-1)*period
+			# Restore any nans
+			flat[mask] = bad
 	return res
 
 def rewind(a, ref=0, period=2*np.pi):
