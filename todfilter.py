@@ -68,26 +68,6 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	if deslope: utils.deslope(tod, w=8, inplace=True)
 	return d.reshape(tod.shape)
 
-def filter_common_board(tod, dets, layout, name=None):
-	# Unfinished
-	mapping = np.zeros(layout.ndet,dtype=int)-1
-	mapping[dets] = np.arange(len(dets))
-	groups = utils.find_equal_groups(layout.pcb[:,None])
-	groups = [mapping[g] for g in groups]
-	groups = [g[g>0] for g in groups]
-	vs = []
-	for gi, group in enumerate(groups):
-		if len(group) == 0: continue
-		d = tod[group]
-		w = 1/(np.mean((d[:,1:]-d[:,:-1])**2,1)/2)
-		v = np.sum(w[:,None]*d,0)/np.sum(w)
-		if name: vs.append(v)
-		tod[group] -= v[None]
-	vs = np.array(vs)
-	if name:
-		with h5py.File("v_"+name+".hdf","w") as hfile:
-			hfile["data"] = vs
-	return tod
 
 def deproject_vecs(tods, dark, nmode=50, cuts=None, deslope=True, inplace=True):
 	"""Given a tod[ndet,nsamp] and a set of basis modes dark[nmode,nsamp], fit
@@ -115,6 +95,23 @@ def deproject_vecs(tods, dark, nmode=50, cuts=None, deslope=True, inplace=True):
 		# Subtract from original tod
 		tods[di] -= fit
 	if deslope: utils.deslope(tods, w=8, inplace=True)
+	return tods
+
+def filter_common_blockwise(tods, blocks, cuts=None, niter=None,
+		deslope=True, inplace=True, weight="auto", nmin=5):
+	# Loop over and filter each block
+	#np.savetxt("comtod0.txt", tods[0])
+	if not inplace: tods = tods.copy()
+	for bi, block in enumerate(blocks):
+		if len(block) < nmin: continue
+		btod = np.ascontiguousarray(tods[block])
+		bcut = None if cuts is None else cuts[block]
+		common = todops.fit_common(btod, cuts=bcut, niter=niter, clean_tod=True, weight=weight)
+		tods[block] = btod
+		#if 0 in block: np.savetxt("comcom.txt", common)
+	if deslope: utils.deslope(tods, w=8, inplace=True)
+	#np.savetxt("comtod1.txt", tods[0])
+	#1/0
 	return tods
 
 def filter_phase_blockwise(tods, blocks, az, daz=None, cuts=None, niter=None,

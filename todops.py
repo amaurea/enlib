@@ -39,6 +39,28 @@ def project(tod, basis, weight=1):
 	amp = np.linalg.solve(div, rhs)
 	return np.conj(amp).T.dot(basis)
 
+def fit_common(tods, cuts=None, niter=None, overlap=None, clean_tod=False, weight=None):
+	# for the given tods[ndet,nsamp], cuts (multirange[ndet,nsamp]) and az[nsamp],
+	if not clean_tod: tods = tods.copy()
+	if niter is None: niter = 3
+	if weight is None:
+		weight = np.full(len(tods), 1.0, dtype=tods.dtype)
+	elif weight is "auto":
+		weight = 1/estimate_white_noise(tods)
+		weight /= np.mean(weight)
+	# Output and work arrays
+	res = tods[0]*0
+	div = np.sum(tods*0+weight[:,None],0)
+	for i in range(niter):
+		# Overall logic: gapfill -> bin -> subtract -> loop
+		if cuts is not None:
+			gapfill.gapfill_linear(tods, cuts, overlap=overlap, inplace=True)
+		delta = np.sum(tods*weight[:,None],0)
+		delta /= div
+		res += delta
+		tods -= delta[None]
+	return res
+
 def fit_phase_flat(tods, az, daz=1*utils.arcmin, cuts=None, niter=None,
 		overlap=None, clean_tod=False, weight=None):
 	# for the given tods[ndet,nsamp], cuts (multirange[ndet,nsamp]) and az[nsamp],
