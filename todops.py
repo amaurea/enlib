@@ -1,7 +1,7 @@
 """This module handles deprojection of a set of arrays from another set of
 arrays. This is useful for cleaning TODs of unwanted signals, for example."""
 import numpy as np, scipy.signal
-from enlib import utils, pmat, rangelist, gapfill
+from enlib import utils, pmat, rangelist, gapfill, fft
 
 def estimate_white_noise(tod, nchunk=10, chunk_size=1000):
 	"""Robust time-domain estimation of white noise level."""
@@ -113,21 +113,54 @@ def fit_phase_flat(tods, az, daz=1*utils.arcmin, cuts=None, niter=None,
 # How about cross-correlating the basis vectors against the data, and only keeping
 # the part with good correlation?
 
-def fit_basis(tods, basis, highpass=50, cuts=None, deslope=True, clean_tod=True):
+def fit_basis(tods, basis, highpass=50, cuts=None, clean_tod=True):
 	if not clean_tod: tods = tods.copy()
 	def hpass(a, n):
 		f = fft.rfft(a)
 		f[...,:n] = 0
 		return fft.ifft(f,a.copy(),normalize=True)
-	hdark = hpass(dark, nmode)
+	hdark = hpass(basis, highpass)
 	for di in range(len(tods)):
-		htod = hpass(tods[di], nmode)
+		htod = hpass(tods[di], highpass)
 		dark_tmp = hdark.copy()
 		if cuts is not None:
 			for ddi in range(len(hdark)):
 				gapfill.gapfill(dark_tmp[ddi], cuts[di], inplace=True)
-		fit  = todops.project(htod[None], dark_tmp)[0]
+		fit = project(htod[None], dark_tmp)[0]
 		# Subtract from original tod
 		tods[di] -= fit
-	if deslope: utils.deslope(tods, w=8, inplace=True)
 	return tods
+
+def smooth_basis_fourier(ftod, fbasis, bsize=100, mincorr=0.1,
+		nsigma=5, highpass=10, nmin=1):
+	"""This function attemps to smooth out irrelevant fourier modes
+	in a noisy set of basis fectors. It assumes the high frequencies
+	are representative of the noise level, and removes parts of the
+	bassi vectors that are too small relative to the noise level,
+	and parts that do not correlate sufficiently with the tods that are
+	passed in as the first argument."""
+	fbasis = fbasis.copy()
+	nbasis, nfreq = fbasis.shape
+	nbin  = int((nfreq+bsize-1)/bsize)
+	# Compute white noise level
+	wbasis = np.var(fbasis[:,nfreq/2:],1)
+	ngood = np.zeros(nbasis,dtype=int)
+	for bi in range(nbin):
+		r = [bi*bsize,(bi+1)*bsize]
+		ft = ftod[:,r[0]:r[1]].copy()
+		fd = fbasis[:,r[0]:r[1]].copy()
+		# Compute mean normalized tod
+		vtod = np.mean(ft*np.conj(ft),1).real
+		vbasis= np.mean(fd*np.conj(fd),1).real
+		ft /= vtod[:,None]**0.5
+		fd /= vbasis[:,None]**0.5
+		fmean = np.mean(ft,0)
+		# Compute average correlation
+		corr = np.mean(fmean*np.conj(fd),1).real
+		# Reject a bin if it has too low S/N, or too low corr
+		bad = (np.abs(corr) < mincorr) | (vbasis < wbasis*nsigma)
+		fbasis[bad,r[0]:r[1]] = 0
+		ngood[~bad] += 1
+	fbasis[:,:highpass] = 0
+	fbasis = fbasis[ngood>=nmin]
+	return fbasis
