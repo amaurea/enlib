@@ -94,3 +94,40 @@ def fit_phase_flat(tods, az, daz=1*utils.arcmin, cuts=None, niter=None,
 		phase += dphase
 		pflat.forward(tods, -dphase)
 	return phase
+
+
+# Problem: Our basis is noisy - both white noise and 1/f noise, and so are
+# our vectors. We don't want to propagate this noise into each individual
+# detector when deprojecting. We can try to limit this by reducing the number
+# of degrees of freedom in the basis vectors, for example by smoothing them,
+# but that will reduce our ability to capture rapidly varying signals. The
+# most important signal variations happen on scales below 20-40 Hz. That lets
+# us reduce the variance by a factor of 5-10, which helps. But it only helps
+# on small scales. On large scales the increase in noise would be the same
+# as before.
+#
+# Can fit an amplitude separately for each frequency bin. At most frequencies
+# there presumably wouldn't be much corelation, so one could skil subtracting it
+# there.
+#
+# How about cross-correlating the basis vectors against the data, and only keeping
+# the part with good correlation?
+
+def fit_basis(tods, basis, highpass=50, cuts=None, deslope=True, clean_tod=True):
+	if not clean_tod: tods = tods.copy()
+	def hpass(a, n):
+		f = fft.rfft(a)
+		f[...,:n] = 0
+		return fft.ifft(f,a.copy(),normalize=True)
+	hdark = hpass(dark, nmode)
+	for di in range(len(tods)):
+		htod = hpass(tods[di], nmode)
+		dark_tmp = hdark.copy()
+		if cuts is not None:
+			for ddi in range(len(hdark)):
+				gapfill.gapfill(dark_tmp[ddi], cuts[di], inplace=True)
+		fit  = todops.project(htod[None], dark_tmp)[0]
+		# Subtract from original tod
+		tods[di] -= fit
+	if deslope: utils.deslope(tods, w=8, inplace=True)
+	return tods
