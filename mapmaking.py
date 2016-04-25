@@ -558,7 +558,7 @@ class FilterDedark:
 		self.fit_highpass = fit_highpass
 	def __call__(self, scan, tod):
 		nmode = int(tod.shape[-1]/2*self.fit_highpass/scan.srate)
-		todfilter.deproject_vecs(tod, scan.dark_tod, nmode=nmode, inplace=True, cuts=scan.cut)
+		todfilter.deproject_vecs_smooth(tod, scan.dark_tod, nmode=nmode, inplace=True, cuts=scan.cut)
 
 class FilterPhaseBlockwise:
 	def __init__(self, daz=None, niter=None):

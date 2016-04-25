@@ -73,29 +73,19 @@ def deproject_vecs(tods, dark, nmode=50, cuts=None, deslope=True, inplace=True):
 	"""Given a tod[ndet,nsamp] and a set of basis modes dark[nmode,nsamp], fit
 	each tod in to the basis modes and subtract them from the tod. The fit
 	ignores the lowest nmode fourier modes, and cut regions are approximately ignored."""
-	if not inplace: tods = tods.copy()
-	def hpass(a, n):
-		f = fft.rfft(a)
-		f[...,:n] = 0
-		return fft.ifft(f,a.copy(),normalize=True)
-	hdark = hpass(dark, nmode)
-	for di in range(len(tods)):
-		htod = hpass(tods[di], nmode)
-		# Gapfill dark based on this detectors cuts.
-		# 1. This improves the fit, since this detector
-		# has been gapfilled in the same areas.
-		# 2. This means that when we subtract the fit,
-		# we won't introduce any huge signals in the
-		# cut regions.
-		dark_tmp = hdark.copy()
-		if cuts is not None:
-			for ddi in range(len(hdark)):
-				gapfill.gapfill(dark_tmp[ddi], cuts[di], inplace=True)
-		fit  = todops.project(htod[None], dark_tmp)[0]
-		# Subtract from original tod
-		tods[di] -= fit
+	if not inplace: tods=tods.copy()
+	todops.fit_basis(tods, dark, highpass=nmode, cuts=cuts, clean_tod=True)
 	if deslope: utils.deslope(tods, w=8, inplace=True)
 	return tods
+
+def deproject_vecs_smooth(tods, dark, nmode=50, cuts=None, deslope=True, inplace=True):
+	if not inplace: tods=tods.copy()
+	ftod  = fft.rfft(tods)
+	fdark = fft.rfft(dark)
+	fdark = todops.smooth_basis_fourier(ftod, fdark)
+	dark  = fft.ifft(fdark, dark*0, normalize=True)
+	todops.fit_basis(tod, dark, highpass=nmode, cuts=cuts, clean_tod=True)
+	if deslope: utils.deslope(tods, w=8, inplace=True)
 
 def filter_common_blockwise(tods, blocks, cuts=None, niter=None,
 		deslope=True, inplace=True, weight="auto", nmin=5):
