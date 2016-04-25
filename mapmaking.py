@@ -37,7 +37,7 @@
 # signal_phase = SignalPhase(..., cut=signal_cut)
 # signals = [signal_cut, signal_map, signal_phase]
 import numpy as np, h5py, zipper, logging
-from enlib import enmap, dmap2 as dmap, array_ops, pmat, utils, todfilter, config, nmat, bench
+from enlib import enmap, dmap2 as dmap, array_ops, pmat, utils, todfilter, config, nmat, bench, gapfill
 L = logging.getLogger(__name__)
 
 ######## Signals ########
@@ -568,11 +568,15 @@ class FilterPhaseBlockwise:
 		todfilter.filter_phase_blockwise(tod, blocks, scan.boresight[:,1], daz=self.daz, cuts=scan.cut, niter=self.niter, inplace=True)
 
 class FilterCommonBlockwise:
-	def __init__(self, daz=None, niter=None):
-		self.daz, self.niter = daz, niter
+	def __init__(self, niter=None):
+		self.niter = niter
 	def __call__(self, scan, tod):
 		blocks = utils.find_equal_groups(scan.layout.pcb[scan.dets])
 		todfilter.filter_common_blockwise(tod, blocks, cuts=scan.cut, niter=self.niter, inplace=True)
+
+class FilterGapfill:
+	def __call__(self, scan, tod):
+		gapfill.gapfill(tod, scan.cut, inplace=True)
 
 ######## Equation system ########
 

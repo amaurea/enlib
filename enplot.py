@@ -48,10 +48,13 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 		# Loop over map fields
 		ncomp  = map.shape[0]
 		ngroup = 3 if args.rgb else 1
+		crange_ind = 0
 		for i in range(0, ncomp, ngroup):
 			# The unflattened index of the current field
 			N = minfo.ishape[:-2]
 			I = np.unravel_index(i, N) if len(N) > 0 else []
+			if args.symmetric and np.any(np.sort(I) != I):
+				continue
 			# Construct default out format
 			ndigit   = get_num_digits(ncomp)
 			ndigits  = [get_num_digits(n) for n in N]
@@ -71,7 +74,7 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 			oname = args.oname.format(**oinfo)
 			# Draw the map
 			if args.driver.lower() == "pil":
-				img, info = draw_map_field(map_field, args, crange[:,i:i+ngroup], return_info=True, return_layers=args.layers, printer=subprint)
+				img, info = draw_map_field(map_field, args, crange[:,crange_ind:crange_ind+ngroup], return_info=True, return_layers=args.layers, printer=subprint)
 				padding = np.array([-info.bounds[0,::-1],info.bounds[1,::-1]-map_field.shape[-2:]],dtype=int)
 				printer.write("padded by %d %d %d %d" % tuple(padding.reshape(-1)), 4)
 				if args.layers:
@@ -84,11 +87,12 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 					with subprint.time("write to %s" % oname, 3):
 						img.save(oname)
 			elif args.driver.lower() in ["matplotlib","mpl"]:
-				figure = draw_map_field_mpl(map_field, args, crange[:,i:i+ngroup], printer=subprint)
+				figure = draw_map_field_mpl(map_field, args, crange[:,crange_ind:crange_ind+ngroup], printer=subprint)
 				with subprint.time("write to %s" % oname, 3):
 					figure.savefig(oname,bbox_inches="tight",dpi=args.mpl_dpi)
 			# Progress report
 			printer.write("\r%s %5d/%d" % (ifile, i+1,ncomp), 2, exact=True, newline=False)
+			crange_ind += 1
 		printer.write("",    2, exact=True)
 		printer.write(ifile, 1, exact=True)
 
@@ -139,6 +143,7 @@ def parse_args(args=sys.argv[1:], noglob=False):
 		l[ine]   lat lon dy dx lat lon dy dx [width [color]]
 	dy and dx are pixel-unit offsets from the specified lat/lon.""")
 	parser.add_argument("--stamps", type=str, default=None, help="Plot stamps instead of the whole map. Format is srcfile:size:nmax, where the last two are optional. srcfile is a file with [dec ra] in degrees, size is the size in pixels of each stamp, and nmax is the max number of stamps to produce.")
+	parser.add_argument("-S", "--symmetric", action="store_true")
 	if isinstance(args, basestring):
 		oargs = []
 		for tok in shlex.split(args):
@@ -483,6 +488,19 @@ def draw_annotations(map, annots, args):
 			draw_ellipse(img,
 					(x-rad,y-rad,x+rad,y+rad),
 					outline=color,width=width, antialias=antialias)
+		elif atype in ["l","line"] or atype in ["r","rect"]:
+			x1,y1 = topix(annot[1:5])
+			x2,y2 = topix(annot[5:9])
+			if x2 < x1: x1,x2 = x2,x1
+			if y2 < y1: y1,y2 = y2,y1
+			print x1, y1, x2, y2
+			if len(annot) >  9: width = int(annot[9])
+			if len(annot) > 10: color = annot[10]
+			if atype[0] == "l":
+				draw.line((x1,y1,x2,y2), fill=color, width=width)
+			else:
+				for i in range(width):
+					draw.rectangle((x1+i,y1+i,x2-i,y2-i), outline=color)
 		elif atype in ["t", "text"]:
 			x,y  = topix(annot[1:5])
 			text = annot[5]
