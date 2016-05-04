@@ -89,6 +89,8 @@ class ndmap(np.ndarray):
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width): return apod(self, width)
 	def stamps(self, pos, shape, aslist=False): return stamps(self, pos, shape, aslist=aslist)
+	@property
+	def plain(self): return ndmap(self, enlib.wcs.WCS(naxis=2))
 	def padslice(self, box, default=np.nan): return padslice(self, box, default=default)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.

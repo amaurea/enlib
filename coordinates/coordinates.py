@@ -297,13 +297,13 @@ def ephem_pos(name, mjd):
 	obj = getattr(ephem, name)()
 	if mjd.ndim == 0:
 		obj.compute(djd)
-		return np.array([float(obj.ra), float(obj.dec)])
+		return np.array([float(obj.a_ra), float(obj.a_dec)])
 	else:
 		res = np.empty((2,djd.size))
 		for i, t in enumerate(djd.reshape(-1)):
 			obj.compute(t)
-			res[0,i] = float(obj.ra)
-			res[1,i] = float(obj.dec)
+			res[0,i] = float(obj.a_ra)
+			res[1,i] = float(obj.a_dec)
 		return res.reshape((2,)+djd.shape)
 
 def interpol_pos(from_sys, to_sys, name_or_pos, mjd, site=None, dt=10):
