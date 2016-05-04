@@ -912,6 +912,8 @@ def read_fits(fname, hdu=0):
 	the hdu argument to change this. The map must be stored as
 	a fits image."""
 	hdu = astropy.io.fits.open(fname)[hdu]
+	if hdu.header["NAXIS"] < 2:
+		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
 	with warnings.catch_warnings():
 		wcs = enlib.wcs.WCS(hdu.header).sub(2)
 	res = ndmap(hdu.data, wcs)
