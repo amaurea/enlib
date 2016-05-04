@@ -80,11 +80,13 @@ def deproject_vecs(tods, dark, nmode=50, cuts=None, deslope=True, inplace=True):
 
 def deproject_vecs_smooth(tods, dark, nmode=50, cuts=None, deslope=True, inplace=True):
 	if not inplace: tods=tods.copy()
+	dark = dark.copy()
 	ftod  = fft.rfft(tods)
 	fdark = fft.rfft(dark)
 	fdark = todops.smooth_basis_fourier(ftod, fdark)
-	dark  = fft.ifft(fdark, dark*0, normalize=True)
-	todops.fit_basis(tod, dark, highpass=nmode, cuts=cuts, clean_tod=True)
+	smooth= np.zeros((fdark.shape[0],dark.shape[1]),dtype=dark.dtype)
+	fft.ifft(fdark, smooth, normalize=True)
+	todops.fit_basis(tods, smooth, highpass=nmode, cuts=cuts, clean_tod=True)
 	if deslope: utils.deslope(tods, w=8, inplace=True)
 
 def filter_common_blockwise(tods, blocks, cuts=None, niter=None,
