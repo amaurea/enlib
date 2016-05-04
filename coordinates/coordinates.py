@@ -190,25 +190,14 @@ def cel2hor(coord, time, site, copy=True):
 	pyfsla.oamulti(time, coord.T, ao, am)
 	return coord
 
-def rotmatrix(ang, axis):
-	ang  = np.asarray(ang)
-	axis = axis.lower()
-	c, s = np.cos(ang), np.sin(ang)
-	R = np.zeros(ang.shape + (3,3))
-	if   axis == "x": R[...,0,0]=1;R[...,1,1]= c;R[...,1,2]=-s;R[...,2,1]= s;R[...,2,2]=c
-	elif axis == "y": R[...,0,0]=c;R[...,0,2]= s;R[...,1,1]= 1;R[...,2,0]=-s;R[...,2,2]=c
-	elif axis == "z": R[...,0,0]=c;R[...,0,1]=-s;R[...,1,0]= s;R[...,1,1]= c;R[...,2,2]=1
-	else: raise ValueError("Axis %s not recognized" % axis)
-	return R
-
 def euler_mat(euler_angles, kind="zyz"):
 	"""Defines the rotation matrix M for a ABC euler rotation,
 	such that M = A(alpha)B(beta)C(gamma), where euler_angles =
 	[alpha,beta,gamma]. The default kind is ABC=ZYZ."""
 	alpha, beta, gamma = euler_angles
-	R1 = rotmatrix(gamma, kind[2])
-	R2 = rotmatrix(beta,  kind[1])
-	R3 = rotmatrix(alpha, kind[0])
+	R1 = utils.rotmatrix(gamma, kind[2])
+	R2 = utils.rotmatrix(beta,  kind[1])
+	R3 = utils.rotmatrix(alpha, kind[0])
 	return np.einsum("...ij,...jk->...ik",np.einsum("...ij,...jk->...ik",R3,R2),R1)
 
 def euler_rot(euler_angles, coords, kind="zyz"):

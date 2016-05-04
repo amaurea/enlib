@@ -109,9 +109,9 @@ def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=Fa
 	if ainfo is None: ainfo = sharp.alm_info(nalm=alm_full.shape[-1])
 	if copy: map_full = map_full.copy()
 	if direct:
-		tmap, tslice = map_full, (Ellipsis,)
+		tmap, mslices, tslices = map_full, [(Ellipsis,)], [(Ellipsis,)]
 	else:
-		tmap, tslice = make_projectable_map_cyl(map_full)
+		tmap, mslices, tslices = make_projectable_map_cyl(map_full)
 	sht    = sharp.sht(map2minfo(tmap), ainfo)
 	# We need a pixel-flattened version for the SHTs.
 	tflat  = tmap.reshape(tmap.shape[:-2]+(-1,))
@@ -131,7 +131,9 @@ def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=Fa
 		if tflat.shape[1] > 1:
 			tflat[:,1:,:] = sht.alm2map(alm_full[:,1:,:], tflat[:,1:,:], spin=spin)
 
-	map_full[:] = tmap[tslice]
+	for mslice, tslice in zip(mslices, tslices):
+		print mslice, tslice
+		map_full[mslice] = tmap[tslice]
 	return map
 
 def alm2map_pos(alm, pos=None, ainfo=None, oversample=2.0, spin=2, deriv=False):
@@ -182,12 +184,19 @@ def make_projectable_map_cyl(map):
 	# We can do this simply by extending it in the positive pixel dimension.
 	oshape = map.shape[:-1]+(nphi,)
 	owcs   = map.wcs
-	# Flip back if necessary
-	if flip:
-		oslice = (Ellipsis, slice(nx-1,None,-1))
-	else:
-		oslice = (Ellipsis, slice(0,nx))
-	return enmap.empty(oshape, owcs, dtype=map.dtype), oslice
+	nslice = (nx+nphi-1)/nphi
+	islice, oslice = [], []
+	for i in range(nslice):
+		i1, i2 = i*nphi, min((i+1)*nphi,nx)
+		islice.append((Ellipsis, slice(i1,i2)))
+		if not flip:
+			oslice.append((Ellipsis, slice(0, i2-i1)))
+		else:
+			# Flip back. Reverse slices are awkward
+			end = nx-1-(i2-i1)
+			if end < 0: end = None
+			oslice.append((Ellipsis, slice(nx-1, end, -1)))
+	return enmap.empty(oshape, owcs, dtype=map.dtype), islice, oslice
 
 def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	"""Make a map suitable as an intermediate step in projecting alms up to
