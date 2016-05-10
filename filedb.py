@@ -190,6 +190,7 @@ class FormatDB(Basedb):
 		if self.override and self.override != "none":
 			for tok in self.override.split(","):
 				name, val = tok.split(":")
+				val = val.format(**info)
 				res[name] = [val] if multi else val
 		return res
 	def dump(self):

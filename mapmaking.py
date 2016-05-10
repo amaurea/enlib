@@ -240,6 +240,7 @@ class PreconMapBinned:
 		self.div = enmap.zeros((ncomp,)+signal.area.shape, signal.area.wcs, signal.area.dtype)
 		calc_div_map(self.div, signal, signal_cut, scans, weights, noise=noise)
 		self.idiv = array_ops.svdpow(self.div, -1, axes=[0,1], lim=config.get("eig_limit"))
+		#self.idiv[:] = np.eye(3)[:,:,None,None]
 		if hits:
 			# Build hitcount map too
 			self.hits = signal.area.copy()
@@ -533,6 +534,27 @@ class PostAddMap:
 		self.map, self.mul = map, mul
 	def __call__(self, imap):
 		return imap + self.map*self.mul
+
+class FilterBuddy:
+	def __init__(self, scans, map, eqsys=None, mul=1, tmul=1, pmat_order=None):
+		self.map, self.eqsys, self.mul, self.tmul = map, eqsys, mul, tmul
+		self.data = {scan: pmat.PmatMapMultibeam(scan, map, scan.buddy_offs,
+			scan.buddy_comps, order=pmat_order, sys=eqsys) for scan in scans}
+	def __call__(self, scan, tod):
+		pmat = self.data[scan]
+		pmat.forward(tod, self.map, tmul=self.tmul, mmul=self.mul)
+
+class FilterBuddyDmap:
+	def __init__(self, scans, subinds, dmap, eqsys=None, mul=1, tmul=1, pmat_order=None):
+		self.map, self.eqsys, self.mul, self.tmul = dmap, eqsys, mul, tmul
+		self.data = {}
+		work = dmap.tile2work()
+		for scan, subind in zip(scans, subinds):
+			self.data[scan] = [pmat.PmatMapMultibeam(scan, work[subind], scan.buddy_offs,
+				scan.buddy_comps, order=pmat_order, sys=eqsys), work[subind]]
+	def __call__(self, scan, tod):
+		pmat, work = self.data[scan]
+		pmat.forward(tod, work, tmul=self.tmul, mmul=self.mul)
 
 class FilterAddSrcs:
 	def __init__(self, scans, params, eqsys=None, mul=1):

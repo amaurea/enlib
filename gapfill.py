@@ -38,7 +38,7 @@ def gapfill_linear(arr, ranges, inplace=False, overlap=None):
 			arr[r1:r2] = np.mean(arr[left:r1])
 		# Otherwise use linear interpolation
 		else:
-			arr[r1-1:r2] = np.linspace(np.mean(arr[left:r1]), np.mean(arr[r2:right]), r2-r1+1,endpoint=False)
+			arr[r1:r2] = np.linspace(np.mean(arr[left:r1]), np.mean(arr[r2:right]), r2-r1+1,endpoint=False)[1:]
 	return arr
 
 def fit_linear(arr, ref=0, nsigma=2):

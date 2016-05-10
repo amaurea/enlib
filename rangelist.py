@@ -138,6 +138,25 @@ class Multirange:
 		flat    = np.concatenate([r.ranges for r in self.data.reshape(self.data.size)])
 		n       = self.data[0].n
 		return n, neach, flat
+	def extract(self, arr):
+		"""Extract the samples corresponding to this Multirange from the array
+		arr, returning them as a 1d array."""
+		res = np.zeros(self.size, arr.dtype)
+		i = 0
+		for d, a in zip(self.data.reshape(-1), arr.reshape(-1,arr.shape[-1])):
+			for r in d.ranges:
+				n = r[1]-r[0]
+				res[i:i+n] = a[r[0]:r[1]]
+				i += n
+		return res
+	def insert(self, arr, vals):
+		"""Reverse of extract"""
+		i = 0
+		for d, a in zip(self.data.reshape(-1), arr.reshape(-1,arr.shape[-1])):
+			for r in d.ranges:
+				n = r[1]-r[0]
+				a[r[0]:r[1]] = vals[i:i+n]
+				i += n
 	def to_mask(self):
 		dflat = self.data.reshape(self.data.size)
 		res   = np.zeros([dflat.size, dflat[0].n],dtype=bool)
