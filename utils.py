@@ -924,8 +924,8 @@ def minmax(a, axis=None):
 	return np.array([np.min(a, axis=axis),np.max(a, axis=axis)])
 
 def point_in_polygon(points, polys):
-	"""Given a points[{ptdim},2] and a set of polys[{podim},2], return
-	inside[{ptdim},{podim}].
+	"""Given a points[n|None,2] and a set of polys[n|None,nvertex,2], return
+	inside[n|None].
 	
 	Examples:
 	utils.point_in_polygon([0.5,0.5],[[0,0],[0,1],[1,1],[1,0]]) -> True
@@ -934,15 +934,9 @@ def point_in_polygon(points, polys):
 	# Make sure we have arrays, and that they have a floating point data type
 	points = np.asarray(points)+0.0
 	polys  = np.asarray(polys) +0.0
-	# Get their original pre-dimensions
-	ptdim  = points.shape[:-1]
-	podim  = polys.shape[:-2]
+	npre   = max(points.ndim-1,polys.ndim-2)
 	nvert  = polys.shape[-2]
-	# Pad each to the full, compatible dimensionality
-	s, n = (slice(None),), (None,)
-	points = points[s*len(ptdim)+n*len(podim)]
-	polys  = polys [n*len(ptdim)+s*len(podim)]
-	dirs   = np.zeros(ptdim+podim, dtype=np.int32)
+	dirs   = np.zeros(max(polys.shape[0],points.shape[0]), dtype=np.int32)
 	def direction(a,b): return np.sign(a[...,0]*b[...,1]-a[...,1]*b[...,0]).astype(np.int32)
 	for i in range(nvert):
 		v1 = polys[...,i-1,:]
