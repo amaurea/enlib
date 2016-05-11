@@ -71,7 +71,7 @@ def read_rahul_marius_old(fname, exact=None, default_beam=1*utils.arcmin, amp_fa
 	return read_rahul_marius(fname, exact=None, default_beam=default_beam, amp_factor=amp_factor)
 
 def read_skn(fname, default_beam=1*utils.arcmin):
-	tmp = np.loadtxt(fname)
+	tmp = np.loadtxt(fname,ndmin=2)
 	if tmp.shape[1] == 5: return read_skn_posamp(fname, default_beam)
 	elif tmp.shape[1] == 8: return read_skn_standard(fname)
 	elif tmp.shape[1] == 25: return read_skn_full(fname)
@@ -79,19 +79,19 @@ def read_skn(fname, default_beam=1*utils.arcmin):
 
 def read_skn_posamp(fname, default_beam=1*utils.arcmin):
 	"""dec ra T Q U"""
-	tmp = np.loadtxt(fname)
+	tmp = np.loadtxt(fname, ndmin=2)
 	b   = np.full(len(tmp),default_beam)
 	return np.concatenate([tmp[:,:2]*utils.degree,tmp[:,3:6],b[:,None],b[:,None],b[:,None]*0],1)
 
 def read_skn_standard(fname):
 	"""dec ra T Q U bw bh phi"""
-	tmp = np.loadtxt(fname)
+	tmp = np.loadtxt(fname, ndmin=2)
 	return np.concatenate([tmp[:,:2]*utils.degree,tmp[:,2:5],
 		tmp[:,5:7]*utils.arcmin*utils.fwhm, tmp[:,7:8]*utils.degree],1)
 
 def read_skn_full(fname):
 	"""id rank S/N dec ddec ra dra T dT Q dQ U dU Tf dTf Qf dQf Uf dUf bw dbw bh dbh phi dphi"""
-	tmp = np.loadtxt(fname)
+	tmp = np.loadtxt(fname, ndmin=2)
 	return np.concatenate([tmp[:,3:7:2]*utils.degree, tmp[:,7:13:2],
 		tmp[:,19:23:2]*utils.arcmin*utils.fwhm, tmp[:,23:25:2]*utils.degree],1)
 

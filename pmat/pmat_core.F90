@@ -6,8 +6,8 @@ contains
 
 	subroutine pmat_map( &
 			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
-			pmet,                      &! pointing. 1: bilinear, gradient
-			mmet,                      &! binning.  1: nearest
+			pmet,                      &! pointing. 1: bilinear, 2: gradient
+			mmet,                      &! binning.  1: nearest,  2: bilinear
 			tmul, mmul,                &! Consts to multiply tod/map by
 			tod, map,                  &! Main inputs/outpus
 			bore, hwp, det_pos, det_comps, &! Input pointing
@@ -40,7 +40,9 @@ contains
 			select case(mmet)
 			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
 			! is even slower for nthread > 8
-			case(1); call project_map_nearest(dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			case(1); call project_map_nearest (dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			case(2); call project_map_bilinear(dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			case(4); call project_map_bicubic (dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
 			end select
 			deallocate(pix, phase)
 		end do
@@ -235,6 +237,184 @@ contains
 			end if
 		end if
 	end subroutine
+
+	! In bilinear interpolation the value of a pixel will
+	! be an estimate of the value at the center of the pixel
+	! rather than the average inside it (though perhaps putting
+	! the degrees of freedom off by half a pixel would be more
+	! stable). Coordinates inside one pixel go from -0.5 to 0.5.
+	! If less than zero, we use
+	!  v(-1)*(-dx) + v(0)*(1+dx)
+	! otherwise it is
+	!  v(+1)*( dx) + v(0)*(1-dx)
+	! We can unify these by using floor instead of nint. Let p = floor(pix),
+	! v0=map(p), v1=map(p+1), x = pix-p. Then the value is
+	!  v0*(1-x) + v1*x
+	! Sadly, our pixel truncation in the pixel calculation is not
+	! enough to avoid OOB in this case. Must handle this ourselves.
+	subroutine project_map_bilinear( &
+		dir, tmul, tod, map, pix, phase)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir
+		real(8),    intent(in)    :: pix(:,:), phase(:,:)
+		real(_),    intent(in)    :: tmul
+		real(_),    intent(inout) :: tod(:), map(:,:,:)
+		real(8)    :: rpix(2)
+		integer(4) :: p(2), ci
+		! Work
+		real(_)    :: x(2), v1(size(map,1),2), v2(size(map,1),2), v3(size(map,1),2), v4(size(map,1)), v
+		integer(4) :: nsamp, ncomp, si, c, nthread
+		nsamp = size(tod)
+		ncomp = size(map,1)
+		nthread = omp_get_max_threads()
+		do si = 1, nsamp
+			! Stricter boundary conditions
+			rpix(1) = max(1d0,min(size(map,3)-1d0,pix(1,si)))
+			rpix(2) = max(1d0,min(size(map,2)-1d0,pix(2,si)))
+			p = floor(rpix)
+			x = rpix-p
+			if(dir > 0) then
+				! Interpolate along y direction
+				v1 = map(:,p(2):p(2)+1,p(1))
+				v2 = map(:,p(2):p(2)+1,p(1)+1)
+				v3 = v1*(1-x(1)) + v2*x(1)
+				! Interpolate along x direction
+				v4 = v3(:,1)*(1-x(2)) + v3(:,2)*x(2)
+				v  = sum(v4*phase(:,si))
+				! Update tod
+				if(tmul .eq. 0) then
+					tod(si) = v
+				else
+					tod(si) = tod(si)*tmul + v
+				end if
+			else
+				! Transpose of the above
+				v  = tod(si)*tmul
+				v4 = v * phase(:,si)
+				v3(:,1) = v4*(1-x(2))
+				v3(:,2) = v4*x(2)
+				v1 = v3*(1-x(1))
+				v2 = v3*x(1)
+				! I don't like using this many atomics. With four
+				! times the number I usually have, this is probably
+				! slower than separate work arrays.
+				if (nthread > 1) then
+					do ci = 1, size(map,1)
+						!$omp atomic
+						map(ci,p(2)  ,p(1)  ) = map(ci,p(2)  ,p(1)  ) + v1(ci,1)
+						!$omp end atomic
+						!$omp atomic
+						map(ci,p(2)+1,p(1)  ) = map(ci,p(2)+1,p(1)  ) + v1(ci,2)
+						!$omp end atomic
+						!$omp atomic
+						map(ci,p(2)  ,p(1)+1) = map(ci,p(2)  ,p(1)+1) + v2(ci,1)
+						!$omp end atomic
+						!$omp atomic
+						map(ci,p(2)+1,p(1)+1) = map(ci,p(2)+1,p(1)+1) + v2(ci,2)
+						!$omp end atomic
+					end do
+				else
+					do ci = 1, size(map,1)
+						map(ci,p(2)  ,p(1)  ) = map(ci,p(2)  ,p(1)  ) + v1(ci,1)
+						map(ci,p(2)+1,p(1)  ) = map(ci,p(2)+1,p(1)  ) + v1(ci,2)
+						map(ci,p(2)  ,p(1)+1) = map(ci,p(2)  ,p(1)+1) + v2(ci,1)
+						map(ci,p(2)+1,p(1)+1) = map(ci,p(2)+1,p(1)+1) + v2(ci,2)
+					end do
+				end if
+			end if
+		end do
+	end subroutine
+
+	subroutine project_map_bicubic( &
+		dir, tmul, tod, map, pix, phase)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir
+		real(8),    intent(in)    :: pix(:,:), phase(:,:)
+		real(_),    intent(in)    :: tmul
+		real(_),    intent(inout) :: tod(:), map(:,:,:)
+		real(8)    :: rpix(2)
+		integer(4) :: p(2), ci, i, j, i2
+		! Work
+		real(_)    :: x, vy(size(map,1),4), vx(size(map,1)), vtot, w(4,2)
+		real(_)    :: vtmp
+		integer(4) :: nsamp, ncomp, si, c, nthread
+		nsamp = size(tod)
+		ncomp = size(map,1)
+		nthread = omp_get_max_threads()
+		! FIXME: Gives negative absolute residual in cg. Something is wrong.
+		do si = 1, nsamp
+			! Stricter boundary conditions
+			rpix(1) = max(2d0,min(size(map,3)-2d0,pix(1,si)))
+			rpix(2) = max(2d0,min(size(map,2)-2d0,pix(2,si)))
+			p = floor(rpix-1)
+			! Compute weights in each direciton. This is based on
+			! compute_weights in enlib.interpol.fortran
+			do j = 1, 2
+				do i = 1, 4
+					x = abs(rpix(j)-(i-1)-p(j))
+					if(x < 1) then
+						w(i,j) =  1.5*x**3 - 2.5*x**2 + 1
+					elseif(x < 2) then
+						w(i,j) = -0.5*x**3 + 2.5*x**2 - 4*x + 2
+					else
+						w(i,j) = 0
+					end if
+				end do
+			end do
+			if(dir > 0) then
+				! Interpolate in y direction
+				vy = 0
+				do i = 1, 4
+					vy(:,:) = vy(:,:) + map(:,p(2):p(2)+3,p(1)+i-1)*w(i,1)
+				end do
+				! Interpolate in x direciton
+				vx = 0
+				do i = 1, 4
+					vx = vx + vy(:,i)*w(i,2)
+				end do
+				vtot = sum(vx*phase(:,si))
+				! Update tod
+				if(tmul .eq. 0) then
+					tod(si) = vtot
+				else
+					tod(si) = tod(si)*tmul + vtot
+				end if
+			else
+				! Transpose of the above
+				vtot = tod(si)*tmul
+				vx = vtot * phase(:,si)
+				do i = 1, 4
+					vy(:,i) = vx*w(i,2)
+				end do
+				if (nthread > 1) then
+					do i = 1, 4
+						do i2 = 1, 4
+							do ci = 1, size(map,1)
+								vtmp = vy(ci,i2) * w(i,1)
+								!$omp atomic
+								map(ci,p(2)+i2-1,p(1)+i-1) = map(ci,p(2)+i2-1,p(1)+i-1) + vtmp
+								!$omp end atomic
+							end do
+						end do
+					end do
+				else
+					do i = 1, 4
+						do i2 = 1, 4
+							do ci = 1, size(map,1)
+								vtmp = vy(ci,i2) * w(i,1)
+								map(ci,p(2)+i2-1,p(1)+i-1) = map(ci,p(2)+i2-1,p(1)+i-1) + vtmp
+							end do
+						end do
+					end do
+				end if
+			end if
+		end do
+	end subroutine
+
 
 	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 	!!!!!! Old stuff below !!!!!!!!!!

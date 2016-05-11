@@ -34,49 +34,22 @@ class PmatMap(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation.
 	20 times faster than the slower python+numpy implementation below."""
 	def __init__(self, scan, template, sys=None, order=None):
-		sys   = config.get("map_eqsys",      sys)
-		order = config.get("pmat_map_order", order)
-
-		# We widen the bounding box slightly to avoid samples falling outside it
-		# due to rounding errors.
-		box = utils.widen_box(np.array(scan.box), 1e-3)
-		acc  = config.get("pmat_accuracy")
-		ip_size= config.get("pmat_interpol_max_size")
-		ip_time= config.get("pmat_interpol_max_time")
-		transform = pos2pix(scan,template,sys)
-
-		# Build pointing interpolator
-		errlim = np.array([1e-3,1e-3,utils.arcmin,utils.arcmin])*acc
-		ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, errlim, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
-		if not ok: print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, scan.entry.id)
-
+		transform  = pos2pix(scan,template,sys)
+		ipol, obox = build_interpol(transform, scan.box, id=scan.entry.id)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
 		# Use obox to extract a pixel bounding box for this scan.
 		# These are the only pixels pmat needs to concern itself with.
 		# Reducing the number of pixels makes us more memory efficient
-		self.pixbox, self.nphi = build_pixbox(obox[:,:2], template)
-
-		self.comps= np.arange(template.shape[0])
-		self.scan  = scan
-		self.order = order
-		self.dtype = template.dtype
-		self.core = get_core(self.dtype)
-		#if order == 0:
-		#	self.func = self.core.pmat_nearest_bilinear
-		#	#self.func = self.core.pmat_nearest_grad_implicit
-		#else:
-		#	raise NotImplementedError("order > 0 is not implemented")
-		self.func = self.core.pmat_map
-		self.transform = transform
-		self.ipol = ipol
+		self.pixbox, self.nphi  = build_pixbox(obox[:,:2], template)
+		self.scan,   self.dtype = scan, template.dtype
+		self.func  = get_core(self.dtype).pmat_map
+		self.order = config.get("pmat_map_order", order)
 	def forward(self, tod, m, tmul=1, mmul=1):
 		"""m -> tod"""
-		self.func( 1, 1, 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
-		#self.func( 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
+		self.func( 1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
 	def backward(self, tod, m, tmul=1, mmul=1):
 		"""tod -> m"""
-		self.func(-1, 1, 1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
-		#self.func(-1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
+		self.func(-1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -90,6 +63,39 @@ class PmatMap(PointingMatrix):
 		phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
 		self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T)
 		return pix, phase
+
+class PmatMapMultibeam(PointingMatrix):
+	"""Like PmatMap, but with multiple, displaced beams."""
+	def __init__(self, scan, template, beam_offs, beam_comps, sys=None, order=None):
+		# beam_offs has format [nbeam,ndet,{dt,dra,ddec,}], which allows
+		# each detector to have a separate beam. The dt part is pretty useless.
+		# beam_comps has format [nbeam,ndet,{T,Q,U}].
+		# Get the full box after taking all beam offsets into account
+		ibox = np.array([np.min(scan.boresight,0)+np.min(beam_offs,(0,1)),
+				np.max(scan.boresight,0)+np.max(beam_offs,(0,1))])
+		# Build our pointing interpolator
+		transform  = pos2pix(scan,template,sys)
+		ipol, obox = build_interpol(transform, ibox, id=scan.entry.id)
+		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
+		# And store our data
+		self.beam_offs, self.beam_comps = beam_offs, beam_comps
+		self.pixbox, self.nphi  = build_pixbox(obox[:,:2], template)
+		self.scan,   self.dtype = scan, template.dtype
+		self.func  = get_core(self.dtype).pmat_map
+		self.order = config.get("pmat_map_order", order)
+	def forward(self, tod, m, tmul=1, mmul=1):
+		"""m -> tod"""
+		# Loop over each beam, summing its contributions
+		tod *= tmul
+		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
+			self.func( 1, 1, self.order+1, 1, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T,
+					boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
+	def backward(self, tod, m, tmul=1, mmul=1):
+		"""tod -> m"""
+		m *= mmul
+		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
+			self.func(-1, 1, self.order+1, 1, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T,
+					boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
 
 def get_moby_pointing(entry, bore, dets, downgrade=1):
 	# Set up moby2
@@ -148,16 +154,6 @@ class PmatMoby(PointingMatrix):
 		yfit = np.linalg.solve(denom, basis.T.dot(pix[0].T))
 		xfit = np.linalg.solve(denom, basis.T.dot(pix[1].T))
 
-		## For some reason pol angles are interpolated differently
-		#t  = np.linspace(0,1,bore.shape[0])[::downsamp]
-		#az = bore[::downsamp,1]
-		#npoly = 3
-		#basis = np.zeros([len(t),2+npoly])
-		#basis[:,0]  = 1
-		#basis[:,-1] = t
-		#for i in range(npoly):
-		#	basis[:,i+1] = basis[:,i]*az
-
 		# Just use the same az and t as before for simplicity. The
 		# coefficients will be different, but the result will be
 		# the same.
@@ -190,64 +186,6 @@ class PmatMoby(PointingMatrix):
 #  1. In order for CG to converge, forward must be the exact transpose of backward.
 #  2. In order to get rid of the bias, forward must be a good approximation of the
 #     beam, and must not have any pixel offsets or similar.
-#
-#class PmatMapIP(PointingMatrix):
-#	def __init__(self, scan, template, sys=None, order=None, oversample=5):
-#		self.scan     = scan
-#		self.template = template
-#		self.dtype    = template.dtype
-#		self.sys      = sys
-#		self.oversample= oversample
-#		ncomp, h, w = template.shape
-#		wcs = template.wcs.deepcopy()
-#		wcs.wcs.cdelt /= oversample
-#		wcs.wcs.crpix *= oversample
-#		self.big = enmap.zeros([ncomp,h*oversample,w*oversample],wcs=wcs,dtype=self.dtype)
-#		self.pmat = PmatMap(scan, self.big, self.sys, order)
-#	def forward(self, tod, m):
-#		# Interpolate map to full res
-#		print "FA", np.sum(m**2)
-#		m2 = m.project(self.big.shape, self.big.wcs)
-#		self.pmat.forward(tod, m2)
-#		print "FB", np.sum(tod**2)
-#	def backward(self, tod, m):
-#		print "BA", np.sum(tod**2)
-#		self.big[...] = 0
-#		self.pmat.backward(tod, self.big)
-#		# This is not the real transpose of project.
-#		m[...] = enmap.downgrade(self.big, self.oversample)
-#		print "Bb", np.sum(m**2)
-#	def translate(self, bore=None, offs=None, comps=None):
-#		return self.pmat.translate(bore, offs, comps)
-
-class PmatMapSlow(PointingMatrix):
-	"""Reference implementation of the simple nearest neighbor
-	pointing matrix. Very slow - not meant for serious use. It's interesting
-	as an example of how a reasonable python-only implementation would
-	perform. Uses trilinear interpolation for coordinates."""
-	def __init__(self, scan, template, sys=None):
-		sys = config.get("map_eqsys", sys)
-		# Build interpolator between scan coordinates and
-		# template map coordinates.
-		self.ipol = interpol.build(pos2pix(scan,template,sys), interpol.ip_linear, scan.box, [1e-3,1e-3,utils.arcsec,utils.arcsec], order=1)
-		self.scan = scan
-	def get_pix_phase(self,d):
-		pix   = self.ipol(self.scan.boresight.T+self.scan.offsets[d,:,None])
-		ipix  = np.floor(pix[:2]).astype(np.int32)
-		phase = np.zeros([self.scan.comps.shape[1],self.scan.boresight.shape[0]])
-		phase[...] = self.scan.comps[d,:,None]
-		phase[1] = self.scan.comps[d,1] * pix[2] + self.scan.comps[d,2] * pix[3]
-		phase[2] = self.scan.comps[d,1] * pix[3] - self.scan.comps[d,2] * pix[2]
-		return ipix, phase
-	def backward(self, tod, m):
-		for d in range(tod.shape[0]):
-			pix, phase = self.get_pix_phase(d)
-			for c in range(m.shape[0]):
-				m[c] += np.bincount(np.ravel_multi_index(pix[:2], m.shape[-2:]), tod[d], m[c].size).reshape(m[c].shape)
-	def forward(self, tod, m):
-		for d in range(tod.shape[0]):
-			pix, phase = self.get_pix_phase(d)
-			tod[d] += np.sum(m[:,pix[0],pix[1]]*phase[:m.shape[0]],0)
 
 class PmatCut(PointingMatrix):
 	"""Implementation of cuts-as-extra-degrees-of-freedom for a single
@@ -333,29 +271,14 @@ class pos2pix:
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)
 
-class PmatMapRebin(PointingMatrix):
-	"""Fortran-accelerated rebinning of maps."""
-	def forward (self, mhigh, mlow):
-		get_core(mhigh.dtype).pmat_map_rebin( 1, mhigh.T, mlow.T)
-	def backward(self, mhigh, mlow):
-		get_core(mhigh.dtype).pmat_map_rebin(-1, mhigh.T, mlow.T)
-
-class PmatCutRebin(PointingMatrix):
-	"""Fortran-accelerated rebinning of cut data."""
-	def __init__(self, pmat_cut_high, pmat_cut_low):
-		self.cut_high, self.cut_low = pmat_cut_high.cuts, pmat_cut_low.cuts
-	def forward (self, jhigh, jlow):
-		get_core(jhigh.dtype).pmat_cut_rebin( 1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
-	def backward(self, jhigh, jlow):
-		get_core(jhigh.dtype).pmat_cut_rebin(-1, jhigh.T, self.cut_high.T, jlow.T, self.cut_low.T)
-
 config.default("pmat_ptsrc_rsigma", 4.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
 class PmatPtsrc(PointingMatrix):
 	def __init__(self, scan, params, sys=None, tmul=None, pmul=None):
 		# Params is [nsrc,{dec,ra,amps,ibeams}]
 		rmul  = config.get("pmat_ptsrc_rsigma")
 		self.dtype = params.dtype
-		ipol, obox = build_pos_interpol(scan, sys=config.get("map_eqsys", sys))
+		transform  = build_pos_transform(scan, sys=config.get("map_eqsys", sys))
+		ipol, obox = build_interpol(transform, scan.box, scan.entry.id, posunit=0.1*utils.arcsec)
 		# It's error prone to require the user to have the angles consistently
 		# wrapped. So we will rewrap params ourselves
 		self.ref = np.mean(obox[:,:2],0)
@@ -467,6 +390,8 @@ class PmatPtsrc2(PointingMatrix):
 			self.dpos = parallax.earth2sun(srcs.T[:2], self.scan.mjd0, sundist, diff=True).T
 		srcs[:,:,:2] += self.dpos
 
+		print "srcs", srcs
+
 		# Investigate the beam to find the max relevant radius
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
 		value_lim = np.exp(-0.5*sigma_lim**2)
@@ -475,13 +400,18 @@ class PmatPtsrc2(PointingMatrix):
 		rmax *= rmul
 
 		# Build interpolator (dec,ra output ordering)
-		ipol, obox = build_pos_interpol(scan, sys)
+		transform  = build_pos_transform(scan, sys=config.get("map_eqsys", sys))
+		ipol, obox = build_interpol(transform, scan.box, scan.entry.id, posunit=0.1*utils.arcsec)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, srcs.dtype)
+
 		# Build source hit grid
 		cbox    = obox[:,:2]
 		cshape  = tuple(np.ceil(((cbox[1]-cbox[0])/cres)).astype(int))
 		self.ref = np.mean(cbox,0)
 		srcs[:,:,:2] = utils.rewind(srcs[:,:,:2], self.ref)
+
+		print "cbox", cbox/utils.degree
+		print "cshape", cshape
 
 		# A cell is hit if it overlaps both horizontall any vertically
 		# with the point source +- rmax
@@ -496,6 +426,7 @@ class PmatPtsrc2(PointingMatrix):
 				# will be put on one of the edge cells
 				i1 = np.maximum(i1.astype(int), 0)
 				i2 = np.minimum(i2.astype(int), np.array(cshape)-1)
+				print si, sdir, i1, i2, cshape
 				if np.any(i1 >= cshape) or np.any(i2 < 0): continue
 				sel= (sdir,slice(i1[0],i2[0]),slice(i1[1],i2[1]))
 				cells[sel][:,:,ncell[sel]] = si
@@ -528,7 +459,22 @@ class PmatPtsrc2(PointingMatrix):
 		"""tod -> srcs"""
 		self.apply(-1, tod, srcs, tmul=tmul, pmul=pmul)
 
-def build_pos_interpol(scan, sys):
+def build_interpol(transform, box, id="none", posunit=1.0, sys=None):
+	sys   = config.get("map_eqsys",      sys)
+	# We widen the bounding box slightly to avoid samples falling outside it
+	# due to rounding errors.
+	box = utils.widen_box(np.array(box), 1e-3)
+	acc = config.get("pmat_accuracy")
+	ip_size = config.get("pmat_interpol_max_size")
+	ip_time = config.get("pmat_interpol_max_time")
+
+	# Build pointing interpolator
+	errlim = np.array([1e-3*posunit,1e-3*posunit,utils.arcmin,utils.arcmin])*acc
+	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, errlim, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
+	if not ok: print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, id)
+	return ipol, obox
+
+def build_pos_transform(scan, sys):
 	# Set up pointing interpolation
 	box = np.array(scan.box)
 	margin = (box[1]-box[0])*1e-3 # margin to avoid rounding erros
@@ -536,21 +482,7 @@ def build_pos_interpol(scan, sys):
 	box[0] -= margin/2; box[1] += margin/2
 	# Find the rough position of our scan
 	ref_phi = coordinates.transform(scan.sys, sys, scan.box[:1,1:].T, time=scan.mjd0+scan.box[:1,0], site=scan.site)[0,0]
-	#ref_phi = params[1,0]
-	acc  = config.get("pmat_accuracy")
-	ip_size= config.get("pmat_interpol_max_size")
-	ip_time= config.get("pmat_interpol_max_time")
-	transform = pos2pix(scan,None,sys,ref_phi=ref_phi)
-	# The default interpol mesh size may not be enough to reach the
-	# target accuracy here. My tests indicate that a grid max of
-	# 1000000 only succeeds in reaching about 0.1" accuracy. It previously
-	# looked like I could go further because I was using bilinear
-	# interpolation to evaluate the accuracy, not the gradient interpolation
-	# I actually use.
-	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box,
-			np.array([0.1*utils.arcsec, 0.1*utils.arcsec ,utils.arcmin,utils.arcmin])*acc,
-			maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
-	return ipol, obox
+	return pos2pix(scan,None,sys,ref_phi=ref_phi)
 
 class PmatScan(PointingMatrix):
 	"""Project between tod and per-det az basis. Will be plain az
@@ -646,53 +578,17 @@ def extract_interpol_params(ipol, dtype):
 	nbox  = np.array(ipol.y.shape[1:])
 	yvals = np.ascontiguousarray(ipol.y.reshape(ipol.y.shape[0],-1).T)
 	return rbox, nbox, yvals
-	#nbox = np.array(ipol.ys.shape[4:])
-	## ipol.ys has shape [2t,2az,2el,{ra,dec,cos,sin},t,az,el]
-	## fortran expects [{ra,dec,cos,sin},{y,dy/dt,dy/daz,dy,del,...},pix]
-	## This format allows us to avoid hard-coding the number of input dimensions,
-	## and is forward compatible for higher order interpolation later.
-	## The disadvantage is that the ordering becomes awkard at higher order.
-	#n = rbox.shape[1]
-	#ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
-	#ys = np.rollaxis(ys.reshape(ys.shape[:2]+(-1,)),-1).astype(dtype)
-	#return rbox, nbox, ys
-
-def extract_interpol_params_old(ipol, dtype):
-	"""Extracts flattend interpolation parameters from an Interpolator object
-	in a form suitable for passing to fortran. Returns rbox[{from,to},nparam],
-	nbox[nparam] (grid size along each input parameter)"""
-	rbox  = ipol.box
-	nbox = np.array(ipol.ys.shape[4:])
-	# ipol.ys has shape [2t,2az,2el,{ra,dec,cos,sin},t,az,el]
-	# fortran expects [{ra,dec,cos,sin},{y,dy/dt,dy/daz,dy,del,...},pix]
-	# This format allows us to avoid hard-coding the number of input dimensions,
-	# and is forward compatible for higher order interpolation later.
-	# The disadvantage is that the ordering becomes awkard at higher order.
-	n = rbox.shape[1]
-	ys = np.asarray([ipol.ys[(0,)*n]] + [ipol.ys[(0,)*i+(1,)+(0,)*(n-i-1)] for i in range(n)])
-	ys = np.rollaxis(ys.reshape(ys.shape[:2]+(-1,)),-1).astype(dtype)
-	return rbox, nbox, ys
 
 def build_pixbox(obox, template, margin=10):
 	# We allow negative and positive overshoot to allow the
 	# pointing matrix to handle pixel wraparound.
 	res = np.array([np.floor(obox[0]-margin),np.floor(obox[1]+margin)]).astype(np.int32)
-	# Argh, I get stuff like [[826 -22346],[3887 -19398]]. This entire file
-	# should be cleaned up after I'm done with pmat_core!
-
 	# If the original box extends outside [[0,0],n], this box may
 	# have empty ranges. If so, return a single-pixel box
 	if np.any(res[1]<=res[0]):
 		res = np.array([[0,0],[1,1]],dtype=np.int32)
 	nphi = int(np.abs(360./template.wcs.wcs.cdelt[0]))
 	return res, nphi
-
-#def build_pixbox(obox, n, margin=10):
-#	res = np.array([np.maximum(0,np.floor(obox[0]-margin)),np.minimum(n,np.floor(obox[1]+margin))]).astype(np.int32)
-#	# If the original box extends outside [[0,0],n], this box may
-#	# have empty ranges. If so, return a single-pixel box
-#	if np.any(res[1]<=res[0]): return np.array([[0,0],[1,1]],dtype=np.int32)
-#	else: return res
 
 def pmat_phase(dir, tod, map, az, dets, az0, daz):
 	core = get_core(tod.dtype)
@@ -701,39 +597,3 @@ def pmat_phase(dir, tod, map, az, dets, az0, daz):
 def pmat_plain(dir, tod, map, pix):
 	core = get_core(tod.dtype)
 	core.pmat_plain(dir, tod.T, map.T, pix.T)
-
-#class WorkMap:
-#	"""Class for handling copying between local workspace
-#	and global one. This is needed to handle angle wrapping."""
-#	def __init__(self, pbox, shape, wcs, margin=10):
-#		# Handle wrapping by having 3 pixel boxes:
-#		# left-wrap, normal, right-wrap. This assumes
-#		# a cylindrical projection
-#		pbox = np.array([pbox[0]-margin,pbox[1]+margin])
-#		nphi = np.abs(360./wcs.wcs.cdelt[0])
-#		subs = []
-#		for i in range(-1,2):
-#			sub = pbox.copy()
-#			sub[:,1] = np.minimum(shape[-1],np.maximum(0,sub[:,1] - i*nphi)).astype(np.int32)
-#			if np.product(sub[1]-sub[0]) > 0:
-#				subs.append(sub)
-#		if len(subs) == 0:
-#			# This tod is totally outside our area. Use a single-pixel
-#			# submap
-#			subs = np.array([[0,0],[1,1]])
-#		lens = [s[1,1]-s[1,0] for s in subs]
-#		offs = utils.cumsum(lens, endpoint=True)
-#		self.subs, self.offs = subs, offs
-#		self.shape = (shape[-2],offs[-1])
-#	def map2work(self, map, work=None):
-#		if work is None:
-#			work = enmap.zeros(map.shape[:-2]+self.shape, map.wcs, map.dtype)
-#		# Copy over each segment
-#		for i, sub in enumerate(self.subs):
-#			work[...,:,self.offs[i]:self.offs[i+1]] = map[...,sub[0,0]:sub[1,0],sub[0,1]:sub[1,1]]
-#		return work
-#	def work2map(self, work, map):
-#		# Copy over each segment
-#		for i, sub in enumerate(self.subs):
-#			map[...,sub[0,0]:sub[1,0],sub[0,1]:sub[1,1]] = work[...,:,self.offs[i]:self.offs[i+1]]
-#		return map

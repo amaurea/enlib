@@ -101,6 +101,7 @@ class Scan:
 		except AttributeError as e:
 			pass
 		res.cut       = res.cut[sel]
+		res.cut_noiseest = res.cut_noiseest[sel]
 		res.noise     = res.noise[sel]
 		return res, detslice, sampslice
 	def __getitem__(self, sel):
