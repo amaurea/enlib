@@ -43,6 +43,16 @@ class Tagdb:
 #    (though in practice there may be other stuff on the lines that needs cleaning...)
 # 2: An hdf file
 
+def read(fname, type=None, regex=None):
+	"""Read a Tagdb from in either the hdf or text format. This is
+	chosen automatically based on the file extension."""
+	if type is None:
+		if fname.endswith(".hdf"): type = "hdf"
+		else: type = "txt"
+	if type == "txt":   return read_txt(fname, regex)
+	elif type == "hdf": return read_hdf(fname)
+	else: raise ValueError("Unknown Tagdb file type: %s" % fname)
+
 def read_txt(fname, regex=None):
 	"""Read a Tagdb from text files. Only supports boolean tags."""
 	dbs = []
