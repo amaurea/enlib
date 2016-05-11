@@ -27,22 +27,33 @@ def listsplit(seq, elem):
 	ranges = zip([0]+[i+1 for i in inds],inds+[len(seq)])
 	return [seq[a:b] for a,b in ranges]
 
+def find(array, vals):
+	"""Return the indices of each value of vals in the given array."""
+	order = np.argsort(array)
+	return order[np.searchsorted(array, vals, sorter=order)]
+
 def common_vals(arrs):
-	"""Given a list of arrays, returns their common values.
+	"""Given a list of arrays, returns their intersection.
 	For example
 	  common_vals([[1,2,3,4,5],[2,4,6,8]]) -> [2,4]"""
-	inter = arrs[0]
+	res = arrs[0]
 	for arr in arrs[1:]:
-		inter = np.lib.arraysetops.intersect1d(inter,arr)
-	return inter
+		res = np.intersect1d(res,arr)
+	return res
+
+def union(arrs):
+	"""Given a list of arrays, returns their union."""
+	res = arrs[0]
+	for arr in arrs[1:]:
+		res = np.union1d(res,arr)
+	return res
 
 def common_inds(arrs):
 	"""Given a list of arrays, returns the indices into each of them of
 	their common elements. For example
 	  common_inds([[1,2,3,4,5],[2,4,6,8]]) -> [[1,3],[0,1]]"""
 	inter = common_vals(arrs)
-	# There should be a faster way of doing this
-	return [np.array([np.where(arr==i)[0][0] for i in inter]) for arr in arrs]
+	return [find(arr, vals) for arr in arrs]
 
 def dict_apply_listfun(dict, function):
 	"""Applies a function that transforms one list to another
@@ -873,7 +884,7 @@ def split_by_group(a, start, end):
 		res[-1] += c
 	return res
 
-def split_outside(a, sep, start, end):
+def split_outside(a, sep, start="([{", end=")]}"):
 	"""Split string a at occurences of separator sep, except when
 	it occurs inside matching groups of start and end characters."""
 	segments = split_by_group(a, start, end)
