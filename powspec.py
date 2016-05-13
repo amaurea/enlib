@@ -140,6 +140,12 @@ def read_camb_scalar(fname, inds=True, scale=True, expand=True, ncmb=3):
 	ps_lens = read_lensing_spectrum(fname, inds=inds, scale=scale, expand=expand, coloff=ncmb)
 	return ps_cmb, ps_lens
 
+def write_spectrum(fname, spec, inds=True, scale=True, expand="diag"):
+	if scale: spec = scale_spectrum(spec, -1)
+	if expand is not None: spec = sym_compress(spec, scheme=expand)
+	if inds: spec = np.concatenate([np.arange(spec.shape[-1])[None],spec],0)
+	np.savetxt(fname, spec.T, fmt="%15.7e")
+
 def spec2corr(spec, pos, iscos=False, symmetric=True):
 	"""Compute the correlation function sum(2l+1)/4pi Cl Pl(cos(theta))
 	corresponding to the given power spectrum at the given positions."""

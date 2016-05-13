@@ -7,29 +7,67 @@ import re, numpy as np, h5py, shlex
 from enlib import utils
 
 class Tagdb:
-	def __init__(self, data):
+	def __init__(self, data, sort=None):
 		"""Most basic constructor. Takes a dictionary
 		data[name][...,nid], which must contain the field "id"."""
 		self.data = {key:np.array(val) for key,val in data.iteritems()}
-	def query(self, query):
+		self.sort = sort
+	def query(self, query=""):
 		"""Query the database. The query takes the form
-		tag,tag,tag,..., where all tags must be satisfied for an id to
+		tag,tag,tag,...:sort[slice], where all tags must be satisfied for an id to
 		be returned. More general syntax is also available. For example,
 		(a+b>c)|foo&bar,cow. This follows standard python and numpy syntax,
 		except that , is treated as a lower-priority version of &."""
-		# Translate a,b,c into (a)&(b)&(c)
-		query = "(" + ")&(".join(utils.split_outside(query,",")) + ")"
+		# First split off any sorting field or slice
+		toks = utils.split_outside(query,":")
+		query, rest = toks[0], ":".join(toks[1:])
+		# Split into ,-separated fields. Fields starting with a "+"
+		# are taken to be tag markers, and are simply propagated to the
+		# resulting ids.
+		toks = utils.split_outside(query,",")
+		fields, extra = [], []
+		for tok in toks:
+			if tok.startswith("+"):
+				extra.append(tok[1:])
+			else:
+				# Normal field. Perform a few convenience transformations first.
+				if tok in self.data["id"]:
+					tok = "id=='%s'" % tok
+				elif tok.startswith("@"):
+					tok = "file_contains('%s',id)" % tok[1:]
+				fields.append(tok)
+		# Back to strings. For our query, we want numpy-compatible syntax,
+		# with low precedence for the comma stuff.
+		query = "(" + ")&(".join(fields) + ")"
+		extra = ",".join(extra)
 		# Evaluate the query. First build up the scope dict
 		scope = np.__dict__.copy()
 		scope.update(self.data)
-		# Generate virtual id tags
-		scope.update(build_id_tags(query, self.data["id"]))
 		# Extra functions
 		scope.update({
 			"hits": utils.point_in_polygon,
+			"file_contains": file_contains,
 			})
 		hits = eval(query, scope)
-		return self.data["id"][hits]
+		ids  = self.data["id"][hits]
+		# Split the rest into a sorting field and a slice
+		toks = rest.split("[")
+		if   len(toks) == 1: sort, fsel, dsel = toks[0], "", ""
+		elif len(toks) == 2: sort, fsel, dsel = toks[0], "", "["+toks[1]
+		else: sort, fsel, dsel = toks[0], "["+toks[1], "["+"[".join(toks[2:])
+		if self.sort and not sort: sort = self.sort
+		if sort:
+			# Evaluate sorting field
+			field = self.data[sort][hits]
+			field = eval("field" + fsel)
+			inds  = np.argsort(field)
+			# Apply sort
+			ids   = ids[inds]
+		# Finally apply the data slice
+		ids = eval("ids" + dsel)
+		# Append the unknown tags to the ids
+		if extra: ids = np.char.add(ids, ":"+extra)
+		return ids
 	def __add__(self, other):
 		"""Produce a new tagdb which contains the union of the
 		tag info from each."""
@@ -71,16 +109,6 @@ def read_hdf(fname):
 		for key in hfile:
 			data[key] = hfile[key].value
 	return Tagdb(data)
-
-def build_id_tags(query, ids):
-	"""Given a query, look for ids in that query, and
-	return a dictionary of tags matching those ids,
-	each selecting only the entry with that id."""
-	id_tags = {}
-	for field in re.findall(r"[\w\.]+",query):
-		if field in ids:
-			id_tags[field] = field == ids
-	return id_tags
 
 def merge(tagdbs, default=np.NaN, typewise={bool:False, int:-1}):
 	"""Merge two or more tagdbs into a total one, which will have the
@@ -141,3 +169,7 @@ def parse_tagfile_idlist(fname, regex=None):
 				line = line.split()[0]
 			res.append(line)
 	return res
+
+def file_contains(fname, ids):
+	lines = [line.split()[0] for line in open(fname,"r") if not line.startswith("#")]
+	return utils.contains(ids, lines)

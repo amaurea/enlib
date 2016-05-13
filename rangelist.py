@@ -52,7 +52,10 @@ class Rangelist:
 	def ones(nsamp):
 		return Rangelist(np.array([[0,nsamp]],dtype=int),n=nsamp,copy=False)
 	def sum(self): return np.sum(self.ranges[:,1]-self.ranges[:,0])
-	def __len__(self): return self.n
+	# In numpy 1.11+, arrays of Rangelists become hard to construct if
+	# __len__ is defined, as numpy tries to iterate through the Rangelist
+	# as a sequence.
+	#def __len__(self): return self.n
 	def __repr__(self): return "Rangelist("+str(self.ranges)+",n="+repr(self.n)+")"
 	def __str__(self): return repr(self)
 	def copy(self): return Rangelist(self.ranges, self.n, copy=True)
@@ -96,6 +99,8 @@ class Multirange:
 			ncum = cumsum(neach,True)
 			self.data = np.asarray([Rangelist(flat[a:b],n) for a,b in zip(ncum[:-1],ncum[1:])])
 		else:
+			# List or array input. Constructing directly via array constructor
+			# is suddenly broken - it tries to iterate through every index
 			if copy: rangelists = np.array(rangelists)
 			self.data = np.asarray(rangelists)
 	def __getitem__(self, sel):

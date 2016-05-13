@@ -303,9 +303,10 @@ def _arghelper(map, func, unit):
 	if unit == "coord": res = pix2sky(map.shape, map.wcs, res.T).T
 	return res
 
-def rand_map(shape, wcs, cov, scalar=False):
+def rand_map(shape, wcs, cov, scalar=False, seed=None):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
 	the provided power spectrum."""
+	if seed is not None: np.random.seed(seed)
 	if scalar:
 		return ifft(rand_gauss_iso_harm(shape, wcs, cov)).real
 	else:

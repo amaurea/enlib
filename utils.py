@@ -32,6 +32,17 @@ def find(array, vals):
 	order = np.argsort(array)
 	return order[np.searchsorted(array, vals, sorter=order)]
 
+def contains(array, vals):
+	"""Given an array[n], returns a boolean res[n], which is True
+	for any element in array that is also in vals, and False otherwise."""
+	array = np.asarray(array)
+	vals  = np.sort(vals)
+	inds  = np.searchsorted(vals, array)
+	# If a value would be inserted after the end, it wasn't
+	# present in the original array.
+	inds[inds>=len(vals)] = 0
+	return vals[inds] == array
+
 def common_vals(arrs):
 	"""Given a list of arrays, returns their intersection.
 	For example
