@@ -110,7 +110,7 @@ def read_hdf(fname):
 			data[key] = hfile[key].value
 	return Tagdb(data)
 
-def merge(tagdbs, default=np.NaN, typewise={bool:False, int:-1}):
+def merge(tagdbs, default={None:np.NaN, bool:False, int:-1}, combiners={None:lambda a,b:b, bool:np.bitwise_or}):
 	"""Merge two or more tagdbs into a total one, which will have the
 	union of the ids. Tags that are missing from some of them will
 	be filled with a default value."""
@@ -119,6 +119,11 @@ def merge(tagdbs, default=np.NaN, typewise={bool:False, int:-1}):
 	tot_ids = utils.union([db.data["id"] for db in tagdbs])
 	inds = [utils.find(tot_ids, db.data["id"]) for db in tagdbs]
 	nid  = len(tot_ids)
+	def dget(ddict,dtype):
+		for type_category in ddict:
+			if np.issubdtype(dtype, type_category):
+				return ddict[type_category]
+		return ddict[None]
 	data_tot = {}
 	for di, db in enumerate(tagdbs):
 		for key, val in db.data.iteritems():
@@ -126,12 +131,10 @@ def merge(tagdbs, default=np.NaN, typewise={bool:False, int:-1}):
 				# This results in default values of False for bool,
 				# NaN for floats, "nan" for strings and -lots for int.
 				oval = np.zeros(val.shape[:-1]+(nid,),val.dtype)
-				oval[:] = default
-				for type_category in typewise:
-					if np.issubdtype(val.dtype, type_category):
-						oval[:] = typewise[type_category]
+				oval[:] = dget(default, val.dtype)
 				data_tot[key] = oval
-			data_tot[key][...,inds[di]] = val
+			combiner = dget(combiners, val.dtype)
+			data_tot[key][...,inds[di]] = combiner(data_tot[key][...,inds[di]], val)
 	return Tagdb(data_tot)
 
 def parse_tagfile_top(fname):
