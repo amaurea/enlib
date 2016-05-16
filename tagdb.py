@@ -3,22 +3,44 @@ with a set of ids, and then select ids based on those tags and values.
 For example query("deep56,night,ar2,in(bounds,Moon)") woult return a
 set of ids with the tags deep56, night and ar2, and where th Moon[2]
 array is in the polygon specified by the bounds [:,2] array."""
-import re, numpy as np, h5py, shlex
+import re, numpy as np, h5py, shlex, copy, warnings
 from enlib import utils
 
 class Tagdb:
-	def __init__(self, data, sort=None):
+	def __init__(self, data=None, sort="id"):
 		"""Most basic constructor. Takes a dictionary
 		data[name][...,nid], which must contain the field "id"."""
-		self.data = {key:np.array(val) for key,val in data.iteritems()}
-		self.sort = sort
-	def query(self, query=""):
+		if data is None:
+			self.data = {"id":np.zeros(0,dtype='S5')}
+		else:
+			self.data = {key:np.array(val) for key,val in data.iteritems()}
+			assert "id" in self.data, "Id field missing"
+			if self.data["id"].size == 0: self.data["id"] = np.zeros(0,dtype='S5')
+		self.sort  = sort
+	def get_funcs(self):
+		return {"file_contains": file_contains}
+	def copy(self):
+		return copy.deepcopy(self)
+	@property
+	def ids(self): return self.data["id"]
+	def __len__(self): return len(self.ids)
+	def __getitem__(self, query=""):
+		return self.select(self.query(query))
+	def select(self, ids):
+		"""Return a tagdb which only contains the selected ids."""
+		inds = utils.find(self.ids, ids)
+		odata = {key:val[...,inds] for key, val in self.data.iteritems()}
+		res = self.copy()
+		res.data = odata
+		return res
+	def query(self, query=None):
 		"""Query the database. The query takes the form
 		tag,tag,tag,...:sort[slice], where all tags must be satisfied for an id to
 		be returned. More general syntax is also available. For example,
 		(a+b>c)|foo&bar,cow. This follows standard python and numpy syntax,
 		except that , is treated as a lower-priority version of &."""
 		# First split off any sorting field or slice
+		if query is None: query = ""
 		toks = utils.split_outside(query,":")
 		query, rest = toks[0], ":".join(toks[1:])
 		# Split into ,-separated fields. Fields starting with a "+"
@@ -44,11 +66,10 @@ class Tagdb:
 		scope = np.__dict__.copy()
 		scope.update(self.data)
 		# Extra functions
-		scope.update({
-			"hits": utils.point_in_polygon,
-			"file_contains": file_contains,
-			})
-		hits = eval(query, scope)
+		scope.update(self.get_funcs())
+		with utils.nowarn():
+			hits = eval(query, scope)
+		foo = self.ids == '1452716782.1452746181.ar3'
 		ids  = self.data["id"][hits]
 		# Split the rest into a sorting field and a slice
 		toks = rest.split("[")
@@ -72,6 +93,11 @@ class Tagdb:
 		"""Produce a new tagdb which contains the union of the
 		tag info from each."""
 		return merge([self,other])
+	def write(self, fname, type=None):
+		write(fname, self, type=type)
+	@staticmethod
+	def read(fname, type=None, matchfun=None):
+		return read(fname, type=type, matchfun=matchfun)
 
 # We want a way to build a dtype from file. Two main ways will be handy:
 # 1: The tag fileset.
@@ -81,21 +107,21 @@ class Tagdb:
 #    (though in practice there may be other stuff on the lines that needs cleaning...)
 # 2: An hdf file
 
-def read(fname, type=None, regex=None):
+def read(fname, type=None, matchfun=None):
 	"""Read a Tagdb from in either the hdf or text format. This is
 	chosen automatically based on the file extension."""
 	if type is None:
 		if fname.endswith(".hdf"): type = "hdf"
 		else: type = "txt"
-	if type == "txt":   return read_txt(fname, regex)
+	if type == "txt":   return read_txt(fname, matchfun)
 	elif type == "hdf": return read_hdf(fname)
 	else: raise ValueError("Unknown Tagdb file type: %s" % fname)
 
-def read_txt(fname, regex=None):
+def read_txt(fname, matchfun=None):
 	"""Read a Tagdb from text files. Only supports boolean tags."""
 	dbs = []
 	for subfile, tags in parse_tagfile_top(fname):
-		ids = parse_tagfile_idlist(subfile, regex)
+		ids = parse_tagfile_idlist(subfile, matchfun)
 		data = {"id":ids}
 		for tag in tags:
 			data[tag] = np.full(len(ids), True, dtype=bool)
@@ -110,31 +136,52 @@ def read_hdf(fname):
 			data[key] = hfile[key].value
 	return Tagdb(data)
 
-def merge(tagdbs, default={None:np.NaN, bool:False, int:-1}, combiners={None:lambda a,b:b, bool:np.bitwise_or}):
+def write(fname, tagdb, type=None):
+	"""Write a Tagdb in either the hdf or text format. This is
+	chosen automatically based on the file extension."""
+	if type is None:
+		if fname.endswith(".hdf"): type = "hdf"
+		else: type = "txt"
+	if type == "txt":   raise NotImplementedError
+	elif type == "hdf": return write_hdf(fname, tagdb)
+	else: raise ValueError("Unknown Tagdb file type: %s" % fname)
+
+def write_hdf(fname, tagdb):
+	"""Write a Tagdb to an hdf file."""
+	with h5py.File(fname, "w") as hfile:
+		for key in tagdb.data:
+			hfile[key] = tagdb.data[key]
+
+def merge(tagdbs):
 	"""Merge two or more tagdbs into a total one, which will have the
-	union of the ids. Tags that are missing from some of them will
-	be filled with a default value."""
+	union of the ids."""
 	# Generate the union of ids, and the index of each
 	# tagset into it.
 	tot_ids = utils.union([db.data["id"] for db in tagdbs])
 	inds = [utils.find(tot_ids, db.data["id"]) for db in tagdbs]
 	nid  = len(tot_ids)
-	def dget(ddict,dtype):
-		for type_category in ddict:
-			if np.issubdtype(dtype, type_category):
-				return ddict[type_category]
-		return ddict[None]
 	data_tot = {}
 	for di, db in enumerate(tagdbs):
 		for key, val in db.data.iteritems():
 			if key not in data_tot:
-				# This results in default values of False for bool,
-				# NaN for floats, "nan" for strings and -lots for int.
+				# Hard to find an appropriate default value for
+				# all types. We use false for bool to let tags
+				# accumulate, -1 as probably the most common
+				# placeholder value for ints, and NaN for strings
+				# and floats.
 				oval = np.zeros(val.shape[:-1]+(nid,),val.dtype)
-				oval[:] = dget(default, val.dtype)
+				if oval.dtype == bool:
+					oval[:] = False
+				elif np.issubdtype(oval.dtype, np.integer):
+					oval[:] = -1
+				else:
+					oval[:] = np.NaN
+				if oval.dtype == bool: oval[:] = False
 				data_tot[key] = oval
-			combiner = dget(combiners, val.dtype)
-			data_tot[key][...,inds[di]] = combiner(data_tot[key][...,inds[di]], val)
+			# Boolean flags combine OR-wise, to let us mention the same
+			# id in multiple files
+			if val.dtype == bool: data_tot[key][...,inds[di]] |= val
+			else: data_tot[key][...,inds[di]] = val
 	return Tagdb(data_tot)
 
 def parse_tagfile_top(fname):
@@ -156,21 +203,20 @@ def parse_tagfile_top(fname):
 				res.append((toks[0].format(**vars), set(toks[1:])))
 	return res
 
-def parse_tagfile_idlist(fname, regex=None):
+def parse_tagfile_idlist(fname, matchfun=None):
 	"""Reads a file containing an id per line, and returns the ids as a list.
-	If regex is specified, it should be a capturing regular expression whose
-	first capture is to be used as the id."""
+	If regex is specified, it should be function returning an id or none (to
+	skip)"""
 	res = []
 	with open(fname,"r") as f:
 		for line in f:
 			line = line.rstrip()
 			if len(line) < 1 or line[0] == "#": continue
-			if regex is not None:
-				m = re.match(regex, line)
-				if m: line = m.group(1)
+			if matchfun is not None:
+				id = matchfun(line)
+				if id: res.append(id)
 			else:
-				line = line.split()[0]
-			res.append(line)
+				res.append(line.split()[0])
 	return res
 
 def file_contains(fname, ids):
