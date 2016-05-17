@@ -78,9 +78,13 @@ def transform_meta(transfun, coords, fields=["ang","mag"], offset=5e-7):
 	# Transform all the coordinates. We assume we aren't super-close to the poles
 	# either before or after the transformation.
 	ocoords = np.zeros((ntrans,2)+coords.shape[1:])
+	ocoords = None
 	for i in range(ntrans):
 		# Transpose to get broadcasting right
-		ocoords[i] = transfun((coords.T + offsets[i].T).T)
+		a = transfun((coords.T + offsets[i].T).T)
+		if ocoords is None:
+			ocoords = np.zeros((ntrans,)+a.shape, a.dtype)
+		ocoords[i] = a
 
 	class Result: pass
 	res = Result()
@@ -130,8 +134,11 @@ def transform_raw(from_sys, to_sys, coords, time=None, site=None):
 		coords = np.array(coords)[:2]
 	else:
 		time   = np.asarray(time)
-		coords = np.array(coords)[:2]+time[None]*0
-		time    = time + coords[0]*0
+		coords = np.asarray(coords)
+		# Broadasting. A bit complicated because we want to handle
+		# both time needing to broadcast and coords needing to
+		time   = time + np.zeros(coords[0].shape,time.dtype)
+		coords = (coords.T + np.zeros(time.shape,coords.dtype)[None].T).T
 	# flatten, so the rest of the code can assume that coordinates are [2,N]
 	# and time is [N]
 	oshape = coords.shape

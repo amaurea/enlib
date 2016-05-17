@@ -74,10 +74,10 @@ class FormatDB(Basedb):
 					selected[-1] = not selected[-1]
 				else:
 					selected.append(("{%s}"%name[1:]).format(**info) == format[0])
-			elif len(format) > 1 and format[1] == "=":
+			elif len(format) == 0 or len(format[0]) == 0:
 				# Handle variable assignment. Avoids repeating the same long paths over and over again
-				assert len(format) == 2, "FormatDB variable assignment has format key = val"
-				info[name] = format[1]
+				vname, vval = re.split(r"\s*=\s*", name)
+				info[vname] = vval
 			elif all(selected):
 				tmp = [fmt.format(**info) for fmt in rule["format"]]
 				res[rule["name"]] = tmp if multi else tmp[0]

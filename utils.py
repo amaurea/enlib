@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, os, errno, scipy.optimize, time
+import numpy as np, scipy.ndimage, os, errno, scipy.optimize, time, datetime, warnings
 
 degree = np.pi/180
 arcmin = degree/60
@@ -52,19 +52,19 @@ def common_vals(arrs):
 		res = np.intersect1d(res,arr)
 	return res
 
+def common_inds(arrs):
+	"""Given a list of arrays, returns the indices into each of them of
+	their common elements. For example
+	  common_inds([[1,2,3,4,5],[2,4,6,8]]) -> [[1,3],[0,1]]"""
+	vals = common_vals(arrs)
+	return [find(arr, vals) for arr in arrs]
+
 def union(arrs):
 	"""Given a list of arrays, returns their union."""
 	res = arrs[0]
 	for arr in arrs[1:]:
 		res = np.union1d(res,arr)
 	return res
-
-def common_inds(arrs):
-	"""Given a list of arrays, returns the indices into each of them of
-	their common elements. For example
-	  common_inds([[1,2,3,4,5],[2,4,6,8]]) -> [[1,3],[0,1]]"""
-	inter = common_vals(arrs)
-	return [find(arr, vals) for arr in arrs]
 
 def dict_apply_listfun(dict, function):
 	"""Applies a function that transforms one list to another
@@ -258,6 +258,15 @@ class flatview:
 		if np.may_share_memory(self.array, self.flat): return
 		# We need to copy back out
 		self.array[:] = partial_expand(self.flat, self.array.shape, self.axes, pos=self.pos)
+
+class nowarn:
+	"""Use in with block to suppress warnings inside that block."""
+	def __enter__(self):
+		self.filters = list(warnings.filters)
+		warnings.filterwarnings("ignore")
+		return self
+	def __exit__(self, type, value, traceback):
+		warnings.filters = self.filters
 
 def dedup(a):
 	"""Removes consecutive equal values from a 1d array, returning the result.
@@ -755,7 +764,10 @@ def allreduce(a, comm):
 def allgather(a, comm):
 	a   = np.asarray(a)
 	res = np.zeros((comm.size,)+a.shape,dtype=a.dtype)
-	comm.Allgather(a, res)
+	if np.issubdtype(a.dtype, str):
+		comm.Allgather(a.view(dtype=np.uint8), res.view(dtype=np.uint8))
+	else:
+		comm.Allgather(a, res)
 	return res
 
 def allgatherv(a, comm, axis=0):
@@ -766,6 +778,11 @@ def allgatherv(a, comm, axis=0):
 	[[1,2],[3,4],[5,6]] for both tasks."""
 	a  = np.asarray(a)
 	fa = moveaxis(a, axis, 0)
+	# mpi4py doesn't handle all types. But why not just do this
+	# for everything?
+	must_fix = np.issubdtype(a.dtype, str) or a.dtype == bool
+	if must_fix:
+		fa = fa.view(dtype=np.uint8)
 	ra = fa.reshape(fa.shape[0],-1) if fa.size > 0 else fa.reshape(0,np.product(fa.shape[1:]))
 	N  = ra.shape[1]
 	n  = allgather([len(ra)],comm)
@@ -773,6 +790,9 @@ def allgatherv(a, comm, axis=0):
 	rb = np.zeros((np.sum(n),N),dtype=ra.dtype)
 	comm.Allgatherv(ra, (rb, (n*N,o*N)))
 	fb = rb.reshape((rb.shape[0],)+fa.shape[1:])
+	# Restore original data type
+	if must_fix:
+		fb = fb.view(dtype=a.dtype)
 	return moveaxis(fb, 0, axis)
 
 def uncat(a, lens):
@@ -810,7 +830,7 @@ def angdist(a, b, zenith=True, lim=1e-7, axis=0):
 	ra = ang2rect(moveaxis(a, axis, 0), zenith, axis=0)
 	rb = ang2rect(moveaxis(b, axis, 0), zenith, axis=0)
 	c = np.sum(ra.T*rb.T,-1).T
-	res = np.zeros(c.shape)
+	res = np.full(c.shape, np.NaN)
 	res[c>=1-lim] = 0
 	res[c<=-(1-lim)] = np.pi
 	res[(c>-(1-lim))&(c<1-lim)] = np.arccos(c[(c>-(1-lim))&(c<1-lim)])
@@ -958,7 +978,7 @@ def point_in_polygon(points, polys):
 	polys  = np.asarray(polys) +0.0
 	npre   = max(points.ndim-1,polys.ndim-2)
 	nvert  = polys.shape[-2]
-	dirs   = np.zeros(max(polys.shape[0],points.shape[0]), dtype=np.int32)
+	dirs   = np.zeros(max(polys.shape[0],points.shape[0]) if npre else (), dtype=np.int32)
 	def direction(a,b): return np.sign(a[...,0]*b[...,1]-a[...,1]*b[...,0]).astype(np.int32)
 	for i in range(nvert):
 		v1 = polys[...,i-1,:]
@@ -966,3 +986,19 @@ def point_in_polygon(points, polys):
 		dirs += direction(v2-v1, points-v1)
 	inside = np.abs(dirs) == nvert
 	return inside
+
+def block_mean_filter(a, width):
+	"""Perform a binwise smoothing of a, where all samples
+	in each bin of the given width are replaced by the mean
+	of the samples in that bin."""
+	a      = np.asarray(a)
+	width  = int(width)
+	nblock = (a.size+width-1)/width
+	work   = np.zeros((2,nblock*width),dtype=a.dtype)
+	work[:,:a.size] = [a,a*0+1]
+	work   = work.reshape(2,-1,width)
+	work[0]= (np.sum(work[0]*work[1],-1)/np.sum(work[1],-1))[:,None]
+	return work[0].reshape(-1)[:a.size]
+
+def ctime2date(timestamp, tzone=0, fmt="%Y-%m-%d"):
+	return datetime.datetime.utcfromtimestamp(timestamp+tzone*3600).strftime(fmt)
