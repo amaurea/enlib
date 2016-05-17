@@ -1,7 +1,7 @@
 """This module provides functions for taking into account the curvature of the
 full sky."""
 import numpy as np
-from enlib import sharp, enmap, powspec, wcs, utils
+from enlib import sharp, enmap, powspec, wcs as enwcs, utils
 
 def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, method="auto"):
 	"""Generates a CMB realization with the given power spectrum for an enmap
@@ -132,7 +132,6 @@ def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=Fa
 			tflat[:,1:,:] = sht.alm2map(alm_full[:,1:,:], tflat[:,1:,:], spin=spin)
 
 	for mslice, tslice in zip(mslices, tslices):
-		print mslice, tslice
 		map_full[mslice] = tmap[tslice]
 	return map
 
@@ -205,14 +204,22 @@ def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	decrange = np.array([np.max(pos[0]),np.min(pos[0])])
 	decrange = (decrange-np.mean(decrange))*1.1+np.mean(decrange)
 	decrange = np.array([min(np.pi/2,decrange[0]),max(-np.pi/2,decrange[1])])
+	decrange /= utils.degree
+	wdec = np.abs(decrange[1]-decrange[0])
 	# The shortest wavelength in the alm is about 2pi/lmax. We need at least
 	# two samples per mode.
-	step = np.pi/lmax/oversample
+	res = 180./lmax/oversample
 	# Set up an intermediate coordinate system for the SHT. We will use
 	# CAR coordinates conformal on the quator.
-	tbox = np.array([[decrange[0],-np.pi],[decrange[1],np.pi]])
-	shape, wcs = enmap.geometry(pos=tbox, res=step, proj="car")
-	tmap = enmap.zeros(dims+shape, wcs, dtype=dtype)
+	nx,ny = int(360/res), int(wdec/res)
+	wcs   = enwcs.WCS(naxis=2)
+	wcs.wcs.crval = [0,np.mean(decrange)]
+	wcs.wcs.cdelt = [360./nx,wdec/ny]
+	# +1 in dec to include end points here. We do this to avoid wrapping from
+	# the south pole to the north pole for full-sky maps
+	wcs.wcs.crpix = [nx/2,ny/2+1]
+	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
+	tmap = enmap.zeros(dims+(ny+1,nx),wcs)
 	return tmap
 
 def map2minfo(m):

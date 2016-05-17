@@ -40,7 +40,7 @@ def transform(from_sys, to_sys, coords, time=55500, site=default_site, pol=None,
 	if pol is None and mag is None:
 		if len(coords) > 2: fields.append("ang")
 		if len(coords) > 3: fields.append("mag")
-	meta = transform_meta(transfunc, coords, fields=fields)
+	meta = transform_meta(transfunc, coords[:2], fields=fields)
 
 	# Fix the polarization convention. We use healpix
 	if "ang" in fields:
@@ -158,7 +158,7 @@ def transform_astropy(from_sys, to_sys, coords):
 	from_sys, to_sys = getsys(from_sys), getsys(to_sys)
 	if from_sys == to_sys: return coords
 	unit   = u.radian
-	coords = from_sys(coords[0], coords[1], unit=(unit,unit))
+	coords = c.SkyCoord(coords[0], coords[1], frame=from_sys, unit=unit)
 	coords = coords.transform_to(to_sys)
 	names  = coord_names[to_sys]
 	return np.asarray([
@@ -319,9 +319,13 @@ def interpol_pos(from_sys, to_sys, name_or_pos, mjd, site=None, dt=10):
 
 def make_mapping(dict): return {value:key for key in dict for value in dict[key]}
 str2sys = make_mapping({
-	c.Galactic: ["gal", "galactic"],
-	c.ICRS:     ["equ", "equatorial", "cel", "celestial", "icrs"],
-	c.AltAz:    ["altaz", "azel", "hor", "horizontal"]})
+	"galactic": ["gal", "galactic"],
+	"icrs":     ["equ", "equatorial", "cel", "celestial", "icrs"],
+	"altaz":    ["altaz", "azel", "hor", "horizontal"],
+	"barycentrictrueecliptic": ["ecl","ecliptic","barycentrictrueecliptic"]})
 coord_names = {
-	c.Galactic: ["l","b"],
-	c.ICRS: ["ra","dec"]}
+	"galactic": ["l","b"],
+	"icrs": ["ra","dec"],
+	"altaz":["az","alt"],
+	"barycentrictrueecliptic":["lon","lat"]
+	}

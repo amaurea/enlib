@@ -263,7 +263,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 		# Put the angle cut as far away from the map as possible.
 		# We do this by putting the reference point in the middle
 		# of the map.
-		wrefpix = np.array(wshape)/2
+		wrefpix = np.array(wshape)/2.
 		if corner: wrefpix += 0.5
 		for i in range(len(wpix)):
 			wn = np.abs(360./wcs.wcs.cdelt[i])
@@ -899,7 +899,7 @@ def write_fits(fname, emap):
 	# the map. So make a copy.
 	emap = emap.copy()
 	# Get our basic wcs header
-	header = emap.wcs.to_header()
+	header = emap.wcs.to_header(relax=True)
 	# Add our map headers
 	header['NAXIS'] = emap.ndim
 	for i,n in enumerate(emap.shape[::-1]):
