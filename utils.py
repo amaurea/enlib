@@ -301,9 +301,10 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0, prefilte
 	if inds_orig_nd == 1: res = res[...,0]
 	return res
 
-def interpol_prefilter(a, npre, order=3, inplace=False):
+def interpol_prefilter(a, npre=None, order=3, inplace=False):
 	a = np.asanyarray(a)
 	if not inplace: a = a.copy()
+	if npre is None: npre = a.ndim - 2
 	with flatview(a, range(npre, a.ndim), "rw") as aflat:
 		for i in range(len(aflat)):
 			aflat[i] = scipy.ndimage.spline_filter(aflat[i], order=order)

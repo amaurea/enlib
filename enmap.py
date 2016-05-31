@@ -77,7 +77,7 @@ class ndmap(np.ndarray):
 	def lmap(self, oversample=1): return lmap(self.shape, self.wcs, oversample=oversample)
 	def area(self): return area(self.shape, self.wcs)
 	def pixsize(self): return self.area()/self.npix
-	def extent(self): return extent(self.shape, self.wcs)
+	def extent(self, method="intermediate"): return extent(self.shape, self.wcs, method=method)
 	@property
 	def preflat(self):
 		"""Returns a view of the map with the non-pixel dimensions flattened."""
@@ -85,9 +85,9 @@ class ndmap(np.ndarray):
 	@property
 	def npix(self): return np.product(self.shape[-2:])
 	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode, cval=0)
-	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord"): return at(self, pos, order, mode=mode, cval=0, unit=unit)
+	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
-	def apod(self, width): return apod(self, width)
+	def apod(self, width, profile="cos", fill="zero"): return apod(self, width, profile=profile, fill=fill)
 	def stamps(self, pos, shape, aslist=False): return stamps(self, pos, shape, aslist=aslist)
 	@property
 	def plain(self): return ndmap(self, enlib.wcs.WCS(naxis=2))
@@ -239,7 +239,7 @@ def pix2sky(shape, wcs, pix, safe=True, corner=False):
 	return sky coordinates in the same ordering."""
 	pix = np.asarray(pix).astype(float)
 	if corner: pix -= 0.5
-	pflat = pix.reshape(pix.shape[0], np.prod(pix.shape[1:]))
+	pflat = pix.reshape(pix.shape[0], -1)
 	coords = np.asarray(wcs.wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*get_unit(wcs)
 	coords = coords.reshape(pix.shape)
 	if safe and not enlib.wcs.is_plain(wcs):
@@ -281,9 +281,9 @@ def project(map, shape, wcs, order=3, mode="nearest", cval=0.0):
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval)
 	return ndmap(pmap, wcs)
 
-def at(map, pos, order=3, mode="constant", cval=0.0, unit="coord"):
+def at(map, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True):
 	if unit != "pix": pos = sky2pix(map.shape, map.wcs, pos)
-	return enlib.utils.interpol(map, pos, order=order, mode=mode, cval=cval)
+	return enlib.utils.interpol(map, pos, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 
 def argmax(map, unit="coord"):
 	"""Return the coordinates of the maximum value in the specified map.
@@ -329,6 +329,19 @@ def rand_gauss_iso_harm(shape, wcs, cov):
 	data = map_mul(spec2flat(shape, wcs, cov, 0.5, mode="constant"), rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
 
+def extent(shape, wcs, method="intermediate"):
+	if method == "intermediate":
+		return extent_intermediate(shape, wcs)
+	elif method == "subgrid":
+		return extent_subgrid(shape, wcs)
+	else:
+		raise ValueError("Unrecognized extent method '%s'" % method)
+
+def extent_intermediate(shape, wcs):
+	"""Estimate the flat-sky extent of the map as the WCS
+	intermediate coordinate extent."""
+	return wcs.wcs.cdelt[::-1]*shape[-2:]*enlib.utils.degree
+
 # Approximations to physical box size and area are needed
 # for transforming to l-space. We can do this by dividing
 # our map into a set of rectangles and computing the
@@ -345,7 +358,7 @@ def rand_gauss_iso_harm(shape, wcs, cov):
 # To construct the coarser system, slicing won't do, as it
 # shaves off some of our area. Instead, we must modify
 # cdelt to match our new pixels: cdelt /= nnew/nold
-def extent(shape, wcs, nsub=0x10):
+def extent_subgrid(shape, wcs, nsub=0x10):
 	"""Returns an estimate of the "physical" extent of the
 	patch given by shape and wcs as [height,width] in
 	radians. That is, if the patch were on a sphere with
@@ -787,19 +800,24 @@ def _widen(map,n):
 	and the last two to give the map a total dimensionality of n."""
 	return map[(slice(None),) + (None,)*(n-3) + (slice(None),slice(None))]
 
-def apod(m, width, profile="cos"):
-	width = np.minimum(np.zeros(2)+width,m.shape[-2:])
+def apod(m, width, profile="cos", fill="zero"):
+	width = np.minimum(np.zeros(2)+width,m.shape[-2:]).astype(np.int32)
 	if profile == "cos":
-		a = [0.5*(1-np.linspace(0,np.pi,w)) for w in width]
+		a = [0.5*(1-np.cos(np.linspace(0,np.pi,w))) for w in width]
 	else:
 		raise ValueError("Unknown apodization profile %s" % profile)
 	res = m.copy()
+	if fill == "mean":
+		offset = np.asarray(np.mean(res,(-2,-1)))[...,None,None]
+		res -= offset
 	if width[0] > 0:
 		res[...,:width[0],:] *= a[0][:,None]
 		res[...,-width[0]:,:] *= a[0][::-1,None]
 	if width[1] > 0:
 		res[...,:,:width[1]] *= a[1][None,:]
 		res[...,:,-width[1]:]  *= a[1][None,::-1]
+	if fill == "mean":
+		res += offset
 	return res
 
 def radial_average(map, center=[0,0], step=1.0):
@@ -855,7 +873,7 @@ def stamps(map, pos, shape, aslist=False):
 # File I/O #
 ############
 
-def write_map(fname, emap, fmt=None):
+def write_map(fname, emap, fmt=None, extra={}):
 	"""Writes an enmap to file. If fmt is not passed,
 	the file type is inferred from the file extension, and can
 	be either fits or hdf. This can be overriden by
@@ -866,9 +884,9 @@ def write_map(fname, emap, fmt=None):
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
-		write_fits(fname, emap)
+		write_fits(fname, emap, extra=extra)
 	elif fmt == "hdf":
-		write_hdf(fname, emap)
+		write_hdf(fname, emap, extra=extra)
 	else:
 		raise ValueError
 
@@ -893,7 +911,7 @@ def read_map(fname, fmt=None):
 		res = eval("res"+":".join(toks[1:]))
 	return res
 
-def write_fits(fname, emap):
+def write_fits(fname, emap, extra={}):
 	"""Write an enmap to a fits file."""
 	# The fits write routines may attempt to modify
 	# the map. So make a copy.
@@ -904,6 +922,8 @@ def write_fits(fname, emap):
 	header['NAXIS'] = emap.ndim
 	for i,n in enumerate(emap.shape[::-1]):
 		header['NAXIS%d'%(i+1)] = n
+	for key, val in extra.items():
+		header[key] = val
 	hdus   = astropy.io.fits.HDUList([astropy.io.fits.PrimaryHDU(emap, header)])
 	with warnings.catch_warnings():
 		warnings.filterwarnings('ignore')
@@ -924,7 +944,7 @@ def read_fits(fname, hdu=0):
 		res = res.byteswap().newbyteorder()
 	return res
 
-def write_hdf(fname, emap):
+def write_hdf(fname, emap, extra={}):
 	"""Write an enmap as an hdf file, preserving all
 	the WCS metadata."""
 	with h5py.File(fname, "w") as hfile:
@@ -932,6 +952,8 @@ def write_hdf(fname, emap):
 		header = emap.wcs.to_header()
 		for key in header:
 			hfile["wcs/"+key] = header[key]
+		for key, val in extra.items():
+			hfile[key] = val
 
 def read_hdf(fname):
 	"""Read an enmap from the specified hdf file. Two formats
