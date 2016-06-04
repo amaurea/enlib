@@ -134,15 +134,15 @@ def repeat_filler(d, n):
 	dtot = np.concatenate([d]*nmul)
 	return dtot[:n]
 
-def deslope(d, w=1, inplace=False):
+def deslope(d, w=1, inplace=False, axis=-1):
 	"""Remove a slope and mean from d, matching up the beginning
 	and end of d. The w parameter controls the number of samples
 	from each end of d that is used to determine the value to
 	match up."""
 	if not inplace: d = np.array(d)
-	dflat = d.reshape(np.prod(d.shape[:-1]),d.shape[-1])
-	for di in dflat:
-		di -= np.arange(di.size)*(np.mean(di[-w:])-np.mean(di[:w]))/(di.size-1)+np.mean(di[:w])
+	with flatview(d, axes=[axis]) as dflat:
+		for di in dflat:
+			di -= np.arange(di.size)*(np.mean(di[-w:])-np.mean(di[:w]))/(di.size-1)+np.mean(di[:w])
 	return d
 
 def ctime2mjd(ctime):
@@ -784,7 +784,7 @@ def allgatherv(a, comm, axis=0):
 	must_fix = np.issubdtype(a.dtype, str) or a.dtype == bool
 	if must_fix:
 		fa = fa.view(dtype=np.uint8)
-	ra = fa.reshape(fa.shape[0],-1) if fa.size > 0 else fa.reshape(0,np.product(fa.shape[1:]))
+	ra = fa.reshape(fa.shape[0],-1) if fa.size > 0 else fa.reshape(0,np.product(fa.shape[1:],dtype=int))
 	N  = ra.shape[1]
 	n  = allgather([len(ra)],comm)
 	o  = cumsum(n)
