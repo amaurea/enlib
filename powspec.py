@@ -30,6 +30,21 @@ def sym_expand(mat, which=None, ncomp=None, scheme=None, axis=0):
 			res[w[1],w[0]] = m[i]
 	return np.rollaxis(np.rollaxis(res, 1, axis), 0, axis)
 
+def sym_expand_camb_full_lens(a):
+	# This complicated ordering doesn't fit into any of our expansion patterns,
+	# so do it manually. The output ordering is [phi,T,E,B], as this lets us
+	# keep our Q,U <-> E,B rotation along last two dimensions convention in
+	# enmap.
+	res = np.zeros((4,4)+a.shape[1:], a.dtype)
+	# phi and its covariances
+	res[0,0] = a[4]
+	res[0,1] = res[1,0] = a[5]
+	res[0,2] = res[2,0] = a[6]
+	# T, E, B
+	res[1,1], res[2,2], res[3,3] = a[:3]
+	res[1,2] = res[2,1] = a[3]
+	return res
+
 def compressed_order(n, scheme=None):
 	"""Surmise the order in which the unique elements of 
 	a symmetric matrix are stored, based on the number of such
@@ -98,14 +113,14 @@ def expand_inds(x, y):
 	res[:,x] = y
 	return res
 
-def scale_spectrum(a, direction):
+def scale_spectrum(a, direction, extra=0):
 	a = np.array(a)
 	l = np.arange(a.shape[-1])
-	a[...,1:] *= (2*np.pi/l[1:]/(l[1:]+1))**direction
+	a[...,1:] *= (2*np.pi/(l[1:]*(l[1:]+1))**(1+extra))**direction
 	a[...,0] = 0
 	return a
 
-def scale_lensing_spectrum(a, direction):
+def scale_camb_scalar_phi(a, direction):
 	a = np.array(a)
 	l = np.arange(a.shape[-1])
 	a[...,1:] /= (l[1:]**4*2.726e6**2)**direction
@@ -128,17 +143,34 @@ def read_spectrum(fname, inds=True, scale=True, expand="diag", ncol=None, ncomp=
 	if expand is not None: a = sym_expand(a, scheme=expand, ncomp=ncomp)
 	return a
 
-def read_lensing_spectrum(fname, coloff=0, inds=True, scale=True, expand="diag"):
+def read_phi_spectrum(fname, coloff=0, inds=True, scale=True, expand="diag"):
 	a = read_spectrum(fname, inds=inds, scale=False, expand=None)[coloff]
-	if scale: a = scale_lensing_spectrum(a, 1)
+	if scale: a = scale_camb_scalar_phi(a, 1)
 	if expand is not None: a = a[None,None]
 	return a
 
 def read_camb_scalar(fname, inds=True, scale=True, expand=True, ncmb=3):
+	"""Read the information in the camb scalar outputs. This contains
+	the cmb and lensing power spectra, but not their correlation. They
+	are therefore returned as two separate arrays."""
 	if expand: expand = "diag"
 	ps_cmb  = read_spectrum(fname, inds=inds, scale=scale, expand=expand, ncol=ncmb, ncomp=3)
-	ps_lens = read_lensing_spectrum(fname, inds=inds, scale=scale, expand=expand, coloff=ncmb)
+	ps_lens = read_phi_spectrum(fname, inds=inds, scale=scale, expand=expand, coloff=ncmb)
 	return ps_cmb, ps_lens
+
+def read_camb_full_lens(fname, inds=True, scale=True, expand=True, ncmb=3):
+	"""Reads the CAMB lens_potential_output spectra, which contain
+	l TT EE BB TE dd dT dE. These are rescaled appropriately is scale is True, and returned
+	as [T,E,B,d] if expand is True."""
+	a = np.loadtxt(fname, ndmin=2).T
+	if inds: a = expand_inds(a[0].astype(int), a[1:])
+	if scale:
+		a[:4] = scale_spectrum(a[:4], 1)
+		a[4]  = scale_spectrum(a[4],  1, 1)
+		a[5:] = scale_spectrum(a[5:], 1, 0.5)
+	if expand:
+		a = sym_expand_camb_full_lens(a)
+	return a
 
 def write_spectrum(fname, spec, inds=True, scale=True, expand="diag"):
 	if scale: spec = scale_spectrum(spec, -1)

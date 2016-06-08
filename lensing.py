@@ -89,27 +89,28 @@ def lens_map_flat(cmb_map, phi_map):
 
 ######## Curved sky lensing ########
 
-def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False):
+def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False):
 	ctype   = np.result_type(dtype,0j)
-	ncomp   = ps_cmb.shape[0]
-	if ps_lens.ndim == 3 and ps_lens.shape[:2] == (1,1): ps_lens = ps_lens[0,0]
-	else: raise ValueError("The lensing spectrum must be scalar, but got " + ps_lens.shape)
 	# First draw a random lensing field, and use it to compute the undeflected positions
 	if verbose: print "Computing observed coordinates"
 	obs_pos = enmap.posmap(shape, wcs)
-	if verbose: print "Generating phi alms"
-	phi_alm = curvedsky.rand_alm(ps_lens, lmax=lmax, seed=seed, dtype=ctype)
+	if verbose: print "Generating alms"
+	alm = curvedsky.rand_alm(ps_lensinput, lmax=lmax, seed=seed, dtype=ctype)
+	phi_alm, cmb_alm = alm[0], alm[1:]
+	# Truncate alm if we want a smoother map. In taylens, it was necessary to truncate
+	# to a lower lmax for the map than for phi, to avoid aliasing. The appropriate lmax
+	# for the cmb was the one that fits the resolution. FIXME: Can't slice alm this way.
+	#if maplmax: cmb_alm = cmb_alm[:,:maplmax]
+	del alm
 	if "p" in output:
 		if verbose: print "Computing phi map"
-		phi_map = curvedsky.alm2map(phi_alm, enmap.zeros(shape, wcs, dtype=dtype))
+		phi_map = curvedsky.alm2map(phi_alm, enmap.zeros(shape[-2:], wcs, dtype=dtype))
 	if verbose: print "Computing grad map"
 	grad = curvedsky.alm2map(phi_alm, enmap.zeros((2,)+shape[-2:], wcs, dtype=dtype), deriv=True)
 	if verbose: print "Computing alpha map"
-	raw_pos = enmap.samewcs(offset_by_grad(obs_pos, grad, pol=ncomp>1, geodesic=geodesic), obs_pos)
+	raw_pos = enmap.samewcs(offset_by_grad(obs_pos, grad, pol=True, geodesic=geodesic), obs_pos)
+	if "a" not in output: del grad
 	del phi_alm
-	# Then draw a random CMB realization at the raw positions
-	if verbose: print "Generating cmb alms"
-	cmb_alm = curvedsky.rand_alm(ps_cmb, lmax=lmax, dtype=ctype) # already seeded
 	if "u" in output:
 		if verbose: print "Computing unlensed map"
 		cmb_raw = curvedsky.alm2map(cmb_alm, enmap.zeros(shape, wcs, dtype=dtype), spin=spin)
@@ -138,6 +139,8 @@ def offset_by_grad(ipos, grad, geodesic=True, pol=None):
 	ncomp = 2 if pol is False or pol is None and ipos.shape[0] <= 2 else 3
 	opos = np.empty((ncomp,)+ipos.shape[1:])
 	iflat = ipos.reshape(ipos.shape[0],-1)
+	# Oflat is a flattened view of opos, so changes to oflat
+	# are visible in our return value opos
 	oflat = opos.reshape(opos.shape[0],-1)
 	gflat = grad.reshape(grad.shape[0],-1)
 	if geodesic:
@@ -147,11 +150,14 @@ def offset_by_grad(ipos, grad, geodesic=True, pol=None):
 			# The helper function assumes zenith coordinates
 			small_grad = gflat[:,i:i+step].copy(); small_grad[0] = -small_grad[0]
 			small_ipos = iflat[:,i:i+step].copy(); small_ipos[0] = np.pi/2-small_ipos[0]
+			# Compute the offset position and polarization rotation, the latter in the
+			# form of cos and sin of the polarization rotation angle
 			small_opos, small_orot = offset_by_grad_helper(small_ipos, small_grad, ncomp>2)
 			oflat[0,i:i+step] = np.pi/2 - small_opos[0]
 			oflat[1,i:i+step] = small_opos[1]
 			# Handle rotation if necessary
 			if oflat.shape[0] > 2:
+				# Recover angle from cos and sin
 				oflat[2,i:i+step] = np.arctan2(small_orot[1],small_orot[0])
 				if iflat.shape[0] > 2:
 					oflat[2,i:i+step] += iflat[2,i:i+step]
@@ -163,10 +169,18 @@ def offset_by_grad(ipos, grad, geodesic=True, pol=None):
 	return opos
 
 def offset_by_grad_helper(ipos, grad, pol):
+	"""Find the new position and induced rotation
+	from offseting the input positions ipos[2,nsamp]
+	by grad[2,nsamp]."""
 	grad = np.array(grad)
+	# Decompose grad into direction and length.
+	# Fix zero-length gradients first, to avoid
+	# division by zero.
 	grad[:,np.all(grad==0,0)] = 1e-20
 	d = np.sum(grad**2,0)**0.5
 	grad  /=d
+	# Perform the position offset using spherical
+	# trigonometry
 	cosd, sind = np.cos(d), np.sin(d)
 	cost, sint = np.cos(ipos[0]), np.sin(ipos[0])
 	ocost  = cosd*cost-sind*sint*grad[0]
@@ -174,11 +188,12 @@ def offset_by_grad_helper(ipos, grad, pol):
 	ophi   = ipos[1] + np.arcsin(sind*grad[1]/osint)
 	if not pol:
 		return np.array([np.arccos(ocost), ophi]), None
+	# Compute the induced polarization rotation.
 	A      = grad[1]/(sind*cost/sint+grad[0]*cosd)
 	nom1   = grad[0]+grad[1]*A
 	denom  = 1+A**2
-	cosgam = nom1**2/denom-1
-	singam = nom1*(grad[1]-grad[0]*A)/denom
+	cosgam = 2*nom1**2/denom-1
+	singam = 2*nom1*(grad[1]-grad[0]*A)/denom
 	return np.array([np.arccos(ocost), ophi]), np.array([cosgam,singam])
 
 def pole_wrap(pos):
@@ -191,8 +206,6 @@ def pole_wrap(pos):
 	a[0,bad] = -np.pi - a[0,bad]
 	a[1,bad] = a[1,bad]+np.pi
 	return a
-
-
 
 #def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False):
 #	ctype   = np.result_type(dtype,0j)
