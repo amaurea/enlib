@@ -17,7 +17,7 @@ iers2struct: iers2struct.c
 	gcc -o $@ $<
 
 finals.all:
-	curl -o finals.all http://datacenter.iers.org/eop/-/somos/5Rgv/latest/9
+	curl -o finals.all "https://datacenter.iers.org/eop/-/somos/5Rgv/latest/9"
 
 clean: tidy
 	rm -rf libiers.so _iers.so iers.py *.pyc finals.all
