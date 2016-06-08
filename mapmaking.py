@@ -206,6 +206,36 @@ class SignalPhase(Signal):
 			if self.dof.comm.rank == 0:
 				enmap.write_map(oname, m)
 
+class SignalMapBuddies(Signal):
+	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, eqsys=None, nuisance=False):
+		Signal.__init__(self, name, ofmt, output, ext)
+		self.area = area
+		self.cuts = cuts
+		self.dof  = zipper.ArrayZipper(area, comm=comm)
+		self.dtype= area.dtype
+		self.data = {scan: [
+			pmat.PmatMap(scan, area, order=pmat_order, sys=eqsys),
+			pmat.PmatMapMultibeam(scan, area, scan.buddy_offs,
+				scan.buddy_comps, order=pmat_order, sys=eqsys)
+			] for scan in scans}
+	def forward(self, scan, tod, work):
+		if scan not in self.data: return
+		for pmat in self.data[scan]:
+			pmat.forward(tod, work)
+	def backward(self, scan, tod, work):
+		if scan not in self.data: return
+		for pmat in self.data[scan]:
+			pmat.backward(tod, work)
+	def finish(self, m, work):
+		self.dof.comm.Allreduce(work, m)
+	def zeros(self): return enmap.zeros(self.area.shape, self.area.wcs, self.area.dtype)
+	def write(self, prefix, tag, m):
+		if not self.output: return
+		oname = self.ofmt.format(name=self.name)
+		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
+		if self.dof.comm.rank == 0:
+			enmap.write_map(oname, m)
+
 ######## Preconditioners ########
 # Preconditioners have a lot of overlap with Eqsys.A. That's not
 # really surprising, as their job is to approximate A, but it does

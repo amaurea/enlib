@@ -94,7 +94,7 @@ class PmatMapMultibeam(PointingMatrix):
 		"""tod -> m"""
 		m *= mmul
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
-			self.func(-1, 1, self.order+1, 1, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T,
+			self.func(-1, 1, self.order+1, tmul, 1, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T,
 					boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
 
 def get_moby_pointing(entry, bore, dets, downgrade=1):
