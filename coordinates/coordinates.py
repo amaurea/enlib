@@ -238,12 +238,12 @@ def decenter(angs, center):
 	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], 0, np.pi/2
 	return euler_rot([ra0,dec1-dec0,-ra1],  angs, kind="zyz")
 
-def nohor(sys): return sys if sys != c.AltAz else c.ICRS
+def nohor(sys): return sys if sys != "altaz" else "icrs"
 def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,basestring) else sys
 def get_handedness(sys):
 	"""Return the handedness of the coordinate system sys, as seen from inside
 	the celestial sphere, in the standard IAU convention."""
-	if sys in [c.AltAz]: return 'R'
+	if sys in ["altaz"]: return 'R'
 	else: return 'L'
 
 def getsys_full(sys, time=None, site=None):
