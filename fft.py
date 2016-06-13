@@ -124,3 +124,6 @@ def asfcarray(a):
 
 def empty(shape, dtype):
 	return engines[engine].n_byte_align_empty(shape, alignment, dtype)
+
+def fftfreq(n, d=1.0): return np.fft.fftfreq(n, d=d)
+def rfftfreq(n, d=1.0): return np.arange(n/2+1)/(1.0*n*d)

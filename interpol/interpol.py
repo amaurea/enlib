@@ -188,7 +188,8 @@ def spline_filter(data, order=3, border="cyclic", ndim=None, trans=False):
 # This differs from scipy.map_coordinates, which has idata[{dims}], points[ndim,{osub}],
 # odata[{osub}]. But they are compatible when there are no isub dimensions.
 # The keywords differ, though.
-def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="cyclic", trans=False, deriv=False):
+def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="cyclic", trans=False, deriv=False,
+		prefilter=True):
 	"""An alternative implementation of scipy.ndimage.map_coordinates. It is slightly
 	slower (20-30%), but more general. Basic usage is
 	 odata[{pdims},{isub}] = map_coordinates(idata[{dims},{isub}], points[ndim,{pdims}])
@@ -236,11 +237,12 @@ def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="c
 			else:
 				# When using derivatives, the output will have shape ({pdims},ndim,{isub})
 				odata = np.empty(points.shape[1:]+(ndim,)+dpost,dtype=idata.dtype)
-		if mode == "spline": idata = spline_filter(idata, order=order, border=border, ndim=ndim, trans=False)
+		if mode == "spline" and prefilter:
+			idata = spline_filter(idata, order=order, border=border, ndim=ndim, trans=False)
 		if not deriv:
 			core.interpol(
-				idata.reshape(np.product(dpre),np.product(dpost)).T, dpre,
-				odata.reshape(np.product(points.shape[1:]),np.product(dpost)).T,
+				idata.reshape(np.product(dpre).astype(int),np.product(dpost).astype(int)).T, dpre,
+				odata.reshape(np.product(points.shape[1:]).astype(int),np.product(dpost).astype(int)).T,
 				points.reshape(ndim, -1).T,
 				imode, order, iborder, False)
 		else:
@@ -265,5 +267,6 @@ def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="c
 				odata.reshape(np.product(points.shape[1:]),ndim,np.product(dpost)).T,
 				points.reshape(ndim,-1).T,
 				imode, order, iborder, True)
-		if mode == "spline": idata[:] = spline_filter(idata, order=order, border=border, ndim=ndim, trans=True)
+		if mode == "spline" and prefilter:
+			idata[:] = spline_filter(idata, order=order, border=border, ndim=ndim, trans=True)
 		return idata
