@@ -144,6 +144,7 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	dy and dx are pixel-unit offsets from the specified lat/lon.""")
 	parser.add_argument("--stamps", type=str, default=None, help="Plot stamps instead of the whole map. Format is srcfile:size:nmax, where the last two are optional. srcfile is a file with [dec ra] in degrees, size is the size in pixels of each stamp, and nmax is the max number of stamps to produce.")
 	parser.add_argument("-S", "--symmetric", action="store_true")
+	parser.add_argument("-z", "--zenith", action="store_true")
 	if isinstance(args, basestring):
 		oargs = []
 		for tok in shlex.split(args):
@@ -391,7 +392,7 @@ def calc_gridinfo(shape, wcs, args):
 	"""Compute the points making up the grid lines for the given map.
 	Depends on args.ticks and args.nstep."""
 	ticks = np.full(2,1.0); ticks[:] = [float(w) for w in args.ticks.split(",")]
-	return cgrid.calc_gridinfo(shape, wcs, steps=ticks, nstep=args.nstep)
+	return cgrid.calc_gridinfo(shape, wcs, steps=ticks, nstep=args.nstep, zenith=args.zenith)
 
 def draw_grid(ginfo, args):
 	"""Return a grid based on gridinfo. args.grid_color controls the color

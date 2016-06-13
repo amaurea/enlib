@@ -30,7 +30,7 @@ def calc_line_segs(pixs, steplim=10.0, extrapolate=2.0):
 
 class Gridinfo: pass
 
-def calc_gridinfo(shape, wcs, steps=[2,2], nstep=[200,200]):
+def calc_gridinfo(shape, wcs, steps=[2,2], nstep=[200,200], zenith=False):
 	"""Return an array of line segments representing a coordinate grid
 	for the given shape and wcs. the steps argument describes the
 	number of points to use along each meridian."""
@@ -61,6 +61,7 @@ def calc_gridinfo(shape, wcs, steps=[2,2], nstep=[200,200]):
 	for theta in start[0] + np.arange(nline[0])*steps[0]:
 		# Loop over phi
 		pixs = np.array(wcs.wcs_world2pix(np.linspace(box[0,1],box[1,1]+0.9,nstep[1],endpoint=True), theta, 0)).T
+		if zenith: theta = 90-theta
 		gridinfo.lat.append((theta,calc_line_segs(pixs)))
 	return gridinfo
 

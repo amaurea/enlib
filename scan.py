@@ -98,8 +98,11 @@ class Scan:
 			# The whole scan stuff is horrible and should be redesigned
 			res.dark_tod = np.ascontiguousarray(enlib.slice.slice_downgrade(res.dark_tod, sampslice, axis=1))
 			res.dark_cut = res.dark_cut[sel]
-		except AttributeError as e:
-			pass
+		except AttributeError as e: pass
+		try:
+			res.buddy_comps = res.buddy_comps[:,detslice]
+			res.buddy_offs  = res.buddy_offs[:,detslice]
+		except AttributeError as e: pass
 		res.cut       = res.cut[sel]
 		res.cut_noiseest = res.cut_noiseest[sel]
 		res.noise     = res.noise[sel]
