@@ -158,10 +158,10 @@ def transform_raw(from_sys, to_sys, coords, time=None, site=None):
 	(from_sys,from_ref), (to_sys,to_ref) = getsys_full(from_sys,time,site), getsys_full(to_sys,time,site)
 	if from_ref is not None: coords[:] = decenter(coords, from_ref)
 	if from_sys != to_sys:
-		if from_sys == c.AltAz:
+		if from_sys == "altaz":
 			coords[:] = hor2cel(coords, time, site, copy=False)
 		coords[:] = transform_astropy(nohor(from_sys), nohor(to_sys), coords)
-		if to_sys == c.AltAz:
+		if to_sys == "altaz":
 			coords[:] = cel2hor(coords, time, site, copy=False)
 	if to_ref is not None: coords[:] = recenter(coords, to_ref)
 	return coords.reshape(oshape)
