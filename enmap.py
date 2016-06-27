@@ -85,7 +85,7 @@ class ndmap(np.ndarray):
 	@property
 	def npix(self): return np.product(self.shape[-2:])
 	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode, cval=0)
-	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan)
+	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width, profile="cos", fill="zero"): return apod(self, width, profile=profile, fill=fill)
 	def stamps(self, pos, shape, aslist=False): return stamps(self, pos, shape, aslist=aslist)
@@ -254,7 +254,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 	If corner is False, then the integer pixel closest to a position
 	is round(sky2pix(...)). Otherwise, it is floor(sky2pix(...))."""
 	coords = np.asarray(coords)/get_unit(wcs)
-	cflat  = coords.reshape(coords.shape[0], np.prod(coords.shape[1:]))
+	cflat  = coords.reshape(coords.shape[0], -1)
 	# Quantities with a w prefix are in wcs ordering (ra,dec)
 	wpix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
 	wshape = shape[-2:][::-1]
@@ -281,8 +281,8 @@ def project(map, shape, wcs, order=3, mode="nearest", cval=0.0):
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval)
 	return ndmap(pmap, wcs)
 
-def at(map, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True):
-	if unit != "pix": pos = sky2pix(map.shape, map.wcs, pos)
+def at(map, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True):
+	if unit != "pix": pos = sky2pix(map.shape, map.wcs, pos, safe=safe)
 	return enlib.utils.interpol(map, pos, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 
 def argmax(map, unit="coord"):
@@ -329,11 +329,11 @@ def rand_gauss_iso_harm(shape, wcs, cov):
 	data = map_mul(spec2flat(shape, wcs, cov, 0.5, mode="constant"), rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
 
-def extent(shape, wcs, method="intermediate"):
+def extent(shape, wcs, method="intermediate", nsub=None):
 	if method == "intermediate":
 		return extent_intermediate(shape, wcs)
 	elif method == "subgrid":
-		return extent_subgrid(shape, wcs)
+		return extent_subgrid(shape, wcs, nsub=nsub)
 	else:
 		raise ValueError("Unrecognized extent method '%s'" % method)
 
@@ -358,7 +358,7 @@ def extent_intermediate(shape, wcs):
 # To construct the coarser system, slicing won't do, as it
 # shaves off some of our area. Instead, we must modify
 # cdelt to match our new pixels: cdelt /= nnew/nold
-def extent_subgrid(shape, wcs, nsub=0x10):
+def extent_subgrid(shape, wcs, nsub=None):
 	"""Returns an estimate of the "physical" extent of the
 	patch given by shape and wcs as [height,width] in
 	radians. That is, if the patch were on a sphere with
@@ -366,6 +366,7 @@ def extent_subgrid(shape, wcs, nsub=0x10):
 	tall and wide the patch is. These are defined such that
 	their product equals the physical area of the patch.
 	Obs: Has trouble with areas near poles."""
+	if nsub is None: nsub = 16
 	# Create a new wcs with (nsub,nsub) pixels
 	wcs = wcs.deepcopy()
 	step = (np.asfarray(shape[-2:])/nsub)[::-1]
@@ -391,7 +392,7 @@ def extent_subgrid(shape, wcs, nsub=0x10):
 def area(shape, wcs, nsub=0x10):
 	"""Returns the area of a patch with the given shape
 	and wcs, in steradians."""
-	return np.prod(extent(shape, wcs, nsub))
+	return np.prod(extent(shape, wcs, nsub=nsub))
 
 def lmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform

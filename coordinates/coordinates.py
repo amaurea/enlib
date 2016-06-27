@@ -2,11 +2,17 @@
 When c is more developed, it might completely replace this
 module. For now, it is used as a part of the implementation."""
 import numpy as np, pyfsla
-import astropy.coordinates as c, astropy.units as u, ephem
-from enlib import iers, utils
+import astropy.coordinates as c, astropy.units as u
+from enlib import utils
 from enlib.utils import ang2rect, rect2ang
+# Optional dependencies
 try:
 	from pyslalib import slalib
+	from enlib    import iers
+except ImportError:
+	pass
+try:
+	import ephem
 except ImportError:
 	pass
 
