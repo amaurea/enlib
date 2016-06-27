@@ -19,7 +19,7 @@ def get_core(dtype):
 
 config.default("pmat_map_order",      0, "The interpolation order of the map pointing matrix.")
 config.default("pmat_cut_type",  "full", "The cut sample representation used. 'full' uses one degree of freedom for each cut sample. 'bin:N' uses one degree of freedom for every N samples. 'exp' used one degree of freedom for the first sample, then one for the next two, one for the next 4, and so on, giving high resoultion at the edges of each cut range, and low resolution in the middle.")
-config.default("map_eqsys",       "equ", "The coordinate system of the maps. Can be eg. 'hor', 'equ' or 'gal'.")
+config.default("map_sys",       "equ", "The coordinate system of the maps. Can be eg. 'hor', 'equ' or 'gal'.")
 config.default("pmat_accuracy",     1.0, "Factor by which to lower accuracy requirement in pointing interpolation. 1.0 corresponds to 1e-3 pixels and 0.1 arc minute in polangle")
 config.default("pmat_interpol_max_size", 100000, "Maximum mesh size in pointing interpolation. Worst-case time and memory scale at most proportionally with this.")
 config.default("pmat_interpol_max_time", 50, "Maximum time to spend in pointing interpolation constructor. Actual time spent may be up to twice this.")
@@ -34,6 +34,7 @@ class PmatMap(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation.
 	20 times faster than the slower python+numpy implementation below."""
 	def __init__(self, scan, template, sys=None, order=None):
+		sys        = config.get("map_sys", sys)
 		transform  = pos2pix(scan,template,sys)
 		ipol, obox = build_interpol(transform, scan.box, id=scan.entry.id)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
@@ -125,7 +126,7 @@ def get_moby_pointing(entry, bore, dets, downgrade=1):
 downsamp = config.default("pmat_moby_downsamp", 20, "How much to downsample pointing by in pmat moby when fitting model")
 class PmatMoby(PointingMatrix):
 	def __init__(self, scan, template, sys=None):
-		sys      = config.get("map_eqsys",      sys)
+		sys      = config.get("map_sys",      sys)
 		downsamp = config.get("pmat_moby_downsamp", 20)
 
 		bore = scan.boresight.copy()
@@ -277,7 +278,7 @@ class PmatPtsrc(PointingMatrix):
 		# Params is [nsrc,{dec,ra,amps,ibeams}]
 		rmul  = config.get("pmat_ptsrc_rsigma")
 		self.dtype = params.dtype
-		transform  = build_pos_transform(scan, sys=config.get("map_eqsys", sys))
+		transform  = build_pos_transform(scan, sys=config.get("map_sys", sys))
 		ipol, obox = build_interpol(transform, scan.box, scan.entry.id, posunit=0.1*utils.arcsec)
 		# It's error prone to require the user to have the angles consistently
 		# wrapped. So we will rewrap params ourselves
@@ -376,7 +377,7 @@ class PmatPtsrc2(PointingMatrix):
 		srcs = np.array(srcs)
 		if srcs.ndim == 2: srcs = srcs[:,None]
 		# srcs is [ndir,nsrc,{dec,ra,T,Q,U,ibeams}]
-		sys   = config.get("map_eqsys", sys)
+		sys   = config.get("map_sys", sys)
 		cres  = config.get("pmat_ptsrc_cell_res")*utils.arcmin
 		ndir       = srcs.shape[1]
 		self.scan  = scan
@@ -400,7 +401,7 @@ class PmatPtsrc2(PointingMatrix):
 		rmax *= rmul
 
 		# Build interpolator (dec,ra output ordering)
-		transform  = build_pos_transform(scan, sys=config.get("map_eqsys", sys))
+		transform  = build_pos_transform(scan, sys=config.get("map_sys", sys))
 		ipol, obox = build_interpol(transform, scan.box, scan.entry.id, posunit=0.1*utils.arcsec)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, srcs.dtype)
 
@@ -460,7 +461,7 @@ class PmatPtsrc2(PointingMatrix):
 		self.apply(-1, tod, srcs, tmul=tmul, pmul=pmul)
 
 def build_interpol(transform, box, id="none", posunit=1.0, sys=None):
-	sys   = config.get("map_eqsys",      sys)
+	sys   = config.get("map_sys",      sys)
 	# We widen the bounding box slightly to avoid samples falling outside it
 	# due to rounding errors.
 	box = utils.widen_box(np.array(box), 1e-3)

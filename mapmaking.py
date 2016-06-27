@@ -36,8 +36,10 @@
 # signal_map   = SignalMap(..., cut=signal_cut)
 # signal_phase = SignalPhase(..., cut=signal_cut)
 # signals = [signal_cut, signal_map, signal_phase]
-import numpy as np, h5py, zipper, logging
-from enlib import enmap, dmap2 as dmap, array_ops, pmat, utils, todfilter, config, nmat, bench, gapfill
+import numpy as np, h5py, zipper, logging, gc
+from enlib import enmap, dmap2 as dmap, array_ops, pmat, utils, todfilter
+from enlib import config, nmat, bench, gapfill, mpi
+from enlib.cg import CG
 L = logging.getLogger(__name__)
 
 ######## Signals ########
@@ -63,13 +65,16 @@ class Signal:
 		return x
 
 class SignalMap(Signal):
-	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, eqsys=None, nuisance=False):
+	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, sys=None, nuisance=False, data=None):
 		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
 		self.dof  = zipper.ArrayZipper(area, comm=comm)
 		self.dtype= area.dtype
-		self.data = {scan: pmat.PmatMap(scan, area, order=pmat_order, sys=eqsys) for scan in scans}
+		if data is not None:
+			self.data = data
+		else:
+			self.data = {scan: pmat.PmatMap(scan, area, order=pmat_order, sys=sys) for scan in scans}
 	def forward(self, scan, tod, work):
 		if scan not in self.data: return
 		self.data[scan].forward(tod, work)
@@ -87,7 +92,7 @@ class SignalMap(Signal):
 			enmap.write_map(oname, m)
 
 class SignalDmap(Signal):
-	def __init__(self, scans, subinds, area, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, eqsys=None, nuisance=False):
+	def __init__(self, scans, subinds, area, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, sys=None, nuisance=False):
 		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
@@ -97,7 +102,7 @@ class SignalDmap(Signal):
 		self.data = {}
 		work = area.tile2work()
 		for scan, subind in zip(scans, subinds):
-			self.data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=eqsys), subind]
+			self.data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys), subind]
 	def prepare(self, m):
 		return m.tile2work()
 	def forward(self, scan, tod, work):
@@ -207,16 +212,17 @@ class SignalPhase(Signal):
 				enmap.write_map(oname, m)
 
 class SignalMapBuddies(Signal):
-	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, eqsys=None, nuisance=False):
+	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, sys=None, nuisance=False):
 		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
 		self.dof  = zipper.ArrayZipper(area, comm=comm)
 		self.dtype= area.dtype
+		self.comm = comm
 		self.data = {scan: [
-			pmat.PmatMap(scan, area, order=pmat_order, sys=eqsys),
+			pmat.PmatMap(scan, area, order=pmat_order, sys=sys),
 			pmat.PmatMapMultibeam(scan, area, scan.buddy_offs,
-				scan.buddy_comps, order=pmat_order, sys=eqsys)
+				scan.buddy_comps, order=pmat_order, sys=sys)
 			] for scan in scans}
 	def forward(self, scan, tod, work):
 		if scan not in self.data: return
@@ -235,6 +241,10 @@ class SignalMapBuddies(Signal):
 		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
 		if self.dof.comm.rank == 0:
 			enmap.write_map(oname, m)
+	# Ugly hack
+	def get_nobuddy(self):
+		data = {k:v[0] for k,v in self.data.iteritems()}
+		return SignalMap(self.data.keys(), self.area, self.comm, cuts=self.cuts, output=False, data=data)
 
 ######## Preconditioners ########
 # Preconditioners have a lot of overlap with Eqsys.A. That's not
@@ -309,6 +319,34 @@ class PreconDmapBinned:
 		self.signal.write(prefix, "div", self.div)
 		if self.hits is not None:
 			self.signal.write(prefix, "hits", self.hits)
+
+class PreconMapHitcount:
+	def __init__(self, signal, signal_cut, scans):
+		"""Hitcount preconditioner: (P'P)_TT."""
+		ncomp = signal.area.shape[0]
+		self.hits = signal.area.copy()
+		self.hits = calc_hits_map(self.hits, signal, signal_cut, scans)
+		self.signal = signal
+	def __call__(self, m):
+		hits = np.maximum(self.hits, 1)
+		m /= hits
+	def write(self, prefix):
+		self.signal.write(prefix, "hits", self.hits)
+
+class PreconDmapHitcount:
+	def __init__(self, signal, signal_cut, scans):
+		"""Hitcount preconditioner: (P'P)_TT"""
+		geom  = signal.area.geometry.copy()
+		geom.pre = (signal.area.shape[0],)+geom.pre
+		self.hits = signal.area.copy()
+		self.hits = calc_hits_map(self.hits, signal, signal_cut, scans)
+		self.signal = signal
+	def __call__(self, m):
+		for htile, mtile in zip(self.hits.tiles, m.tiles):
+			hits = np.maximum(hits, 1)
+			mtile /= hits
+	def write(self, prefix):
+		self.signal.write(prefix, "hits", self.hits)
 
 class PreconCut:
 	def __init__(self, signal, scans):
@@ -538,20 +576,20 @@ class PostPickup:
 		return omaps[1]
 
 class FilterAddMap:
-	def __init__(self, scans, map, eqsys=None, mul=1, tmul=1, pmat_order=None):
-		self.map, self.eqsys, self.mul, self.tmul = map, eqsys, mul, tmul
-		self.data = {scan: pmat.PmatMap(scan, map, order=pmat_order, sys=eqsys) for scan in scans}
+	def __init__(self, scans, map, sys=None, mul=1, tmul=1, pmat_order=None):
+		self.map, self.sys, self.mul, self.tmul = map, sys, mul, tmul
+		self.data = {scan: pmat.PmatMap(scan, map, order=pmat_order, sys=sys) for scan in scans}
 	def __call__(self, scan, tod):
 		pmat = self.data[scan]
 		pmat.forward(tod, self.map, tmul=self.tmul, mmul=self.mul)
 
 class FilterAddDmap:
-	def __init__(self, scans, subinds, dmap, eqsys=None, mul=1, tmul=1, pmat_order=None):
-		self.map, self.eqsys, self.mul, self.tmul = dmap, eqsys, mul, tmul
+	def __init__(self, scans, subinds, dmap, sys=None, mul=1, tmul=1, pmat_order=None):
+		self.map, self.sys, self.mul, self.tmul = dmap, sys, mul, tmul
 		self.data = {}
 		work = dmap.tile2work()
 		for scan, subind in zip(scans, subinds):
-			self.data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=eqsys), work[subind]]
+			self.data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys), work[subind]]
 	def __call__(self, scan, tod):
 		pmat, work = self.data[scan]
 		pmat.forward(tod, work, tmul=self.tmul, mmul=self.mul)
@@ -566,33 +604,77 @@ class PostAddMap:
 		return imap + self.map*self.mul
 
 class FilterBuddy:
-	def __init__(self, scans, map, eqsys=None, mul=1, tmul=1, pmat_order=None):
-		self.map, self.eqsys, self.mul, self.tmul = map, eqsys, mul, tmul
+	def __init__(self, scans, map, sys=None, mul=1, tmul=1, pmat_order=None):
+		self.map, self.sys, self.mul, self.tmul = map, sys, mul, tmul
 		self.data = {scan: pmat.PmatMapMultibeam(scan, map, scan.buddy_offs,
-			scan.buddy_comps, order=pmat_order, sys=eqsys) for scan in scans}
+			scan.buddy_comps, order=pmat_order, sys=sys) for scan in scans}
 	def __call__(self, scan, tod):
 		pmat = self.data[scan]
 		pmat.forward(tod, self.map, tmul=self.tmul, mmul=self.mul)
 
 class FilterBuddyDmap:
-	def __init__(self, scans, subinds, dmap, eqsys=None, mul=1, tmul=1, pmat_order=None):
-		self.map, self.eqsys, self.mul, self.tmul = dmap, eqsys, mul, tmul
+	def __init__(self, scans, subinds, dmap, sys=None, mul=1, tmul=1, pmat_order=None):
+		self.map, self.sys, self.mul, self.tmul = dmap, sys, mul, tmul
 		self.data = {}
 		work = dmap.tile2work()
 		for scan, subind in zip(scans, subinds):
 			self.data[scan] = [pmat.PmatMapMultibeam(scan, work[subind], scan.buddy_offs,
-				scan.buddy_comps, order=pmat_order, sys=eqsys), work[subind]]
+				scan.buddy_comps, order=pmat_order, sys=sys), work[subind]]
 	def __call__(self, scan, tod):
 		pmat, work = self.data[scan]
 		pmat.forward(tod, work, tmul=self.tmul, mmul=self.mul)
 
+class FilterBuddyPertod:
+	def __init__(self, map, sys=None, mul=1, tmul=1, pmat_order=None, nstep=200, prec="bin"):
+		self.map, self.sys, self.mul, self.tmul = map, sys, mul, tmul
+		self.comm  = mpi.COMM_SELF
+		self.dtype = map.dtype
+		self.nstep = nstep
+		self.pmat_order = pmat_order
+		self.prec  = prec
+	def __call__(self, scan, tod):
+		# We need to be able to restore the noise model, as this is just
+		# one among several filters, and the main noise model must be computed
+		# afterwards. We currently store the noise model computer as a special
+		# kind of noise model that gets overwritten. That's not a good choice,
+		# but since that's how we do it, we must preserve this object.
+		old_noise  = scan.noise
+		# Set up our equation system
+		signal_cut = SignalCut([scan], self.dtype, self.comm)
+		signal_map = SignalMap([scan], self.map,   self.comm, sys=self.sys, pmat_order=self.pmat_order)
+		pmat_buddy =  pmat.PmatMapMultibeam(scan, self.map, scan.buddy_offs,
+			scan.buddy_comps, order=self.pmat_order, sys=self.sys)
+		eqsys = Eqsys([scan], [signal_cut, signal_map], dtype=self.dtype, comm=self.comm)
+		# This also updates the noise model
+		eqsys.calc_b(tod.copy())
+		# Set up a preconditioner
+		if self.prec == "bin" or self.prec == "jacobi":
+			signal_map.precon = PreconMapBinned(signal_map, signal_cut, [scan], [], noise=self.prec=="bin", hits=False)
+		else: raise NotImplementedError
+		# Ok, we can now solve the system
+		cg = CG(eqsys.A, eqsys.b, M=eqsys.M, dot=eqsys.dof.dot)
+		for i in range(self.nstep):
+			cg.step()
+			L.debug("buddy pertod step %3d err %15.7e" % (cg.i, cg.err))
+		# Apodize the buddy map
+		buddy_map = eqsys.dof.unzip(cg.x)[1]
+		div  = signal_map.precon.div[0,0]
+		apod = np.minimum(1,div/(0.2*np.median(div[div!=0])))**4
+		buddy_map *= apod
+		# Ok, the system is hopefully solved by now. Read off the buddy model
+		pmat_buddy.forward(tod, buddy_map, tmul=self.tmul, mmul=self.mul)
+		# Restore noise
+		scan.noise = old_noise
+		del signal_map.precon
+		del signal_map
+
 class FilterAddSrcs:
-	def __init__(self, scans, params, eqsys=None, mul=1):
+	def __init__(self, scans, params, sys=None, mul=1):
 		self.params = params
 		self.data = {}
 		for scan in scans:
-			self.data[scan] = pmat.PmatPtsrc2(scan, params, sys=eqsys, pmul=mul)
-			#self.data[scan] = pmat.PmatPtsrc(scan, params, sys=eqsys, pmul=mul)
+			self.data[scan] = pmat.PmatPtsrc2(scan, params, sys=sys, pmul=mul)
+			#self.data[scan] = pmat.PmatPtsrc(scan, params, sys=sys, pmul=mul)
 	def __call__(self, scan, tod):
 		pmat = self.data[scan]
 		pmat.forward(tod, self.params)
@@ -686,7 +768,7 @@ class Eqsys:
 			for signal, map in zip(self.signals, maps):
 				signal.precon(map)
 			return self.dof.zip(maps)
-	def calc_b(self):
+	def calc_b(self, itod=None):
 		"""Compute b = P'N"d, and store it as the .b member. This involves
 		reading in the TOD data and potentially estimating a noise model,
 		so it is a heavy operation."""
@@ -694,10 +776,12 @@ class Eqsys:
 		owork = [signal.prepare(map) for signal, map in zip(self.signals,maps)]
 		for scan in self.scans:
 			# Get the actual TOD samples (d)
-			with bench.mark("b_read"):
-				tod  = scan.get_samples()
-				tod -= np.mean(tod,1)[:,None]
-				tod  = tod.astype(self.dtype)
+			if itod is None:
+				with bench.mark("b_read"):
+					tod  = scan.get_samples()
+					tod -= np.mean(tod,1)[:,None]
+					tod  = tod.astype(self.dtype)
+			else: tod = itod
 			# Apply all filters (pickup filter, src subtraction, etc)
 			with bench.mark("b_filter"):
 				for filter in self.filters: filter(scan, tod)

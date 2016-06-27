@@ -3,7 +3,7 @@ with a set of ids, and then select ids based on those tags and values.
 For example query("deep56,night,ar2,in(bounds,Moon)") woult return a
 set of ids with the tags deep56, night and ar2, and where th Moon[2]
 array is in the polygon specified by the bounds [:,2] array."""
-import re, numpy as np, h5py, shlex, copy, warnings
+import re, numpy as np, h5py, shlex, copy, warnings, time
 from enlib import utils
 
 class Tagdb:
@@ -43,6 +43,12 @@ class Tagdb:
 		if query is None: query = ""
 		toks = utils.split_outside(query,":")
 		query, rest = toks[0], ":".join(toks[1:])
+		# Hack: Support id fields as tags, even if they contain
+		# illegal characters..
+		t1 = time.time()
+		for id in self.data["id"]:
+			if id not in query: continue
+			query = re.sub(r"""(?<!['"])\b%s\b""" % id, "(id=='%s')" % id, query)
 		# Split into ,-separated fields. Fields starting with a "+"
 		# are taken to be tag markers, and are simply propagated to the
 		# resulting ids.
@@ -53,9 +59,7 @@ class Tagdb:
 				extra.append(tok[1:])
 			else:
 				# Normal field. Perform a few convenience transformations first.
-				if tok in self.data["id"]:
-					tok = "id=='%s'" % tok
-				elif tok.startswith("@"):
+				if tok.startswith("@"):
 					tok = "file_contains('%s',id)" % tok[1:]
 				fields.append(tok)
 		# Back to strings. For our query, we want numpy-compatible syntax,

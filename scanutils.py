@@ -1,5 +1,6 @@
-import numpy as np
+import numpy as np, logging
 from enlib import scan as enscan, errors, utils, coordinates, dmap2 as dmap
+L = logging.getLogger(__name__)
 
 def calc_sky_bbox_scan(scan, osys):
 	icorners = utils.box2corners(scan.box)
@@ -55,3 +56,44 @@ def classify_scanning_patterns(myscans, tol=0.5*utils.degree, comm=None):
 	if comm is not None:
 		pids = pids[rank==comm.rank]
 	return pboxes, pids
+
+def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1):
+	"""Given a set of ids/files and a set of indices into that list. Try
+	to read each of these scans. Returns a list of successfully read scans
+	and a list of their indices."""
+	for ind in inds:
+		try:
+			if isinstance(filelist[ind],list): raise IOError
+			d = enscan.read_scan(filelist[ind])
+		except IOError:
+			try:
+				if isinstance(filelist[ind],list):
+					entry = [db.query(id,multi=True) for id in filelist[ind]]
+				else:
+					entry = db.query(filelist[ind],multi=True)
+				d = reader(entry)
+				if d.ndet == 0 or d.nsamp == 0:
+					raise errors.DataMissing("Tod contains no valid data")
+			except errors.DataMissing as e:
+				if not quiet: L.debug("Skipped %s (%s)" % (str(filelist[ind]), e.message))
+				continue
+		if dets:
+			if dets.startswith("@"):
+				uids = [int(w) for w in open(dets[1:],"r")]
+				_,det_inds = utils.common_inds([uids,d.dets])
+				d = d[det_inds]
+			else:
+				d = eval("d[%s]" % dets)
+		d = d[:,::downsample]
+		if not quiet: L.debug("Read %s" % str(filelist[ind]))
+		yield ind, d
+
+def read_scans(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1):
+	"""Given a set of ids/files and a set of indices into that list. Try
+	to read each of these scans. Returns a list of successfully read scans
+	and a list of their indices."""
+	myinds, myscans  = [], []
+	for ind, scan in scan_iterator(filelist, inds, reader, db=db, dets=dets, quiet=quiet, downsample=downsample):
+		myinds.append(ind)
+		myscans.append(scan)
+	return myinds, myscans
