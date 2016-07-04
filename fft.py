@@ -15,7 +15,7 @@ if len(engines) == 0:
 	raise ImportError("Could not find any fftw implementations!")
 try:
 	nthread_fft = int(os.environ['OMP_NUM_THREADS'])
-except KeyError, ValueError:
+except (KeyError, ValueError):
 	nthread_fft=multiprocessing.cpu_count()
 nthread_ifft=nthread_fft
 default_flags=['FFTW_ESTIMATE']
