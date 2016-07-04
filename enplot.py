@@ -146,17 +146,12 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser.add_argument("-S", "--symmetric", action="store_true")
 	parser.add_argument("-z", "--zenith", action="store_true")
 	if isinstance(args, basestring):
-		oargs = []
-		for tok in shlex.split(args):
-			if not noglob:
-				gtok = glob.glob(tok)
-				if len(gtok) == 0: gtok = [tok]
-				tok = gtok
-			else: tok = [tok]
-			oargs += tok
-		args = oargs
+		args = shlex.split(args)
 	res = parser.parse_args(args)
 	res = bunch.Bunch(**res.__dict__)
+	# Glob expansion
+	if not noglob:
+		res.ifiles = [match for pattern in res.ifiles for match in glob.glob(pattern)]
 	return res
 
 def get_map(ifile, args, return_info=False):

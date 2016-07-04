@@ -152,7 +152,7 @@ def set(name, value, desc=None, priority=1):
 	if name in parameters and desc is None: desc = parameters[name]["desc"]
 	parameters[name] = {"value": value, "priority": priority, "desc": desc}
 
-def default(name, value, desc):
+def default(name, value, desc=None):
 	"""Declare a new configuration parameter, specifying its name, default value and
 	description. Only variables that have been declared this way will be recognized in
 	configuration files."""
