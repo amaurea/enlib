@@ -326,10 +326,12 @@ class PreconMapHitcount:
 		ncomp = signal.area.shape[0]
 		self.hits = signal.area.copy()
 		self.hits = calc_hits_map(self.hits, signal, signal_cut, scans)
+		self.ihits= 1.0/np.maximum(self.hits,1)
 		self.signal = signal
 	def __call__(self, m):
-		hits = np.maximum(self.hits, 1)
-		m /= hits
+		m *= self.ihits
+		#hits = np.maximum(self.hits, 1)
+		#m /= hits
 	def write(self, prefix):
 		self.signal.write(prefix, "hits", self.hits)
 

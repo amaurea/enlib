@@ -76,7 +76,8 @@ class ndmap(np.ndarray):
 	def pixmap(self): return pixmap(self.shape, self.wcs)
 	def lmap(self, oversample=1): return lmap(self.shape, self.wcs, oversample=oversample)
 	def area(self): return area(self.shape, self.wcs)
-	def pixsize(self): return self.area()/self.npix
+	def pixsize(self): return pixsize(self.shape, self.wcs)
+	def pixshape(self): return pixshape(self.shape, self.wcs)
 	def extent(self, method="intermediate"): return extent(self.shape, self.wcs, method=method)
 	@property
 	def preflat(self):
@@ -340,7 +341,7 @@ def extent(shape, wcs, method="intermediate", nsub=None):
 def extent_intermediate(shape, wcs):
 	"""Estimate the flat-sky extent of the map as the WCS
 	intermediate coordinate extent."""
-	return wcs.wcs.cdelt[::-1]*shape[-2:]*enlib.utils.degree
+	return np.abs(wcs.wcs.cdelt[::-1]*shape[-2:]*get_unit(wcs))
 
 # Approximations to physical box size and area are needed
 # for transforming to l-space. We can do this by dividing
@@ -394,6 +395,14 @@ def area(shape, wcs, nsub=0x10):
 	and wcs, in steradians."""
 	return np.prod(extent(shape, wcs, nsub=nsub))
 
+def pixsize(shape, wcs):
+	"""Reaturns the area of a single pixel, in steradians."""
+	return area(shape, wcs)/np.product(shape[-2:])
+
+def pixshape(shape, wcs):
+	"""Returns the height and width of a single pixel, in radians."""
+	return extent(shape, wcs)/shape[-2:]
+
 def lmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
 	of a map with the given shape and wcs."""
@@ -442,9 +451,9 @@ def ifft(emap, omap=None, nthread=0, normalize=True):
 # T,E,B hamonic maps. They are not the most efficient way of doing this.
 # It would be better to precompute the rotation matrix and buffers, and
 # use real transforms.
-def map2harm(emap, nthread=0):
+def map2harm(emap, nthread=0, normalize=True):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
-	emap = samewcs(fft(emap,nthread=nthread), emap)
+	emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
 	if emap.ndim > 2 and emap.shape[-3] > 1:
 		rot = queb_rotmat(emap.lmap())
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
@@ -454,7 +463,7 @@ def harm2map(emap, nthread=0, normalize=True):
 		rot = queb_rotmat(emap.lmap(), inverse=True)
 		emap = emap.copy()
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
-	return samewcs(ifft(emap,nthread=nthread), emap).real
+	return samewcs(ifft(emap,nthread=nthread,normalize=normalize), emap).real
 
 def queb_rotmat(lmap, inverse=False):
 	a    = 2*np.arctan2(lmap[0], lmap[1])
