@@ -201,9 +201,10 @@ def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	"""Make a map suitable as an intermediate step in projecting alms up to
 	lmax on to the given positions. Helper function for alm2map."""
 	# First find the theta range of the pixels, with a 10% margin
-	decrange = np.array([np.max(pos[0]),np.min(pos[0])])
+	ra0      = np.mean(pos[1])/utils.degree
+	decrange = np.array([np.min(pos[0]),np.max(pos[0])])
 	decrange = (decrange-np.mean(decrange))*1.1+np.mean(decrange)
-	decrange = np.array([min(np.pi/2,decrange[0]),max(-np.pi/2,decrange[1])])
+	decrange = np.array([max(-np.pi/2,decrange[0]),min(np.pi/2,decrange[1])])
 	decrange /= utils.degree
 	wdec = np.abs(decrange[1]-decrange[0])
 	# The shortest wavelength in the alm is about 2pi/lmax. We need at least
@@ -212,12 +213,12 @@ def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	# Set up an intermediate coordinate system for the SHT. We will use
 	# CAR coordinates conformal on the quator.
 	nx,ny = int(360/res), int(wdec/res)
-	wcs   = enwcs.WCS(naxis=2)
-	wcs.wcs.crval = [0,np.mean(decrange)]
+	wcs   = wcsutils.WCS(naxis=2)
+	wcs.wcs.crval = [ra0,0]
 	wcs.wcs.cdelt = [360./nx,wdec/ny]
 	# +1 in dec to include end points here. We do this to avoid wrapping from
 	# the south pole to the north pole for full-sky maps
-	wcs.wcs.crpix = [nx/2,ny/2+1]
+	wcs.wcs.crpix = [nx/2,-decrange[0]/res+1]
 	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
 	tmap = enmap.zeros(dims+(ny+1,nx),wcs)
 	return tmap

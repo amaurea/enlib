@@ -85,6 +85,8 @@ class ndmap(np.ndarray):
 		return self.reshape(-1, self.shape[-2], self.shape[-1])
 	@property
 	def npix(self): return np.product(self.shape[-2:])
+	@property
+	def geometry(self): return self.shape, self.wcs
 	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode, cval=0)
 	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
