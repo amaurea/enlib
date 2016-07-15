@@ -69,7 +69,6 @@ class Tagdb:
 		scope.update(self.get_funcs())
 		with utils.nowarn():
 			hits = eval(query, scope)
-		foo = self.ids == '1452716782.1452746181.ar3'
 		ids  = self.data["id"][hits]
 		# Split the rest into a sorting field and a slice
 		toks = rest.split("[")
