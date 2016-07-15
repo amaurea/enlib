@@ -100,7 +100,7 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser = argparse.ArgumentParser()
 	parser.add_argument("ifiles", nargs="+", help="The map files to plot. Each file will be processed independently and output as an image file with a name derived from that of the input file (see --oname). For each file a color range will be determined, and each component of the map (if multidimensional) will be written to a separate image file. If the file has more than 1 non-pixel dimension, these will be flattened first.")
 	parser.add_argument("-o", "--oname", default="{dir}{pre}{base}{suf}{comp}{layer}.{ext}", help="The format to use for the output name. Default is {dir}{pre}{base}{suf}{comp}{layer}.{ext}")
-	parser.add_argument("-c", "--color", default="wmap", help="The color scheme to use, e.g. wmap, gray, hotcold, etc., or a colors pecification in the form val:rrggbb,val:rrggbb,.... Se enlib.colorize for details.")
+	parser.add_argument("-c", "--color", default="planck", help="The color scheme to use, e.g. planck, wmap, gray, hotcold, etc., or a colors pecification in the form val:rrggbb,val:rrggbb,.... Se enlib.colorize for details.")
 	parser.add_argument("-r", "--range", type=str, help="The symmetric color bar range to use. If specified, colors in the map will be truncated to [-range,range]. To give each component in a multidimensional map different color ranges, use a colon-separated list, for example -r 250:100:50 would plot the first component with a range of 250, the second with a range of 100 and the third and any subsequent component with a range of 50.")
 	parser.add_argument("--min", type=str, help="The value at which the color bar starts. See --range.")
 	parser.add_argument("--max", type=str, help="The value at which the color bar ends. See --range.")
@@ -131,11 +131,12 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser.add_argument("--mpl-dpi", type=float, default=75, help="The resolution to use for the mpl driver.")
 	parser.add_argument("--mpl-pad", type=float, default=1.6, help="The padding to use for the mpl driver.")
 	parser.add_argument("--rgb", action="store_true", help="Enable RGB mode. The input maps must have 3 components, which will be interpreted as red, green and blue channels of a single image instead of 3 separate images as would be the case without this option. The color scheme is overriden in this case.")
+	parser.add_argument("--reverse-color",  action="store_true", help="Reverse the color scale. For example, a black-to-white scale will become a white-to-black sacle.")
 	parser.add_argument("-a", "--autocrop", action="store_true", help="Automatically crop the image by removing expanses of uniform color around the edges. This is done jointly for all components in a map, making them directly comparable, but is done independently for each input file.")
 	parser.add_argument("-A", "--autocrop-each", action="store_true", help="As --autocrop, but done individually for each component in each map.")
 	parser.add_argument("-L", "--layers", action="store_true", help="Output the individual layers that make up the final plot (such as the map itself, the coordinate grid, the axis labels, any contours and lables) as individual files instead of compositing them into a final image.")
-	parser.add_argument("-C", "--contours", type=str, default=None, help="Enable contour lines. For example -C 10 to place a contour at every 10 units in the map, -C 5,10 to place it at every 10 units, but starting at 5, and 1,2,4,8 or similar to place contours at manually chosen locations.")
-	parser.add_argument("--contour-color", type=str, default="000000", help="The color scheme to use for contour lines. Either a single rrggbb, a val:rrggbb,val:rrggbb,... specification or a color scheme name, such as wmap or gray.")
+	parser.add_argument("-C", "--contours", type=str, default=None, help="Enable contour lines. For example -C 10 to place a contour at every 10 units in the map, -C 5:10 to place it at every 10 units, but starting at 5, and 1,2,4,8 or similar to place contours at manually chosen locations.")
+	parser.add_argument("--contour-color", type=str, default="000000", help="The color scheme to use for contour lines. Either a single rrggbb, a val:rrggbb,val:rrggbb,... specification or a color scheme name, such as planck, wmap or gray.")
 	parser.add_argument("--contour-width", type=int, default=1, help="The width of each contour line, in pixels.")
 	parser.add_argument("--annotate",      type=str, default=None, help="""Annotate the map with text, lines or circles. Should be a text file with one entry per line, where an entry can be:
 		c[ircle] lat lon dy dx [rad [width [color]]]
@@ -146,17 +147,19 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser.add_argument("-S", "--symmetric", action="store_true")
 	parser.add_argument("-z", "--zenith", action="store_true")
 	if isinstance(args, basestring):
-		oargs = []
-		for tok in shlex.split(args):
-			if not noglob:
-				gtok = glob.glob(tok)
-				if len(gtok) == 0: gtok = [tok]
-				tok = gtok
-			else: tok = [tok]
-			oargs += tok
-		args = oargs
+		args = shlex.split(args)
 	res = parser.parse_args(args)
 	res = bunch.Bunch(**res.__dict__)
+	# Glob expansion
+	if not noglob:
+		ifiles = []
+		for pattern in res.ifiles:
+			matches = glob.glob(pattern)
+			if len(matches) > 0:
+				ifiles += matches
+			else:
+				ifiles.append(pattern)
+		res.ifiles = ifiles
 	return res
 
 def get_map(ifile, args, return_info=False):
@@ -383,6 +386,7 @@ def map_to_color(map, crange, args):
 	fields: color, method, rgb. If rgb is not true, only the first element
 	of the input map will be used. Otherwise 3 will be used."""
 	map = ((map.T-crange[0])/(crange[1]-crange[0])).T # .T ensures broadcasting for rgb case
+	if args.reverse_color: map = 1-map
 	if args.rgb: m_color = colorize.colorize(map,    desc=args.color, method="direct")
 	else:        m_color = colorize.colorize(map[0], desc=args.color, method=args.method)
 	m_color = enmap.samewcs(np.rollaxis(m_color,2), map)
@@ -442,11 +446,17 @@ def calc_contours(crange, args):
 		return np.arange(a,b)*step + base
 
 def draw_contours(map, contours, args):
-	img  = PIL.Image.new("RGBA", map.shape[-2:][::-1])
-	cmap = array_ops.find_contours(map[0], contours)
-	cmap = contour_widen(cmap, args.contour_width)
+	img   = PIL.Image.new("RGBA", map.shape[-2:][::-1])
+	inds  = np.argsort(contours)
+	cmap  = array_ops.find_contours(map[0], contours[inds])
+	cmap  = contour_widen(cmap, args.contour_width)
+	cmap -= 1
+	# Undo sorting if we sorted
+	if not np.allclose(inds, np.arange(len(inds))):
+		mask = cmap>=0
+		cmap[mask] = inds[cmap[mask]]
+	cmap  = cmap.astype(float)
 	# Make non-contour areas transparent
-	cmap = (cmap-1).astype(float)
 	cmap[cmap<0] = np.nan
 	# Rescale to 0:1
 	if len(contours) > 1:
