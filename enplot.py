@@ -131,6 +131,7 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser.add_argument("--mpl-dpi", type=float, default=75, help="The resolution to use for the mpl driver.")
 	parser.add_argument("--mpl-pad", type=float, default=1.6, help="The padding to use for the mpl driver.")
 	parser.add_argument("--rgb", action="store_true", help="Enable RGB mode. The input maps must have 3 components, which will be interpreted as red, green and blue channels of a single image instead of 3 separate images as would be the case without this option. The color scheme is overriden in this case.")
+	parser.add_argument("--reverse-color",  action="store_true", help="Reverse the color scale. For example, a black-to-white scale will become a white-to-black sacle.")
 	parser.add_argument("-a", "--autocrop", action="store_true", help="Automatically crop the image by removing expanses of uniform color around the edges. This is done jointly for all components in a map, making them directly comparable, but is done independently for each input file.")
 	parser.add_argument("-A", "--autocrop-each", action="store_true", help="As --autocrop, but done individually for each component in each map.")
 	parser.add_argument("-L", "--layers", action="store_true", help="Output the individual layers that make up the final plot (such as the map itself, the coordinate grid, the axis labels, any contours and lables) as individual files instead of compositing them into a final image.")
@@ -385,6 +386,7 @@ def map_to_color(map, crange, args):
 	fields: color, method, rgb. If rgb is not true, only the first element
 	of the input map will be used. Otherwise 3 will be used."""
 	map = ((map.T-crange[0])/(crange[1]-crange[0])).T # .T ensures broadcasting for rgb case
+	if args.reverse_color: map = 1-map
 	if args.rgb: m_color = colorize.colorize(map,    desc=args.color, method="direct")
 	else:        m_color = colorize.colorize(map[0], desc=args.color, method=args.method)
 	m_color = enmap.samewcs(np.rollaxis(m_color,2), map)
@@ -444,11 +446,17 @@ def calc_contours(crange, args):
 		return np.arange(a,b)*step + base
 
 def draw_contours(map, contours, args):
-	img  = PIL.Image.new("RGBA", map.shape[-2:][::-1])
-	cmap = array_ops.find_contours(map[0], contours)
-	cmap = contour_widen(cmap, args.contour_width)
+	img   = PIL.Image.new("RGBA", map.shape[-2:][::-1])
+	inds  = np.argsort(contours)
+	cmap  = array_ops.find_contours(map[0], contours[inds])
+	cmap  = contour_widen(cmap, args.contour_width)
+	cmap -= 1
+	# Undo sorting if we sorted
+	if not np.allclose(inds, np.arange(len(inds))):
+		mask = cmap>=0
+		cmap[mask] = inds[cmap[mask]]
+	cmap  = cmap.astype(float)
 	# Make non-contour areas transparent
-	cmap = (cmap-1).astype(float)
 	cmap[cmap<0] = np.nan
 	# Rescale to 0:1
 	if len(contours) > 1:

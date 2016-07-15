@@ -120,4 +120,5 @@ class show:
 		self.time2  = time.time()
 		self.clock2 = time.clock()
 		self.mem2   = memory.current()
-		print "%5.2f %s" % (self.time2-self.time1, self.name)
+		self.memmax = memory.max()
+		print "%5.2f %5.2f %5.2f %s" % (self.time2-self.time1, self.mem2*1e-9, self.memmax*1e-9, self.name)
