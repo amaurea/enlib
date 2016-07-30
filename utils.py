@@ -1003,3 +1003,12 @@ def block_mean_filter(a, width):
 
 def ctime2date(timestamp, tzone=0, fmt="%Y-%m-%d"):
 	return datetime.datetime.utcfromtimestamp(timestamp+tzone*3600).strftime(fmt)
+
+def tofinite(arr, val=0):
+	"""Return arr with all non-finite values replaced with val."""
+	arr = np.asanyarray(arr).copy()
+	if arr.ndim == 0:
+		if ~np.isfinite(arr): arr = val
+	else:
+		arr[~np.isfinite(arr)] = val
+	return arr

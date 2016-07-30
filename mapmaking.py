@@ -59,6 +59,8 @@ class Signal:
 	def forward (self, scan, tod, x): pass
 	def backward(self, scan, tod, x): pass
 	def finish  (self, x, y): x[:] = y
+	# This one is a potentially cheaper version of self.prepare(self.zeros())
+	def work    (self): return self.prepare(self.zeros())
 	def write   (self, prefix, tag, x): pass
 	def postprocess(self, x):
 		for p in self.post: x = p(x)
@@ -116,6 +118,7 @@ class SignalDmap(Signal):
 	def finish(self, m, work):
 		m.work2tile(work)
 	def zeros(self): return dmap.zeros(self.area.geometry)
+	def work(self):  return self.area.geometry.build_work()
 	def write(self, prefix, tag, m):
 		if not self.output: return
 		oname = self.ofmt.format(name=self.name)
@@ -211,7 +214,7 @@ class SignalPhase(Signal):
 			if self.dof.comm.rank == 0:
 				enmap.write_map(oname, m)
 
-class SignalMapBuddies(Signal):
+class SignalMapBuddies(SignalMap):
 	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, sys=None, nuisance=False):
 		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
@@ -232,15 +235,6 @@ class SignalMapBuddies(Signal):
 		if scan not in self.data: return
 		for pmat in self.data[scan]:
 			pmat.backward(tod, work)
-	def finish(self, m, work):
-		self.dof.comm.Allreduce(work, m)
-	def zeros(self): return enmap.zeros(self.area.shape, self.area.wcs, self.area.dtype)
-	def write(self, prefix, tag, m):
-		if not self.output: return
-		oname = self.ofmt.format(name=self.name)
-		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
-		if self.dof.comm.rank == 0:
-			enmap.write_map(oname, m)
 	# Ugly hack
 	def get_nobuddy(self):
 		data = {k:v[0] for k,v in self.data.iteritems()}
@@ -733,7 +727,8 @@ class Eqsys:
 			# Set up our input and output work arrays. The output work array will accumulate
 			# the results, so it must start at zero.
 			iwork = [signal.prepare(map) for signal, map in zip(self.signals, imaps)]
-			owork = [signal.prepare(map) for signal, map in zip(self.signals, omaps)]
+			owork = [signal.work() for signal in self.signals]
+			#owork = [signal.prepare(map) for signal, map in zip(self.signals, omaps)]
 		for scan in self.scans:
 			# Set up a TOD for this scan
 			tod = np.zeros([scan.ndet, scan.nsamp], self.dtype)
@@ -775,7 +770,8 @@ class Eqsys:
 		reading in the TOD data and potentially estimating a noise model,
 		so it is a heavy operation."""
 		maps  = [signal.zeros() for signal in self.signals]
-		owork = [signal.prepare(map) for signal, map in zip(self.signals,maps)]
+		owork = [signal.work() for signal in self.signals]
+		#owork = [signal.prepare(map) for signal, map in zip(self.signals,maps)]
 		for scan in self.scans:
 			# Get the actual TOD samples (d)
 			if itod is None:
