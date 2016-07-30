@@ -253,6 +253,8 @@ cdef class alm_info:
 		"""Computes res[a,lm] = lmat[a,b,l]*alm[b,lm], where lm is the position of the
 		element with (l,m) in the alm array, as defined by this class."""
 		if out is None: out = alm.copy()
+		if lmat.ndim == 1:
+			lmat = np.eye(alm.shape[0])[:,:,None]*lmat
 		if alm.dtype == np.complex128:
 			self.lmul_dp(out, lmat)
 		else:

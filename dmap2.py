@@ -82,8 +82,7 @@ class Dmap(object):
 		self.geometry.work_bufinfo.data2data(work, self.geometry.tile_bufinfo, self.tiles, self.comm)
 	def tile2work(self, work=None):
 		"""Project from tiles into the local workspaces."""
-		if work is None:
-			work = [enmap.zeros(ws,ww,dtype=self.dtype) for ws,ww in self.geometry.work_geometry]
+		if work is None: work = self.geometry.build_work()
 		self.geometry.tile_bufinfo.data2data(self.tiles, self.geometry.work_bufinfo, work, self.comm)
 		return work
 	def copy(self):
@@ -402,6 +401,8 @@ class DGeometry(object):
 		res = self.copy()
 		res.pre = pre
 		return res
+	def build_work(self):
+		return [enmap.zeros(ws,ww,dtype=self.dtype) for ws,ww in self.work_geometry]
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
