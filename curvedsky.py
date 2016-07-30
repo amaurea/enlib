@@ -213,7 +213,7 @@ def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	# Set up an intermediate coordinate system for the SHT. We will use
 	# CAR coordinates conformal on the quator.
 	nx,ny = int(360/res), int(wdec/res)
-	wcs   = wcsutils.WCS(naxis=2)
+	wcs   = enwcs.WCS(naxis=2)
 	wcs.wcs.crval = [ra0,0]
 	wcs.wcs.cdelt = [360./nx,wdec/ny]
 	# +1 in dec to include end points here. We do this to avoid wrapping from

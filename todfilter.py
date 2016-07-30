@@ -58,7 +58,11 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 			w = weights.reshape(-1,weights.shape[-1])
 			amps = np.zeros([naz+nt,d.shape[0]],dtype=tod.dtype)
 			for di in range(len(tod)):
-				amps[:,di] = np.linalg.solve(B.dot(w[di,:,None]*B.T),B.dot(w[di]*d[di]))
+				try:
+					amps[:,di] = np.linalg.solve(B.dot(w[di,:,None]*B.T),B.dot(w[di]*d[di]))
+				except np.linalg.LinAlgError as e:
+					print "LinAlgError in todfilter di %d. Skipping" % di
+					continue
 		#print "amps", amps[:,0]
 		# Subtract the best fit
 		if asign > 0: d -= amps[:naz].T.dot(B[:naz])
