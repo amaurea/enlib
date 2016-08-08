@@ -828,6 +828,7 @@ def angdist(a, b, zenith=True, lim=1e-7, axis=0):
 	"""Compute the angluar distance between a[{phi,theta},...] and
 	b[{phi,theta},...], where the ... part can have different lengths
 	as long as their transposes broadcast to each other."""
+	a, b = np.asarray(a), np.asarray(b)
 	ra = ang2rect(moveaxis(a, axis, 0), zenith, axis=0)
 	rb = ang2rect(moveaxis(b, axis, 0), zenith, axis=0)
 	c = np.sum(ra.T*rb.T,-1).T

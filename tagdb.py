@@ -55,6 +55,7 @@ class Tagdb:
 		toks = utils.split_outside(query,",")
 		fields, extra = [], []
 		for tok in toks:
+			if len(tok) == 0: continue
 			if tok.startswith("+"):
 				extra.append(tok[1:])
 			else:

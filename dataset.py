@@ -52,9 +52,11 @@ class DataField:
 		our data will have changed accordingly. An IndexError exception will
 		be raised if a detector is missing."""
 		if self.dets is None or dets is None: return self
+		if np.array(dets).ndim > 1: 1/0
 		# Find positions of requested detectors in our detector array
-		dets = np.array(dets)
-		if np.all(dets == self.dets): return self
+		dets = np.array(dets).reshape(-1)
+		if len(dets) == len(self.dets) and np.all(dets == self.dets): return self
+		if len(dets) == 0 and len(self.dets) == 0: return self
 		inds = np.argsort(self.dets)
 		pos  = inds[np.searchsorted(self.dets, dets, sorter=inds)]
 		# Did we actually find the right detectors?
