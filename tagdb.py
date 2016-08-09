@@ -11,25 +11,34 @@ class Tagdb:
 		"""Most basic constructor. Takes a dictionary
 		data[name][...,nid], which must contain the field "id"."""
 		if data is None:
-			self.data = {"id":np.zeros(0,dtype='S5')}
+			self.data = {"id":np.zeros(0,dtype='S5'),"subids":np.zeros(0,dtype='S5')}
 		else:
 			self.data = {key:np.array(val) for key,val in data.iteritems()}
 			assert "id" in self.data, "Id field missing"
 			if self.data["id"].size == 0: self.data["id"] = np.zeros(0,dtype='S5')
+		# Insert subids if missing
+		if "subids" not in self.data:
+			self.data["subids"] = np.zeros(len(self.data["id"]),dtype='S5')
 		self.sort  = sort
 	def get_funcs(self):
 		return {"file_contains": file_contains}
 	def copy(self):
 		return copy.deepcopy(self)
 	@property
-	def ids(self): return self.data["id"]
+	def ids(self):
+		return append_subs(self.data["id"], self.data["subids"])
 	def __len__(self): return len(self.ids)
 	def __getitem__(self, query=""):
 		return self.select(self.query(query))
 	def select(self, ids):
 		"""Return a tagdb which only contains the selected ids."""
+		# Extract the subids
+		ids, subids = split_ids(ids)
+		# Restrict to the subset of these ids
 		inds = utils.find(self.ids, ids)
 		odata = {key:val[...,inds] for key, val in self.data.iteritems()}
+		# Update subids
+		odata["subids"] = [merge_subid(a,b) for a, b in zip(odata["subids"], subids)]
 		res = self.copy()
 		res.data = odata
 		return res
@@ -53,11 +62,12 @@ class Tagdb:
 		# are taken to be tag markers, and are simply propagated to the
 		# resulting ids.
 		toks = utils.split_outside(query,",")
-		fields, extra = [], []
+		fields, subid = [], []
 		for tok in toks:
 			if len(tok) == 0: continue
+			# Tags starting with + will be interpreted as a subid specification
 			if tok.startswith("+"):
-				extra.append(tok[1:])
+				subid.append(tok[1:])
 			else:
 				# Normal field. Perform a few convenience transformations first.
 				if tok.startswith("@"):
@@ -66,7 +76,7 @@ class Tagdb:
 		# Back to strings. For our query, we want numpy-compatible syntax,
 		# with low precedence for the comma stuff.
 		query = "(" + ")&(".join(fields) + ")"
-		extra = ",".join(extra)
+		subid = ",".join(subid)
 		# Evaluate the query. First build up the scope dict
 		scope = np.__dict__.copy()
 		scope.update(self.data)
@@ -75,6 +85,7 @@ class Tagdb:
 		with utils.nowarn():
 			hits = eval(query, scope)
 		ids  = self.data["id"][hits]
+		subs = self.data["subids"][hits]
 		# Split the rest into a sorting field and a slice
 		toks = rest.split("[")
 		if   len(toks) == 1: sort, fsel, dsel = toks[0], "", ""
@@ -87,11 +98,14 @@ class Tagdb:
 			field = eval("field" + fsel)
 			inds  = np.argsort(field)
 			# Apply sort
-			ids   = ids[inds]
+			ids  = ids[inds]
+			subs = subs[inds]
 		# Finally apply the data slice
-		ids = eval("ids" + dsel)
-		# Append the unknown tags to the ids
-		if extra: ids = np.char.add(ids, ":"+extra)
+		ids = eval("ids"  + dsel)
+		subs= eval("subs" + dsel)
+		# Build our subid extensions and append them to ids
+		subs = np.array([merge_subid(subid, sub) for sub in subs])
+		ids = append_subs(ids, subs)
 		return ids
 	def __add__(self, other):
 		"""Produce a new tagdb which contains the union of the
@@ -226,3 +240,23 @@ def parse_tagfile_idlist(fname, matchfun=None):
 def file_contains(fname, ids):
 	lines = [line.split()[0] for line in open(fname,"r") if not line.startswith("#")]
 	return utils.contains(ids, lines)
+
+def split_ids(ids):
+	bids, subids = [], []
+	for id in ids:
+		toks = id.split(":")
+		bids.append(toks[0])
+		subids.append(toks[1] if len(toks) > 1 else "")
+	return bids, subids
+
+def merge_subid(a, b):
+	res = set(a.split(",")) | set(b.split(","))
+	try: res.remove("")
+	except: pass
+	return ",".join(sorted(list(res)))
+
+def append_subs(ids, subs):
+	sep_helper = np.array(["",":"])
+	ind = (np.char.str_len(subs) > 0).astype(int)
+	sep = sep_helper[ind]
+	return np.char.add(ids, np.char.add(sep, subs))
