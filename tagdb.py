@@ -38,7 +38,7 @@ class Tagdb:
 		inds = utils.find(self.ids, ids)
 		odata = {key:val[...,inds] for key, val in self.data.iteritems()}
 		# Update subids
-		odata["subids"] = [merge_subid(a,b) for a, b in zip(odata["subids"], subids)]
+		odata["subids"] = np.array([merge_subid(a,b) for a, b in zip(odata["subids"], subids)])
 		res = self.copy()
 		res.data = odata
 		return res
