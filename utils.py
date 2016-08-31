@@ -1016,3 +1016,20 @@ def tofinite(arr, val=0):
 	else:
 		arr[~np.isfinite(arr)] = val
 	return arr
+
+def parse_ints(s): return parse_numbers(s, int)
+def parse_floats(s): return parse_numbers(s, float)
+def parse_numbers(s, dtype=None):
+	res = []
+	for word in s.split(","):
+		toks = [float(w) for w in word.split(":")]
+		if ":" not in word:
+			res.append(toks[:1])
+		else:
+			start, stop = toks[:2]
+			step = toks[2] if len(toks) > 2 else 1
+			res.append(np.arange(start,stop,step))
+	res = np.concatenate(res)
+	if dtype is not None:
+		res = res.astype(dtype)
+	return res
