@@ -211,7 +211,7 @@ def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	# two samples per mode.
 	res = 180./lmax/oversample
 	# Set up an intermediate coordinate system for the SHT. We will use
-	# CAR coordinates conformal on the quator.
+	# CAR coordinates conformal on the equator.
 	nx,ny = int(360/res), int(wdec/res)
 	wcs   = enwcs.WCS(naxis=2)
 	wcs.wcs.crval = [ra0,0]
@@ -227,6 +227,6 @@ def map2minfo(m):
 	"""Given an enmap with constant-latitude rows and constant longitude
 	intervals, return a corresponding sharp map_info."""
 	theta  = np.pi/2 - m[...,:,:1].posmap(corner=False)[0,:,0]
-	phi0   = m[...,:1,:1].posmap(corner=False)[1,0,0]
+	phi0   = m[...,1:2,1:2].posmap(corner=False)[1,0,0]
 	nphi   = m.shape[-1]
 	return sharp.map_info(theta, nphi, phi0)
