@@ -744,6 +744,7 @@ def find_blank_edges(m, value="auto"):
 		bs = [find_blank_edges(m, med) for med in medians]
 		nb = [np.product(np.sum(b,0)) for b in bs]
 		blanks = bs[np.argmax(nb)]
+		return blanks
 	elif value is "none":
 		# Don't use any values for cropping, so no cropping is done
 		return np.zeros([2,2],dtype=int)
