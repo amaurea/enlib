@@ -221,7 +221,10 @@ def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="c
 	The interpolation performed by map_coordinates is a linear operation,
 	and can hence be expressed as out = A*data, where A is a matrix.
 	If trans is true, then what will instead be performed is data = A.T*in.
-	For this to work, the odata argument must be specified."""
+	For this to work, the odata argument must be specified.
+
+	Normally idata is read and odata is written to, but when trans=True,
+	idata is written to and odata is read from."""
 
 	imode   = {"conv":0, "spline":1, "lanczos":2}[mode]
 	iborder = {"zero":0, "nearest":1, "cyclic":2, "mirror":3}[border]
@@ -230,6 +233,7 @@ def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="c
 	core    = get_core(idata.dtype)
 	ndim    = points.shape[0]
 	dpre,dpost= idata.shape[:ndim], idata.shape[ndim:]
+	def iprod(x): return np.product(x).astype(int)
 	if not trans:
 		if odata is None:
 			if not deriv:
@@ -241,14 +245,14 @@ def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="c
 			idata = spline_filter(idata, order=order, border=border, ndim=ndim, trans=False)
 		if not deriv:
 			core.interpol(
-				idata.reshape(np.product(dpre).astype(int),np.product(dpost).astype(int)).T, dpre,
-				odata.reshape(np.product(points.shape[1:]).astype(int),np.product(dpost).astype(int)).T,
+				idata.reshape(iprod(dpre),iprod(dpost)).T, dpre,
+				odata.reshape(iprod(points.shape[1:]),iprod(dpost)).T,
 				points.reshape(ndim, -1).T,
 				imode, order, iborder, False)
 		else:
 			core.interpol_deriv(
-				idata.reshape(np.product(dpre),np.product(dpost)).T, dpre,
-				odata.reshape(np.product(points.shape[1:]),ndim,np.product(dpost)).T,
+				idata.reshape(iprod(dpre),iprod(dpost)).T, dpre,
+				odata.reshape(iprod(points.shape[1:]),ndim,iprod(dpost)).T,
 				points.reshape(ndim, -1).T,
 				imode, order, iborder, False)
 		return odata
@@ -257,14 +261,14 @@ def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="c
 		# idata and odata must be specified in this case.
 		if not deriv:
 			core.interpol(
-				idata.reshape(np.product(dpre),np.product(dpost)).T, dpre,
-				odata.reshape(np.product(points.shape[1:]),np.product(dpost)).T,
+				idata.reshape(iprod(dpre),iprod(dpost)).T, dpre,
+				odata.reshape(iprod(points.shape[1:]),iprod(dpost)).T,
 				points.reshape(ndim,-1).T,
 				imode, order, iborder, True)
 		else:
 			core.interpol_deriv(
-				idata.reshape(np.product(dpre),np.product(dpost)).T, dpre,
-				odata.reshape(np.product(points.shape[1:]),ndim,np.product(dpost)).T,
+				idata.reshape(iprod(dpre),iprod(dpost)).T, dpre,
+				odata.reshape(iprod(points.shape[1:]),ndim,iprod(dpost)).T,
 				points.reshape(ndim,-1).T,
 				imode, order, iborder, True)
 		if mode == "spline" and prefilter:

@@ -315,7 +315,7 @@ def bin_multi(pix, shape, weights=None):
 	pix  = np.maximum(np.minimum(pix, (np.array(shape)-1)[:,None]),0)
 	inds = np.ravel_multi_index(tuple(pix), tuple(shape))
 	size = np.product(shape)
-	return np.bincount(inds, weights=None, minlength=size).reshape(shape)
+	return np.bincount(inds, weights=weights, minlength=size).reshape(shape)
 
 def grid(box, shape, endpoint=True, axis=0, flat=False):
 	"""Given a bounding box[{from,to},ndim] and shape[ndim] in each
