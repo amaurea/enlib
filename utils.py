@@ -311,7 +311,10 @@ def interpol_prefilter(a, npre=None, order=3, inplace=False):
 	return a
 
 def bin_multi(pix, shape, weights=None):
-	"""Simple multidimensional binning. Not very fast."""
+	"""Simple multidimensional binning. Not very fast.
+	Given pix[{coords},:] where coords are indices into an array
+	with shape shape, count the number of hits in each pixel,
+	returning map[shape]."""
 	pix  = np.maximum(np.minimum(pix, (np.array(shape)-1)[:,None]),0)
 	inds = np.ravel_multi_index(tuple(pix), tuple(shape))
 	size = np.product(shape)

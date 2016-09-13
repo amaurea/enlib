@@ -57,7 +57,11 @@ def ifft(ft, tod=None, nthread=0, normalize=False, axes=[-1],flags=None):
 	if flags is None: flags = default_flags
 	if tod is None: tod = empty(ft.shape, ft.dtype)
 	plan = engines[engine].FFTW(ft, tod, flags=flags, direction='FFTW_BACKWARD', threads=nt, axes=axes)
-	plan(normalise_idft=normalize)
+	# I get a small, cumulative loss in amplitude when using
+	# pyfftw's normalize function.. So normalize manually instead
+	#plan(normalise_idft=normalize)
+	plan(normalise_idft=False)
+	if normalize: tod /= np.product([tod.shape[i] for i in axes])
 	return tod
 
 def rfft(tod, ft=None, nthread=0, axes=[-1], flags=None):
