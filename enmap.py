@@ -468,7 +468,9 @@ def harm2map(emap, nthread=0, normalize=True):
 	return samewcs(ifft(emap,nthread=nthread,normalize=normalize), emap).real
 
 def queb_rotmat(lmap, inverse=False):
-	a    = 2*np.arctan2(lmap[0], lmap[1])
+	# atan2(x,y) instead of (y,x) because Qr points in the
+	# tangential direction, not radial. This matches flipperpol too.
+	a    = 2*np.arctan2(lmap[1], lmap[0])
 	c, s = np.cos(a), np.sin(a)
 	if inverse: s = -s
 	return samewcs(np.array([[c,-s],[s,c]]),lmap)
@@ -744,6 +746,7 @@ def find_blank_edges(m, value="auto"):
 		bs = [find_blank_edges(m, med) for med in medians]
 		nb = [np.product(np.sum(b,0)) for b in bs]
 		blanks = bs[np.argmax(nb)]
+		return blanks
 	elif value is "none":
 		# Don't use any values for cropping, so no cropping is done
 		return np.zeros([2,2],dtype=int)

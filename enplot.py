@@ -36,6 +36,7 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 		comm = mpi.COMM_WORLD
 	# Set up verbose output
 	printer = Printer(args.verbosity)
+	cache = {}
 	# Plot each file
 	for fi in range(comm.rank,len(ifiles),comm.size):
 		ifile = ifiles[fi]
@@ -74,7 +75,7 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 			oname = args.oname.format(**oinfo)
 			# Draw the map
 			if args.driver.lower() == "pil":
-				img, info = draw_map_field(map_field, args, crange[:,crange_ind:crange_ind+ngroup], return_info=True, return_layers=args.layers, printer=subprint)
+				img, info = draw_map_field(map_field, args, crange[:,crange_ind:crange_ind+ngroup], return_info=True, return_layers=args.layers, printer=subprint, cache=cache)
 				padding = np.array([-info.bounds[0,::-1],info.bounds[1,::-1]-map_field.shape[-2:]],dtype=int)
 				printer.write("padded by %d %d %d %d" % tuple(padding.reshape(-1)), 4)
 				if args.layers:
@@ -248,13 +249,19 @@ def extract_stamps(map, args):
 	# Extract stamps
 	return map.stamps(pix.T, size, aslist=True)
 
-def draw_map_field(map, args, crange=None, return_layers=False, return_info=False, printer=noprint):
+def get_cache(cache, key, fun):
+	if cache is None: return fun()
+	if key not in cache: cache[key] = fun()
+	return cache[key]
+
+def draw_map_field(map, args, crange=None, return_layers=False, return_info=False, printer=noprint, cache=None):
 	"""Draw a single map field, resulting in a single image. Adds a coordinate grid
 	and lables as specified by args. If return_layers is True, an array will be
 	returned instead of an image, wich each entry being a component of the image,
 	such as the base image, the coordinate grid, the labels, etc. If return_bounds
 	is True, then the """
 	map, color = prepare_map_field(map, args, crange, printer=printer)
+	tag    = (tuple(map.shape), map.wcs.to_header_string(), repr(args))
 	layers = []
 	names  = []
 	# Image layer
@@ -272,19 +279,23 @@ def draw_map_field(map, args, crange=None, return_layers=False, return_info=Fals
 	# Annotations
 	if args.annotate:
 		with printer.time("draw annotations", 3):
-			annots = parse_annotations(args.annotate)
-			aimg = draw_annotations(map, annots, args)
+			def get_aimg():
+				annots = parse_annotations(args.annotate)
+				return draw_annotations(map, annots, args)
+			aimg = get_cache(cache, ("annotate",tag), get_aimg)
 			layers.append((aimg, [[0,0],aimg.size]))
 			names.append("annot")
 	# Coordinate grid
 	if args.grid % 2:
 		with printer.time("draw grid", 3):
-			ginfo = calc_gridinfo(map.shape, map.wcs, args)
-			layers.append(draw_grid(ginfo, args))
+			ginfo = get_cache(cache, ("ginfo",tag), lambda: calc_gridinfo(map.shape, map.wcs, args))
+			grid  = get_cache(cache, ("grid", tag), lambda: draw_grid(ginfo, args))
+			layers.append(grid)
 			names.append("grid")
 		if not args.nolabels:
 			with printer.time("draw labels", 3):
-				layers.append(draw_grid_labels(ginfo, args))
+				labels = get_cache(cache, ("labels",tag), lambda: draw_grid_labels(ginfo, args))
+				layers.append(labels)
 				names.append("tics")
 	# Possibly other stuff too, like point source circles
 	# or contours
