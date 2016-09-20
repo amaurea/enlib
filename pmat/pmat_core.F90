@@ -138,9 +138,11 @@ contains
 		real(8),    intent(in)    :: bore(:,:), hwp(:,:), det_pos(:), det_comps(:), x0(:), inv_dx(:), yvals(:,:)
 		real(8),    intent(inout) :: pix(:,:), phase(:,:)
 		integer(4) :: nsamp, xind(3), ig, ic, si
-		real(8)    :: xrel(3), point(4), work(4,4), psize(2)
+		logical    :: use_hwp
+		real(8)    :: xrel(3), point(4), work(4,4), psize(2), tmp
 		nsamp = size(bore,2)
 		psize = pbox(:,2)-pbox(:,1)
+		use_hwp = hwp(1,1) .ne. 0 .and. hwp(2,1) .ne. 0
 		!$!omp simd
 		do si = 1, nsamp
 			xrel = (bore(:,si)+det_pos(:)-x0)*inv_dx
@@ -170,21 +172,24 @@ contains
 			! still be in bounds after rounding.
 			pix(1,si) = min(psize(1)+0.49999d0,max(0.5d0,pix(1,si)))
 			pix(2,si) = min(psize(2)+0.49999d0,max(0.5d0,pix(2,si)))
-			phase(1,si) = det_comps(1)
-			! This is where we would apply the half-wave plate rotation
-			phase(2,si) = point(3)*det_comps(2) - point(4)*det_comps(3)
-			phase(3,si) = point(4)*det_comps(2) + point(3)*det_comps(3)
+			! Build our detector response on the sky. First the hwp
+			! if applicable. The effect of the hwp isn't just a rotation,
+			! it also flips Q. We could handle this by passing in a
+			! full rotation matrix, but to keep things simple we will
+			! hardcode this behavior. The flip also needs that we must
+			! rotate in the opposite direction to avoid killing the signal.
+			! Not sure why.
+			phase(:,si) = det_comps(:)
+			if(use_hwp) then
+				tmp = phase(2,si)
+				phase(2,si) = -hwp(1,si)*tmp + hwp(2,si)*phase(3,si)
+				phase(3,si) =  hwp(2,si)*tmp + hwp(1,si)*phase(3,si)
+			end if
+			! Then the sky rotation
+			tmp = phase(2,si)
+			phase(2,si) = point(3)*tmp - point(4)*phase(3,si)
+			phase(3,si) = point(4)*tmp + point(3)*phase(3,si)
 		end do
-		! The hwp array holds the cos and sin of the polarization
-		! rotation induced by the half-wave plate. We use cos=sin=0
-		! to indicate that no hwp data is present, since that's an impossible
-		! combination.
-		if(hwp(1,1) .ne. 0 .and. hwp(2,1) .ne. 0) then
-			do si = 1, nsamp
-				phase(2,si) = phase(2,si)*hwp(1,si) - phase(3,si)*hwp(2,si)
-				phase(3,si) = phase(2,si)*hwp(2,si) + phase(3,si)*hwp(1,si)
-			end do
-		end if
 	end subroutine
 
 	subroutine project_map_nearest( &

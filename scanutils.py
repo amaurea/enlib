@@ -68,9 +68,9 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 		except IOError:
 			try:
 				if isinstance(filelist[ind],list):
-					entry = [db.query(id,multi=True) for id in filelist[ind]]
+					entry = [db[id] for id in filelist[ind]]
 				else:
-					entry = db.query(filelist[ind],multi=True)
+					entry = db[filelist[ind]]
 				d = reader(entry)
 				if d.ndet == 0 or d.nsamp == 0:
 					raise errors.DataMissing("Tod contains no valid data")

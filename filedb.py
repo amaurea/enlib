@@ -55,7 +55,7 @@ class FormatDB(Basedb):
 			self.static[name] = format
 	def __getitem__(self, id):
 		return self.query(id)
-	def query(self, id, multi=False):
+	def query(self, id, multi=True):
 		# Split the id argument into the actual id plus a tag list
 		toks    = id.split(":")
 		id  = toks[0]

@@ -472,7 +472,7 @@ def queb_rotmat(lmap, inverse=False):
 	# tangential direction, not radial. This matches flipperpol too.
 	# This corresponds to the Healpix convention. To get IAU,
 	# flip the sign of a.
-	a    = 2*np.arctan2(lmap[1], lmap[0])
+	a    = 2*np.arctan2(-lmap[1], lmap[0])
 	c, s = np.cos(a), np.sin(a)
 	if inverse: s = -s
 	return samewcs(np.array([[c,-s],[s,c]]),lmap)
