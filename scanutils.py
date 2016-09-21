@@ -97,3 +97,18 @@ def read_scans(filelist, inds, reader, db=None, dets=None, quiet=False, downsamp
 		myinds.append(ind)
 		myscans.append(scan)
 	return myinds, myscans
+
+def get_tod_groups(ids, samelen=True):
+	times = np.array([float(id[:id.index(".")]) for id in ids])
+	labels = utils.label_unique(times, rtol=0, atol=10)
+	nlabel = np.max(labels)+1
+	groups = [ids[labels==label] for label in range(nlabel)]
+	# Try to preserve original ordering
+	first  = [group[0] for group in groups]
+	orig_inds = utils.find(ids, first)
+	order  = np.argsort(orig_inds)
+	groups = [groups[i] for i in order]
+	if samelen:
+		nsub = np.max(np.bincount(labels))
+		groups = [g for g in groups if len(g) == nsub]
+	return groups
