@@ -183,7 +183,7 @@ contains
 			if(use_hwp) then
 				tmp = phase(2,si)
 				phase(2,si) = -hwp(1,si)*tmp + hwp(2,si)*phase(3,si)
-				phase(3,si) =  hwp(2,si)*tmp + hwp(1,si)*phase(3,si)
+				phase(3,si) = +hwp(2,si)*tmp + hwp(1,si)*phase(3,si)
 			end if
 			! Then the sky rotation
 			tmp = phase(2,si)

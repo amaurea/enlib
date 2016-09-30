@@ -798,8 +798,8 @@ class Eqsys:
 					with bench.mark("b_PT_" + signal.name):
 						signal.backward(scan, tod, work)
 			del tod
-			times = [bench.stats[s]["time"].last for s in ["b_read","b_N_build", "b_N", "b_PT"]]
-			L.debug("b get %5.1f NB %5.3f N %5.3f P' %5.3f %s" % (tuple(times)+(scan.id,)))
+			times = [bench.stats[s]["time"].last for s in ["b_read","b_filter","b_N_build", "b_N", "b_PT"]]
+			L.debug("b get %5.1f f %5.1f NB %5.3f N %5.3f P' %5.3f %s" % (tuple(times)+(scan.id,)))
 		# Collect results
 		with bench.mark("b_reduce"):
 			for signal, map, work in zip(self.signals, maps, owork):

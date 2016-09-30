@@ -72,7 +72,7 @@ class ndmap(np.ndarray):
 	def sky2pix(self, coords, safe=True, corner=False): return sky2pix(self.shape, self.wcs, coords, safe, corner)
 	def pix2sky(self, pix,    safe=True, corner=False): return pix2sky(self.shape, self.wcs, pix,    safe, corner)
 	def box(self): return box(self.shape, self.wcs)
-	def posmap(self, corner=False): return posmap(self.shape, self.wcs, corner=corner)
+	def posmap(self, safe=True, corner=False): return posmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
 	def lmap(self, oversample=1): return lmap(self.shape, self.wcs, oversample=oversample)
 	def area(self): return area(self.shape, self.wcs)
@@ -273,13 +273,16 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 			wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
 	return wpix[::-1].reshape(coords.shape)
 
-def project(map, shape, wcs, order=3, mode="nearest", cval=0.0):
+def project(map, shape, wcs, order=3, mode="nearest", cval=0.0, force=False):
 	"""Project the map into a new map given by the specified
 	shape and wcs, interpolating as necessary. Handles nan
 	regions in the map by masking them before interpolating.
 	This uses local interpolation, and will lose information
 	when downgrading compared to averaging down."""
 	map  = map.copy()
+	# Skip expensive operation is map is compatible
+	if not force and enlib.wcs.equal(map.wcs, wcs) and tuple(shape[-2:]) == tuple(shape[-2:]):
+		return map
 	pix  = map.sky2pix(posmap(shape, wcs))
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval)
 	return ndmap(pmap, wcs)

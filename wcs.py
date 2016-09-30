@@ -52,6 +52,9 @@ def describe(wcs):
 # Add this to all WCSes in this class
 WCS.__repr__ = describe
 
+def equal(wcs1, wcs2):
+	return repr(wcs1.to_header()) == repr(wcs2.to_header())
+
 def is_plain(wcs):
 	"""Determines whether the given wcs represents plain, non-specific,
 	non-wrapping coordinates or some angular coordiante system."""
