@@ -8,7 +8,7 @@ setup(
 	ext_modules = [
 		Extension(
 			name="sharp",
-			sources=["sharp.pyx"],
+			sources=["sharp.c"],
 			libraries=["sharp","c_utils","fftpack"],
 			include_dirs=["."],
 			extra_link_args = ["-fopenmp"],
