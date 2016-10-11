@@ -256,6 +256,7 @@ def merge_subid(a, b):
 	return ",".join(sorted(list(res)))
 
 def append_subs(ids, subs):
+	if len(ids) == 0: return ids
 	sep_helper = np.array(["",":"])
 	ind = (np.char.str_len(subs) > 0).astype(int)
 	sep = sep_helper[ind]
