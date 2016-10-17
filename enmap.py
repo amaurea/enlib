@@ -95,6 +95,9 @@ class ndmap(np.ndarray):
 	@property
 	def plain(self): return ndmap(self, enlib.wcs.WCS(naxis=2))
 	def padslice(self, box, default=np.nan): return padslice(self, box, default=default)
+	def to_healpix(self, nside=0, order=3, omap=None, chunk=100000, destroy_input=False):
+		return to_healpix(self, nside=nside, order=order, omap=omap, chunk=chunk, destroy_input=destroy_input)
+	def to_flipper(self, omap=None): return to_flipper(self, omap=omap)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
@@ -898,6 +901,51 @@ def stamps(map, pos, shape, aslist=False):
 	if aslist: return res
 	res = samewcs(np.array(res),res[0])
 	return res
+
+def to_healpix(imap, omap=None, nside=0, order=3, chunk=100000, destroy_input=False):
+	"""Project the enmap "imap" onto the healpix pixelization. If omap is given,
+	the output will be written to it. Otherwise, a new healpix map will be constructed.
+	The healpix map must be in RING order. nside controls the resolution of the output map.
+	If 0, nside is chosen such that the output map is higher resolution than the input.
+	This is needed to avoid losing information. To go to a lower-resolution output map,
+	you should first degrade the input map. The chunk argument affects the speed/memory
+	tradeoff of the function. Higher values use more memory, and might (and might not)
+	give higher speed. If destroy_input is True, then the input map will be prefiltered
+	in-place, which saves memory but modifies its values."""
+	import healpy
+	if not destroy_input and order > 1: imap = imap.copy()
+	imap = enlib.utils.interpol_prefilter(imap, order=order, inplace=True)
+	if omap is None:
+		# Generate an output map
+		if not nside:
+			npix_full_cyl = 4*np.pi/imap.pixsize()
+			nside = 2**int(np.floor(np.log2((npix_full_cyl/12)**0.5)))
+		npix = 12*nside**2
+		omap = np.zeros(imap.shape[:-2]+(npix,),imap.dtype)
+	else:
+		nside = healpy.npix2nside(omap.shape[-1])
+	npix = omap.shape[-1]
+	# Interpolate values at output pixel positions
+	for i in range(0, npix, chunk):
+		pos   = np.array(healpy.pix2ang(nside, np.arange(i, min(npix,i+chunk))))
+		# Healpix uses polar angle, not dec
+		pos[0] = np.pi/2 - pos[0]
+		omap[...,i:i+chunk] = imap.at(pos, order=order, mask_nan=False, prefilter=False)
+	return omap
+
+def to_flipper(imap, omap=None):
+	"""Convert the enmap "imap" into a flipper map with the same geometry. If
+	omap is given, the output will be written to it. Otherwise, a an array of
+	flipper maps will be constructed. If the input map has dimensions
+	[a,b,c,ny,nx], then the output will be an [a,b,c] array with elements
+	that are flipper maps with dimension [ny,nx]."""
+	import flipper
+	iflat = imap.preflat
+	if omap is None:
+		omap = np.empty(iflat.shape[:-2],dtype=object)
+	for i, m in enumerate(iflat):
+		omap[i] = flipper.liteMap.liteMapFromDataAndWCS(iflat[i], iflat.wcs)
+	return omap.reshape(imap.shape[:-1])
 
 ############
 # File I/O #
