@@ -7,8 +7,8 @@ from enlib import utils
 from enlib.utils import ang2rect, rect2ang
 # Optional dependencies
 try:
-	from pyslalib import slalib
 	from enlib    import iers
+	from pyslalib import slalib
 except ImportError:
 	pass
 try:
