@@ -67,13 +67,17 @@ class FormatDB(Basedb):
 			name, format = rule["name"], rule["format"]
 			if name[0] == "@":
 				# In this case, format is actually the conditional in the selector
-				assert len(format) == 1, "FormatDB conditional must have a single argument"
 				if name == "@end":
 					selected.pop()
 				elif name == "@else":
 					selected[-1] = not selected[-1]
 				else:
-					selected.append(("{%s}"%name[1:]).format(**info) == format[0])
+					# General format @var:case case case ...
+					match = False
+					for case in format:
+						match |= ("{%s}"%name[1:]).format(**info) == case
+					selected.append(match)
+					#selected.append(("{%s}"%name[1:]).format(**info) == format[0])
 			elif len(format) == 0 or len(format[0]) == 0:
 				# Handle variable assignment. Avoids repeating the same long paths over and over again
 				vname, vval = re.split(r"\s*=\s*", name)
