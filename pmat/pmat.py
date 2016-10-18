@@ -45,12 +45,14 @@ class PmatMap(PointingMatrix):
 		self.scan,   self.dtype = scan, template.dtype
 		self.func  = get_core(self.dtype).pmat_map
 		self.order = config.get("pmat_map_order", order)
-	def forward(self, tod, m, tmul=1, mmul=1):
+	def forward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""m -> tod"""
-		self.func( 1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
-	def backward(self, tod, m, tmul=1, mmul=1):
+		if times is None: times = np.zeros(5)
+		self.func( 1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
-		self.func(-1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
+		if times is None: times = np.zeros(5)
+		self.func(-1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -84,19 +86,21 @@ class PmatMapMultibeam(PointingMatrix):
 		self.scan,   self.dtype = scan, template.dtype
 		self.func  = get_core(self.dtype).pmat_map
 		self.order = config.get("pmat_map_order", order)
-	def forward(self, tod, m, tmul=1, mmul=1):
+	def forward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""m -> tod"""
 		# Loop over each beam, summing its contributions
+		if times is None: times = np.zeros(5)
 		tod *= tmul
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
 			self.func( 1, 1, self.order+1, 1, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T,
-					boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
-	def backward(self, tod, m, tmul=1, mmul=1):
+					boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
+		if times is None: times = np.zeros(5)
 		m *= mmul
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
 			self.func(-1, 1, self.order+1, tmul, 1, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T,
-					boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi)
+					boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
 
 def get_moby_pointing(entry, bore, dets, downgrade=1):
 	# Set up moby2

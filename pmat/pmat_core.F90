@@ -11,7 +11,8 @@ contains
 			tmul, mmul,                &! Consts to multiply tod/map by
 			tod, map,                  &! Main inputs/outpus
 			bore, hwp, det_pos, det_comps, &! Input pointing
-			rbox, nbox, yvals, pbox, nphi &! Coordinate transformation
+			rbox, nbox, yvals, pbox, nphi, &! Coordinate transformation
+			times & ! Report of time used in each step (output) (length 5)
 		)
 		use omp_lib
 		implicit none
@@ -21,22 +22,31 @@ contains
 		real(8),    intent(in)    :: det_comps(:,:)
 		real(_),    intent(in)    :: tmul, mmul
 		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		real(8),    intent(inout) :: times(:)
 		! Work
 		real(8),    allocatable   :: pix(:,:), phase(:,:)
 		real(_),    allocatable   :: wmap(:,:,:)
 		integer(4), allocatable   :: xmap(:)
 		integer(4) :: nsamp, ndet, di, si, mi, ncopy, psize(2), steps(3)
-		real(8)    :: x0(3), inv_dx(3), xrel(3)
+		real(8)    :: x0(3), inv_dx(3), xrel(3), t1, t2, t0, tloc1, tloc2, tpoint, tproj
 		nsamp   = size(bore, 2)
 		ndet    = size(det_comps, 2)
 		! prepare + finish: 0.0074 / 0.0090
+		t1 = omp_get_wtime()
 		call interpol_prepare(nbox, rbox, steps, x0, inv_dx)
+		t2 = omp_get_wtime()
+		times(1) = times(1) + t2-t1
 		call map_block_prepare(dir, pbox, nphi, mmul, map, wmap, xmap)
-		!$omp parallel do private(di, pix, phase)
+		t1 = omp_get_wtime()
+		times(2) = times(1) + t1-t2
+		!$omp parallel do private(di, pix, phase, tloc1, tloc2) reduction(+:tpoint,tproj)
 		do di = 1, ndet
+			tloc1 = omp_get_wtime()
 			allocate(pix(2,nsamp), phase(3,nsamp))
 			call build_pointing(pmet, bore, hwp, pix, phase, &
 				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals, pbox, nphi)
+			tloc2 = omp_get_wtime()
+			tpoint = tpoint + tloc2-tloc1
 			select case(mmet)
 			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
 			! is even slower for nthread > 8
@@ -45,8 +55,15 @@ contains
 			case(4); call project_map_bicubic (dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
 			end select
 			deallocate(pix, phase)
+			tloc1 = omp_get_wtime()
+			tproj = tproj + tloc1-tloc2
 		end do
+		t2 = omp_get_wtime()
+		times(3) = times(3) + (t2-t1)*tpoint/(tpoint+tproj)
+		times(4) = times(4) + (t2-t1)*tproj /(tpoint+tproj)
 		call map_block_finish(dir, pbox, mmul, map, wmap, xmap)
+		t1 = omp_get_wtime()
+		times(5) = times(5) + t1-t2
 	end subroutine
 
 	subroutine interpol_prepare(nbox, rbox, steps, x0, inv_dx)
@@ -172,6 +189,9 @@ contains
 			! still be in bounds after rounding.
 			pix(1,si) = min(psize(1)+0.49999d0,max(0.5d0,pix(1,si)))
 			pix(2,si) = min(psize(2)+0.49999d0,max(0.5d0,pix(2,si)))
+			if(si < 10) then
+				write(*,*) pix(:,si)
+			end if
 			! Build our detector response on the sky. First the hwp
 			! if applicable. The effect of the hwp isn't just a rotation,
 			! it also flips Q. We could handle this by passing in a
