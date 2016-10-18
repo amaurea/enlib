@@ -189,9 +189,6 @@ contains
 			! still be in bounds after rounding.
 			pix(1,si) = min(psize(1)+0.49999d0,max(0.5d0,pix(1,si)))
 			pix(2,si) = min(psize(2)+0.49999d0,max(0.5d0,pix(2,si)))
-			if(si < 10) then
-				write(*,*) pix(:,si)
-			end if
 			! Build our detector response on the sky. First the hwp
 			! if applicable. The effect of the hwp isn't just a rotation,
 			! it also flips Q. We could handle this by passing in a
