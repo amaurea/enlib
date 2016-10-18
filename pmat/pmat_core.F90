@@ -130,6 +130,17 @@ contains
 		deallocate(wmap, xmap)
 	end subroutine
 
+	! ops: about nsamp * 146. If we're compute-bound, then this function
+	! should completely dominate pmat cost, since the nearest neighbor
+	! projection is nsamp * 7. The fact that it doesn't shows how limited
+	! we are by memory.
+	! Jon's approach for pointing is much more memory-friendly, since
+	! it uses the same small number of coeffents for each sample (per
+	! detector). But his approach doesn't work for very curved coordinates.
+	! Could try first using a polynomial, and if that fails, build a
+	! a grid interpolator instead. Anyway, this only really becomes
+	! relevant if we can improve the memory performance of the map
+	! access, where the memory is the greatest bottleneck.
 	subroutine build_pointing( &
 		pmet, bore, hwp, pix, phase, &
 		det_pos, det_comps, steps, x0, inv_dx, yvals, pbox, nphi)
@@ -154,6 +165,7 @@ contains
 			! compared to gradient interpolation, it's about the same speed.
 			select case(pmet)
 			case(1)
+				! ops: about (2+4+2+4+4)*7 = 112
 				work(:,1) = yvals(:,ig)*(1-xrel(1)) + yvals(:,ig+steps(1))*xrel(1)
 				work(:,2) = yvals(:,ig+steps(2))*(1-xrel(1)) + yvals(:,ig+steps(2)+steps(1))*xrel(1)
 				work(:,3) = yvals(:,ig+steps(3))*(1-xrel(1)) + yvals(:,ig+steps(3)+steps(1))*xrel(1)
@@ -192,6 +204,7 @@ contains
 		end do
 	end subroutine
 
+	! ops: about nsamp * 7
 	subroutine project_map_nearest( &
 		dir, tmul, tod, map, pix, phase)
 		use omp_lib
