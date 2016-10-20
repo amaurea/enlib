@@ -1038,3 +1038,16 @@ def parse_numbers(s, dtype=None):
 	if dtype is not None:
 		res = res.astype(dtype)
 	return res
+
+def triangle_wave(x, period=1):
+	"""Return a triangle wave with amplitude 1 and the given period."""
+	# This order (rather than x/period%1) gave smaller errors
+	x = x % period / period * 4
+	m1 = x < 1
+	m2 = (x < 3) ^ m1
+	m3 = x >= 3
+	res = x.copy()
+	res[m1] = x[m1]
+	res[m2] = 2-x[m2]
+	res[m3] = x[m3]-4
+	return res
