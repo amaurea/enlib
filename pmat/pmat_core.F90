@@ -66,6 +66,112 @@ contains
 		times(5) = times(5) + t1-t2
 	end subroutine
 
+	! We can improve memory efficiency by using a different internal pixelization.
+	! We already do that with the pbox, which is a rectangular subset of the full
+	! map. But we can do better by using a skewed system:
+	!
+	!      e       m
+	!     d f     l n        ijklmn...
+	!    c   g   k       :
+	!   b     h j        :
+	!  a       i             abcdefgh
+	!
+	! Define an ex(y,sdir), the expected x-location as a function of y and scanning
+	! direction and make a new coordinate system which is
+	!  ox = y - obox(1,1)
+	!  oy = x - xshift(ox,sdir) - obox(2,1)
+	!  oz = dir
+	! xshift(ox,sdir) can for example be based on a simulated padded sweep of a detector
+	! in the center of the focalplane. This will make that detector trace perfectly
+	! straight lines in the new coordinate system, while others will be a bit curved,
+	! but still mostly straight.
+	!
+	! What will be bounds of this system be? In the ox direction it will be given
+	! by the size of the padded sweep we used. As long as that is properly padded
+	! it will be large enough. In the oy direction it will have the same width as
+	! the broadest width in ra of our tod on the sky. This should be
+	!  woy = det_max(ra(t1))-det_min(ra(t0))
+	!
+	! So the inputs to the fortran part should be
+	!  xshift(ox,sdir), obox({ox,oy},{from,to})
+	! and the internal buffer will be (nox,noy,2) where (nox,noy) =
+	! obox(:,2)-obox(:-1), all in fortran order. These will replace pbox.
+	! sdir does not need to be passed in - it can be efficiently computed
+	! on the fly each time, since is isn't per-detector.
+	!
+	! Copying between the map and our buffer:
+	!  do sdir = 1, 2
+	!   do ox = 1, nox
+	!    iy = max(1,min(ny,ox + obox(1,1)))
+	!    do oy = 1, noy
+	!     ix = max(1,min(nx,oy + xshfit(ox,sdir) + obox(2,1)))
+	!     map(ix,iy,:) = work(:,ox,oy) ! case copy-out
+	!     work(:,oy,oy) = map(ix,iy,:) ! case copy-in
+
+	subroutine pmat_test( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			pmet,                      &! pointing. 1: bilinear, 2: gradient
+			mmet,                      &! binning.  1: nearest,  2: bilinear
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			bore, hwp, det_pos, det_comps, &! Input pointing
+			rbox, nbox, yvals, pbox, nphi, &! Coordinate transformation
+			times & ! Report of time used in each step (output) (length 5)
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), nphi, pmet, mmet
+		real(8),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
+		real(8),    intent(in)    :: det_comps(:,:)
+		real(_),    intent(in)    :: tmul, mmul
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		real(8),    intent(inout) :: times(:)
+		! Work
+		real(8),    allocatable   :: pix(:,:), phase(:,:)
+		real(_),    allocatable   :: wmap(:,:,:)
+		integer(4), allocatable   :: xmap(:)
+		integer(4) :: nsamp, ndet, di, si, mi, ncopy, psize(2), steps(3)
+		real(8)    :: x0(3), inv_dx(3), xrel(3), t1, t2, t0, tloc1, tloc2, tpoint, tproj
+		nsamp   = size(bore, 2)
+		ndet    = size(det_comps, 2)
+		! prepare + finish: 0.0074 / 0.0090
+		t1 = omp_get_wtime()
+		call interpol_prepare(nbox, rbox, steps, x0, inv_dx)
+		t2 = omp_get_wtime()
+		times(1) = times(1) + t2-t1
+		call map_block_prepare(dir, pbox, nphi, mmul, map, wmap, xmap)
+		t1 = omp_get_wtime()
+		times(2) = times(1) + t1-t2
+		!$omp parallel do private(di, pix, phase, tloc1, tloc2) reduction(+:tpoint,tproj)
+		do di = 1, ndet
+			tloc1 = omp_get_wtime()
+			allocate(pix(2,nsamp), phase(3,nsamp))
+			call build_pointing(pmet, bore, hwp, pix, phase, &
+				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals, pbox, nphi)
+			tloc2 = omp_get_wtime()
+			tpoint = tpoint + tloc2-tloc1
+			select case(mmet)
+			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
+			! is even slower for nthread > 8
+			case(1); call project_map_nearest (dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			case(2); call project_map_bilinear(dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			case(4); call project_map_bicubic (dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			end select
+			deallocate(pix, phase)
+			tloc1 = omp_get_wtime()
+			tproj = tproj + tloc1-tloc2
+		end do
+		t2 = omp_get_wtime()
+		times(3) = times(3) + (t2-t1)*tpoint/(tpoint+tproj)
+		times(4) = times(4) + (t2-t1)*tproj /(tpoint+tproj)
+		call map_block_finish(dir, pbox, mmul, map, wmap, xmap)
+		t1 = omp_get_wtime()
+		times(5) = times(5) + t1-t2
+	end subroutine
+
+
+
 	subroutine interpol_prepare(nbox, rbox, steps, x0, inv_dx)
 		implicit none
 		integer(4), intent(in)    :: nbox(:)
@@ -89,10 +195,6 @@ contains
 		integer(4), intent(inout), allocatable :: xmap(:)
 		integer(4) :: psize(2), ix, iy, ox, oy, ic, pcut
 		! Set up our work map based on the relevant subset of pixels.
-		! We use a shared map across all threads for map2tod, but
-		! one per thread for tod2map to avoid clobbering. The
-		! work map has TQU as the fastest dimension to improve
-		! memory performance.
 		psize = pbox(:,2)-pbox(:,1)
 		allocate(wmap(3,psize(2),psize(1)))
 		! Set up the pixel wrap remapper
