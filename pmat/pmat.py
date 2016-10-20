@@ -68,10 +68,10 @@ class PmatMap(PointingMatrix):
 		return pix, phase
 
 def get_scan_dir(az, step=3):
-	"""The scanning direction is 1 if az is increasing, and 0 otherwise.
+	"""The scanning direction is 0 if az is increasing, and 1 otherwise.
 	Larger values of step are less sensitive to jitter, but have worse
 	resolution."""
-	sdir = az[step:]>az[:-step]
+	sdir = az[step:]<az[:-step]
 	return np.concatenate([
 			np.full(step/2,sdir[0],dtype=bool),
 			sdir,
@@ -114,7 +114,7 @@ def build_work_shift(transform, hor_box, scan_period):
 	y0 = int(np.floor(pix_box[0,0]))
 	y1 = int(np.ceil(pix_box[1,0]))+1
 	mean_t, mean_az, mean_el = np.mean(hor_box,0)
-	# Get a forward and backwards sweep
+	# Get a forward and backwards sweep. So index 0 is az increasing, index 1 is az decreasing
 	wshift = np.array([
 		measure_sweep_pixels(transform, [mean_t,mean_t+scan_period], hor_box[:,1],    mean_el, [y0,y1]),
 		measure_sweep_pixels(transform, [mean_t,mean_t+scan_period], hor_box[::-1,1], mean_el, [y0,y1])])
@@ -126,22 +126,7 @@ def build_work_shift(transform, hor_box, scan_period):
 		# coordinates. This wil give us the bounds of the shifted system
 		shift_corn = pix_corn.copy()
 		np.set_printoptions(suppress=True)
-		print "pix_box"
-		print pix_box
-		print "y0", y0, "y1", y1
-		print "shift_corn before"
-		print shift_corn
-		print "shift_box before"
-		print utils.bounding_box(shift_corn)
-		print "shifts args"
-		print np.round(shift_corn[:,0]).astype(int)-y0
-		print "shifts"
-		print wshift_single[np.round(shift_corn[:,0]).astype(int)-y0]
 		shift_corn[:,1] -= wshift_single[np.round(shift_corn[:,0]-y0).astype(int)]
-		print "shift_corn after"
-		print shift_corn
-		print "shift_box after"
-		print utils.bounding_box(shift_corn)
 		wboxes.append(utils.bounding_box(shift_corn))
 	# Merge wboxes
 	wbox = utils.bounding_box(wboxes)
@@ -150,7 +135,6 @@ def build_work_shift(transform, hor_box, scan_period):
 	wbox    = wbox.astype(int)
 	return wbox, wshift
 
-import sys
 def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, nsamp=None, ntry=None):
 	"""Helper function for build_work_shift. Measure the x for each y of an azimuth sweep."""
 	if nsamp   is None: nsamp   = 10000

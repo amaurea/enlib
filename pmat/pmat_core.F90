@@ -1,6 +1,9 @@
 module pmat_core
 
 	private map_block_prepare, map_block_finish, map_block_prepare_shifted, map_block_finish_shifted
+	private map_block_prepare_single, map_block_finish_single, map_block_prepare_shifted_single, map_block_finish_shifted_single
+	private map_block_prepare_shifted_mbuf, map_block_finish_shifted_mbuf
+
 
 contains
 
@@ -140,7 +143,6 @@ contains
 		! Work
 		real(8),    allocatable   :: pix(:,:), phase(:,:)
 		real(_),    allocatable   :: wmap(:,:,:)
-		integer(4), allocatable   :: xmap(:)
 		integer(4) :: nsamp, ndet, di, si, mi, ncopy, steps(3)
 		real(8)    :: x0(3), inv_dx(3), xrel(3), t1, t2, t0, tloc1, tloc2, tpoint, tproj
 		nsamp   = size(bore, 2)
@@ -181,72 +183,87 @@ contains
 		times(5) = times(5) + t1-t2
 	end subroutine
 
-	subroutine pmat_test_test( &
-			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+	subroutine pmat_test_get_pix( &
 			pmet,                      &! pointing. 1: bilinear, 2: gradient
 			mmet,                      &! binning.  1: nearest,  2: bilinear
-			tmul, mmul,                &! Consts to multiply tod/map by
-			tod, wmap,                 &! Main inputs/outpus
+			pix,  phase,               &! Main inputs/outpus
 			bore, hwp, det_pos, det_comps, &! Input pointing
 			rbox, nbox, yvals,         &! Coordinate interpolation
+			sdir, wbox, wshift, nphi   &! Pixel remapping
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: nbox(:), wbox(:,:), wshift(:,:), nphi, pmet, mmet, sdir(:)
+		real(8),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
+		real(8),    intent(in)    :: det_comps(:,:)
+		real(8),    intent(inout) :: pix(:,:,:), phase(:,:,:)
+		! Work
+		integer(4) :: nsamp, ndet, di, si, mi, ncopy, steps(3)
+		real(8)    :: x0(3), inv_dx(3), xrel(3), t1, t2, t0, tloc1, tloc2, tpoint, tproj
+		nsamp   = size(bore, 2)
+		ndet    = size(det_comps, 2)
+		! prepare + finish: 0.0074 / 0.0090
+		call interpol_prepare(nbox, rbox, steps, x0, inv_dx)
+		!$omp parallel do private(di, tloc1, tloc2) reduction(+:tpoint,tproj)
+		do di = 1, ndet
+			call build_pointing(pmet, bore, hwp, pix(:,:,di), phase(:,:,di), &
+				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals)
+			call shift_pixels(pix(:,:,di), sdir, wbox, wshift)
+		end do
+	end subroutine
+
+	subroutine pmat_test_use_pix( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			mmet,                      &! binning.  1: nearest,  2: bilinear
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			pix, phase,                &! Precomputed pointing
 			sdir, wbox, wshift, nphi,  &! Pixel remapping
 			times                      &! Time report output array (5)
 		)
 		use omp_lib
 		implicit none
 		! Parameters
-		integer(4), intent(in)    :: dir, nbox(:), wbox(:,:), wshift(:,:), nphi, pmet, mmet, sdir(:)
-		real(8),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
-		real(8),    intent(in)    :: det_comps(:,:)
+		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi, mmet, sdir(:)
 		real(_),    intent(in)    :: tmul, mmul
-		real(_),    intent(inout) :: tod(:,:), wmap(:,:,:)
-		real(8),    intent(inout) :: times(:)
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		real(8),    intent(inout) :: times(:), pix(:,:,:), phase(:,:,:)
 		! Work
-		real(8),    allocatable   :: pix(:,:), phase(:,:)
-		!real(_),    allocatable   :: wmap(:,:,:)
-		integer(4), allocatable   :: xmap(:)
+		real(_),    allocatable   :: wmap(:,:,:)
 		integer(4) :: nsamp, ndet, di, si, mi, ncopy, steps(3)
 		real(8)    :: x0(3), inv_dx(3), xrel(3), t1, t2, t0, tloc1, tloc2, tpoint, tproj
-		nsamp   = size(bore, 2)
-		ndet    = size(det_comps, 2)
+		nsamp   = size(tod, 1)
+		ndet    = size(tod, 2)
 		! prepare + finish: 0.0074 / 0.0090
 		t1 = omp_get_wtime()
-		call interpol_prepare(nbox, rbox, steps, x0, inv_dx)
 		t2 = omp_get_wtime()
 		times(1) = times(1) + t2-t1
-		!call map_block_prepare_shifted(dir, wbox, wshift, nphi, mmul, map, wmap)
-		write(*,*) shape(wmap)
+		call map_block_prepare_shifted(dir, wbox, wshift, nphi, mmul, map, wmap)
 		t1 = omp_get_wtime()
 		times(2) = times(1) + t1-t2
-		!$omp parallel do private(di, pix, phase, tloc1, tloc2) reduction(+:tpoint,tproj)
+		!$omp parallel do private(di, tloc1, tloc2) reduction(+:tpoint,tproj)
 		do di = 1, ndet
 			tloc1 = omp_get_wtime()
-			allocate(pix(2,nsamp), phase(3,nsamp))
-			call build_pointing(pmet, bore, hwp, pix, phase, &
-				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals)
-			call shift_pixels(pix, sdir, wbox, wshift)
 			tloc2 = omp_get_wtime()
 			tpoint = tpoint + tloc2-tloc1
 			select case(mmet)
 			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
 			! is even slower for nthread > 8
-			case(1); call project_map_nearest (dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
-			case(2); call project_map_bilinear(dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
-			case(4); call project_map_bicubic (dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			case(1); call project_map_nearest (dir, tmul, tod(:,di), wmap(:,:,:), pix(:,:,di), phase(:,:,di))
+			case(2); call project_map_bilinear(dir, tmul, tod(:,di), wmap(:,:,:), pix(:,:,di), phase(:,:,di))
+			case(4); call project_map_bicubic (dir, tmul, tod(:,di), wmap(:,:,:), pix(:,:,di), phase(:,:,di))
 			end select
-			deallocate(pix, phase)
 			tloc1 = omp_get_wtime()
 			tproj = tproj + tloc1-tloc2
 		end do
 		t2 = omp_get_wtime()
 		times(3) = times(3) + (t2-t1)*tpoint/(tpoint+tproj)
 		times(4) = times(4) + (t2-t1)*tproj /(tpoint+tproj)
-		!call map_block_finish_shifted(dir, wbox, wshift, nphi, mmul, map, wmap)
+		call map_block_finish_shifted(dir, wbox, wshift, nphi, mmul, map, wmap)
 		t1 = omp_get_wtime()
 		times(5) = times(5) + t1-t2
 	end subroutine
-
-
 
 	subroutine interpol_prepare(nbox, rbox, steps, x0, inv_dx)
 		implicit none
@@ -430,7 +447,6 @@ contains
 		real(8)    :: xrel(3), point(4), work(4,4), psize(2), tmp
 		nsamp = size(bore,2)
 		use_hwp = hwp(1,1) .ne. 0 .and. hwp(2,1) .ne. 0
-		!$!omp simd
 		do si = 1, nsamp
 			xrel = (bore(:,si)+det_pos(:)-x0)*inv_dx
 			xind = floor(xrel)
@@ -525,7 +541,6 @@ contains
 		integer(4) :: nsamp, si
 		nsamp = size(tod)
 		if(dir > 0) then
-			!$!omp simd
 			do si = 1, nsamp
 				p = nint(pix(:,si))
 				if(tmul .eq. 0) then
@@ -546,7 +561,6 @@ contains
 						! there is only one thread.
 						!$omp atomic
 						map(ci,p(2),p(1)) = map(ci,p(2),p(1)) + v
-						!$omp end atomic
 					end do
 				end do
 			else
@@ -737,6 +751,890 @@ contains
 			end if
 		end do
 	end subroutine
+
+	! multibuf !
+
+	subroutine pmat_test_mbuf( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			pmet,                      &! pointing. 1: bilinear, 2: gradient
+			mmet,                      &! binning.  1: nearest,  2: bilinear
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			bore, hwp, det_pos, det_comps, &! Input pointing
+			rbox, nbox, yvals,         &! Coordinate interpolation
+			sdir, wbox, wshift, nphi,  &! Pixel remapping
+			times                      &! Time report output array (5)
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, nbox(:), wbox(:,:), wshift(:,:), nphi, pmet, mmet, sdir(:)
+		real(8),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
+		real(8),    intent(in)    :: det_comps(:,:)
+		real(_),    intent(in)    :: tmul, mmul
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		real(8),    intent(inout) :: times(:)
+		! Work
+		real(8),    allocatable   :: pix(:,:), phase(:,:)
+		real(_),    allocatable   :: wmap(:,:,:,:)
+		integer(4) :: nsamp, ndet, di, si, mi, ncopy, steps(3)
+		real(8)    :: x0(3), inv_dx(3), xrel(3), t1, t2, t0, tloc1, tloc2, tpoint, tproj, id
+		nsamp   = size(bore, 2)
+		ndet    = size(det_comps, 2)
+		id      = omp_get_thread_num()+1
+		! prepare + finish: 0.0074 / 0.0090
+		t1 = omp_get_wtime()
+		call interpol_prepare(nbox, rbox, steps, x0, inv_dx)
+		t2 = omp_get_wtime()
+		times(1) = times(1) + t2-t1
+		call map_block_prepare_shifted_mbuf(dir, wbox, wshift, nphi, mmul, map, wmap)
+		t1 = omp_get_wtime()
+		times(2) = times(1) + t1-t2
+		!$omp parallel do private(di, pix, phase, tloc1, tloc2) reduction(+:tpoint,tproj)
+		do di = 1, ndet
+			tloc1 = omp_get_wtime()
+			allocate(pix(2,nsamp), phase(3,nsamp))
+			call build_pointing(pmet, bore, hwp, pix, phase, &
+				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals)
+			call shift_pixels(pix, sdir, wbox, wshift)
+			tloc2 = omp_get_wtime()
+			tpoint = tpoint + tloc2-tloc1
+			select case(mmet)
+			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
+			! is even slower for nthread > 8
+			case(1); call project_map_nearest_noatomic (dir, tmul, tod(:,di), wmap(:,:,:,id), pix, phase)
+			end select
+			deallocate(pix, phase)
+			tloc1 = omp_get_wtime()
+			tproj = tproj + tloc1-tloc2
+		end do
+		t2 = omp_get_wtime()
+		times(3) = times(3) + (t2-t1)*tpoint/(tpoint+tproj)
+		times(4) = times(4) + (t2-t1)*tproj /(tpoint+tproj)
+		call map_block_finish_shifted_mbuf(dir, wbox, wshift, nphi, mmul, map, wmap)
+		t1 = omp_get_wtime()
+		times(5) = times(5) + t1-t2
+	end subroutine
+
+	subroutine map_block_prepare_shifted_mbuf(dir, wbox, wshift, nphi, mmul, map, wmap)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi
+		real(_),    intent(in)    :: map(:,:,:), mmul
+		real(_),    intent(inout), allocatable :: wmap(:,:,:,:)
+		integer(4) :: ix, iy, iwx, iwy, iwy_sdir, ic, nx, ny, nwx, nwy, pcut, sdir, nbuf
+		! Set up our work map based on the relevant subset of pixels.
+		nx   = size(map,1)
+		ny   = size(map,2)
+		nwx  = wbox(1,2)-wbox(1,1) ! {wx,wy} ordering
+		nwy  = wbox(2,2)-wbox(2,1)
+		pcut = -(nphi-nx)/2
+		nbuf = omp_get_max_threads()
+		if(dir > 0) nbuf = 1
+		! It would be most natural to have wmap(ncomp,nwx,nwy,sdir),
+		! but then it wouldn't be compatible with our binnin functions,
+		! which expect a 3d map. Instead, we can unroll it such that
+		! the sdir == 1 case follows after the sdir == 0 case in memory.
+		! So the real size would be 2*nwy. From the point of view of the
+		! python code, this will be an implementation detail.
+		allocate(wmap(3,nwx,2*nwy,nbuf))
+		!$omp parallel workshare
+		wmap = 0
+		!$omp end parallel workshare
+		if (dir > 0) then
+			! map2tod. Copy values over so we can add them to the tod later
+			! 5% of total cost
+			do sdir = 0, 1
+				!$omp parallel do private(iy,ix,ic,iwx,iwy,iwy_sdir)
+				do iwx = 1, nwx
+					iy = max(1,min(ny, iwx+wbox(1,1)))
+					do iwy = 1, nwy
+						iwy_sdir = iwy + sdir*nwy
+						ix = iwy+wbox(2,1)+wshift(iwx,sdir+1)
+						! This looks a bit heavy. Could precompute, but not as
+						! easy as before.
+						ix = modulo(ix-1-pcut,nphi)+pcut+1
+						ix = max(1,min(nx, ix))
+						do ic = 1, size(map,3)
+							wmap(ic,iwx,iwy_sdir,1) = map(ix,iy,ic)*mmul
+						end do
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
+	subroutine map_block_finish_shifted_mbuf(dir, wbox, wshift, nphi, mmul, map, wmap)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi
+		real(_),    intent(in)    :: mmul
+		real(_),    intent(inout) :: map(:,:,:)
+		real(_),    intent(inout), allocatable :: wmap(:,:,:,:)
+		integer(4) :: ix, iy, iwx, iwy, iwy_sdir, ic, nx, ny, nwx, nwy, pcut, sdir
+		! Set up our work map based on the relevant subset of pixels.
+		nx   = size(map,1)
+		ny   = size(map,2)
+		nwx  = wbox(1,2)-wbox(1,1) ! {wx,wy} order
+		nwy  = wbox(2,2)-wbox(2,1)
+		pcut = -(nphi-nx)/2
+		if (dir < 0) then
+			! map2tod. Copy values over so we can add them to the tod later
+			! 5% of total cost
+			do sdir = 0, 1
+				!$omp parallel do private(iy,ix,ic,iwx,iwy,iwy_sdir)
+				do iwx = 1, nwx
+					iy = max(1,min(ny, iwx+wbox(1,1)))
+					do iwy = 1, nwy
+						iwy_sdir = iwy + sdir*nwy
+						ix = iwy+wbox(2,1)+wshift(iwx,sdir+1)
+						ix = modulo(ix-1-pcut,nphi)+pcut+1
+						ix = max(1,min(nx, ix))
+						do ic = 1, size(map,3)
+							map(ix,iy,ic) = map(ix,iy,ic)*mmul + sum(wmap(ic,iwx,iwy_sdir,:))
+						end do
+					end do
+				end do
+			end do
+		end if
+		deallocate(wmap)
+	end subroutine
+
+	subroutine project_map_nearest_noatomic( &
+		dir, tmul, tod, map, pix, phase)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir
+		real(8),    intent(in)    :: pix(:,:), phase(:,:)
+		real(_),    intent(in)    :: tmul
+		real(_),    intent(inout) :: tod(:), map(:,:,:)
+		integer(4) :: p(2), ci
+		! Work
+		real(_)    :: v
+		integer(4) :: nsamp, si
+		nsamp = size(tod)
+		if(dir > 0) then
+			do si = 1, nsamp
+				p = nint(pix(:,si))
+				if(tmul .eq. 0) then
+					tod(si) = sum(map(:,p(2),p(1))*phase(:,si))
+				else
+					tod(si) = tod(si)*tmul + sum(map(:,p(2),p(1))*phase(:,si))
+				end if
+			end do
+		elseif(tmul .ne. 0) then
+			do si = 1, nsamp
+				p = nint(pix(:,si))
+				do ci = 1, size(map,1)
+					map(ci,p(2),p(1)) = map(ci,p(2),p(1)) + (tod(si)*tmul)*phase(ci,si)
+				end do
+			end do
+		end if
+	end subroutine
+
+	! single !
+
+	subroutine pmat_map_single( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			pmet,                      &! pointing. 1: bilinear, 2: gradient
+			mmet,                      &! binning.  1: nearest,  2: bilinear
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			bore, hwp, det_pos, det_comps, &! Input pointing
+			rbox, nbox, yvals, pbox, nphi, &! Coordinate transformation
+			times & ! Report of time used in each step (output) (length 5)
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, nbox(:), pbox(:,:), nphi, pmet, mmet
+		real(4),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
+		real(4),    intent(in)    :: det_comps(:,:)
+		real(_),    intent(in)    :: tmul, mmul
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		real(4),    intent(inout) :: times(:)
+		! Work
+		real(4),    allocatable   :: pix(:,:), phase(:,:)
+		real(_),    allocatable   :: wmap(:,:,:)
+		integer(4), allocatable   :: xmap(:)
+		integer(4) :: nsamp, ndet, di, si, mi, ncopy, psize(2), steps(3)
+		real(4)    :: x0(3), inv_dx(3), xrel(3), t1, t2, t0, tloc1, tloc2, tpoint, tproj
+		nsamp   = size(bore, 2)
+		ndet    = size(det_comps, 2)
+		! prepare + finish: 0.0074 / 0.0090
+		t1 = omp_get_wtime()
+		call interpol_prepare_single(nbox, rbox, steps, x0, inv_dx)
+		t2 = omp_get_wtime()
+		times(1) = times(1) + t2-t1
+		call map_block_prepare_single(dir, pbox, nphi, mmul, map, wmap, xmap)
+		t1 = omp_get_wtime()
+		times(2) = times(1) + t1-t2
+		!$omp parallel do private(di, pix, phase, tloc1, tloc2) reduction(+:tpoint,tproj)
+		do di = 1, ndet
+			tloc1 = omp_get_wtime()
+			allocate(pix(2,nsamp), phase(3,nsamp))
+			call build_pointing_single(pmet, bore, hwp, pix, phase, &
+				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals)
+			call cap_pixels_single(pix, pbox)
+			tloc2 = omp_get_wtime()
+			tpoint = tpoint + tloc2-tloc1
+			select case(mmet)
+			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
+			! is even slower for nthread > 8
+			case(1); call project_map_nearest_single (dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			case(2); call project_map_bilinear_single(dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			case(4); call project_map_bicubic_single (dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			end select
+			deallocate(pix, phase)
+			tloc1 = omp_get_wtime()
+			tproj = tproj + tloc1-tloc2
+		end do
+		t2 = omp_get_wtime()
+		times(3) = times(3) + (t2-t1)*tpoint/(tpoint+tproj)
+		times(4) = times(4) + (t2-t1)*tproj /(tpoint+tproj)
+		call map_block_finish_single(dir, pbox, mmul, map, wmap, xmap)
+		t1 = omp_get_wtime()
+		times(5) = times(5) + t1-t2
+	end subroutine
+
+	subroutine pmat_test_single( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			pmet,                      &! pointing. 1: bilinear, 2: gradient
+			mmet,                      &! binning.  1: nearest,  2: bilinear
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			bore, hwp, det_pos, det_comps, &! Input pointing
+			rbox, nbox, yvals,         &! Coordinate interpolation
+			sdir, wbox, wshift, nphi,  &! Pixel remapping
+			times                      &! Time report output array (5)
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, nbox(:), wbox(:,:), wshift(:,:), nphi, pmet, mmet, sdir(:)
+		real(4),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
+		real(4),    intent(in)    :: det_comps(:,:)
+		real(_),    intent(in)    :: tmul, mmul
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		real(4),    intent(inout) :: times(:)
+		! Work
+		real(4),    allocatable   :: pix(:,:), phase(:,:)
+		real(_),    allocatable   :: wmap(:,:,:)
+		integer(4) :: nsamp, ndet, di, si, mi, ncopy, steps(3)
+		real(4)    :: x0(3), inv_dx(3), xrel(3), t1, t2, t0, tloc1, tloc2, tpoint, tproj
+		nsamp   = size(bore, 2)
+		ndet    = size(det_comps, 2)
+		! prepare + finish: 0.0074 / 0.0090
+		t1 = omp_get_wtime()
+		call interpol_prepare_single(nbox, rbox, steps, x0, inv_dx)
+		t2 = omp_get_wtime()
+		times(1) = times(1) + t2-t1
+		call map_block_prepare_shifted_single(dir, wbox, wshift, nphi, mmul, map, wmap)
+		t1 = omp_get_wtime()
+		times(2) = times(1) + t1-t2
+		!$omp parallel do private(di, pix, phase, tloc1, tloc2) reduction(+:tpoint,tproj)
+		do di = 1, ndet
+			tloc1 = omp_get_wtime()
+			allocate(pix(2,nsamp), phase(3,nsamp))
+			call build_pointing_single(pmet, bore, hwp, pix, phase, &
+				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals)
+			call shift_pixels_single(pix, sdir, wbox, wshift)
+			tloc2 = omp_get_wtime()
+			tpoint = tpoint + tloc2-tloc1
+			select case(mmet)
+			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
+			! is even slower for nthread > 8
+			case(1); call project_map_nearest_single (dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			case(2); call project_map_bilinear_single(dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			case(4); call project_map_bicubic_single (dir, tmul, tod(:,di), wmap(:,:,:), pix, phase)
+			end select
+			deallocate(pix, phase)
+			tloc1 = omp_get_wtime()
+			tproj = tproj + tloc1-tloc2
+		end do
+		t2 = omp_get_wtime()
+		times(3) = times(3) + (t2-t1)*tpoint/(tpoint+tproj)
+		times(4) = times(4) + (t2-t1)*tproj /(tpoint+tproj)
+		call map_block_finish_shifted_single(dir, wbox, wshift, nphi, mmul, map, wmap)
+		t1 = omp_get_wtime()
+		times(5) = times(5) + t1-t2
+	end subroutine
+
+	subroutine pmat_test_get_pix_single( &
+			pmet,                      &! pointing. 1: bilinear, 2: gradient
+			mmet,                      &! binning.  1: nearest,  2: bilinear
+			pix,  phase,               &! Main inputs/outpus
+			bore, hwp, det_pos, det_comps, &! Input pointing
+			rbox, nbox, yvals,         &! Coordinate interpolation
+			sdir, wbox, wshift, nphi   &! Pixel remapping
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: nbox(:), wbox(:,:), wshift(:,:), nphi, pmet, mmet, sdir(:)
+		real(4),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
+		real(4),    intent(in)    :: det_comps(:,:)
+		real(4),    intent(inout) :: pix(:,:,:), phase(:,:,:)
+		! Work
+		integer(4) :: nsamp, ndet, di, si, mi, ncopy, steps(3)
+		real(4)    :: x0(3), inv_dx(3), xrel(3), t1, t2, t0, tloc1, tloc2, tpoint, tproj
+		nsamp   = size(bore, 2)
+		ndet    = size(det_comps, 2)
+		! prepare + finish: 0.0074 / 0.0090
+		call interpol_prepare_single(nbox, rbox, steps, x0, inv_dx)
+		!$omp parallel do private(di, tloc1, tloc2) reduction(+:tpoint,tproj)
+		do di = 1, ndet
+			call build_pointing_single(pmet, bore, hwp, pix(:,:,di), phase(:,:,di), &
+				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals)
+			call shift_pixels_single(pix(:,:,di), sdir, wbox, wshift)
+		end do
+	end subroutine
+
+	subroutine pmat_test_use_pix_single( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			mmet,                      &! binning.  1: nearest,  2: bilinear
+			tmul, mmul,                &! Consts to multiply tod/map by
+			tod, map,                  &! Main inputs/outpus
+			pix, phase,                &! Precomputed pointing
+			sdir, wbox, wshift, nphi,  &! Pixel remapping
+			times                      &! Time report output array (5)
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi, mmet, sdir(:)
+		real(_),    intent(in)    :: tmul, mmul
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		real(4),    intent(inout) :: times(:), pix(:,:,:), phase(:,:,:)
+		! Work
+		real(_),    allocatable   :: wmap(:,:,:)
+		integer(4) :: nsamp, ndet, di, si, mi, ncopy, steps(3)
+		real(4)    :: x0(3), inv_dx(3), xrel(3), t1, t2, t0, tloc1, tloc2, tpoint, tproj
+		nsamp   = size(tod, 1)
+		ndet    = size(tod, 2)
+		! prepare + finish: 0.0074 / 0.0090
+		t1 = omp_get_wtime()
+		t2 = omp_get_wtime()
+		times(1) = times(1) + t2-t1
+		call map_block_prepare_shifted_single(dir, wbox, wshift, nphi, mmul, map, wmap)
+		t1 = omp_get_wtime()
+		times(2) = times(1) + t1-t2
+		!$omp parallel do private(di, tloc1, tloc2) reduction(+:tpoint,tproj)
+		do di = 1, ndet
+			tloc1 = omp_get_wtime()
+			tloc2 = omp_get_wtime()
+			tpoint = tpoint + tloc2-tloc1
+			select case(mmet)
+			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
+			! is even slower for nthread > 8
+			case(1); call project_map_nearest_single (dir, tmul, tod(:,di), wmap(:,:,:), pix(:,:,di), phase(:,:,di))
+			case(2); call project_map_bilinear_single(dir, tmul, tod(:,di), wmap(:,:,:), pix(:,:,di), phase(:,:,di))
+			case(4); call project_map_bicubic_single (dir, tmul, tod(:,di), wmap(:,:,:), pix(:,:,di), phase(:,:,di))
+			end select
+			tloc1 = omp_get_wtime()
+			tproj = tproj + tloc1-tloc2
+		end do
+		t2 = omp_get_wtime()
+		times(3) = times(3) + (t2-t1)*tpoint/(tpoint+tproj)
+		times(4) = times(4) + (t2-t1)*tproj /(tpoint+tproj)
+		call map_block_finish_shifted_single(dir, wbox, wshift, nphi, mmul, map, wmap)
+		t1 = omp_get_wtime()
+		times(5) = times(5) + t1-t2
+	end subroutine
+
+	subroutine interpol_prepare_single(nbox, rbox, steps, x0, inv_dx)
+		implicit none
+		integer(4), intent(in)    :: nbox(:)
+		real(4),    intent(in)    :: rbox(:,:)
+		integer(4), intent(inout) :: steps(:)
+		real(4),    intent(inout) :: x0(:), inv_dx(:)
+		integer(4) :: ic
+		steps(size(steps)) = 1
+		do ic = size(steps)-1, 1, -1
+			steps(ic) = steps(ic+1)*nbox(ic+1)
+		end do
+		x0 = rbox(:,1); inv_dx = (nbox-1)/(rbox(:,2)-rbox(:,1))
+	end subroutine
+
+	subroutine map_block_prepare_single(dir, pbox, nphi, mmul, map, wmap, xmap)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, pbox(:,:), nphi
+		real(_),    intent(in)    :: map(:,:,:), mmul
+		real(_),    intent(inout), allocatable :: wmap(:,:,:)
+		integer(4), intent(inout), allocatable :: xmap(:)
+		integer(4) :: psize(2), ix, iy, ox, oy, ic, pcut
+		! Set up our work map based on the relevant subset of pixels.
+		psize = pbox(:,2)-pbox(:,1)
+		allocate(wmap(3,psize(2),psize(1)))
+		! Set up the pixel wrap remapper
+		allocate(xmap(psize(2)))
+		pcut = -(nphi-size(map,1))/2
+		!$!omp simd
+		do ix = 1, psize(2)
+			ox = modulo(ix-1+pbox(2,1)-pcut,nphi)+pcut+1
+			xmap(ix) = max(1,min(size(map,1),ox))
+		end do
+		!$omp parallel workshare
+		wmap = 0
+		!$omp end parallel workshare
+		if (dir > 0) then
+			! map2tod. Copy values over so we can add them to the tod later
+			! 5% of total cost
+			!$omp parallel do private(iy,ix,ic,oy)
+			do iy = 1, size(wmap,3)
+				oy = max(1,min(size(map,2),iy+pbox(1,1)))
+				!$!omp simd
+				do ic = 1, size(map,3)
+					do ix = 1, size(wmap,2)
+						wmap(ic,ix,iy) = map(xmap(ix),oy,ic)*mmul
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
+	subroutine map_block_finish_single(dir, pbox, mmul, map, wmap, xmap)
+		implicit none
+		integer(4), intent(in)    :: dir, pbox(:,:)
+		real(_),    intent(inout) :: map(:,:,:)
+		real(_),    intent(in)    :: mmul
+		real(_),    intent(inout), allocatable :: wmap(:,:,:)
+		integer(4), intent(inout), allocatable :: xmap(:)
+		integer(4) :: nmap, psize(2), ix, iy, ox, ic, oy
+		if (dir < 0) then
+			! tod2map, must copy out result from wmap. map is
+			! usually bigger than wmap, so optimize loop for it
+			!$omp parallel do private(iy,ix,ic,ox,oy)
+			do iy = 1, size(wmap,3)
+				oy = max(1,min(size(map,2),iy+pbox(1,1)))
+				!$!omp simd
+				do ic = 1, size(map,3)
+					do ix = 1, size(wmap,2)
+						map(xmap(ix),oy,ic) = map(xmap(ix),oy,ic)*mmul + wmap(ic,ix,iy)
+					end do
+				end do
+			end do
+		end if
+		deallocate(wmap, xmap)
+	end subroutine
+
+	subroutine map_block_prepare_shifted_single(dir, wbox, wshift, nphi, mmul, map, wmap)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi
+		real(_),    intent(in)    :: map(:,:,:), mmul
+		real(_),    intent(inout), allocatable :: wmap(:,:,:)
+		integer(4) :: ix, iy, iwx, iwy, iwy_sdir, ic, nx, ny, nwx, nwy, pcut, sdir
+		! Set up our work map based on the relevant subset of pixels.
+		nx   = size(map,1)
+		ny   = size(map,2)
+		nwx  = wbox(1,2)-wbox(1,1) ! {wx,wy} ordering
+		nwy  = wbox(2,2)-wbox(2,1)
+		pcut = -(nphi-nx)/2
+		! It would be most natural to have wmap(ncomp,nwx,nwy,sdir),
+		! but then it wouldn't be compatible with our binnin functions,
+		! which expect a 3d map. Instead, we can unroll it such that
+		! the sdir == 1 case follows after the sdir == 0 case in memory.
+		! So the real size would be 2*nwy. From the point of view of the
+		! python code, this will be an implementation detail.
+		allocate(wmap(3,nwx,2*nwy))
+		!$omp parallel workshare
+		wmap = 0
+		!$omp end parallel workshare
+		if (dir > 0) then
+			! map2tod. Copy values over so we can add them to the tod later
+			! 5% of total cost
+			do sdir = 0, 1
+				!$omp parallel do private(iy,ix,ic,iwx,iwy,iwy_sdir)
+				do iwx = 1, nwx
+					iy = max(1,min(ny, iwx+wbox(1,1)))
+					do iwy = 1, nwy
+						iwy_sdir = iwy + sdir*nwy
+						ix = iwy+wbox(2,1)+wshift(iwx,sdir+1)
+						! This looks a bit heavy. Could precompute, but not as
+						! easy as before.
+						ix = modulo(ix-1-pcut,nphi)+pcut+1
+						ix = max(1,min(nx, ix))
+						do ic = 1, size(map,3)
+							wmap(ic,iwx,iwy_sdir) = map(ix,iy,ic)*mmul
+						end do
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
+	subroutine map_block_finish_shifted_single(dir, wbox, wshift, nphi, mmul, map, wmap)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi
+		real(_),    intent(in)    :: mmul
+		real(_),    intent(inout) :: map(:,:,:)
+		real(_),    intent(inout), allocatable :: wmap(:,:,:)
+		integer(4) :: ix, iy, iwx, iwy, iwy_sdir, ic, nx, ny, nwx, nwy, pcut, sdir
+		! Set up our work map based on the relevant subset of pixels.
+		nx   = size(map,1)
+		ny   = size(map,2)
+		nwx  = wbox(1,2)-wbox(1,1) ! {wx,wy} order
+		nwy  = wbox(2,2)-wbox(2,1)
+		pcut = -(nphi-nx)/2
+		if (dir < 0) then
+			! map2tod. Copy values over so we can add them to the tod later
+			! 5% of total cost
+			do sdir = 0, 1
+				!$omp parallel do private(iy,ix,ic,iwx,iwy,iwy_sdir)
+				do iwx = 1, nwx
+					iy = max(1,min(ny, iwx+wbox(1,1)))
+					do iwy = 1, nwy
+						iwy_sdir = iwy + sdir*nwy
+						ix = iwy+wbox(2,1)+wshift(iwx,sdir+1)
+						ix = modulo(ix-1-pcut,nphi)+pcut+1
+						ix = max(1,min(nx, ix))
+						do ic = 1, size(map,3)
+							map(ix,iy,ic) = map(ix,iy,ic)*mmul + wmap(ic,iwx,iwy_sdir)
+						end do
+					end do
+				end do
+			end do
+		end if
+		deallocate(wmap)
+	end subroutine
+
+	! ops: about nsamp * 146. If we're compute-bound, then this function
+	! should completely dominate pmat cost, since the nearest neighbor
+	! projection is nsamp * 7. The fact that it doesn't shows how limited
+	! we are by memory.
+	! Jon's approach for pointing is much more memory-friendly, since
+	! it uses the same small number of coeffents for each sample (per
+	! detector). But his approach doesn't work for very curved coordinates.
+	! Could try first using a polynomial, and if that fails, build a
+	! a grid interpolator instead. Anyway, this only really becomes
+	! relevant if we can improve the memory performance of the map
+	! access, where the memory is the greatest bottleneck.
+	subroutine build_pointing_single( &
+		pmet, bore, hwp, pix, phase, &
+		det_pos, det_comps, steps, x0, inv_dx, yvals)
+		implicit none
+		integer(4), intent(in)    :: steps(:), pmet
+		real(4),    intent(in)    :: bore(:,:), hwp(:,:), det_pos(:), det_comps(:), x0(:), inv_dx(:), yvals(:,:)
+		real(4),    intent(inout) :: pix(:,:), phase(:,:)
+		integer(4) :: nsamp, xind(3), ig, ic, si
+		logical    :: use_hwp
+		real(4)    :: xrel(3), point(4), work(4,4), psize(2), tmp
+		nsamp = size(bore,2)
+		use_hwp = hwp(1,1) .ne. 0 .and. hwp(2,1) .ne. 0
+		!$!omp simd
+		do si = 1, nsamp
+			xrel = (bore(:,si)+det_pos(:)-x0)*inv_dx
+			xind = floor(xrel)
+			xrel = xrel - xind
+			ig   = sum(xind*steps)+1
+			! Manual expansion of bilinear interpolation. Pretty bad memory
+			! access pattern, sadly. But despite the huge number of operations
+			! compared to gradient interpolation, it's about the same speed.
+			select case(pmet)
+			case(1)
+				! ops: about (2+4+2+4+4)*7 = 112
+				work(:,1) = yvals(:,ig)*(1-xrel(1)) + yvals(:,ig+steps(1))*xrel(1)
+				work(:,2) = yvals(:,ig+steps(2))*(1-xrel(1)) + yvals(:,ig+steps(2)+steps(1))*xrel(1)
+				work(:,3) = yvals(:,ig+steps(3))*(1-xrel(1)) + yvals(:,ig+steps(3)+steps(1))*xrel(1)
+				work(:,4) = yvals(:,ig+steps(2)+steps(3))*(1-xrel(1)) + yvals(:,ig+steps(2)+steps(3)+steps(1))*xrel(1)
+				work(:,1) = work(:,1)*(1-xrel(2)) + work(:,2)*xrel(2)
+				work(:,2) = work(:,3)*(1-xrel(2)) + work(:,4)*xrel(2)
+				point = work(:,1)*(1-xrel(3)) + work(:,2)*xrel(3)
+			case(2)
+				point = yvals(:,ig) + &
+					(yvals(:,ig+steps(1))-yvals(:,ig))*xrel(1) + &
+					(yvals(:,ig+steps(2))-yvals(:,ig))*xrel(2) + &
+					(yvals(:,ig+steps(3))-yvals(:,ig))*xrel(3)
+			end select
+			! Make 1-indexed
+			pix(:,si) = point(1:2)+1
+			phase(:,si) = det_comps(:)
+			if(use_hwp) then
+				tmp = phase(2,si)
+				phase(2,si) = -hwp(1,si)*tmp + hwp(2,si)*phase(3,si)
+				phase(3,si) = +hwp(2,si)*tmp + hwp(1,si)*phase(3,si)
+			end if
+			! Then the sky rotation
+			tmp = phase(2,si)
+			phase(2,si) = point(3)*tmp - point(4)*phase(3,si)
+			phase(3,si) = point(4)*tmp + point(3)*phase(3,si)
+		end do
+	end subroutine
+
+	subroutine cap_pixels_single(pix, pbox)
+		implicit none
+		integer(4), intent(in)    :: pbox(:,:)
+		real(4),    intent(inout) :: pix(:,:)
+		real(4)    :: psize(2)
+		integer(4) :: si
+		psize = pbox(:,2)-pbox(:,1)
+		!$!omp simd
+		do si = 1, size(pix,2)
+			pix(:,si) = pix(:,si) - pbox(:,1)
+			! We will round this later. The numbers ensure that we will
+			! still be in bounds after rounding.
+			pix(1,si) = min(psize(1)+0.49999d0,max(0.5d0,pix(1,si)))
+			pix(2,si) = min(psize(2)+0.49999d0,max(0.5d0,pix(2,si)))
+		end do
+	end subroutine
+
+	subroutine shift_pixels_single(pix, sdir, wbox, wshift)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: wbox(:,:), wshift(:,:), sdir(:)
+		real(4),    intent(inout) :: pix(:,:)
+		real(4)    :: wx, wy
+		integer(4) :: iwx, nwy, n, i
+		nwy = wbox(2,2)-wbox(2,1)
+		do i = 1, size(pix,2)
+			! No sky wrapping needed here. That's taken care of in the copy-in
+			! copy-out operation. It is the python code's responsibility to
+			! set up wshift and wbox using pixel coordinates
+			! wrap-compatible with the pixels we get here.
+			wx  = pix(1,i) - wbox(1,1) ! work x = pix y - box corner y
+			iwx = nint(wx)
+			! work y = pix x - box corner x - shift + dir factor
+			wy  = pix(2,i) - wbox(2,1) - wshift(iwx,sdir(i)+1) + sdir(i)*nwy
+			pix(1,i) = wy
+			pix(2,i) = wx
+		end do
+	end subroutine
+
+	! ops: about nsamp * 7
+	subroutine project_map_nearest_single( &
+		dir, tmul, tod, map, pix, phase)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir
+		real(4),    intent(in)    :: pix(:,:), phase(:,:)
+		real(_),    intent(in)    :: tmul
+		real(_),    intent(inout) :: tod(:), map(:,:,:)
+		integer(4) :: p(2), ci
+		! Work
+		real(_)    :: v
+		integer(4) :: nsamp, si
+		nsamp = size(tod)
+		if(dir > 0) then
+			!$!omp simd
+			do si = 1, nsamp
+				p = nint(pix(:,si))
+				if(tmul .eq. 0) then
+					tod(si) = sum(map(:,p(2),p(1))*phase(:,si))
+				else
+					tod(si) = tod(si)*tmul + sum(map(:,p(2),p(1))*phase(:,si))
+				end if
+			end do
+		elseif(tmul .ne. 0) then
+			if (omp_get_max_threads() > 1) then
+				do si = 1, nsamp
+					p = nint(pix(:,si))
+					do ci = 1, size(map,1)
+						v = (tod(si)*tmul)*phase(ci,si)
+						! Atomic wins over multiple buffers at 16 threads, and
+						! keeps scaling with number of threads where buffers stops.
+						! But atomic has a large fixed cost, so don't use it when
+						! there is only one thread.
+						!$omp atomic
+						map(ci,p(2),p(1)) = map(ci,p(2),p(1)) + v
+						!$omp end atomic
+					end do
+				end do
+			else
+				!$!omp simd
+				do si = 1, nsamp
+					p = nint(pix(:,si))
+					do ci = 1, size(map,1)
+						map(ci,p(2),p(1)) = map(ci,p(2),p(1)) + (tod(si)*tmul)*phase(ci,si)
+					end do
+				end do
+			end if
+		end if
+	end subroutine
+
+	! In bilinear interpolation the value of a pixel will
+	! be an estimate of the value at the center of the pixel
+	! rather than the average inside it (though perhaps putting
+	! the degrees of freedom off by half a pixel would be more
+	! stable). Coordinates inside one pixel go from -0.5 to 0.5.
+	! If less than zero, we use
+	!  v(-1)*(-dx) + v(0)*(1+dx)
+	! otherwise it is
+	!  v(+1)*( dx) + v(0)*(1-dx)
+	! We can unify these by using floor instead of nint. Let p = floor(pix),
+	! v0=map(p), v1=map(p+1), x = pix-p. Then the value is
+	!  v0*(1-x) + v1*x
+	! Sadly, our pixel truncation in the pixel calculation is not
+	! enough to avoid OOB in this case. Must handle this ourselves.
+	subroutine project_map_bilinear_single( &
+		dir, tmul, tod, map, pix, phase)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir
+		real(4),    intent(in)    :: pix(:,:), phase(:,:)
+		real(_),    intent(in)    :: tmul
+		real(_),    intent(inout) :: tod(:), map(:,:,:)
+		real(4)    :: rpix(2)
+		integer(4) :: p(2), ci
+		! Work
+		real(_)    :: x(2), v1(size(map,1),2), v2(size(map,1),2), v3(size(map,1),2), v4(size(map,1)), v
+		integer(4) :: nsamp, ncomp, si, c, nthread
+		nsamp = size(tod)
+		ncomp = size(map,1)
+		nthread = omp_get_max_threads()
+		do si = 1, nsamp
+			! Stricter boundary conditions
+			rpix(1) = max(1d0,min(size(map,3)-1d0,pix(1,si)))
+			rpix(2) = max(1d0,min(size(map,2)-1d0,pix(2,si)))
+			p = floor(rpix)
+			x = rpix-p
+			if(dir > 0) then
+				! Interpolate along y direction
+				v1 = map(:,p(2):p(2)+1,p(1))
+				v2 = map(:,p(2):p(2)+1,p(1)+1)
+				v3 = v1*(1-x(1)) + v2*x(1)
+				! Interpolate along x direction
+				v4 = v3(:,1)*(1-x(2)) + v3(:,2)*x(2)
+				v  = sum(v4*phase(:,si))
+				! Update tod
+				if(tmul .eq. 0) then
+					tod(si) = v
+				else
+					tod(si) = tod(si)*tmul + v
+				end if
+			else
+				! Transpose of the above
+				v  = tod(si)*tmul
+				v4 = v * phase(:,si)
+				v3(:,1) = v4*(1-x(2))
+				v3(:,2) = v4*x(2)
+				v1 = v3*(1-x(1))
+				v2 = v3*x(1)
+				! I don't like using this many atomics. With four
+				! times the number I usually have, this is probably
+				! slower than separate work arrays.
+				if (nthread > 1) then
+					do ci = 1, size(map,1)
+						!$omp atomic
+						map(ci,p(2)  ,p(1)  ) = map(ci,p(2)  ,p(1)  ) + v1(ci,1)
+						!$omp end atomic
+						!$omp atomic
+						map(ci,p(2)+1,p(1)  ) = map(ci,p(2)+1,p(1)  ) + v1(ci,2)
+						!$omp end atomic
+						!$omp atomic
+						map(ci,p(2)  ,p(1)+1) = map(ci,p(2)  ,p(1)+1) + v2(ci,1)
+						!$omp end atomic
+						!$omp atomic
+						map(ci,p(2)+1,p(1)+1) = map(ci,p(2)+1,p(1)+1) + v2(ci,2)
+						!$omp end atomic
+					end do
+				else
+					do ci = 1, size(map,1)
+						map(ci,p(2)  ,p(1)  ) = map(ci,p(2)  ,p(1)  ) + v1(ci,1)
+						map(ci,p(2)+1,p(1)  ) = map(ci,p(2)+1,p(1)  ) + v1(ci,2)
+						map(ci,p(2)  ,p(1)+1) = map(ci,p(2)  ,p(1)+1) + v2(ci,1)
+						map(ci,p(2)+1,p(1)+1) = map(ci,p(2)+1,p(1)+1) + v2(ci,2)
+					end do
+				end if
+			end if
+		end do
+	end subroutine
+
+	subroutine project_map_bicubic_single( &
+		dir, tmul, tod, map, pix, phase)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir
+		real(4),    intent(in)    :: pix(:,:), phase(:,:)
+		real(_),    intent(in)    :: tmul
+		real(_),    intent(inout) :: tod(:), map(:,:,:)
+		real(4)    :: rpix(2)
+		integer(4) :: p(2), ci, i, j, i2
+		! Work
+		real(_)    :: x, vy(size(map,1),4), vx(size(map,1)), vtot, w(4,2)
+		real(_)    :: vtmp
+		integer(4) :: nsamp, ncomp, si, c, nthread
+		nsamp = size(tod)
+		ncomp = size(map,1)
+		nthread = omp_get_max_threads()
+		! FIXME: Gives negative absolute residual in cg. Something is wrong.
+		do si = 1, nsamp
+			! Stricter boundary conditions
+			rpix(1) = max(2d0,min(size(map,3)-2d0,pix(1,si)))
+			rpix(2) = max(2d0,min(size(map,2)-2d0,pix(2,si)))
+			p = floor(rpix-1)
+			! Compute weights in each direciton. This is based on
+			! compute_weights in enlib.interpol.fortran
+			do j = 1, 2
+				do i = 1, 4
+					x = abs(rpix(j)-(i-1)-p(j))
+					if(x < 1) then
+						w(i,j) =  1.5*x**3 - 2.5*x**2 + 1
+					elseif(x < 2) then
+						w(i,j) = -0.5*x**3 + 2.5*x**2 - 4*x + 2
+					else
+						w(i,j) = 0
+					end if
+				end do
+			end do
+			if(dir > 0) then
+				! Interpolate in y direction
+				vy = 0
+				do i = 1, 4
+					vy(:,:) = vy(:,:) + map(:,p(2):p(2)+3,p(1)+i-1)*w(i,1)
+				end do
+				! Interpolate in x direciton
+				vx = 0
+				do i = 1, 4
+					vx = vx + vy(:,i)*w(i,2)
+				end do
+				vtot = sum(vx*phase(:,si))
+				! Update tod
+				if(tmul .eq. 0) then
+					tod(si) = vtot
+				else
+					tod(si) = tod(si)*tmul + vtot
+				end if
+			else
+				! Transpose of the above
+				vtot = tod(si)*tmul
+				vx = vtot * phase(:,si)
+				do i = 1, 4
+					vy(:,i) = vx*w(i,2)
+				end do
+				if (nthread > 1) then
+					do i = 1, 4
+						do i2 = 1, 4
+							do ci = 1, size(map,1)
+								vtmp = vy(ci,i2) * w(i,1)
+								!$omp atomic
+								map(ci,p(2)+i2-1,p(1)+i-1) = map(ci,p(2)+i2-1,p(1)+i-1) + vtmp
+								!$omp end atomic
+							end do
+						end do
+					end do
+				else
+					do i = 1, 4
+						do i2 = 1, 4
+							do ci = 1, size(map,1)
+								vtmp = vy(ci,i2) * w(i,1)
+								map(ci,p(2)+i2-1,p(1)+i-1) = map(ci,p(2)+i2-1,p(1)+i-1) + vtmp
+							end do
+						end do
+					end do
+				end if
+			end if
+		end do
+	end subroutine
+
+
+
 
 
 	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

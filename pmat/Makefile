@@ -1,10 +1,10 @@
 include ../compile_opts/$(ENLIB_COMP).mk
-skip := skip: map_block_prepare map_block_finish map_block_prepare_shifted map_block_finish_shifted :
+skip := skip: map_block_prepare map_block_finish map_block_prepare_shifted map_block_finish_shifted map_block_prepare_single map_block_finish_single map_block_prepare_shifted_single map_block_finish_shifted_single map_block_prepare_shifted_mbuf map_block_finish_shifted_mbuf :
 all: pmat_core_32.so pmat_core_64.so
 
 %.so: %.f90
-	#$(F2PY) --fcompiler=$(F2PYCOMP) --noopt -c -m $(basename $<) $< $(skip) $(OMP_LINK)
-	FFLAGS="-fPIC -O0 -g -fbounds-check -ffree-line-length-none" $(F2PY) --noopt --fcompiler=gfortran -c -m $(basename $<) $< $(skip) -lgomp
+	$(F2PY) --fcompiler=$(F2PYCOMP) --noopt -c -m $(basename $<) $< $(skip) $(OMP_LINK)
+	#FFLAGS="-fPIC -O0 -g -fbounds-check -ffree-line-length-none" $(F2PY) --noopt --fcompiler=gfortran -c -m $(basename $<) $< $(skip) -lgomp
 
 pmat_core_32.f90: pmat_core.F90
 	$(SED) 's/\<_\>/4/g' < $< > $@
