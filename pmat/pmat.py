@@ -177,6 +177,49 @@ def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, n
 		wshift = np.zeros(y1-y0,int)
 	return wshift
 
+class PolyInterpol:
+	def __init__(self, transfun, bore, det_offs, thin=500):
+		"""Fit a polynomial in az and t to each detector's pointing,
+		returning coeffs[ndet,:]. El is assumed to be constant."""
+		bore  = bore[::thin]
+		basis = self.get_basis(bore)
+		div  = basis.dot(basis.T)
+		# This memory-wasting storate of opoint is there to work around
+		# a severe performance (10x-100x loss of speed) problemI get when
+		# openblas and openmp threads are created rapidly in succession.
+		# The thinning will make it relatively cheap memory-wise anyway.
+		opoints = []
+		for di, offs in enumerate(det_offs):
+			# First evaluate our exact pointing
+			ipoint = bore + offs
+			opoints.append(transfun(ipoint.T))
+		coeffs = []
+		resids = []
+		for di, opoint in enumerate(opoints):
+			# Fit coeff[nparam,nbasis]
+			rhs   = basis.dot(opoint.T)
+			coeff = np.linalg.solve(div,rhs).T
+			# Evaluate model
+			model = coeff.dot(basis)
+			# Evaluate residual
+			resid = np.std(opoint-model,1)
+			coeffs.append(coeff)
+			resids.append(resid)
+		# coeffs[ndet,{y,x,c,s},nbasis]
+		self.coeffs = np.array(coeffs)
+		self.resids = np.max(resids,0)
+	def get_basis(self, bore):
+		t  = bore[:,0]
+		az = bore[:,1]
+		# This one gets 1.6e-3 pixel accuracy for my 90 deg sweep test case
+		basis = np.concatenate([
+			[az**i for i in range(8)],
+			[t*az**i for i in range(3)]])
+		return basis
+	def __call__(self, bore, det_inds):
+		basis = self.get_basis(bore)
+		model = np.einsum("dab,bt->dat",self.coeffs[det_inds], basis)
+
 class PmatMapMultibeam(PointingMatrix):
 	"""Like PmatMap, but with multiple, displaced beams."""
 	def __init__(self, scan, template, beam_offs, beam_comps, sys=None, order=None):
