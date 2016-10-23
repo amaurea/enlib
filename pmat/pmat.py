@@ -43,16 +43,16 @@ class PmatMap(PointingMatrix):
 		# Reducing the number of pixels makes us more memory efficient
 		self.pixbox, self.nphi  = build_pixbox(obox[:,:2], template)
 		self.scan,   self.dtype = scan, template.dtype
-		self.func  = get_core(self.dtype).pmat_map
+		self.core  = get_core(self.dtype)
 		self.order = config.get("pmat_map_order", order)
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""m -> tod"""
 		if times is None: times = np.zeros(5)
-		self.func( 1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+		self.core.pmat_map( 1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
-		self.func(-1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+		self.core.pmat_map(-1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -66,6 +66,159 @@ class PmatMap(PointingMatrix):
 		phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
 		self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T)
 		return pix, phase
+
+def get_scan_dir(az, step=3):
+	"""The scanning direction is 0 if az is increasing, and 1 otherwise.
+	Larger values of step are less sensitive to jitter, but have worse
+	resolution."""
+	sdir = az[step:]<az[:-step]
+	return np.concatenate([
+			np.full(step/2,sdir[0],dtype=bool),
+			sdir,
+			np.full(step-step/2,sdir[-1:],dtype=bool)
+		])
+
+def get_scan_period(az, srate=1):
+	"""Estimate the period of the az sweeps. This is done by
+	finding the interval between zero crossings of az-mean(az)."""
+	off  = az - np.mean(az)
+	up_cross = (off[1:]*off[:-1] < 0)&(off[1:]-off[:-1]>0)
+	up_cross = np.where(up_cross)[0]
+	periods  = up_cross[1:]-up_cross[:-1]
+	if len(periods) == 0: return 0.0
+	# Jitter may cause very short ones blips just as we are crossing.
+	# Discard these.
+	periods = periods[periods>np.mean(periods)*0.2]
+	# And use the median of the reminder as our estimate
+	period = np.median(periods) / float(srate)
+	return period
+
+def build_work_shift(transform, hor_box, scan_period):
+	"""Given a transofrmation that takes [{t,az,el},nsamp] into [{y,x,...},nsamp],
+	and a bounding box [{from,to},{t,az,el}], compute the parameters for a
+	per-y shift in x that makes scans roughly straight. These parameters are returned
+	in the form of wbox[{from,to},{y,x'}] and wshift[{up,down},ny]. They are used in the shifted
+	pmat implementation."""
+	# The problem with using the real scanning profile is that it can't be adjusted to
+	# cover all the detectors, and at any y, the az where a detector hits that y will
+	# be different. So only one of them can faithfully follow the profile after all.
+	# So I think I'll stay with the simple model I use here, and just take the travel
+	# time into account, through an extra parameters.
+
+	# Find the pixel bounds corresponding to our hor bounds
+	hor_corn = utils.box2corners(hor_box)
+	pix_corn = transform(hor_corn.T)[:2].T
+	pix_box  = utils.bounding_box(pix_corn)
+	# The y bounds are the most relevant. Our wshift must
+	# be defined for every output y in the range.
+	y0 = int(np.floor(pix_box[0,0]))
+	y1 = int(np.ceil(pix_box[1,0]))+1
+	mean_t, mean_az, mean_el = np.mean(hor_box,0)
+	# Get a forward and backwards sweep. So index 0 is az increasing, index 1 is az decreasing
+	wshift = np.array([
+		measure_sweep_pixels(transform, [mean_t,mean_t+scan_period], hor_box[:,1],    mean_el, [y0,y1]),
+		measure_sweep_pixels(transform, [mean_t,mean_t+scan_period], hor_box[::-1,1], mean_el, [y0,y1])])
+	# For each of these, find the pixel bounds. The total
+	# bounds will be the union of these
+	wboxes = []
+	for wshift_single in wshift:
+		# Use this shift to transform the pixel corners into shifted
+		# coordinates. This wil give us the bounds of the shifted system
+		shift_corn = pix_corn.copy()
+		np.set_printoptions(suppress=True)
+		shift_corn[:,1] -= wshift_single[np.round(shift_corn[:,0]-y0).astype(int)]
+		wboxes.append(utils.bounding_box(shift_corn))
+	# Merge wboxes
+	wbox = utils.bounding_box(wboxes)
+	wbox[0] = np.floor(wbox[0])
+	wbox[1] = np.ceil (wbox[1])
+	wbox    = wbox.astype(int)
+	return wbox, wshift
+
+def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, nsamp=None, ntry=None):
+	"""Helper function for build_work_shift. Measure the x for each y of an azimuth sweep."""
+	if nsamp   is None: nsamp   = 10000
+	if padstep is None: padstep = 4*utils.degree
+	if ntry    is None: ntry    = 5
+	y0, y1 = yrange
+	pad = padstep
+	for i in range(ntry):
+		az0, az1 = utils.widen_box(azrange, pad, relative=False)
+		ipos = np.zeros([3,nsamp])
+		# Forward sweep
+		ipos[0] = np.linspace(trange[0], trange[1], nsamp)
+		ipos[1] = np.linspace(az0,       az1,       nsamp)
+		ipos[2] = el
+		opix = np.round(transform(ipos)[:2]).astype(int)
+		#print "opix"
+		#sys.stdout.flush()
+		#np.savetxt("/dev/stdout", opix.T, "%6d")
+		#sys.stdout.flush()
+		# Get the entries with unique y values
+		uy, ui = np.unique(opix[0], return_index=True)
+		if uy[0] > y0 or uy[-1] <= y1:
+			# We didn't cover the range, so try again
+			pad += padstep
+			continue
+		# Restrict to relevant pixel range
+		yi = ui[(uy>=y0)&(uy<y1)]
+		if len(ui) < y1-y0:
+			# We didn't hit every pixel. Try again
+			nsamp *= 2
+			continue
+		wshift  = opix[1,yi]
+		# Shift is defined to start at zero, since we will put
+		# the absolute offset into wbox.
+		wshift -= wshift[0]
+		break
+	else:
+		# We didn't find a match! Just use a constant shift of zero.
+		# This shouldn't happen, though.
+		wshift = np.zeros(y1-y0,int)
+	return wshift
+
+class PolyInterpol:
+	def __init__(self, transfun, bore, det_offs, thin=500):
+		"""Fit a polynomial in az and t to each detector's pointing,
+		returning coeffs[ndet,:]. El is assumed to be constant."""
+		bore  = bore[::thin]
+		basis = self.get_basis(bore)
+		div  = basis.dot(basis.T)
+		# This memory-wasting storate of opoint is there to work around
+		# a severe performance (10x-100x loss of speed) problemI get when
+		# openblas and openmp threads are created rapidly in succession.
+		# The thinning will make it relatively cheap memory-wise anyway.
+		opoints = []
+		for di, offs in enumerate(det_offs):
+			# First evaluate our exact pointing
+			ipoint = bore + offs
+			opoints.append(transfun(ipoint.T))
+		coeffs = []
+		resids = []
+		for di, opoint in enumerate(opoints):
+			# Fit coeff[nparam,nbasis]
+			rhs   = basis.dot(opoint.T)
+			coeff = np.linalg.solve(div,rhs).T
+			# Evaluate model
+			model = coeff.dot(basis)
+			# Evaluate residual
+			resid = np.std(opoint-model,1)
+			coeffs.append(coeff)
+			resids.append(resid)
+		# coeffs[ndet,{y,x,c,s},nbasis]
+		self.coeffs = np.array(coeffs)
+		self.resids = np.max(resids,0)
+	def get_basis(self, bore):
+		t  = bore[:,0]
+		az = bore[:,1]
+		# This one gets 1.6e-3 pixel accuracy for my 90 deg sweep test case
+		basis = np.concatenate([
+			[az**i for i in range(8)],
+			[t*az**i for i in range(3)]])
+		return basis
+	def __call__(self, bore, det_inds):
+		basis = self.get_basis(bore)
+		model = np.einsum("dab,bt->dat",self.coeffs[det_inds], basis)
 
 class PmatMapMultibeam(PointingMatrix):
 	"""Like PmatMap, but with multiple, displaced beams."""
@@ -248,6 +401,7 @@ class pos2pix:
 		self.scan, self.template, self.sys = scan, template, sys
 		self.ref_phi = ref_phi
 	def __call__(self, ipos):
+		"""Transform ipos[{t,az,el},nsamp] into opix[{y,x,c,s},nsamp]."""
 		shape = ipos.shape[1:]
 		ipos  = ipos.reshape(ipos.shape[0],-1)
 		time  = self.scan.mjd0 + ipos[0]/utils.day2sec
@@ -602,3 +756,4 @@ def pmat_phase(dir, tod, map, az, dets, az0, daz):
 def pmat_plain(dir, tod, map, pix):
 	core = get_core(tod.dtype)
 	core.pmat_plain(dir, tod.T, map.T, pix.T)
+

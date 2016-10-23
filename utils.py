@@ -707,7 +707,8 @@ def date2ctime(dstr):
 	return time.mktime(d.timetuple())
 
 def bounding_box(boxes):
-	"""Compute bounding box for a set of boxes [:,2,:]."""
+	"""Compute bounding box for a set of boxes [:,2,:], or a
+	set of points [:,2]"""
 	boxes = np.asarray(boxes)
 	if boxes.ndim == 2:
 		return np.array([np.min(boxes,0),np.max(boxes,0)])
@@ -751,6 +752,7 @@ def widen_box(box, margin=1e-3, relative=True):
 	box = np.asarray(box)
 	margin = np.zeros(box.shape[1:])+margin
 	if relative: margin = (box[1]-box[0])*margin
+	margin = np.asarray(margin) # Support 1d case
 	margin[box[0]>box[1]] *= -1
 	return np.array([box[0]-margin/2, box[1]+margin/2])
 
