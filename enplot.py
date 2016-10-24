@@ -5,8 +5,6 @@ from enlib import enmap, colorize, mpi, cgrid, utils, memory, bunch
 try: from enlib import array_ops
 except ImportError: pass
 
-array_ops, memory, bunch
-
 class Printer:
 	def __init__(self, level=1, prefix=""):
 		self.level  = level
