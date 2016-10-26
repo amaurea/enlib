@@ -338,7 +338,7 @@ contains
 				! Buffer mode or naive mode
 				do si = 1, nsamp
 					p = nint(pix(:,si))
-					map(1,p(2),p(1),1) = map(1,p(2),p(1),1) + tod(si)*tmul
+					map(1,p(2),p(1),id) = map(1,p(2),p(1),id) + tod(si)*tmul
 					do ci = 2, 3
 						map(ci,p(2),p(1),id) = map(ci,p(2),p(1),id) + (tod(si)*tmul)*phase(ci-1,si)
 					end do
