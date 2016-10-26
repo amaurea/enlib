@@ -1,5 +1,5 @@
 include ../compile_opts/$(ENLIB_COMP).mk
-skip := skip: map_block_prepare map_block_finish map_block_prepare_shifted map_block_finish_shifted map_block_prepare_single map_block_finish_single map_block_prepare_shifted_single map_block_finish_shifted_single map_block_prepare_shifted_mbuf map_block_finish_shifted_mbuf :
+skip := skip: map_block_prepare map_block_finish map_block_prepare_shifted map_block_finish_shifted map_block_prepare_single map_block_finish_single map_block_prepare_shifted_single map_block_finish_shifted_single map_block_prepare_shifted_mbuf map_block_finish_shifted_mbuf map_block_prepare_shifted_flat map_block_finish_shifted_flat map_block_prepare_new map_block_finish_new private map_block_prepare_shifted_flat_new map_block_finish_shifted_flat_new :
 all: pmat_core_32.so pmat_core_64.so
 
 %.so: %.f90
