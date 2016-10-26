@@ -163,15 +163,19 @@ contains
 		integer(4), intent(in)  :: dir, cmet
 		integer(4), intent(out) :: nbuf, id
 		logical,    intent(out) :: atomic
-		select case(cmet)
-			case(0); nbuf = 1; atomic = .false.; id = 1
-			case(1); nbuf = 1; atomic = .true.;  id = 1
-			case(2);
-				nbuf   = omp_get_max_threads()
-				id     = omp_get_thread_num()+1
-				atomic = .false.
-		end select
-		if(omp_get_max_threads() == 1) atomic = .false.
+		if(dir > 0) then
+			nbuf = 1; id = 1; atomic = .false.
+		else
+			select case(cmet)
+				case(0); nbuf = 1; atomic = .false.; id = 1
+				case(1); nbuf = 1; atomic = .true.;  id = 1
+				case(2);
+					nbuf   = omp_get_max_threads()
+					id     = omp_get_thread_num()+1
+					atomic = .false.
+			end select
+			if(omp_get_max_threads() == 1) atomic = .false.
+		end if
 	end subroutine
 
 	subroutine map_block_prepare_new(dir, cmet, wbox, nphi, mmul, map, wmap, xmap)
