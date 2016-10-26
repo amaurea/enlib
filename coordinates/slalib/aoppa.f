@@ -128,6 +128,7 @@
 
       DOUBLE PRECISION DATE,DUT,ELONGM,PHIM,HM,XP,YP,TDK,PMB,
      :                 RH,WL,TLR,AOPRMS(14)
+Cf2py intent(out) aoprms
 
       DOUBLE PRECISION sla_EQEQX
 

@@ -1,6 +1,9 @@
 import numpy as np, argparse, time, sys, warnings, os, shlex, glob, PIL.Image, PIL.ImageDraw
 from scipy import ndimage
-from enlib import enmap, colorize, mpi, cgrid, utils, array_ops, memory, bunch
+from enlib import enmap, colorize, mpi, cgrid, utils, memory, bunch
+# Optional dependency array_ops needed for contour drawing
+try: from enlib import array_ops
+except ImportError: pass
 
 class Printer:
 	def __init__(self, level=1, prefix=""):
@@ -109,7 +112,7 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser.add_argument("-v", dest="verbosity", action="count", help="Verbose output. Specify multiple times to increase verbosity further.")
 	parser.add_argument("-s", "-u", "--scale", "--upgrade", type=str, default="1", help="Upscale the image using nearest neighbor interpolation by this amount before plotting. For example, 2 would make the map twice as large in each direction, while 4,1 would make it 4 times as tall and leave the width unchanged.")
 	parser.add_argument("--verbosity", dest="verbosity", type=int, help="Specify verbosity directly as an integer.")
-	parser.add_argument("--method", default="fast", help="Which colorization implementation to use: fast or simple.")
+	parser.add_argument("--method", default="auto", help="Which colorization implementation to use: auto, fortran or python.")
 	parser.add_argument("--slice", type=str, help="Apply this numpy slice to the map before plotting.")
 	parser.add_argument("--sub",   type=str, help="Slice a map based on dec1:dec2,ra1:ra2.")
 	parser.add_argument("--op", type=str, help="Apply this general operation to the map before plotting. For example, 'log(abs(m))' would give you a lograithmic plot.")
@@ -398,8 +401,8 @@ def map_to_color(map, crange, args):
 	of the input map will be used. Otherwise 3 will be used."""
 	map = ((map.T-crange[0])/(crange[1]-crange[0])).T # .T ensures broadcasting for rgb case
 	if args.reverse_color: map = 1-map
-	if args.rgb: m_color = colorize.colorize(map,    desc=args.color, method="direct")
-	else:        m_color = colorize.colorize(map[0], desc=args.color, method=args.method)
+	if args.rgb: m_color = colorize.colorize(map,    desc=args.color, driver=args.method, mode="direct")
+	else:        m_color = colorize.colorize(map[0], desc=args.color, driver=args.method)
 	m_color = enmap.samewcs(np.rollaxis(m_color,2), map)
 	return m_color
 
@@ -472,7 +475,7 @@ def draw_contours(map, contours, args):
 	# Rescale to 0:1
 	if len(contours) > 1:
 		cmap /= len(contours)-1
-	color = colorize.colorize(cmap, desc=args.contour_color, method=args.method)
+	color = colorize.colorize(cmap, desc=args.contour_color, driver=args.method)
 	return PIL.Image.fromarray(color).convert('RGBA')
 
 def parse_annotations(afile):
@@ -548,7 +551,7 @@ def standardize_images(tuples):
 	res = []
 	for img, bounds in tuples:
 		# Expand to full size
-		img_big = PIL.Image.new("RGBA", totsize)
+		img_big = PIL.Image.new("RGBA", tuple(totsize))
 		img_big.paste(img, tuple(bounds[0]-bounds_full[0]))
 		res.append(img_big)
 	return res, bounds_full

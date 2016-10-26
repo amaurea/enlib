@@ -4,17 +4,11 @@ module. For now, it is used as a part of the implementation."""
 import numpy as np, pyfsla
 import astropy.coordinates as c, astropy.units as u
 from enlib import utils
-from enlib.utils import ang2rect, rect2ang
 # Optional dependencies
-try:
-	from enlib    import iers
-	from pyslalib import slalib
-except ImportError:
-	pass
-try:
-	import ephem
-except ImportError:
-	pass
+try: from enlib import iers
+except ImportError: pass
+try: import ephem
+except ImportError: pass
 
 class default_site:
 	lat  = -22.9585
@@ -182,10 +176,10 @@ def hor2cel(coord, time, site, copy=True):
 	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]
 	info   = iers.lookup(trepr)
-	ao = slalib.sla_aoppa(trepr, info.dUT, site.lon*utils.degree, site.lat*utils.degree, site.alt,
+	ao = pyfsla.sla_aoppa(trepr, info.dUT, site.lon*utils.degree, site.lat*utils.degree, site.alt,
 		info.pmx*utils.arcsec, info.pmy*utils.arcsec, site.T, site.P, site.hum,
 		299792.458/site.freq, site.lapse)
-	am = slalib.sla_mappa(2000.0, trepr)
+	am = pyfsla.sla_mappa(2000.0, trepr)
 	# This involves a transpose operation, which is not optimal
 	pyfsla.aomulti(time, coord.T, ao, am)
 	return coord
@@ -195,10 +189,10 @@ def cel2hor(coord, time, site, copy=True):
 	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]
 	info   = iers.lookup(trepr)
-	ao = slalib.sla_aoppa(trepr, info.dUT, site.lon*utils.degree, site.lat*utils.degree, site.alt,
+	ao = pyfsla.sla_aoppa(trepr, info.dUT, site.lon*utils.degree, site.lat*utils.degree, site.alt,
 		info.pmx*utils.arcsec, info.pmy*utils.arcsec, site.T, site.P, site.hum,
 		299792.458/site.freq, site.lapse)
-	am = slalib.sla_mappa(2000.0, trepr)
+	am = pyfsla.sla_mappa(2000.0, trepr)
 	# This involves a transpose operation, which is not optimal
 	pyfsla.oamulti(time, coord.T, ao, am)
 	return coord
@@ -217,9 +211,9 @@ def euler_rot(euler_angles, coords, kind="zyz"):
 	coords = np.asarray(coords)
 	co     = coords.reshape(2,-1)
 	M      = euler_mat(euler_angles, kind)
-	rect   = ang2rect(co, False)
+	rect   = utils.ang2rect(co, False)
 	rect   = np.einsum("...ij,j...->i...",M,rect)
-	co     = rect2ang(rect, False)
+	co     = utils.rect2ang(rect, False)
 	return co.reshape(coords.shape)
 
 def recenter(angs, center):
