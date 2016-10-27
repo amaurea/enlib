@@ -449,6 +449,8 @@ def prec_div_helper(signal, signal_cut, scans, weights, iwork, owork, ijunk, oju
 	# The argument list of this one is so long that it almost doesn't save any
 	# code.
 	for scan in scans:
+		with bench.mark("div_Pr_" + signal.name):
+			signal.precompute(scan)
 		with bench.mark("div_P_" + signal.name):
 			tod = np.zeros((scan.ndet, scan.nsamp), signal.dtype)
 			signal.forward(scan, tod, iwork)
@@ -460,6 +462,8 @@ def prec_div_helper(signal, signal_cut, scans, weights, iwork, owork, ijunk, oju
 		with bench.mark("div_PT_" + signal.name):
 			signal_cut.backward(scan, tod, ojunk)
 			signal.backward(scan, tod, owork)
+		with bench.mark("div_Fr_" + signal.name):
+			signal.free()
 		times = [bench.stats[s]["time"].last for s in ["div_P_"+signal.name, "div_white", "div_PT_" + signal.name]]
 		L.debug("div %s %6.3f %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
 
@@ -481,10 +485,14 @@ def calc_hits_map(hits, signal, signal_cut, scans):
 	work = signal.prepare(hits)
 	ojunk= signal_cut.prepare(signal_cut.zeros())
 	for scan in scans:
+		with bench.mark("hits_Pr_" + signal.name):
+			signal.precompute(scan)
 		with bench.mark("hits_PT"):
 			tod = np.full((scan.ndet, scan.nsamp), 1, hits.dtype)
 			signal_cut.backward(scan, tod, ojunk)
 			signal.backward(scan, tod, work)
+		with bench.mark("hits_Fr_" + signal.name):
+			signal.free()
 		times = [bench.stats[s]["time"].last for s in ["hits_PT"]]
 		L.debug("hits %s %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
 	with bench.mark("hits_reduce"):
