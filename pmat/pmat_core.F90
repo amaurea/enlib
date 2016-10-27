@@ -98,7 +98,6 @@ contains
 		map, mmul,                     &! The map(nx,ny,ncomp) and what to multiply it by
 		pmet,                          &! Grid pointing interpol variant: 1: bilinear, 2:gradient
 		mmet,                          &! Map projection method: 1: nearest, 2:bilinear, 3:bicubic
-		cmet,                          &! Clobber-avoidance method: 0: none (dangerous), 1: atomics, 2: buffers
 		bore, hwp, det_pos, det_comps, &! Input pointing
 		rbox, nbox, yvals,             &! Interpolation grid
 		wbox, nphi,                    &! wbox({y,x},{from,to}) pixbox and sky wrap in pixels
@@ -107,7 +106,7 @@ contains
 		use omp_lib
 		implicit none
 		! Parameters
-		integer(4), intent(in)    :: dir, nbox(:), wbox(:,:), nphi, pmet, mmet, cmet
+		integer(4), intent(in)    :: dir, nbox(:), wbox(:,:), nphi, pmet, mmet
 		real(8),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
 		real(8),    intent(in)    :: det_comps(:,:)
 		real(_),    intent(in)    :: tmul, mmul
@@ -115,7 +114,7 @@ contains
 		real(8),    intent(inout) :: times(:)
 		! Work
 		real(8),    allocatable   :: pix(:,:)
-		real(_),    allocatable   :: wmap(:,:,:,:), phase(:,:)
+		real(_),    allocatable   :: wmap(:,:,:), phase(:,:)
 		integer(4), allocatable   :: xmap(:)
 		integer(4) :: nsamp, ndet, di, steps(3)
 		real(8)    :: x0(3), inv_dx(3), xrel(3), t1, t2, t0, tloc1, tloc2, tpoint, tproj
@@ -125,7 +124,7 @@ contains
 		call interpol_prepare(nbox, rbox, steps, x0, inv_dx)
 		t2 = omp_get_wtime()
 		times(1) = times(1) + t2-t1
-		call map_block_prepare_new(dir, cmet, wbox, nphi, mmul, map, wmap, xmap)
+		call map_block_prepare_new(dir, wbox, nphi, mmul, map, wmap, xmap)
 		t1 = omp_get_wtime()
 		times(2) = times(1) + t1-t2
 		tpoint = 0; tproj = 0 ! avoid ifort overeager optimization
@@ -141,9 +140,9 @@ contains
 			select case(mmet)
 			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
 			! is even slower for nthread > 8
-			case(1); call project_map_nearest_new (dir, cmet, tod(:,di), tmul, wmap, pix, phase)
-			case(2); call project_map_bilinear_new(dir, cmet, tod(:,di), tmul, wmap, pix, phase)
-			case(4); call project_map_bicubic_new (dir, cmet, tod(:,di), tmul, wmap, pix, phase)
+			case(1); call project_map_nearest_new (dir, tod(:,di), tmul, wmap, pix, phase)
+			case(2); call project_map_bilinear_new(dir, tod(:,di), tmul, wmap, pix, phase)
+			case(4); call project_map_bicubic_new (dir, tod(:,di), tmul, wmap, pix, phase)
 			end select
 			deallocate(pix, phase)
 			tloc1 = omp_get_wtime()
@@ -152,46 +151,23 @@ contains
 		t2 = omp_get_wtime()
 		times(3) = times(3) + (t2-t1)*tpoint/(tpoint+tproj)
 		times(4) = times(4) + (t2-t1)*tproj /(tpoint+tproj)
-		call map_block_finish_new(dir, cmet, wbox, mmul, map, wmap, xmap)
+		call map_block_finish_new(dir, wbox, mmul, map, wmap, xmap)
 		t1 = omp_get_wtime()
 		times(5) = times(5) + t1-t2
 	end subroutine
 
-	subroutine get_clob_info(dir, cmet, nbuf, id, atomic)
+	subroutine map_block_prepare_new(dir, wbox, nphi, mmul, map, wmap, xmap)
 		use omp_lib
 		implicit none
-		integer(4), intent(in)  :: dir, cmet
-		integer(4), intent(out) :: nbuf, id
-		logical,    intent(out) :: atomic
-		if(dir > 0) then
-			nbuf = 1; id = 1; atomic = .false.
-		else
-			select case(cmet)
-				case(0); nbuf = 1; atomic = .false.; id = 1
-				case(1); nbuf = 1; atomic = .true.;  id = 1
-				case(2);
-					nbuf   = omp_get_max_threads()
-					id     = omp_get_thread_num()+1
-					atomic = .false.
-			end select
-			if(omp_get_max_threads() == 1) atomic = .false.
-		end if
-	end subroutine
-
-	subroutine map_block_prepare_new(dir, cmet, wbox, nphi, mmul, map, wmap, xmap)
-		use omp_lib
-		implicit none
-		integer(4), intent(in)    :: dir, wbox(:,:), nphi, cmet
+		integer(4), intent(in)    :: dir, wbox(:,:), nphi
 		real(_),    intent(in)    :: map(:,:,:), mmul
-		real(_),    intent(inout), allocatable :: wmap(:,:,:,:)
+		real(_),    intent(inout), allocatable :: wmap(:,:,:)
 		integer(4), intent(inout), allocatable :: xmap(:)
-		integer(4) :: nwx, nwy, ix, iy, ox, oy, ic, pcut, nbuf, id
-		logical    :: atomic
-		call get_clob_info(dir, cmet, nbuf, id, atomic)
+		integer(4) :: nwx, nwy, ix, iy, ox, oy, ic, pcut
 		! Set up our work map based on the relevant subset of pixels.
 		nwy = wbox(1,2)-wbox(1,1)
 		nwx = wbox(2,2)-wbox(2,1)
-		allocate(wmap(3,nwx,nwy,nbuf))
+		allocate(wmap(3,nwx,nwy))
 		! Set up the pixel wrap remapper
 		allocate(xmap(nwx))
 		pcut = -(nphi-size(map,1))/2
@@ -210,19 +186,19 @@ contains
 				oy = max(1,min(size(map,2),iy+wbox(1,1)))
 				do ic = 1, size(map,3)
 					do ix = 1, nwx
-						wmap(ic,ix,iy,:) = map(xmap(ix),oy,ic)*mmul
+						wmap(ic,ix,iy) = map(xmap(ix),oy,ic)*mmul
 					end do
 				end do
 			end do
 		end if
 	end subroutine
 
-	subroutine map_block_finish_new(dir, cmet, wbox, mmul, map, wmap, xmap)
+	subroutine map_block_finish_new(dir, wbox, mmul, map, wmap, xmap)
 		implicit none
-		integer(4), intent(in)    :: dir, wbox(:,:), cmet
+		integer(4), intent(in)    :: dir, wbox(:,:)
 		real(_),    intent(inout) :: map(:,:,:)
 		real(_),    intent(in)    :: mmul
-		real(_),    intent(inout), allocatable :: wmap(:,:,:,:)
+		real(_),    intent(inout), allocatable :: wmap(:,:,:)
 		integer(4), intent(inout), allocatable :: xmap(:)
 		integer(4) :: nmap, nwx, nwy, ix, iy, ox, ic, oy
 		nwy = wbox(1,2)-wbox(1,1)
@@ -235,7 +211,7 @@ contains
 				oy = max(1,min(size(map,2),iy+wbox(1,1)))
 				do ic = 1, size(map,3)
 					do ix = 1, nwx
-						map(xmap(ix),oy,ic) = map(xmap(ix),oy,ic)*mmul + sum(wmap(ic,ix,iy,:))
+						map(xmap(ix),oy,ic) = map(xmap(ix),oy,ic)*mmul + wmap(ic,ix,iy)
 					end do
 				end do
 			end do
@@ -297,53 +273,39 @@ contains
 
 	! ops: about nsamp * 7
 	subroutine project_map_nearest_new( &
-		dir, cmet, tod, tmul, map, pix, phase)
+		dir, tod, tmul, map, pix, phase)
 		use omp_lib
 		implicit none
 		! Parameters
-		integer(4), intent(in)    :: dir, cmet
+		integer(4), intent(in)    :: dir
 		real(8),    intent(in)    :: pix(:,:)
 		real(_),    intent(in)    :: tmul, phase(:,:)
-		real(_),    intent(inout) :: tod(:), map(:,:,:,:)
+		real(_),    intent(inout) :: tod(:), map(:,:,:)
 		! Work
 		real(_)    :: v
-		integer(4) :: nsamp, si, ci, p(2), nbuf, id
-		logical    :: atomic
-		call get_clob_info(dir, cmet, nbuf, id, atomic)
+		integer(4) :: nsamp, si, ci, p(2)
 		nsamp = size(tod)
 		if(dir > 0) then
 			! No clobber avoidance needed
 			do si = 1, nsamp
 				p = nint(pix(:,si))
 				if(tmul .eq. 0) then
-					tod(si) = map(1,p(2),p(1),1) + sum(map(2:3,p(2),p(1),1)*phase(1:2,si))
+					tod(si) = map(1,p(2),p(1)) + sum(map(2:3,p(2),p(1))*phase(1:2,si))
 				else
-					tod(si) = tod(si)*tmul + map(1,p(2),p(1),1) + sum(map(2:3,p(2),p(1),1)*phase(1:2,si))
+					tod(si) = tod(si)*tmul + map(1,p(2),p(1)) + sum(map(2:3,p(2),p(1))*phase(1:2,si))
 				end if
 			end do
 		else
-			if(atomic) then
-				! Atomic mode
-				do si = 1, nsamp
-					p = nint(pix(:,si))
+			do si = 1, nsamp
+				p = nint(pix(:,si))
+				!$omp atomic
+				map(1,p(2),p(1)) = map(1,p(2),p(1)) + tod(si)*tmul
+				do ci = 2, 3
+					v = (tod(si)*tmul)*phase(ci-1,si)
 					!$omp atomic
-					map(1,p(2),p(1),1) = map(1,p(2),p(1),1) + tod(si)*tmul
-					do ci = 2, 3
-						v = (tod(si)*tmul)*phase(ci-1,si)
-						!$omp atomic
-						map(ci,p(2),p(1),1) = map(ci,p(2),p(1),1) + v
-					end do
+					map(ci,p(2),p(1)) = map(ci,p(2),p(1)) + v
 				end do
-			else
-				! Buffer mode or naive mode
-				do si = 1, nsamp
-					p = nint(pix(:,si))
-					map(1,p(2),p(1),id) = map(1,p(2),p(1),id) + tod(si)*tmul
-					do ci = 2, 3
-						map(ci,p(2),p(1),id) = map(ci,p(2),p(1),id) + (tod(si)*tmul)*phase(ci-1,si)
-					end do
-				end do
-			end if
+			end do
 		end if
 	end subroutine
 
@@ -362,23 +324,21 @@ contains
 	! Sadly, our pixel truncation in the pixel calculation is not
 	! enough to avoid OOB in this case. Must handle this ourselves.
 	subroutine project_map_bilinear_new( &
-		dir, cmet, tod, tmul, map, pix, phase)
+		dir, tod, tmul, map, pix, phase)
 		use omp_lib
 		implicit none
 		! Parameters
-		integer(4), intent(in)    :: dir, cmet
+		integer(4), intent(in)    :: dir
 		real(8),    intent(in)    :: pix(:,:)
 		real(_),    intent(in)    :: tmul, phase(:,:)
-		real(_),    intent(inout) :: tod(:), map(:,:,:,:)
+		real(_),    intent(inout) :: tod(:), map(:,:,:)
 		real(8)    :: rpix(2)
 		integer(4) :: p(2), ci
 		! Work
 		real(_)    :: x(2), v1(3,2), v2(3,2), v3(3,2), v4(3), v
-		integer(4) :: nsamp, ncomp, si, c, id, nbuf
-		logical    :: atomic
+		integer(4) :: nsamp, ncomp, si, c
 		nsamp = size(tod)
 		ncomp = size(map,1)
-		call get_clob_info(dir, cmet, nbuf, id, atomic)
 		do si = 1, nsamp
 			! Stricter boundary conditions
 			rpix(1) = max(1d0,min(size(map,3)-1d0,pix(1,si)))
@@ -387,8 +347,8 @@ contains
 			x = rpix-p
 			if(dir > 0) then
 				! Interpolate along y direction
-				v1 = map(:,p(2):p(2)+1,p(1),1)
-				v2 = map(:,p(2):p(2)+1,p(1)+1,1)
+				v1 = map(:,p(2):p(2)+1,p(1))
+				v2 = map(:,p(2):p(2)+1,p(1)+1)
 				v3 = v1*(1-x(1)) + v2*x(1)
 				! Interpolate along x direction
 				v4 = v3(:,1)*(1-x(2)) + v3(:,2)*x(2)
@@ -411,52 +371,41 @@ contains
 				! I don't like using this many atomics. With four
 				! times the number I usually have, this is probably
 				! slower than separate work arrays.
-				if(atomic) then
-					do ci = 1, 3
-						!$omp atomic
-						map(ci,p(2)  ,p(1),  1) = map(ci,p(2)  ,p(1),  1) + v1(ci,1)
-						!$omp end atomic
-						!$omp atomic
-						map(ci,p(2)+1,p(1),  1) = map(ci,p(2)+1,p(1),  1) + v1(ci,2)
-						!$omp end atomic
-						!$omp atomic
-						map(ci,p(2)  ,p(1)+1,1) = map(ci,p(2)  ,p(1)+1,1) + v2(ci,1)
-						!$omp end atomic
-						!$omp atomic
-						map(ci,p(2)+1,p(1)+1,1) = map(ci,p(2)+1,p(1)+1,1) + v2(ci,2)
-						!$omp end atomic
-					end do
-				else
-					do ci = 1, 3
-						map(ci,p(2)  ,p(1)  ,id) = map(ci,p(2)  ,p(1)  ,id) + v1(ci,1)
-						map(ci,p(2)+1,p(1)  ,id) = map(ci,p(2)+1,p(1)  ,id) + v1(ci,2)
-						map(ci,p(2)  ,p(1)+1,id) = map(ci,p(2)  ,p(1)+1,id) + v2(ci,1)
-						map(ci,p(2)+1,p(1)+1,id) = map(ci,p(2)+1,p(1)+1,id) + v2(ci,2)
-					end do
-				end if
+				do ci = 1, 3
+					!$omp atomic
+					map(ci,p(2)  ,p(1)  ) = map(ci,p(2)  ,p(1)  ) + v1(ci,1)
+					!$omp end atomic
+					!$omp atomic
+					map(ci,p(2)+1,p(1)  ) = map(ci,p(2)+1,p(1)  ) + v1(ci,2)
+					!$omp end atomic
+					!$omp atomic
+					map(ci,p(2)  ,p(1)+1) = map(ci,p(2)  ,p(1)+1) + v2(ci,1)
+					!$omp end atomic
+					!$omp atomic
+					map(ci,p(2)+1,p(1)+1) = map(ci,p(2)+1,p(1)+1) + v2(ci,2)
+					!$omp end atomic
+				end do
 			end if
 		end do
 	end subroutine
 
 	subroutine project_map_bicubic_new( &
-		dir, cmet, tod, tmul, map, pix, phase)
+		dir, tod, tmul, map, pix, phase)
 		use omp_lib
 		implicit none
 		! Parameters
-		integer(4), intent(in)    :: dir, cmet
+		integer(4), intent(in)    :: dir
 		real(8),    intent(in)    :: pix(:,:)
 		real(_),    intent(in)    :: tmul, phase(:,:)
-		real(_),    intent(inout) :: tod(:), map(:,:,:,:)
+		real(_),    intent(inout) :: tod(:), map(:,:,:)
 		real(8)    :: rpix(2)
 		integer(4) :: p(2), ci, i, j, i2
 		! Work
 		real(_)    :: x, vy(3,4), vx(3), vtot, w(4,2)
 		real(_)    :: vtmp
-		integer(4) :: nsamp, ncomp, si, id, nbuf
-		logical    :: atomic
+		integer(4) :: nsamp, ncomp, si
 		nsamp = size(tod)
 		ncomp = size(map,1)
-		call get_clob_info(dir, cmet, nbuf, id, atomic)
 		! FIXME: Gives negative absolute residual in cg. Something is wrong.
 		do si = 1, nsamp
 			! Stricter boundary conditions
@@ -481,7 +430,7 @@ contains
 				! Interpolate in y direction
 				vy = 0
 				do i = 1, 4
-					vy(:,:) = vy(:,:) + map(:,p(2):p(2)+3,p(1)+i-1,1)*w(i,1)
+					vy(:,:) = vy(:,:) + map(:,p(2):p(2)+3,p(1)+i-1)*w(i,1)
 				end do
 				! Interpolate in x direciton
 				vx = 0
@@ -503,27 +452,16 @@ contains
 				do i = 1, 4
 					vy(:,i) = vx*w(i,2)
 				end do
-				if(atomic) then
-					do i = 1, 4
-						do i2 = 1, 4
-							do ci = 1, 3
-								vtmp = vy(ci,i2) * w(i,1)
-								!$omp atomic
-								map(ci,p(2)+i2-1,p(1)+i-1,1) = map(ci,p(2)+i2-1,p(1)+i-1,1) + vtmp
-								!$omp end atomic
-							end do
+				do i = 1, 4
+					do i2 = 1, 4
+						do ci = 1, 3
+							vtmp = vy(ci,i2) * w(i,1)
+							!$omp atomic
+							map(ci,p(2)+i2-1,p(1)+i-1) = map(ci,p(2)+i2-1,p(1)+i-1) + vtmp
+							!$omp end atomic
 						end do
 					end do
-				else
-					do i = 1, 4
-						do i2 = 1, 4
-							do ci = 1, 3
-								vtmp = vy(ci,i2) * w(i,1)
-								map(ci,p(2)+i2-1,p(1)+i-1,id) = map(ci,p(2)+i2-1,p(1)+i-1,id) + vtmp
-							end do
-						end do
-					end do
-				end if
+				end do
 			end if
 		end do
 	end subroutine
@@ -557,7 +495,6 @@ contains
 			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
 			tod, tmul,                 &! tod and what to mul it by
 			map, mmul,                 &! map and what to mul it by
-			cmet,                      &! How to handle clobbering: 0: ignore, 1: atomic, 2: buffers
 			pix, phase,                &! Precomputed pointing
 			sdir, wbox, wshift, nphi,  &! Pixel remapping
 			times                      &! Time report output array (5)
@@ -565,77 +502,65 @@ contains
 		use omp_lib
 		implicit none
 		! Parameters
-		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi, sdir(:), cmet
+		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi, sdir(:)
 		real(_),    intent(in)    :: tmul, mmul, phase(:,:,:)
 		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
 		integer(4), intent(in)    :: pix(:,:)
 		real(8),    intent(inout) :: times(:)
 		! Work
-		real(_),    allocatable   :: wmap(:,:,:)
+		real(_),    allocatable   :: wmap(:,:)
 		integer(4) :: ndet, di
 		real(8)    :: t1, t2
 		ndet    = size(tod, 2)
 		t1 = omp_get_wtime()
-		call map_block_prepare_shifted_flat_new(dir, cmet, wbox, wshift, nphi, mmul, map, wmap)
+		call map_block_prepare_shifted_flat_new(dir, wbox, wshift, nphi, mmul, map, wmap)
 		t2 = omp_get_wtime()
-		times(2) = t2-t1
+		times(2) = times(2) + t2-t1
 		!$omp parallel do private(di)
 		do di = 1, ndet
-			call project_map_nearest_int_flat_new (dir, tod(:,di), tmul, wmap, cmet, pix(:,di), phase(:,:,di))
+			call project_map_nearest_int_flat_new (dir, tod(:,di), tmul, wmap, pix(:,di), phase(:,:,di))
 		end do
 		t1 = omp_get_wtime()
-		times(4) = t1-t2
-		call map_block_finish_shifted_flat_new(dir, cmet, wbox, wshift, nphi, mmul, map, wmap)
+		times(4) = times(4) + t1-t2
+		call map_block_finish_shifted_flat_new(dir, wbox, wshift, nphi, mmul, map, wmap)
 		t2 = omp_get_wtime()
-		times(5) = t2-t1
+		times(5) = times(5) + t2-t1
 	end subroutine
 
 	subroutine project_map_nearest_int_flat_new( &
-		dir, tod, tmul, map, cmet, pix, phase)
+		dir, tod, tmul, map, pix, phase)
 		use omp_lib
 		implicit none
 		! Parameters
-		integer(4), intent(in)    :: dir, cmet
+		integer(4), intent(in)    :: dir
 		integer(4), intent(in)    :: pix(:)
 		real(_),    intent(in)    :: tmul, phase(:,:)
-		real(_),    intent(inout) :: tod(:), map(:,:,:)
-		integer    :: p, ci, nsamp, si, nbuf, id
-		logical    :: atomic
+		real(_),    intent(inout) :: tod(:), map(:,:)
+		integer    :: p, ci, nsamp, si
 		real(_)    :: v
-		call get_clob_info(dir, cmet, nbuf, id, atomic)
 		nsamp = size(tod)
 		if(dir > 0) then
 			do si = 1, nsamp
 				p = pix(si)
 				if(tmul .eq. 0) then
-					tod(si) = map(1,p,1) + sum(map(2:3,p,1)*phase(1:2,si))
+					tod(si) = map(1,p) + sum(map(2:3,p)*phase(1:2,si))
 				else
-					tod(si) = tod(si)*tmul + map(1,p,1) + sum(map(2:3,p,1)*phase(1:2,si))
+					tod(si) = tod(si)*tmul + map(1,p) + sum(map(2:3,p)*phase(1:2,si))
 				end if
 			end do
 		else
-			if(atomic) then
-				do si = 1, nsamp
-					p = pix(si)
-					v = tod(si)*tmul
+			do si = 1, nsamp
+				p = pix(si)
+				v = tod(si)*tmul
+				!$omp atomic
+				map(1,p) = map(1,p) + v
+				!$omp end atomic
+				do ci = 2, 3
+					v = (tod(si)*tmul)*phase(ci-1,si)
 					!$omp atomic
-					map(1,p,1) = map(1,p,1) + v
-					!$omp end atomic
-					do ci = 2, 3
-						v = (tod(si)*tmul)*phase(ci-1,si)
-						!$omp atomic
-						map(ci,p,1) = map(ci,p,1) + v
-					end do
+					map(ci,p) = map(ci,p) + v
 				end do
-			else
-				do si = 1, nsamp
-					p = pix(si)
-					map(1,p,id) = map(1,p,id) + tod(si)*tmul
-					do ci = 2, 3
-						map(ci,p,id) = map(ci,p,id) + (tod(si)*tmul)*phase(ci-1,si)
-					end do
-				end do
-			end if
+			end do
 		end if
 	end subroutine
 
@@ -681,16 +606,14 @@ contains
 		end do
 	end subroutine
 
-	subroutine map_block_prepare_shifted_flat_new(dir, cmet, wbox, wshift, nphi, mmul, map, wmap)
+	subroutine map_block_prepare_shifted_flat_new(dir, wbox, wshift, nphi, mmul, map, wmap)
 		use omp_lib
 		implicit none
-		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi, cmet
+		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi
 		real(_),    intent(in)    :: map(:,:,:), mmul
-		real(_),    intent(inout), allocatable :: wmap(:,:,:)
-		integer(4) :: ix, iy, iwx, iwy, iwy_sdir, ic, nx, ny, nwx, nwy, pcut, sdir, nbuf, id
-		logical    :: atomic
+		real(_),    intent(inout), allocatable :: wmap(:,:)
+		integer(4) :: ix, iy, iwx, iwy, iwy_sdir, ic, nx, ny, nwx, nwy, pcut, sdir
 		! Set up our work map based on the relevant subset of pixels.
-		call get_clob_info(dir, cmet, nbuf, id, atomic)
 		nx   = size(map,1)
 		ny   = size(map,2)
 		nwx  = wbox(1,2)-wbox(1,1) ! {wx,wy} ordering
@@ -702,7 +625,7 @@ contains
 		! the sdir == 1 case follows after the sdir == 0 case in memory.
 		! So the real size would be 2*nwy. From the point of view of the
 		! python code, this will be an implementation detail.
-		allocate(wmap(3,nwx*2*nwy,nbuf))
+		allocate(wmap(3,nwx*2*nwy))
 		!$omp parallel workshare
 		wmap = 0
 		!$omp end parallel workshare
@@ -719,7 +642,7 @@ contains
 						ix = modulo(ix-1-pcut,nphi)+pcut+1
 						ix = max(1,min(nx, ix))
 						do ic = 1, size(map,3)
-							wmap(ic,iwx+(iwy_sdir-1)*nwx,:) = map(ix,iy,ic)*mmul
+							wmap(ic,iwx+(iwy_sdir-1)*nwx) = map(ix,iy,ic)*mmul
 						end do
 					end do
 				end do
@@ -727,13 +650,13 @@ contains
 		end if
 	end subroutine
 
-	subroutine map_block_finish_shifted_flat_new(dir, cmet, wbox, wshift, nphi, mmul, map, wmap)
+	subroutine map_block_finish_shifted_flat_new(dir, wbox, wshift, nphi, mmul, map, wmap)
 		use omp_lib
 		implicit none
-		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi, cmet
+		integer(4), intent(in)    :: dir, wbox(:,:), wshift(:,:), nphi
 		real(_),    intent(in)    :: mmul
 		real(_),    intent(inout) :: map(:,:,:)
-		real(_),    intent(inout), allocatable :: wmap(:,:,:)
+		real(_),    intent(inout), allocatable :: wmap(:,:)
 		integer(4) :: ix, iy, iwx, iwy, iwy_sdir, ic, nx, ny, nwx, nwy, pcut, sdir
 		! Set up our work map based on the relevant subset of pixels.
 		nx   = size(map,1)
@@ -754,7 +677,7 @@ contains
 						ix = modulo(ix-1-pcut,nphi)+pcut+1
 						ix = max(1,min(nx, ix))
 						do ic = 1, size(map,3)
-							map(ix,iy,ic) = map(ix,iy,ic)*mmul + sum(wmap(ic,iwx+(iwy_sdir-1)*nwx,:))
+							map(ix,iy,ic) = map(ix,iy,ic)*mmul + wmap(ic,iwx+(iwy_sdir-1)*nwx)
 						end do
 					end do
 				end do
@@ -2201,7 +2124,7 @@ contains
 		times(1) = times(1) + t2-t1
 		call map_block_prepare_shifted_flat(dir, wbox, wshift, nphi, mmul, map, wmap)
 		t1 = omp_get_wtime()
-		times(2) = times(1) + t1-t2
+		times(2) = times(2) + t1-t2
 		tpoint = 0; tproj = 0 ! avoid ifort overeager optimization
 		!$omp parallel do private(di, tloc1, tloc2) reduction(+:tpoint,tproj)
 		do di = 1, ndet
@@ -2353,8 +2276,6 @@ contains
 					do iwy = 1, nwy
 						iwy_sdir = iwy + sdir*nwy
 						ix = iwy+wbox(2,1)+wshift(iwx,sdir+1)
-						! This looks a bit heavy. Could precompute, but not as
-						! easy as before.
 						ix = modulo(ix-1-pcut,nphi)+pcut+1
 						ix = max(1,min(nx, ix))
 						do ic = 1, size(map,3)
