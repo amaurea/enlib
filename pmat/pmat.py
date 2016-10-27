@@ -31,8 +31,7 @@ class PointingMatrix:
 	def backward(self, tod, m): raise NotImplementedError
 
 class PmatMap(PointingMatrix):
-	"""Fortran-accelerated scan <-> enmap pointing matrix implementation.
-	20 times faster than the slower python+numpy implementation below."""
+	"""Fortran-accelerated scan <-> enmap pointing matrix implementation."""
 	def __init__(self, scan, template, sys=None, order=None):
 		sys        = config.get("map_sys", sys)
 		transform  = pos2pix(scan,template,sys)
@@ -51,7 +50,6 @@ class PmatMap(PointingMatrix):
 		self.core.pmat_map_direct_grid(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
 				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
 				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
-
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
@@ -72,6 +70,39 @@ class PmatMap(PointingMatrix):
 		#phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
 		#self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T)
 		#return pix, phase
+
+class PmatMapFast(PointingMatrix):
+	"""Fortran-accelerated scan <-> enmap pointing matrix implementation
+	using precomputed pointing and polynomial interpolation."""
+	def __init__(self, scan, template, sys=None, order=None):
+		self.sys   = config.get("map_sys", sys)
+		# Build the pointing interpolator
+		self.trans = pos2pix(scan,template,self.sys)
+		self.poly  = PolyInterpol(self.trans, scan.boresight, scan.offsets)
+		# Build the pixel shift information. This assumes ces-like scans in equ-like systems
+		self.sdir  = get_scan_dir(scan.boresight[:,1])
+		self.period= get_scan_period(scan.boresight[:,1], scan.srate)
+		self.wbox, self.wshift = build_work_shift(self.trans, scan.box, self.period)
+		self.nphi = int(np.abs(360./template.wcs.wcs.cdelt[0]))
+		self.dtype= template.dtype
+		self.core = get_core(self.dtype)
+		self.scan = scan
+		self.order= 0
+	def get_pix_phase(self):
+		ndet, nsamp = self.scan.ndet, self.scan.nsamp
+		pix    = np.zeros([ndet,nsamp],np.int32)
+		phase  = np.zeros([ndet,nsamp,2],self.dtype)
+		self.core.pmat_map_get_pix_poly_shift(pix.T, phase.T, self.scan.boresight.T, self.scan.hwp_phase.T,
+				self.scan.comps.T, self.poly.coeffs.T, self.sdir, self.wbox.T, self.wshift.T)
+		return pix, phase
+	def forward(self, tod, map, pix, phase, tmul=1, mmul=1, times=None):
+		"""m -> tod"""
+		if times is None: times = np.zeros(5)
+		self.core.pmat_map_use_pix_shift(1, tod.T, tmul, map.T, mmul, pix.T, phase.T, self.wbox.T, self.wshift.T, self.nphi, times)
+	def backward(self, tod, map, pix, phase, tmul=1, mmul=1, times=None):
+		"""tod -> m"""
+		if times is None: times = np.zeros(5)
+		self.core.pmat_map_use_pix_shift(-1, tod.T, tmul, map.T, mmul, pix.T, phase.T, self.wbox.T, self.wshift.T, self.nphi, times)
 
 def get_scan_dir(az, step=3):
 	"""The scanning direction is 0 if az is increasing, and 1 otherwise.

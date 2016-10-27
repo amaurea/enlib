@@ -5,7 +5,22 @@ module pmat_core
 
 contains
 
-! Scinet benchmark results (these are quite different on my dektop):
+! Scinet benchmark results (OMP 16 on standard node):
+!ip fast     d  1 tb 1.9105 t  0.889: 0.091 0.000  0.789 0.009 v 7.2496799e+09 1.182
+!ip std_bi_0 d  1 tb 0.1321 t  3.353: 0.034 1.846  1.384 0.014 v 7.2498084e+09 0.000
+!ip std_bi_1 d  1 tb 0.1325 t  4.104: 0.039 1.756  2.220 0.014 v 3.6996657e+09 0.000
+!ip std_bi_3 d  1 tb 0.1322 t  5.563: 0.039 1.646  3.786 0.014 v 5.0880599e+09 0.000
+!ip fast     d -1 tb 1.9821 t  1.321: 0.059 0.000  1.221 0.041 v 1.5651278e+13 1.174
+!ip std_bi_0 d -1 tb 0.1270 t  4.717: 0.026 1.572  3.012 0.056 v 1.5650680e+13 0.000
+!ip std_bi_1 d -1 tb 0.1265 t  7.240: 0.026 1.542  5.568 0.053 v 1.5856977e+13 0.000
+!ip std_bi_3 d -1 tb 0.1328 t 18.186: 0.026 1.492 16.562 0.055 v 1.6075638e+13 0.000
+!
+!fast corresponds to sint below. std is faster than before because of the simplified
+!phase optimization, but not as fast as sphase_bi because it doesn't use shifting.
+!Shifting makes assumptions about the scanning pattern, and when those assumptions are
+!valid, we can just as well go all the way to fast.
+
+! Scinet benchmark results from testing phase (these are quite different on my dektop):
 !std_bi    d  1 tb 0.1304 t 4.066: 0.000 0.040 2.201 1.736 0.015 v 7.2498084e+09 0.000
 !shift_bi  d  1 tb 0.1230 t 3.493: 0.000 0.027 2.558 0.843 0.010 v 7.2498084e+09 0.000
 !sbuf_bi   d  1 tb 0.1287 t 3.330: 0.000 0.027 2.484 0.750 0.010 v 7.2498084e+09 0.000
@@ -27,41 +42,6 @@ contains
 ! Simplifying the phase appears always to be a win, and should be implemented as
 ! standard, I think. We don't need to support scaling of T or a different number
 ! than 3 components.
-
-! Several different useful cases:
-! 1. shift   / no shift
-! 2. atomic  / buffers
-! 3. precomp / no precomp
-! 4. grid    / poly
-! 5. grid order
-! 6. map order
-!
-! Can I support all of them at the same time?
-! 1. Precomp has a very diffent use case:
-!    get_pix, use_forwards, use_backwards
-!    Will probably have to be separate.
-! 2. grid vs. poly have different input
-!    structures: rbox, nbox, yvals vs. coeffs.
-! 3. normal vs. shift also nave a different
-!    interface: pbox vs. sdir, wbox, wshift
-! 4. atomic vs. buffers could be supported
-!    via a common interface, but having an extra
-!    dimensions could be costly, even if it is
-!    always 1 in one case. Should test. If it
-!    is, I can get around it by always having
-!    3 dims, but making one dim nproc times longer.
-!    This seems like the safest case.
-! Could use a fat interface. But to support
-! all of the above, that would have to be
-! very fat. It would also be inconvenient not to
-! be able to call the function without lots of
-! irrelevant arguments.
-!
-! On the other hand, using different
-! functions would mean I need at least 8 different
-! functions, whith quite a bit of repeated code,
-! and would be a hassle to maintain. In C, this would be
-! done by passing in parameter structs or something.
 !
 ! The faster techniques I've implemented here are less
 ! general than the standard mapmaker, so I want to keep
