@@ -48,24 +48,30 @@ class PmatMap(PointingMatrix):
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""m -> tod"""
 		if times is None: times = np.zeros(5)
-		self.core.pmat_map( 1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+		self.core.pmat_map_direct_grid(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
-		self.core.pmat_map(-1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+		self.core.pmat_map_direct_grid(-1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
-		if bore  is None: bore  = self.scan.boresight
-		if offs  is None: offs  = self.scan.offsets[:1]*0
-		if comps is None: comps = self.scan.comps[:self.scan.offsets.shape[0]]*0
-		bore, offs, comps = np.asarray(bore), np.asarray(offs), np.asarray(comps)
-		nsamp, ndet, ncomp = bore.shape[0], offs.shape[0], comps.shape[1]
-		dtype = self.dtype
-		pix   = np.empty([ndet,nsamp,2],dtype=dtype)
-		phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
-		self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T)
-		return pix, phase
+		raise NotImplementedError
+		#if bore  is None: bore  = self.scan.boresight
+		#if offs  is None: offs  = self.scan.offsets[:1]*0
+		#if comps is None: comps = self.scan.comps[:self.scan.offsets.shape[0]]*0
+		#bore, offs, comps = np.asarray(bore), np.asarray(offs), np.asarray(comps)
+		#nsamp, ndet, ncomp = bore.shape[0], offs.shape[0], comps.shape[1]
+		#dtype = self.dtype
+		#pix   = np.empty([ndet,nsamp,2],dtype=dtype)
+		#phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
+		#self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T)
+		#return pix, phase
 
 def get_scan_dir(az, step=3):
 	"""The scanning direction is 0 if az is increasing, and 1 otherwise.
@@ -219,6 +225,7 @@ class PolyInterpol:
 	def __call__(self, bore, det_inds):
 		basis = self.get_basis(bore)
 		model = np.einsum("dab,bt->dat",self.coeffs[det_inds], basis)
+		return model
 
 class PmatMapMultibeam(PointingMatrix):
 	"""Like PmatMap, but with multiple, displaced beams."""
@@ -245,15 +252,17 @@ class PmatMapMultibeam(PointingMatrix):
 		if times is None: times = np.zeros(5)
 		tod *= tmul
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
-			self.func( 1, 1, self.order+1, 1, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T,
-					boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+			self.core.pmat_map_direct_grid(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+					self.scan.hwp_phase.T, boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T,
+					self.pixbox.T, self.nphi, times)
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
 		m *= mmul
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
-			self.func(-1, 1, self.order+1, tmul, 1, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T,
-					boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+			self.core.pmat_map_direct_grid(-11, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+					self.scan.hwp_phase.T, boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T,
+					self.pixbox.T, self.nphi, times)
 
 def get_moby_pointing(entry, bore, dets, downgrade=1):
 	# Set up moby2
@@ -431,101 +440,6 @@ class pos2pix:
 		return opix.reshape((opix.shape[0],)+shape)
 
 config.default("pmat_ptsrc_rsigma", 4.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
-class PmatPtsrc(PointingMatrix):
-	def __init__(self, scan, params, sys=None, tmul=None, pmul=None):
-		# Params is [nsrc,{dec,ra,amps,ibeams}]
-		rmul  = config.get("pmat_ptsrc_rsigma")
-		self.dtype = params.dtype
-		transform  = build_pos_transform(scan, sys=config.get("map_sys", sys))
-		ipol, obox = build_interpol(transform, scan.box, scan.entry.id, posunit=0.1*utils.arcsec)
-		# It's error prone to require the user to have the angles consistently
-		# wrapped. So we will rewrap params ourselves
-		self.ref = np.mean(obox[:,:2],0)
-		params   = params.copy()
-		params[:2] = utils.rewind(params[:2].T,self.ref).T
-
-		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, self.dtype)
-		self.comps = np.arange(params.shape[0]-5)
-		self.scan  = scan
-		self.core = pmat_core_32.pmat_core if self.dtype == np.float32 else pmat_core_64.pmat_core
-
-		# Collect information about which samples hit which sources
-		nsrc = params.shape[1]
-		ndet = scan.ndet
-		# rhit is the inverse of the squared amplitude-weighted inverse beam for
-		# some reason. But it is basically going to be our beam size.
-		print "FIXME: Point source format incompatible with PmatPtsrc"
-		# To be precise, this function assumes that point sources are [param,nsrc]
-		# rathar than [nsrc,param], that PmatPtsrc2 assumes. I should decide which
-		# one I want. The whole point source stuff is messy at the moment.
-
-		rhit = np.zeros(nsrc)+(np.sum(1./params[-3]*params[2]**2)/np.sum(params[2]**2))**0.5
-		rmax = rhit*rmul
-		try: det_ivars = scan.noise.ivar
-		except NotImplementedError: det_ivars = np.zeros(ndet)
-		src_ivars = np.zeros(nsrc,dtype=self.dtype)
-
-		# Measure ranges. May need to iterate if initial allocation was too small
-		nrange = np.zeros([nsrc,ndet],dtype=np.int32)
-		ranges = np.zeros([nsrc,ndet,100,2],dtype=np.int32)
-		self.core.pmat_ptsrc_prepare(params, rhit, rmax, det_ivars, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.yvals.T)
-		if np.max(nrange) > ranges.shape[2]:
-			ranges = np.zeros([nsrc,ndet,np.max(nrange),2],dtype=np.int32)
-			self.core.pmat_ptsrc_prepare(params, rhit, rmax, det_ivars, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.yvals.T)
-		self.ranges, self.rangesets, self.offsets = compress_ranges(ranges, nrange, scan.cut, scan.nsamp)
-		self.src_ivars = src_ivars
-		self.nhit = np.sum(self.ranges[:,1]-self.ranges[:,0])
-
-		self.tmul = 0 if tmul is None else tmul
-		self.pmul = 1 if pmul is None else pmul
-
-	def forward(self, tod, params, tmul=None, pmul=None):
-		"""params -> tod"""
-		if tmul is None: tmul = self.tmul
-		if pmul is None: pmul = self.pmul
-		pcopy = params.copy()
-		pcopy[:2] = utils.rewind(pcopy[:2].T,self.ref).T
-		self.core.pmat_ptsrc(tmul, pmul, tod.T, pcopy, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.ranges.T, self.rangesets, self.offsets.T)
-
-	def extract(self, tod, cut=None, raw=0):
-		"""Extract precomputed pointing and phase information for the selected samples.
-		These are stored in a (somewhat cumbersome) compressed format, where sample I
-		of range R of detector D and source S has index ranges[rangesets[offsets[S,D,0]+R],0]+I.
-		The reason for this complicated setup is to store each TOD sample only once, even if
-		it hits multiple sources. This is not primarily to save space, but to be able to
-		perform likelihood analysis on it. Subtracting one source from one copy of a sample,
-		and another source from another copy of the sample, will leave each copy with some
-		signal left unmodeled.
-
-		If cut is specified, the response of cut samples will be set to zero, giving them
-		no weight.
-
-		If raw is a nonzero integer, the output pointing and phase will be in the
-		telescope's native coordinates (i.e. hor) rather than the normal output coordinates.
-		"""
-		point = np.zeros([self.nhit,2+(raw>0)],dtype=self.dtype)
-		phase = np.zeros([self.nhit,len(self.comps)],dtype=self.dtype)
-		srctod= np.zeros([self.nhit],dtype=self.dtype)
-		oranges= np.zeros(self.ranges.shape, dtype=np.int32)
-		self.core.pmat_ptsrc_extract(tod.T, srctod, point.T, phase.T, oranges.T, self.scan.boresight.T,
-				self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
-				self.yvals.T, self.ranges.T, self.rangesets, self.offsets.T, raw)
-		if cut:
-			# Cuts are handled by setting the phase (response) to zero
-			mtod = cut.to_mask().astype(self.dtype)
-			mask = np.zeros([self.nhit],dtype=self.dtype)
-			self.core.pmat_ptsrc_extract(mtod.T, mask, point.T, phase.T, oranges.T, self.scan.boresight.T,
-					self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
-					self.yvals.T, self.ranges.T, self.rangesets, self.offsets.T, raw)
-			mask = np.rint(mask)==1
-			phase[mask] = 0
-		# Store the raw pointing offsets, so we can ensure that the point fit does everything the same
-		# way the main mapmaker does.
-		mean_point = np.mean(self.scan.boresight.T[1:],1)
-		raw_offsets = coordinates.recenter(mean_point[:,None] + self.scan.offsets.T[1:], np.concatenate([mean_point,mean_point*0])).T
-		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets, rbox=self.rbox, nbox=self.nbox, yvals=self.yvals, point_offset=raw_offsets, ivars=np.ones(len(self.scan.dets)))
-		return res
-
 config.default("pmat_ptsrc_cell_res", 5, "Cell size in arcmin to use for fast source lookup.")
 class PmatPtsrc2(PointingMatrix):
 	def __init__(self, scan, srcs, sys=None, tmul=None, pmul=None):
@@ -549,8 +463,6 @@ class PmatPtsrc2(PointingMatrix):
 			self.dpos = parallax.earth2sun(srcs.T[:2], self.scan.mjd0, sundist, diff=True).T
 		srcs[:,:,:2] += self.dpos
 
-		print "srcs", srcs
-
 		# Investigate the beam to find the max relevant radius
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
 		value_lim = np.exp(-0.5*sigma_lim**2)
@@ -568,9 +480,6 @@ class PmatPtsrc2(PointingMatrix):
 		cshape  = tuple(np.ceil(((cbox[1]-cbox[0])/cres)).astype(int))
 		self.ref = np.mean(cbox,0)
 		srcs[:,:,:2] = utils.rewind(srcs[:,:,:2], self.ref)
-
-		print "cbox", cbox/utils.degree
-		print "cshape", cshape
 
 		# A cell is hit if it overlaps both horizontall any vertically
 		# with the point source +- rmax
