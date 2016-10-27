@@ -283,8 +283,9 @@ contains
 		real(_),    intent(inout) :: tod(:), map(:,:,:)
 		! Work
 		real(_)    :: v
-		integer(4) :: nsamp, si, ci, p(2)
+		integer(4) :: nsamp, si, ci, p(2), nproc
 		nsamp = size(tod)
+		nproc = omp_get_num_threads()
 		if(dir > 0) then
 			! No clobber avoidance needed
 			do si = 1, nsamp
@@ -296,16 +297,28 @@ contains
 				end if
 			end do
 		else
-			do si = 1, nsamp
-				p = nint(pix(:,si))
-				!$omp atomic
-				map(1,p(2),p(1)) = map(1,p(2),p(1)) + tod(si)*tmul
-				do ci = 2, 3
-					v = (tod(si)*tmul)*phase(ci-1,si)
+			if(nproc > 1) then
+				do si = 1, nsamp
+					p = nint(pix(:,si))
 					!$omp atomic
-					map(ci,p(2),p(1)) = map(ci,p(2),p(1)) + v
+					map(1,p(2),p(1)) = map(1,p(2),p(1)) + tod(si)*tmul
+					do ci = 2, 3
+						v = (tod(si)*tmul)*phase(ci-1,si)
+						!$omp atomic
+						map(ci,p(2),p(1)) = map(ci,p(2),p(1)) + v
+					end do
 				end do
-			end do
+			else
+				! Avoid slowing down single-proc case with atomics
+				do si = 1, nsamp
+					p = nint(pix(:,si))
+					map(1,p(2),p(1)) = map(1,p(2),p(1)) + tod(si)*tmul
+					do ci = 2, 3
+						v = (tod(si)*tmul)*phase(ci-1,si)
+						map(ci,p(2),p(1)) = map(ci,p(2),p(1)) + v
+					end do
+				end do
+			end if
 		end if
 	end subroutine
 
@@ -336,9 +349,10 @@ contains
 		integer(4) :: p(2), ci
 		! Work
 		real(_)    :: x(2), v1(3,2), v2(3,2), v3(3,2), v4(3), v
-		integer(4) :: nsamp, ncomp, si, c
+		integer(4) :: nsamp, ncomp, si, c, nproc
 		nsamp = size(tod)
 		ncomp = size(map,1)
+		nproc = omp_get_num_threads()
 		do si = 1, nsamp
 			! Stricter boundary conditions
 			rpix(1) = max(1d0,min(size(map,3)-1d0,pix(1,si)))
@@ -368,23 +382,29 @@ contains
 				v3(:,2) = v4*x(2)
 				v1 = v3*(1-x(1))
 				v2 = v3*x(1)
-				! I don't like using this many atomics. With four
-				! times the number I usually have, this is probably
-				! slower than separate work arrays.
-				do ci = 1, 3
-					!$omp atomic
-					map(ci,p(2)  ,p(1)  ) = map(ci,p(2)  ,p(1)  ) + v1(ci,1)
-					!$omp end atomic
-					!$omp atomic
-					map(ci,p(2)+1,p(1)  ) = map(ci,p(2)+1,p(1)  ) + v1(ci,2)
-					!$omp end atomic
-					!$omp atomic
-					map(ci,p(2)  ,p(1)+1) = map(ci,p(2)  ,p(1)+1) + v2(ci,1)
-					!$omp end atomic
-					!$omp atomic
-					map(ci,p(2)+1,p(1)+1) = map(ci,p(2)+1,p(1)+1) + v2(ci,2)
-					!$omp end atomic
-				end do
+				if(nproc > 1) then
+					! I don't like using this many atomics. With four
+					! times the number I usually have, this is probably
+					! slower than separate work arrays.
+					do ci = 1, 3
+						!$omp atomic
+						map(ci,p(2)  ,p(1)  ) = map(ci,p(2)  ,p(1)  ) + v1(ci,1)
+						!$omp atomic
+						map(ci,p(2)+1,p(1)  ) = map(ci,p(2)+1,p(1)  ) + v1(ci,2)
+						!$omp atomic
+						map(ci,p(2)  ,p(1)+1) = map(ci,p(2)  ,p(1)+1) + v2(ci,1)
+						!$omp atomic
+						map(ci,p(2)+1,p(1)+1) = map(ci,p(2)+1,p(1)+1) + v2(ci,2)
+					end do
+				else
+					! Avoid slowing down single-proc case with atomics
+					do ci = 1, 3
+						map(ci,p(2)  ,p(1)  ) = map(ci,p(2)  ,p(1)  ) + v1(ci,1)
+						map(ci,p(2)+1,p(1)  ) = map(ci,p(2)+1,p(1)  ) + v1(ci,2)
+						map(ci,p(2)  ,p(1)+1) = map(ci,p(2)  ,p(1)+1) + v2(ci,1)
+						map(ci,p(2)+1,p(1)+1) = map(ci,p(2)+1,p(1)+1) + v2(ci,2)
+					end do
+				end if
 			end if
 		end do
 	end subroutine
@@ -403,9 +423,10 @@ contains
 		! Work
 		real(_)    :: x, vy(3,4), vx(3), vtot, w(4,2)
 		real(_)    :: vtmp
-		integer(4) :: nsamp, ncomp, si
+		integer(4) :: nsamp, ncomp, si, nproc
 		nsamp = size(tod)
 		ncomp = size(map,1)
+		nproc = omp_get_num_threads()
 		! FIXME: Gives negative absolute residual in cg. Something is wrong.
 		do si = 1, nsamp
 			! Stricter boundary conditions
@@ -452,16 +473,26 @@ contains
 				do i = 1, 4
 					vy(:,i) = vx*w(i,2)
 				end do
-				do i = 1, 4
-					do i2 = 1, 4
-						do ci = 1, 3
-							vtmp = vy(ci,i2) * w(i,1)
-							!$omp atomic
-							map(ci,p(2)+i2-1,p(1)+i-1) = map(ci,p(2)+i2-1,p(1)+i-1) + vtmp
-							!$omp end atomic
+				if(nproc > 1) then
+					do i = 1, 4
+						do i2 = 1, 4
+							do ci = 1, 3
+								vtmp = vy(ci,i2) * w(i,1)
+								map(ci,p(2)+i2-1,p(1)+i-1) = map(ci,p(2)+i2-1,p(1)+i-1) + vtmp
+							end do
 						end do
 					end do
-				end do
+				else
+					! Avoid slowing down single-proc case with atomics
+					do i = 1, 4
+						do i2 = 1, 4
+							do ci = 1, 3
+								vtmp = vy(ci,i2) * w(i,1)
+								map(ci,p(2)+i2-1,p(1)+i-1) = map(ci,p(2)+i2-1,p(1)+i-1) + vtmp
+							end do
+						end do
+					end do
+				end if
 			end if
 		end do
 	end subroutine
@@ -536,9 +567,10 @@ contains
 		integer(4), intent(in)    :: pix(:)
 		real(_),    intent(in)    :: tmul, phase(:,:)
 		real(_),    intent(inout) :: tod(:), map(:,:)
-		integer    :: p, ci, nsamp, si
+		integer    :: p, ci, nsamp, si, nproc
 		real(_)    :: v
 		nsamp = size(tod)
+		nproc = omp_get_num_threads()
 		if(dir > 0) then
 			do si = 1, nsamp
 				p = pix(si)
@@ -549,18 +581,30 @@ contains
 				end if
 			end do
 		else
-			do si = 1, nsamp
-				p = pix(si)
-				v = tod(si)*tmul
-				!$omp atomic
-				map(1,p) = map(1,p) + v
-				!$omp end atomic
-				do ci = 2, 3
-					v = (tod(si)*tmul)*phase(ci-1,si)
+			if(nproc > 1) then
+				do si = 1, nsamp
+					p = pix(si)
+					v = tod(si)*tmul
 					!$omp atomic
-					map(ci,p) = map(ci,p) + v
+					map(1,p) = map(1,p) + v
+					do ci = 2, 3
+						v = (tod(si)*tmul)*phase(ci-1,si)
+						!$omp atomic
+						map(ci,p) = map(ci,p) + v
+					end do
 				end do
-			end do
+			else
+				! Avoid slowing down single-proc case with atomics
+				do si = 1, nsamp
+					p = pix(si)
+					v = tod(si)*tmul
+					map(1,p) = map(1,p) + v
+					do ci = 2, 3
+						v = (tod(si)*tmul)*phase(ci-1,si)
+						map(ci,p) = map(ci,p) + v
+					end do
+				end do
+			end if
 		end if
 	end subroutine
 
