@@ -152,9 +152,10 @@ def build_work_shift(transform, hor_box, scan_period):
 	y1 = int(np.ceil(pix_box[1,0]))+1
 	mean_t, mean_az, mean_el = np.mean(hor_box,0)
 	# Get a forward and backwards sweep. So index 0 is az increasing, index 1 is az decreasing
+	# Divide scan period by 2 because there is a forwards and backward sweep per period.
 	wshift = np.array([
-		measure_sweep_pixels(transform, [mean_t,mean_t+scan_period], hor_box[:,1],    mean_el, [y0,y1]),
-		measure_sweep_pixels(transform, [mean_t,mean_t+scan_period], hor_box[::-1,1], mean_el, [y0,y1])])
+		measure_sweep_pixels(transform, [mean_t,mean_t+scan_period/2], hor_box[:,1],    mean_el, [y0,y1]),
+		measure_sweep_pixels(transform, [mean_t,mean_t+scan_period/2], hor_box[::-1,1], mean_el, [y0,y1])])
 	# For each of these, find the pixel bounds. The total
 	# bounds will be the union of these
 	wboxes = []

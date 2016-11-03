@@ -40,7 +40,7 @@ class Tagdb:
 		return append_subs(self.data["id"], self.data["subids"])
 	def __len__(self): return len(self.ids)
 	def __getitem__(self, query=""):
-		return self.select(self.query(query))
+		return self.query(query)
 	def select(self, ids):
 		"""Return a tagdb which only contains the selected ids."""
 		# Extract the subids
@@ -74,6 +74,7 @@ class Tagdb:
 		# resulting ids.
 		toks = utils.split_outside(query,",")
 		fields, subid = [], []
+		override_ids = None
 		for tok in toks:
 			if len(tok) == 0: continue
 			if tok.startswith("+"):
@@ -85,9 +86,20 @@ class Tagdb:
 				else: raise ValueError("Unknown query flag '%s'" % tok)
 			else:
 				# Normal field. Perform a few convenience transformations first.
-				if tok.startswith("@"):
+				if tok.startswith("@@"):
+					# Hack. *Force* the given ids to be returned, even if they aren't in the database.
+					override_ids = load_ids(tok[2:])
+					continue
+				elif tok.startswith("@"):
+					# Restrict dataset to those in the given file
 					tok = "file_contains('%s',id)" % tok[1:]
 				fields.append(tok)
+		if override_ids is not None:
+			# Append subids to our ids, and return immediately. All other fields
+			# and queries are ignored.
+			subs = np.array(",".join(subid))
+			subs = np.full(len(override_ids), subs, subs.dtype)
+			return append_subs(override_ids, subs)
 		# Apply our default queries here. These are things that we almost always
 		# want in our queries, and that it's tedious to have to specify manually
 		# each time. For example, this would be "selected" for act todinfo queries
@@ -260,6 +272,10 @@ def parse_tagfile_idlist(fname):
 def file_contains(fname, ids):
 	lines = [line.split()[0] for line in open(fname,"r") if not line.startswith("#")]
 	return utils.contains(ids, lines)
+
+def load_ids(fname):
+	lines = [line.split()[0] for line in open(fname,"r") if not line.startswith("#")]
+	return np.array(lines)
 
 def split_ids(ids):
 	bids, subids = [], []

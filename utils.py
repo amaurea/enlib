@@ -718,7 +718,7 @@ def bounding_box(boxes):
 def unpackbits(a): return np.unpackbits(np.atleast_1d(a).view(np.uint8)[::-1])[::-1]
 
 def box2corners(box):
-	"""Given a [{from,to},:] bounding box, returns [nocorner,:] coordinates
+	"""Given a [{from,to},:] bounding box, returns [ncorner,:] coordinates
 	of of all its corners."""
 	box = np.asarray(box)
 	ndim= box.shape[1]
