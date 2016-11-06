@@ -2,6 +2,7 @@ module pmat_core
 
 	private map_block_prepare, map_block_finish
 	private map_block_prepare_shifted_flat, map_block_finish_shifted_flat
+	private map_block_prepare_direct_flat, map_block_finish_direct_flat
 
 contains
 
@@ -787,6 +788,180 @@ contains
 			pix(1,si) = min(psize(1)+0.49999d0,max(0.5d0,pix(1,si)))
 			pix(2,si) = min(psize(2)+0.49999d0,max(0.5d0,pix(2,si)))
 		end do
+	end subroutine
+
+	!!! Workspace projection. Only the pix computation is new. The rest is shared. !!!
+
+	subroutine pmat_map_use_pix_direct( &
+			dir,                       &! Direction of the projection: 1: forward (map2tod), -1: backard (tod2map)
+			tod, tmul,                 &! tod and what to mul it by
+			map, mmul,                 &! map and what to mul it by
+			pix, phase,                &! Precomputed pointing
+			times                      &! Time report output array (5)
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir
+		real(_),    intent(in)    :: tmul, mmul, phase(:,:,:)
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		integer(4), intent(in)    :: pix(:,:)
+		real(8),    intent(inout) :: times(:)
+		! Work
+		real(_),    allocatable   :: wmap(:,:)
+		integer(4) :: ndet, di
+		real(8)    :: t1, t2
+		ndet    = size(tod, 2)
+		t1 = omp_get_wtime()
+		call map_block_prepare_direct_flat(dir, mmul, map, wmap)
+		t2 = omp_get_wtime()
+		times(2) = times(2) + t2-t1
+		!$omp parallel do private(di)
+		do di = 1, ndet
+			call project_map_nearest_int_flat (dir, tod(:,di), tmul, wmap, pix(:,di), phase(:,:,di))
+		end do
+		t1 = omp_get_wtime()
+		times(4) = times(4) + t1-t2
+		call map_block_finish_direct_flat(dir, mmul, map, wmap)
+		t2 = omp_get_wtime()
+		times(5) = times(5) + t2-t1
+	end subroutine
+
+	subroutine pmat_map_get_pix_poly_shift_xy( &
+			pix,  phase,               &! Main inputs/outpus
+			bore, hwp, det_comps,      &! Input pointing
+			coeffs,                    &! Coordinate interpolation
+			sdir, y0, nwx, nwys, xshift, yshift, nphi &! Pixel remapping
+		)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: y0, nwx, nwys(:), xshift(:,:), yshift(:,:), sdir(:), nphi
+		real(8),    intent(in)    :: bore(:,:), hwp(:,:), coeffs(:,:,:)
+		real(8),    intent(in)    :: det_comps(:,:)
+		integer(4), intent(inout) :: pix(:,:)
+		real(_),    intent(inout) :: phase(:,:,:)
+		integer(4) :: ndet, di
+		ndet    = size(det_comps, 2)
+		!$omp parallel do
+		do di = 1, ndet
+			call build_pointing_int_poly_shift_xy(bore, hwp, pix(:,di), phase(:,:,di), &
+				det_comps(:,di), coeffs(:,:,di), sdir, y0, nwx, nwys, xshift, yshift, nphi)
+		end do
+	end subroutine
+
+	subroutine build_pointing_int_poly_shift_xy(bore, hwp, pix, phase, det_comps, coeff, sdir, y0, nwx, nwys, xshift, yshift, nphi)
+		implicit none
+		real(8),    intent(in)    :: bore(:,:), hwp(:,:), det_comps(:), coeff(:,:)
+		integer(4), intent(inout) :: pix(:)
+		real(_),    intent(inout) :: phase(:,:)
+		integer(4), intent(in)    :: nwx, nwys(:), y0, xshift(:,:), yshift(:,:), sdir(:), nphi
+		real(_)    :: tmp
+		real(8)    :: work(4), p(2)
+		integer(4) :: nsamp, si, iwx, iy, d, nsub, wx, wy, wytot
+		logical    :: use_hwp
+		real(8)    :: az, t
+		nsamp = size(bore,2)
+		use_hwp = hwp(1,1) .ne. 0 .or. hwp(2,1) .ne. 0
+		do si = 1, nsamp
+			!write(*,*) "-----------"
+			t  = bore(1,si)
+			az = bore(2,si)
+			!write(*,*) "si", si, "t", t, "az", az*180/3.14159, "el", bore(3,si)*180/3.14159
+			work = coeff(1,:) + coeff(9,:)*t + az*(coeff(2,:) + coeff(10,:)*t + &
+				az*(coeff(3,:) + coeff(11,:)*t + az*(coeff(4,:) + az*(coeff(5,:) + &
+				az*(coeff(6,:) + az*(coeff(7,:) + az*coeff(8,:)))))))
+			p  = work(1:2)
+			!write(*,*) "p", p
+			d  = sdir(si)+1
+			! p is the pixel index into the full map. We now want to transform
+			! it onto the local workspace. The shape of the workspace is given
+			! by nwys(2) and nwx.
+			! Up to pixel rounding, capping and dir offsets, we have
+			! wy = x - xshift[y-y0], wx = yshift[y-y0]
+			iy = min(max(nint(p(1))-y0+1,1),size(xshift,1))
+			!write(*,*) "y0 iy ny", y0, iy, size(xshift,1)
+			wy = modulo(nint(p(2)) - xshift(iy,d),nphi) + 1
+			!write(*,*) "sdir", d, "xshift", xshift(iy,d)
+			!write(*,*) "wy", wy, "nwys", nwys
+			! The x stretching is a bit harder
+			if(iy == size(yshift,1)) then
+				nsub = 1
+			else
+				nsub = yshift(iy+1,d)-yshift(iy,d)
+			end if
+			wx = yshift(iy,d) + floor((p(1)-nint(p(1))+0.5d0)*nsub) + 1
+			!write(*,*) "nsub", nsub, "rel", p(1)-nint(p(1))+0.5, "off", floor((p(1)-nint(p(1))+0.5d0)*nsub)
+			!write(*,*) "wx", wx, nwx
+			! Cap to bounds of workspace
+			wx = max(1,min(nwx, wx))
+			wy = max(1,min(nwys(d),wy))
+			wytot = wy + nwys(1)*sdir(si)
+			!write(*,*) "wxc", wx, "wyc", wy, "wytot", wytot
+			! And flatten to 1d
+			pix(si) = (wytot-1)*nwx+wx
+			! Make 1-indexed
+			phase(1:2,si) = det_comps(2:3)
+			if(use_hwp) then
+				tmp = phase(1,si)
+				phase(1,si) = -hwp(1,si)*tmp + hwp(2,si)*phase(2,si)
+				phase(2,si) = +hwp(2,si)*tmp + hwp(1,si)*phase(2,si)
+			end if
+			! Then the sky rotation
+			tmp = phase(1,si)
+			phase(1,si) = work(3)*tmp - work(4)*phase(2,si)
+			phase(2,si) = work(4)*tmp + work(3)*phase(2,si)
+		end do
+	end subroutine
+
+	subroutine map_block_prepare_direct_flat(dir, mmul, map, wmap)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir
+		real(_),    intent(in)    :: map(:,:,:), mmul
+		real(_),    intent(inout), allocatable :: wmap(:,:)
+		integer(4) :: ix, iy, ic, nx, ny
+		! Set up our work map based on the relevant subset of pixels.
+		nx   = size(map,1)
+		ny   = size(map,2)
+		allocate(wmap(3,nx*ny))
+		!$omp parallel workshare
+		wmap = 0
+		!$omp end parallel workshare
+		if (dir > 0) then
+			!$omp parallel do private(iy,ix,ic)
+			do ix = 1, nx
+				do iy = 1, ny
+					do ic = 1, size(map,3)
+						wmap(ic,(iy-1)*nx+ix) = map(ix,iy,ic)*mmul
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
+	subroutine map_block_finish_direct_flat(dir, mmul, map, wmap)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir
+		real(_),    intent(in)    :: mmul
+		real(_),    intent(inout) :: map(:,:,:)
+		real(_),    intent(inout), allocatable :: wmap(:,:)
+		integer(4) :: ix, iy, ic, nx, ny
+		! Set up our work map based on the relevant subset of pixels.
+		nx   = size(map,1)
+		ny   = size(map,2)
+		if (dir < 0) then
+			!$omp parallel do private(iy,ix,ic)
+			do ix = 1, nx
+				do iy = 1, ny
+					do ic = 1, size(map,3)
+						map(ix,iy,ic) = map(ix,iy,ic)*mmul + wmap(ic,ix+(iy-1)*nx)
+					end do
+				end do
+			end do
+		end if
+		deallocate(wmap)
 	end subroutine
 
 	!!! Cut stuff here !!!

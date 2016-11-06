@@ -60,16 +60,6 @@ class PmatMap(PointingMatrix):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
 		raise NotImplementedError
-		#if bore  is None: bore  = self.scan.boresight
-		#if offs  is None: offs  = self.scan.offsets[:1]*0
-		#if comps is None: comps = self.scan.comps[:self.scan.offsets.shape[0]]*0
-		#bore, offs, comps = np.asarray(bore), np.asarray(offs), np.asarray(comps)
-		#nsamp, ndet, ncomp = bore.shape[0], offs.shape[0], comps.shape[1]
-		#dtype = self.dtype
-		#pix   = np.empty([ndet,nsamp,2],dtype=dtype)
-		#phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
-		#self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T)
-		#return pix, phase
 
 class PmatMapFast(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation
@@ -216,7 +206,7 @@ def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, n
 	return wshift
 
 class PolyInterpol:
-	def __init__(self, transfun, bore, det_offs, thin=500):
+	def __init__(self, transfun, bore, det_offs, thin=200):
 		"""Fit a polynomial in az and t to each detector's pointing,
 		returning coeffs[ndet,:]. El is assumed to be constant."""
 		bore  = bore[::thin]
