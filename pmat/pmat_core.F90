@@ -964,6 +964,31 @@ contains
 		deallocate(wmap)
 	end subroutine
 
+	subroutine bincount_flat(hits, flat_pix, pshape, axis)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: flat_pix(:,:), pshape(:), axis
+		integer(4), intent(inout) :: hits(:,:)
+		integer(4) :: nsamp, ndet, si, di, pdiv, pmod, ndim, p, ax
+		nsamp= size(flat_pix, 1)
+		ndet = size(flat_pix, 2)
+		ndim = size(pshape)
+		ax   = modulo(axis, ndim)+1
+		pdiv = product(pshape(ax+1:ndim))
+		pmod = pshape(ax)
+		!$omp parallel workshare
+		hits = 0
+		!$omp end parallel workshare
+		!$omp parallel do private(si, p)
+		do di = 1, ndet
+			do si = 1, nsamp
+				p = modulo((flat_pix(si,di)-1)/pdiv,pmod)+1
+				hits(p,di) = hits(p,di) + 1
+			end do
+		end do
+	end subroutine
+
 	!!! Cut stuff here !!!
 
 	! Simple cut scheme: a simple array of ({det,lstart,len,gstart,glen,type,params...},ncut)

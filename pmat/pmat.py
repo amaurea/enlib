@@ -206,7 +206,7 @@ def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, n
 	return wshift
 
 class PolyInterpol:
-	def __init__(self, transfun, bore, det_offs, thin=200):
+	def __init__(self, transfun, bore, det_offs, thin=500):
 		"""Fit a polynomial in az and t to each detector's pointing,
 		returning coeffs[ndet,:]. El is assumed to be constant."""
 		bore  = bore[::thin]
