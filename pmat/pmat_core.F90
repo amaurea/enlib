@@ -989,6 +989,41 @@ contains
 		end do
 	end subroutine
 
+	!!! Workspace to map !!!
+
+	subroutine pmat_workspace(dir, work, map, y0, nwx, nwys, xshift, yshift, nphi)
+		implicit none
+		integer(4), intent(in)    :: dir, y0, nwx, nwys(2), xshift(:,:), yshift(:,:), nphi
+		real(_),    intent(inout) :: work(:,:,:), map(:,:,:)
+		integer(4) :: y, x, iy, wy, wytot, wx, d, ny, dx, nsub, i
+		ny = size(xshift,1)
+		! Loop through each output pixel in the map. iy and ix are the y and x pixel relative
+		! to the bottom-left corner of the exposed region. Looping this way avoids the need
+		! for any locking.
+		do d = 1, 2
+			!$omp parallel do private(iy,y,wx,x,nsub,i)
+			do iy = 1, ny
+				y = iy + y0
+				do wy = 1, nwys(d)
+					wytot = wy + nwys(1)*(d-1)
+					x = modulo(xshift(iy,d) + wy - 1, nphi)+1
+					nsub = 1
+					!write(*,*) "d", d, "iy", iy, "y", y, ny
+					!write(*,*) "wy", wy, "wytot", wytot
+					if(iy < ny) nsub = yshift(iy+1,d)-yshift(iy,d)
+					do i = 1, nsub
+						wx = yshift(iy,d) + i
+						if(dir > 0) then
+							work(wx,wytot,:) = map(x,y,:)
+						else
+							map(x,y,:) = map(x,y,:) + work(wx,wytot,:)
+						end if
+					end do
+				end do
+			end do
+		end do
+	end subroutine
+
 	!!! Cut stuff here !!!
 
 	! Simple cut scheme: a simple array of ({det,lstart,len,gstart,glen,type,params...},ncut)

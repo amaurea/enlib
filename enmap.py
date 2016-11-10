@@ -263,9 +263,9 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 	cflat  = coords.reshape(coords.shape[0], -1)
 	# Quantities with a w prefix are in wcs ordering (ra,dec)
 	wpix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
-	wshape = shape[-2:][::-1]
 	if corner: wpix += 0.5
 	if safe and not enlib.wcs.is_plain(wcs):
+		wshape = shape[-2:][::-1]
 		# Put the angle cut as far away from the map as possible.
 		# We do this by putting the reference point in the middle
 		# of the map.
