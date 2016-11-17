@@ -1008,8 +1008,6 @@ contains
 					wytot = wy + nwys(1)*(d-1)
 					x = modulo(xshift(iy,d) + wy - 1, nphi)+1
 					nsub = 1
-					!write(*,*) "d", d, "iy", iy, "y", y, ny
-					!write(*,*) "wy", wy, "wytot", wytot
 					if(iy < ny) nsub = yshift(iy+1,d)-yshift(iy,d)
 					do i = 1, nsub
 						wx = yshift(iy,d) + i
