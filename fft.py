@@ -1,6 +1,46 @@
 """This is a convenience wrapper of pyfftw."""
 import numpy as np, multiprocessing, os, enlib.utils
 engines = {}
+
+# Define our engines. First a baseline numpy-based engine
+class numpy_FFTW:
+	"""Minimal wrapper of numpy in order to be able to provide it as an engine.
+	Not a full-blown interface."""
+	def __init__(self, a, b, axes=(-1), direction='FFTW_FORWARD', *args, **kwargs):
+		self.a, self.b = a, b
+		self.axes = axes
+		self.direction = direction
+	def __call__(self, normalise_idft=False):
+		if self.direction == 'FFTW_FORWARD':
+			if self.a.shape == self.b.shape:
+				# Complex to complex
+				self.b[:] = np.fft.fftn(self.a, axes=self.axes)
+			else:
+				# Real to complex
+				self.b[:] = np.fft.rfftn(self.a, axes=self.axes)
+		else:
+			if self.a.shape == self.b.shape:
+				# Complex to complex
+				self.b[:] = np.fft.ifftn(self.a, axes=self.axes)
+			else:
+				self.b[:] = np.fft.irfftn(self.a, s=[self.b.shape[i] for i in self.axes], axes=self.axes)
+			# Numpy already normalizes, so undo this if necessary
+			if not normalise_idft:
+				self.b *= np.product([self.b.shape[i] for i in self.axes])
+
+def numpy_n_byte_align_empty(shape, alignment, dtype):
+	"""This dummy function just skips the alignment, since numpy
+	doesn't provide an easy way to get it."""
+	return np.empty(shape, dtype)
+
+class NumpyEngine: pass
+numpy_engine = NumpyEngine()
+numpy_engine.FFTW = numpy_FFTW
+numpy_engine.n_byte_align_empty = numpy_n_byte_align_empty
+engines["numpy"] = numpy_engine
+engine = "numpy"
+
+# Then optional, faster engines
 try:
 	import pyfftw
 	engines["fftw"] = pyfftw
@@ -12,6 +52,7 @@ try:
 	engine = "intel"
 except ImportError: pass
 if len(engines) == 0:
+	# This should not happen due to the numpy fallback
 	raise ImportError("Could not find any fftw implementations!")
 try:
 	nthread_fft = int(os.environ['OMP_NUM_THREADS'])
@@ -20,6 +61,7 @@ except (KeyError, ValueError):
 nthread_ifft=nthread_fft
 default_flags=['FFTW_ESTIMATE']
 alignment = 32
+
 
 def fft(tod, ft=None, nthread=0, axes=[-1], flags=None):
 	"""Compute discrete fourier transform of tod, and store it in ft. What

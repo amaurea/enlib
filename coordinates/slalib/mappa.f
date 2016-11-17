@@ -86,6 +86,7 @@
       IMPLICIT NONE
 
       DOUBLE PRECISION EQ,DATE,AMPRMS(21)
+Cf2py intent(out) amprms
 
 *  Light time for 1 AU (sec)
       DOUBLE PRECISION CR

@@ -31,8 +31,7 @@ class PointingMatrix:
 	def backward(self, tod, m): raise NotImplementedError
 
 class PmatMap(PointingMatrix):
-	"""Fortran-accelerated scan <-> enmap pointing matrix implementation.
-	20 times faster than the slower python+numpy implementation below."""
+	"""Fortran-accelerated scan <-> enmap pointing matrix implementation."""
 	def __init__(self, scan, template, sys=None, order=None):
 		sys        = config.get("map_sys", sys)
 		transform  = pos2pix(scan,template,sys)
@@ -43,29 +42,212 @@ class PmatMap(PointingMatrix):
 		# Reducing the number of pixels makes us more memory efficient
 		self.pixbox, self.nphi  = build_pixbox(obox[:,:2], template)
 		self.scan,   self.dtype = scan, template.dtype
-		self.func  = get_core(self.dtype).pmat_map
+		self.core  = get_core(self.dtype)
 		self.order = config.get("pmat_map_order", order)
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""m -> tod"""
 		if times is None: times = np.zeros(5)
-		self.func( 1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+		self.core.pmat_map_direct_grid(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
-		self.func(-1, 1, self.order+1, tmul, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+		self.core.pmat_map_direct_grid(-1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
-		if bore  is None: bore  = self.scan.boresight
-		if offs  is None: offs  = self.scan.offsets[:1]*0
-		if comps is None: comps = self.scan.comps[:self.scan.offsets.shape[0]]*0
-		bore, offs, comps = np.asarray(bore), np.asarray(offs), np.asarray(comps)
-		nsamp, ndet, ncomp = bore.shape[0], offs.shape[0], comps.shape[1]
-		dtype = self.dtype
-		pix   = np.empty([ndet,nsamp,2],dtype=dtype)
-		phase = np.empty([ndet,nsamp,ncomp],dtype=dtype)
-		self.core.translate(bore.T, pix.T, phase.T, offs.T, comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T)
+		raise NotImplementedError
+
+class PmatMapFast(PointingMatrix):
+	"""Fortran-accelerated scan <-> enmap pointing matrix implementation
+	using precomputed pointing and polynomial interpolation."""
+	def __init__(self, scan, template, sys=None, order=None):
+		self.sys   = config.get("map_sys", sys)
+		# Build the pointing interpolator
+		self.trans = pos2pix(scan,template,self.sys)
+		self.poly  = PolyInterpol(self.trans, scan.boresight, scan.offsets)
+		# Build the pixel shift information. This assumes ces-like scans in equ-like systems
+		self.sdir  = get_scan_dir(scan.boresight[:,1])
+		self.period= get_scan_period(scan.boresight[:,1], scan.srate)
+		self.wbox, self.wshift = build_work_shift(self.trans, scan.box, self.period)
+		self.nphi = int(np.abs(360./template.wcs.wcs.cdelt[0]))
+		self.dtype= template.dtype
+		self.core = get_core(self.dtype)
+		self.scan = scan
+		self.order= 0
+	def get_pix_phase(self):
+		ndet, nsamp = self.scan.ndet, self.scan.nsamp
+		pix    = np.zeros([ndet,nsamp],np.int32)
+		phase  = np.zeros([ndet,nsamp,2],self.dtype)
+		self.core.pmat_map_get_pix_poly_shift(pix.T, phase.T, self.scan.boresight.T, self.scan.hwp_phase.T,
+				self.scan.comps.T, self.poly.coeffs.T, self.sdir, self.wbox.T, self.wshift.T)
 		return pix, phase
+	def forward(self, tod, map, pix, phase, tmul=1, mmul=1, times=None):
+		"""m -> tod"""
+		if times is None: times = np.zeros(5)
+		self.core.pmat_map_use_pix_shift(1, tod.T, tmul, map.T, mmul, pix.T, phase.T, self.wbox.T, self.wshift.T, self.nphi, times)
+	def backward(self, tod, map, pix, phase, tmul=1, mmul=1, times=None):
+		"""tod -> m"""
+		if times is None: times = np.zeros(5)
+		self.core.pmat_map_use_pix_shift(-1, tod.T, tmul, map.T, mmul, pix.T, phase.T, self.wbox.T, self.wshift.T, self.nphi, times)
+
+def get_scan_dir(az, step=3):
+	"""The scanning direction is 0 if az is increasing, and 1 otherwise.
+	Larger values of step are less sensitive to jitter, but have worse
+	resolution."""
+	sdir = az[step:]<az[:-step]
+	return np.concatenate([
+			np.full(step/2,sdir[0],dtype=bool),
+			sdir,
+			np.full(step-step/2,sdir[-1:],dtype=bool)
+		])
+
+def get_scan_period(az, srate=1):
+	"""Estimate the period of the az sweeps. This is done by
+	finding the interval between zero crossings of az-mean(az)."""
+	off  = az - np.mean(az)
+	up_cross = (off[1:]*off[:-1] < 0)&(off[1:]-off[:-1]>0)
+	up_cross = np.where(up_cross)[0]
+	periods  = up_cross[1:]-up_cross[:-1]
+	if len(periods) == 0: return 0.0
+	# Jitter may cause very short ones blips just as we are crossing.
+	# Discard these.
+	periods = periods[periods>np.mean(periods)*0.2]
+	# And use the median of the reminder as our estimate
+	period = np.median(periods) / float(srate)
+	return period
+
+def build_work_shift(transform, hor_box, scan_period):
+	"""Given a transofrmation that takes [{t,az,el},nsamp] into [{y,x,...},nsamp],
+	and a bounding box [{from,to},{t,az,el}], compute the parameters for a
+	per-y shift in x that makes scans roughly straight. These parameters are returned
+	in the form of wbox[{from,to},{y,x'}] and wshift[{up,down},ny]. They are used in the shifted
+	pmat implementation."""
+	# The problem with using the real scanning profile is that it can't be adjusted to
+	# cover all the detectors, and at any y, the az where a detector hits that y will
+	# be different. So only one of them can faithfully follow the profile after all.
+	# So I think I'll stay with the simple model I use here, and just take the travel
+	# time into account, through an extra parameters.
+
+	# Find the pixel bounds corresponding to our hor bounds
+	hor_corn = utils.box2corners(hor_box)
+	pix_corn = transform(hor_corn.T)[:2].T
+	pix_box  = utils.bounding_box(pix_corn)
+	# The y bounds are the most relevant. Our wshift must
+	# be defined for every output y in the range.
+	y0 = int(np.floor(pix_box[0,0]))
+	y1 = int(np.ceil(pix_box[1,0]))+1
+	mean_t, mean_az, mean_el = np.mean(hor_box,0)
+	# Get a forward and backwards sweep. So index 0 is az increasing, index 1 is az decreasing
+	# Divide scan period by 2 because there is a forwards and backward sweep per period.
+	wshift = np.array([
+		measure_sweep_pixels(transform, [mean_t,mean_t+scan_period/2], hor_box[:,1],    mean_el, [y0,y1]),
+		measure_sweep_pixels(transform, [mean_t,mean_t+scan_period/2], hor_box[::-1,1], mean_el, [y0,y1])])
+	# For each of these, find the pixel bounds. The total
+	# bounds will be the union of these
+	wboxes = []
+	for wshift_single in wshift:
+		# Use this shift to transform the pixel corners into shifted
+		# coordinates. This wil give us the bounds of the shifted system
+		shift_corn = pix_corn.copy()
+		np.set_printoptions(suppress=True)
+		shift_corn[:,1] -= wshift_single[np.round(shift_corn[:,0]-y0).astype(int)]
+		wboxes.append(utils.bounding_box(shift_corn))
+	# Merge wboxes
+	wbox = utils.bounding_box(wboxes)
+	wbox[0] = np.floor(wbox[0])
+	wbox[1] = np.ceil (wbox[1])
+	wbox    = wbox.astype(int)
+	return wbox, wshift
+
+def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, nsamp=None, ntry=None):
+	"""Helper function for build_work_shift. Measure the x for each y of an azimuth sweep."""
+	if nsamp   is None: nsamp   = 10000
+	if padstep is None: padstep = 4*utils.degree
+	if ntry    is None: ntry    = 5
+	y0, y1 = yrange
+	pad = padstep
+	for i in range(ntry):
+		az0, az1 = utils.widen_box(azrange, pad, relative=False)
+		ipos = np.zeros([3,nsamp])
+		# Forward sweep
+		ipos[0] = np.linspace(trange[0], trange[1], nsamp)
+		ipos[1] = np.linspace(az0,       az1,       nsamp)
+		ipos[2] = el
+		opix = np.round(transform(ipos)[:2]).astype(int)
+		#print "opix"
+		#sys.stdout.flush()
+		#np.savetxt("/dev/stdout", opix.T, "%6d")
+		#sys.stdout.flush()
+		# Get the entries with unique y values
+		uy, ui = np.unique(opix[0], return_index=True)
+		if uy[0] > y0 or uy[-1] <= y1:
+			# We didn't cover the range, so try again
+			pad += padstep
+			continue
+		# Restrict to relevant pixel range
+		yi = ui[(uy>=y0)&(uy<y1)]
+		if len(ui) < y1-y0:
+			# We didn't hit every pixel. Try again
+			nsamp *= 2
+			continue
+		wshift  = opix[1,yi]
+		# Shift is defined to start at zero, since we will put
+		# the absolute offset into wbox.
+		wshift -= wshift[0]
+		break
+	else:
+		# We didn't find a match! Just use a constant shift of zero.
+		# This shouldn't happen, though.
+		wshift = np.zeros(y1-y0,int)
+	return wshift
+
+class PolyInterpol:
+	def __init__(self, transfun, bore, det_offs, thin=500):
+		"""Fit a polynomial in az and t to each detector's pointing,
+		returning coeffs[ndet,:]. El is assumed to be constant."""
+		bore  = bore[::thin]
+		basis = self.get_basis(bore)
+		div  = basis.dot(basis.T)
+		# This memory-wasting storate of opoint is there to work around
+		# a severe performance (10x-100x loss of speed) problemI get when
+		# openblas and openmp threads are created rapidly in succession.
+		# The thinning will make it relatively cheap memory-wise anyway.
+		opoints = []
+		for di, offs in enumerate(det_offs):
+			# First evaluate our exact pointing
+			ipoint = bore + offs
+			opoints.append(transfun(ipoint.T))
+		coeffs = []
+		resids = []
+		for di, opoint in enumerate(opoints):
+			# Fit coeff[nparam,nbasis]
+			rhs   = basis.dot(opoint.T)
+			coeff = np.linalg.solve(div,rhs).T
+			# Evaluate model
+			model = coeff.dot(basis)
+			# Evaluate residual
+			resid = np.std(opoint-model,1)
+			coeffs.append(coeff)
+			resids.append(resid)
+		# coeffs[ndet,{y,x,c,s},nbasis]
+		self.coeffs = np.array(coeffs)
+		self.resids = np.max(resids,0)
+	def get_basis(self, bore):
+		t  = bore[:,0]
+		az = bore[:,1]
+		# This one gets 1.6e-3 pixel accuracy for my 90 deg sweep test case
+		basis = np.concatenate([
+			[az**i for i in range(8)],
+			[t*az**i for i in range(3)]])
+		return basis
+	def __call__(self, bore, det_inds):
+		basis = self.get_basis(bore)
+		model = np.einsum("dab,bt->dat",self.coeffs[det_inds], basis)
+		return model
 
 class PmatMapMultibeam(PointingMatrix):
 	"""Like PmatMap, but with multiple, displaced beams."""
@@ -92,15 +274,17 @@ class PmatMapMultibeam(PointingMatrix):
 		if times is None: times = np.zeros(5)
 		tod *= tmul
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
-			self.func( 1, 1, self.order+1, 1, mmul, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T,
-					boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+			self.core.pmat_map_direct_grid(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+					self.scan.hwp_phase.T, boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T,
+					self.pixbox.T, self.nphi, times)
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
 		m *= mmul
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
-			self.func(-1, 1, self.order+1, tmul, 1, tod.T, m.T, self.scan.boresight.T, self.scan.hwp_phase.T,
-					boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+			self.core.pmat_map_direct_grid(-11, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+					self.scan.hwp_phase.T, boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T,
+					self.pixbox.T, self.nphi, times)
 
 def get_moby_pointing(entry, bore, dets, downgrade=1):
 	# Set up moby2
@@ -248,6 +432,7 @@ class pos2pix:
 		self.scan, self.template, self.sys = scan, template, sys
 		self.ref_phi = ref_phi
 	def __call__(self, ipos):
+		"""Transform ipos[{t,az,el},nsamp] into opix[{y,x,c,s},nsamp]."""
 		shape = ipos.shape[1:]
 		ipos  = ipos.reshape(ipos.shape[0],-1)
 		time  = self.scan.mjd0 + ipos[0]/utils.day2sec
@@ -277,101 +462,6 @@ class pos2pix:
 		return opix.reshape((opix.shape[0],)+shape)
 
 config.default("pmat_ptsrc_rsigma", 4.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
-class PmatPtsrc(PointingMatrix):
-	def __init__(self, scan, params, sys=None, tmul=None, pmul=None):
-		# Params is [nsrc,{dec,ra,amps,ibeams}]
-		rmul  = config.get("pmat_ptsrc_rsigma")
-		self.dtype = params.dtype
-		transform  = build_pos_transform(scan, sys=config.get("map_sys", sys))
-		ipol, obox = build_interpol(transform, scan.box, scan.entry.id, posunit=0.1*utils.arcsec)
-		# It's error prone to require the user to have the angles consistently
-		# wrapped. So we will rewrap params ourselves
-		self.ref = np.mean(obox[:,:2],0)
-		params   = params.copy()
-		params[:2] = utils.rewind(params[:2].T,self.ref).T
-
-		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, self.dtype)
-		self.comps = np.arange(params.shape[0]-5)
-		self.scan  = scan
-		self.core = pmat_core_32.pmat_core if self.dtype == np.float32 else pmat_core_64.pmat_core
-
-		# Collect information about which samples hit which sources
-		nsrc = params.shape[1]
-		ndet = scan.ndet
-		# rhit is the inverse of the squared amplitude-weighted inverse beam for
-		# some reason. But it is basically going to be our beam size.
-		print "FIXME: Point source format incompatible with PmatPtsrc"
-		# To be precise, this function assumes that point sources are [param,nsrc]
-		# rathar than [nsrc,param], that PmatPtsrc2 assumes. I should decide which
-		# one I want. The whole point source stuff is messy at the moment.
-
-		rhit = np.zeros(nsrc)+(np.sum(1./params[-3]*params[2]**2)/np.sum(params[2]**2))**0.5
-		rmax = rhit*rmul
-		try: det_ivars = scan.noise.ivar
-		except NotImplementedError: det_ivars = np.zeros(ndet)
-		src_ivars = np.zeros(nsrc,dtype=self.dtype)
-
-		# Measure ranges. May need to iterate if initial allocation was too small
-		nrange = np.zeros([nsrc,ndet],dtype=np.int32)
-		ranges = np.zeros([nsrc,ndet,100,2],dtype=np.int32)
-		self.core.pmat_ptsrc_prepare(params, rhit, rmax, det_ivars, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.yvals.T)
-		if np.max(nrange) > ranges.shape[2]:
-			ranges = np.zeros([nsrc,ndet,np.max(nrange),2],dtype=np.int32)
-			self.core.pmat_ptsrc_prepare(params, rhit, rmax, det_ivars, src_ivars, ranges.T, nrange.T, self.scan.boresight.T, self.scan.offsets.T, self.rbox.T, self.nbox, self.yvals.T)
-		self.ranges, self.rangesets, self.offsets = compress_ranges(ranges, nrange, scan.cut, scan.nsamp)
-		self.src_ivars = src_ivars
-		self.nhit = np.sum(self.ranges[:,1]-self.ranges[:,0])
-
-		self.tmul = 0 if tmul is None else tmul
-		self.pmul = 1 if pmul is None else pmul
-
-	def forward(self, tod, params, tmul=None, pmul=None):
-		"""params -> tod"""
-		if tmul is None: tmul = self.tmul
-		if pmul is None: pmul = self.pmul
-		pcopy = params.copy()
-		pcopy[:2] = utils.rewind(pcopy[:2].T,self.ref).T
-		self.core.pmat_ptsrc(tmul, pmul, tod.T, pcopy, self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox, self.yvals.T, self.ranges.T, self.rangesets, self.offsets.T)
-
-	def extract(self, tod, cut=None, raw=0):
-		"""Extract precomputed pointing and phase information for the selected samples.
-		These are stored in a (somewhat cumbersome) compressed format, where sample I
-		of range R of detector D and source S has index ranges[rangesets[offsets[S,D,0]+R],0]+I.
-		The reason for this complicated setup is to store each TOD sample only once, even if
-		it hits multiple sources. This is not primarily to save space, but to be able to
-		perform likelihood analysis on it. Subtracting one source from one copy of a sample,
-		and another source from another copy of the sample, will leave each copy with some
-		signal left unmodeled.
-
-		If cut is specified, the response of cut samples will be set to zero, giving them
-		no weight.
-
-		If raw is a nonzero integer, the output pointing and phase will be in the
-		telescope's native coordinates (i.e. hor) rather than the normal output coordinates.
-		"""
-		point = np.zeros([self.nhit,2+(raw>0)],dtype=self.dtype)
-		phase = np.zeros([self.nhit,len(self.comps)],dtype=self.dtype)
-		srctod= np.zeros([self.nhit],dtype=self.dtype)
-		oranges= np.zeros(self.ranges.shape, dtype=np.int32)
-		self.core.pmat_ptsrc_extract(tod.T, srctod, point.T, phase.T, oranges.T, self.scan.boresight.T,
-				self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
-				self.yvals.T, self.ranges.T, self.rangesets, self.offsets.T, raw)
-		if cut:
-			# Cuts are handled by setting the phase (response) to zero
-			mtod = cut.to_mask().astype(self.dtype)
-			mask = np.zeros([self.nhit],dtype=self.dtype)
-			self.core.pmat_ptsrc_extract(mtod.T, mask, point.T, phase.T, oranges.T, self.scan.boresight.T,
-					self.scan.offsets.T, self.scan.comps.T, self.comps, self.rbox.T, self.nbox,
-					self.yvals.T, self.ranges.T, self.rangesets, self.offsets.T, raw)
-			mask = np.rint(mask)==1
-			phase[mask] = 0
-		# Store the raw pointing offsets, so we can ensure that the point fit does everything the same
-		# way the main mapmaker does.
-		mean_point = np.mean(self.scan.boresight.T[1:],1)
-		raw_offsets = coordinates.recenter(mean_point[:,None] + self.scan.offsets.T[1:], np.concatenate([mean_point,mean_point*0])).T
-		res = bunch.Bunch(point=point, phase=phase, tod=srctod, ranges=oranges, rangesets=self.rangesets, offsets=self.offsets, dets=self.scan.dets, rbox=self.rbox, nbox=self.nbox, yvals=self.yvals, point_offset=raw_offsets, ivars=np.ones(len(self.scan.dets)))
-		return res
-
 config.default("pmat_ptsrc_cell_res", 5, "Cell size in arcmin to use for fast source lookup.")
 class PmatPtsrc2(PointingMatrix):
 	def __init__(self, scan, srcs, sys=None, tmul=None, pmul=None):
@@ -395,8 +485,6 @@ class PmatPtsrc2(PointingMatrix):
 			self.dpos = parallax.earth2sun(srcs.T[:2], self.scan.mjd0, sundist, diff=True).T
 		srcs[:,:,:2] += self.dpos
 
-		print "srcs", srcs
-
 		# Investigate the beam to find the max relevant radius
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
 		value_lim = np.exp(-0.5*sigma_lim**2)
@@ -414,9 +502,6 @@ class PmatPtsrc2(PointingMatrix):
 		cshape  = tuple(np.ceil(((cbox[1]-cbox[0])/cres)).astype(int))
 		self.ref = np.mean(cbox,0)
 		srcs[:,:,:2] = utils.rewind(srcs[:,:,:2], self.ref)
-
-		print "cbox", cbox/utils.degree
-		print "cshape", cshape
 
 		# A cell is hit if it overlaps both horizontall any vertically
 		# with the point source +- rmax
@@ -602,3 +687,4 @@ def pmat_phase(dir, tod, map, az, dets, az0, daz):
 def pmat_plain(dir, tod, map, pix):
 	core = get_core(tod.dtype)
 	core.pmat_plain(dir, tod.T, map.T, pix.T)
+

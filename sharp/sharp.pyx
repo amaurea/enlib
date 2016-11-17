@@ -108,9 +108,8 @@ def map_info_fejer1(int nrings, nphi=None, double phi0=0, stride_lon=None, strid
 def map_info_fejer2(int nrings, nphi=None, double phi0=0, stride_lon=None, stride_lat=None):
 	"""Construct a new sharp map geometry with Cylindrical Equi-rectangular pixelization
 	with nrings iso-colatitude rings with nphi pixels each, such that the first and last
-	rings have colatitude pi/(2*nrings-1) and pi respectively.
-	This corresponds to Frejer's second quadrature.
-	This function does *NOT* define any quadrature weights!"""
+	rings have colatitude pi/(nrings+1) and pi-pi/(nrings+1) respectively.
+	This corresponds to Frejer's second quadrature."""
 	cdef int inphi = 2*nrings if nphi is None else nphi
 	cdef int slon  = 1 if stride_lon is None else stride_lon
 	cdef int slat  = inphi*slon if stride_lat is None else stride_lat
@@ -119,6 +118,10 @@ def map_info_fejer2(int nrings, nphi=None, double phi0=0, stride_lon=None, strid
 	return map_info_from_geom(geom)
 
 def map_info_mw(int nrings, nphi=None, double phi0=0, stride_lon=None, stride_lat=None):
+	"""Construct a new sharp map geometry with Cylindrical Equi-rectangular pixelization
+	with nrings iso-colatitude rings with nphi pixels each, such that the first and last
+	rings have colatitude pi/(2*nrings-1) and pi respectively.
+	This function does *NOT* define any quadrature weights!"""
 	cdef int inphi = 2*nrings if nphi is None else nphi
 	cdef int slon  = 1 if stride_lon is None else stride_lon
 	cdef int slat  = inphi*slon if stride_lat is None else stride_lat

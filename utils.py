@@ -707,7 +707,8 @@ def date2ctime(dstr):
 	return time.mktime(d.timetuple())
 
 def bounding_box(boxes):
-	"""Compute bounding box for a set of boxes [:,2,:]."""
+	"""Compute bounding box for a set of boxes [:,2,:], or a
+	set of points [:,2]"""
 	boxes = np.asarray(boxes)
 	if boxes.ndim == 2:
 		return np.array([np.min(boxes,0),np.max(boxes,0)])
@@ -717,7 +718,7 @@ def bounding_box(boxes):
 def unpackbits(a): return np.unpackbits(np.atleast_1d(a).view(np.uint8)[::-1])[::-1]
 
 def box2corners(box):
-	"""Given a [{from,to},:] bounding box, returns [nocorner,:] coordinates
+	"""Given a [{from,to},:] bounding box, returns [ncorner,:] coordinates
 	of of all its corners."""
 	box = np.asarray(box)
 	ndim= box.shape[1]
@@ -751,6 +752,7 @@ def widen_box(box, margin=1e-3, relative=True):
 	box = np.asarray(box)
 	margin = np.zeros(box.shape[1:])+margin
 	if relative: margin = (box[1]-box[0])*margin
+	margin = np.asarray(margin) # Support 1d case
 	margin[box[0]>box[1]] *= -1
 	return np.array([box[0]-margin/2, box[1]+margin/2])
 
@@ -1035,4 +1037,17 @@ def parse_numbers(s, dtype=None):
 	res = np.concatenate(res)
 	if dtype is not None:
 		res = res.astype(dtype)
+	return res
+
+def triangle_wave(x, period=1):
+	"""Return a triangle wave with amplitude 1 and the given period."""
+	# This order (rather than x/period%1) gave smaller errors
+	x = x % period / period * 4
+	m1 = x < 1
+	m2 = (x < 3) ^ m1
+	m3 = x >= 3
+	res = x.copy()
+	res[m1] = x[m1]
+	res[m2] = 2-x[m2]
+	res[m3] = x[m3]-4
 	return res
