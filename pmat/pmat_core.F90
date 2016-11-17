@@ -39,6 +39,7 @@ contains
 		call map_block_prepare(dir, pbox, nphi, mmul, map, wmap, xmap)
 		t1 = omp_get_wtime()
 		times(2) = times(1) + t1-t2
+		tpoint = 0; tproj = 0
 		!$omp parallel do private(di, pix, phase, tloc1, tloc2) reduction(+:tpoint,tproj)
 		do di = 1, ndet
 			tloc1 = omp_get_wtime()
