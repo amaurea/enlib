@@ -103,7 +103,7 @@ def build_work_shift(transform, hor_box, scan_period):
 	# cover all the detectors, and at any y, the az where a detector hits that y will
 	# be different. So only one of them can faithfully follow the profile after all.
 	# So I think I'll stay with the simple model I use here, and just take the travel
-	# time into account, through an extra parameters.
+	# time into account, through an extra parameter.
 
 	# Find the pixel bounds corresponding to our hor bounds
 	hor_corn = utils.box2corners(hor_box)

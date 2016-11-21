@@ -186,6 +186,10 @@ class Multirange:
 	def widen(self, n):
 		if np.all(np.asarray(n) == 0): return self
 		return Multirange([d.widen(n) for d in self.data], copy=False)
+	def reshape(self, *shape):
+		res = Multirange(self, copy=False)
+		res.data = res.data.reshape(*shape)
+		return res
 
 def zeros(shape):
 	assert(len(shape)==2)
