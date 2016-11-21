@@ -58,6 +58,8 @@ class Signal:
 	def prepare (self, x): return x.copy()
 	def forward (self, scan, tod, x): pass
 	def backward(self, scan, tod, x): pass
+	def precompute(self, scan): pass
+	def free(self): pass
 	def finish  (self, x, y): x[:] = y
 	# This one is a potentially cheaper version of self.prepare(self.zeros())
 	def work    (self): return self.prepare(self.zeros())
@@ -67,7 +69,8 @@ class Signal:
 		return x
 
 class SignalMap(Signal):
-	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, sys=None, nuisance=False, data=None):
+	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True,
+			ext="fits", pmat_order=None, sys=None, nuisance=False, data=None):
 		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
@@ -93,18 +96,39 @@ class SignalMap(Signal):
 		if self.dof.comm.rank == 0:
 			enmap.write_map(oname, m)
 
+class SignalMapFast(SignalMap):
+	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True,
+			ext="fits", sys=None, nuisance=False, data=None):
+		if data is None:
+			data = {scan: pmat.PmatMapFast(scan, area, sys=sys) for scan in scans}
+		SignalMap.__init__(self, scans, area, comm=comm, cuts=cuts, name=name, ofmt=ofmt,
+				output=output, ext=ext, sys=sys, nuisance=nuisance, data=data)
+	def precompute(self, scan):
+		if scan not in self.data: return
+		self.pix, self.phase = self.data[scan].get_pix_phase()
+	def free(self):
+		del self.pix, self.phase
+	def forward(self, scan, tod, work):
+		if scan not in self.data: return
+		self.data[scan].forward(tod, work, self.pix, self.phase)
+	def backward(self, scan, tod, work):
+		if scan not in self.data: return
+		self.data[scan].backward(tod, work, self.pix, self.phase)
+
 class SignalDmap(Signal):
-	def __init__(self, scans, subinds, area, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, sys=None, nuisance=False):
+	def __init__(self, scans, subinds, area, cuts=None, name="main", ofmt="{name}", output=True,
+			ext="fits", pmat_order=None, sys=None, nuisance=False, data=None):
 		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
 		self.dof  = dmap.DmapZipper(area)
 		self.dtype= area.dtype
 		self.subs = subinds
-		self.data = {}
-		work = area.tile2work()
-		for scan, subind in zip(scans, subinds):
-			self.data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys), subind]
+		if data is None:
+			work = area.tile2work()
+			for scan, subind in zip(scans, subinds):
+				data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys), subind]
+		self.data = data
 	def prepare(self, m):
 		return m.tile2work()
 	def forward(self, scan, tod, work):
@@ -124,6 +148,30 @@ class SignalDmap(Signal):
 		oname = self.ofmt.format(name=self.name)
 		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
 		dmap.write_map(oname, m)
+
+class SignalDmapFast(SignalMap):
+	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True,
+			ext="fits", sys=None, nuisance=False, data=None):
+		if data is None:
+			work = area.tile2work()
+			for scan, subind in zip(scans, subinds):
+				data[scan] = [pmat.PmatMapFast(scan, work[subind], sys=sys), subind]
+		SignalDmap.__init__(self, scans, area, comm=comm, cuts=cuts, name=name, ofmt=ofmt,
+				output=output, ext=ext, sys=sys, nuisance=nuisance, data=data)
+	def precompute(self, scan):
+		if scan not in self.data: return
+		mat, ind = self.data[scan]
+		self.pix, self.phase = mat.get_pix_phase()
+	def free(self):
+		del self.pix, self.phase
+	def forward(self, scan, tod, work):
+		if scan not in self.data: return
+		mat, ind = self.data[scan]
+		mat.forward(tod, work[ind], self.pix, self.phase)
+	def backward(self, scan, tod, work):
+		if scan not in self.data: return
+		mat, ind = self.data[scan]
+		mat.backward(tod, work[ind], self.pix, self.phase)
 
 class SignalCut(Signal):
 	def __init__(self, scans, dtype, comm, name="cut", ofmt="{name}_{rank:02}", output=False, cut_type=None):
@@ -401,6 +449,8 @@ def prec_div_helper(signal, signal_cut, scans, weights, iwork, owork, ijunk, oju
 	# The argument list of this one is so long that it almost doesn't save any
 	# code.
 	for scan in scans:
+		with bench.mark("div_Pr_" + signal.name):
+			signal.precompute(scan)
 		with bench.mark("div_P_" + signal.name):
 			tod = np.zeros((scan.ndet, scan.nsamp), signal.dtype)
 			signal.forward(scan, tod, iwork)
@@ -412,6 +462,8 @@ def prec_div_helper(signal, signal_cut, scans, weights, iwork, owork, ijunk, oju
 		with bench.mark("div_PT_" + signal.name):
 			signal_cut.backward(scan, tod, ojunk)
 			signal.backward(scan, tod, owork)
+		with bench.mark("div_Fr_" + signal.name):
+			signal.free()
 		times = [bench.stats[s]["time"].last for s in ["div_P_"+signal.name, "div_white", "div_PT_" + signal.name]]
 		L.debug("div %s %6.3f %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
 
@@ -433,10 +485,14 @@ def calc_hits_map(hits, signal, signal_cut, scans):
 	work = signal.prepare(hits)
 	ojunk= signal_cut.prepare(signal_cut.zeros())
 	for scan in scans:
+		with bench.mark("hits_Pr_" + signal.name):
+			signal.precompute(scan)
 		with bench.mark("hits_PT"):
 			tod = np.full((scan.ndet, scan.nsamp), 1, hits.dtype)
 			signal_cut.backward(scan, tod, ojunk)
 			signal.backward(scan, tod, work)
+		with bench.mark("hits_Fr_" + signal.name):
+			signal.free()
 		times = [bench.stats[s]["time"].last for s in ["hits_PT"]]
 		L.debug("hits %s %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
 	with bench.mark("hits_reduce"):
@@ -648,7 +704,7 @@ class FilterBuddyPertod:
 			signal_map.precon = PreconMapBinned(signal_map, signal_cut, [scan], [], noise=self.prec=="bin", hits=False)
 		else: raise NotImplementedError
 		# Ok, we can now solve the system
-		cg = CG(eqsys.A, eqsys.b, M=eqsys.M, dot=eqsys.dof.dot)
+		cg = CG(eqsys.A, eqsys.b, M=eqsys.M, dot=eqsys.dot)
 		for i in range(self.nstep):
 			cg.step()
 			L.debug("buddy pertod step %3d err %15.7e" % (cg.i, cg.err))
@@ -736,7 +792,10 @@ class Eqsys:
 			# so that the cuts can override the other signals.
 			with bench.mark("A_P"):
 				for signal, work in zip(self.signals, iwork)[::-1]:
-					with bench.mark("A_P_" + signal.name): signal.forward(scan, tod, work)
+					with bench.mark("A_Pr_" + signal.name):
+						signal.precompute(scan)
+					with bench.mark("A_P_" + signal.name):
+						signal.forward(scan, tod, work)
 			# Apply the noise matrix (N")
 			with bench.mark("A_N"):
 				for weight in self.weights: weight(scan, tod)
@@ -746,9 +805,12 @@ class Eqsys:
 			# to allow the cuts to zero out the relevant TOD samples first
 			with bench.mark("A_PT"):
 				for signal, work in zip(self.signals, owork):
-					with bench.mark("A_PT_" + signal.name): signal.backward(scan, tod, work)
+					with bench.mark("A_PT_" + signal.name):
+						signal.backward(scan, tod, work)
+					with bench.mark("A_Fr_" + signal.name):
+						signal.free()
 			times = [bench.stats[s]["time"].last for s in ["A_P","A_N","A_PT"]]
-			L.debug("A P %5.3f N %5.3f P' %5.3f %s" % (tuple(times)+(scan.id,)))
+			L.debug("A P %5.3f N %5.3f P' %5.3f %s %4d" % (tuple(times)+(scan.id,scan.ndet)))
 		# Collect all the results, and flatten them
 		with bench.mark("A_reduce"):
 			for signal, map, work in zip(self.signals, omaps, owork):
@@ -796,7 +858,9 @@ class Eqsys:
 			with bench.mark("b_PT"):
 				for signal, work in zip(self.signals, owork):
 					with bench.mark("b_PT_" + signal.name):
+						signal.precompute(scan)
 						signal.backward(scan, tod, work)
+						signal.free()
 			del tod
 			times = [bench.stats[s]["time"].last for s in ["b_read","b_filter","b_N_build", "b_N", "b_PT"]]
 			L.debug("b get %5.1f f %5.1f NB %5.3f N %5.3f P' %5.3f %s" % (tuple(times)+(scan.id,)))
@@ -806,6 +870,9 @@ class Eqsys:
 				signal.finish(map, work)
 		with bench.mark("b_zip"):
 			self.b = self.dof.zip(maps)
+	def dot(self, a, b):
+		with bench.mark("dot"):
+			return self.dof.dot(a,b)
 	def postprocess(self, x):
 		maps = self.dof.unzip(x)
 		for i in range(len(self.signals)):

@@ -53,7 +53,11 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 		# Solve for the best fit for each detector, [nbasis,ndet]
 		# B[b,n], d[d,n], amps[b,d]
 		if weights is None:
-			amps = np.linalg.solve(B.dot(B.T),B.dot(d.T))
+			try:
+				amps = np.linalg.solve(B.dot(B.T),B.dot(d.T))
+			except np.linalg.LinAlgError as e:
+				print "LinAlgError in todfilter. Skipping"
+				continue
 		else:
 			w = weights.reshape(-1,weights.shape[-1])
 			amps = np.zeros([naz+nt,d.shape[0]],dtype=tod.dtype)
@@ -63,7 +67,7 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 				except np.linalg.LinAlgError as e:
 					print "LinAlgError in todfilter di %d. Skipping" % di
 					continue
-		#print "amps", amps[:,0]
+		#print "amps", amps[:,2]
 		# Subtract the best fit
 		if asign > 0: d -= amps[:naz].T.dot(B[:naz])
 		if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[naz:naz+nt])
