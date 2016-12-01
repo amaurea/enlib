@@ -186,7 +186,7 @@ def calc_bounds(boxes, size):
 	return np.array([np.minimum((0,0),np.min(boxes[:,0],0)),np.maximum(size,np.max(boxes[:,1],0))])
 
 def expand_image(img, bounds):
-	res = Image.new("RGBA", bounds[1]-bounds[0])
+	res = Image.new("RGBA", tuple(bounds[1]-bounds[0]))
 	res.paste(img, tuple(-bounds[0]))
 	return res
 
