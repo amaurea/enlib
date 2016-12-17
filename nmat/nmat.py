@@ -79,7 +79,7 @@ class NmatBinned(NoiseMatrix):
 		ft = enlib.fft.rfft(tod)
 		fft_norm = tod.shape[1]
 		core = get_core(tod.dtype)
-		core.nmat_covs(ft.T, self.get_ibins(tod.shape[1]).T, self.icovs.T/fft_norm)
+		core.nmat_covs(ft.T, get_ibins(self.bins, tod.shape[1]).T, self.icovs.T/fft_norm)
 		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
 	def white(self, tod):
@@ -87,11 +87,6 @@ class NmatBinned(NoiseMatrix):
 		return tod
 	@property
 	def ivar(self): return self.tdiag
-	def get_ibins(self, n):
-		nf = n/2+1
-		ibins = (self.bins*nf/self.bins[-1,-1]).astype(np.int32)
-		ibins[-1,-1] = nf
-		return ibins
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
 		dets  = res.dets[detslice]
@@ -107,9 +102,11 @@ class NmatBinned(NoiseMatrix):
 		return BinnedNmat(dets, bins, icovs*step)
 	def __mul__(self, a):
 		return NmatBinned(self.icovs/a, self.bins, self.dets)
-	def write(self, fname, group=None):
-		fields = [("type","binned"),("icovs",self.icovs),("bins",self.bins),("dets",self.dets)]
-		nmat_write_helper(fname, fields, group)
+	def export(self):
+		return {"type":"binned","icovs":self.icovs,"bins":self.bins,"dets":self.dets}
+	def write(self, fname):
+		fields = self.export()
+		nmat_write_helper(fname, fields)
 
 class NmatDetvecs(NmatBinned):
 	"""A binned noise matrix where the inverse covariance matrix is stored and
@@ -180,7 +177,7 @@ class NmatDetvecs(NmatBinned):
 	def apply_ft(self, ft, nsamp, dtype):
 		fft_norm = nsamp
 		core = get_core(dtype)
-		core.nmat_detvecs(ft.T, self.get_ibins(nsamp).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
+		core.nmat_detvecs(ft.T, get_ibins(self.bins, nsamp).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
 		dets = res.dets[detslice]
@@ -195,9 +192,11 @@ class NmatDetvecs(NmatBinned):
 		return NmatDetvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, dets)
 	def __mul__(self, a):
 		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.dets)
-	def write(self, fname, group=None):
-		fields = [("type","detvecs"),("D",self.D),("V",self.V),("E",self.E),("bins",self.bins),("ebins",self.ebins),("dets",self.dets)]
-		write_nmat_helper(fname, fields, group)
+	def export(self):
+		return {"type":"detvecs","D":self.D,"V":self.V,"E":self.E,"bins":self.bins,"ebins":self.ebins,"dets":self.dets}
+	def write(self, fname):
+		fields = self.export()
+		write_nmat_helper(fname, fields)
 
 class NmatSharedvecs(NmatDetvecs):
 	"""A binned noise matrix where the inverse covariance matrix is stored and
@@ -240,44 +239,138 @@ class NmatSharedvecs(NmatDetvecs):
 		return NmatSharedvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, vbins, dets)
 	def __mul__(self, a):
 		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.vbins, self.dets)
-	def write(self, fname, group=None):
-		fields = [("type","sharedvecs"),("D",self.D),("V",self.V),("E",self.E),("bins",self.bins),("ebins",self.ebins),("vbins",self.vbins),("dets",self.dets)]
-		write_nmat_helper(fname, fields, group)
+	def export(self):
+		return {"type":"sharedvecs","D":self.D,"V":self.V,"E":self.E,"bins":self.bins,"ebins":self.ebins,"vbins":self.vbins,"dets":self.dets}
+	def write(self, fname):
+		fields = self.export()
+		write_nmat_helper(fname, fields)
 
-def read_nmat(fname, group=None):
-	"""Read a noise matrix from file, optionally from the named group
-	in the file."""
-	if isinstance(fname, basestring):
-		f = h5py.File(fname, "r")
-	else:
-		f = fname
-	g = f[group] if group else f
-	typ = np.array(g["type"])[...]
-	if typ == "detvecs":
-		ebins = g["ebins"].value if "ebins" in g else g["vbins"].value # compatibility with old format
-		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, ebins, g["dets"].value)
-	elif typ == "sharedvecs":
-		return NmatSharedvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["vbins"].value, g["dets"].value)
-	elif typ == "binned":
-		return NmatBinned(g["icovs"], g["bins"], g["dets"])
-	else:
-		raise IOError("Unrecognized noise matrix format %s" % typ)
-	if isinstance(fname, basestring):
-		f.close()
+# Plans for new nmat for HWP data and filter magrinalization.
+# 1. Increased variance resoultion. Use much higher resolution
+#    for the variance than for the correlation. Model will ve
+#    cov = sqrt(var)*corr*sqrt(var)
+# 2. Multi-1/f binning. Assume HWP is spinning at approximately constant
+#    rate fh. The sky signal and polarized atmosphere will be modulated at
+#    4fh, but since they are not constant they will have a spread around
+#    this. Much like we have a 1/f behavior around 0Hz, we should expect
+#    this around 4fh also. So we should have the same kind of increased
+#    resolution here.
+# 3. HWP emission notch filter. The HWP emission is modulated at multiples
+#    of f. Since the rotation speed is not quite constant, we will need a
+#    small delta-f width comparable to the rotation speed variation, which
+#    should be at the <0.1% level.
+# 4. Azimuth notch filter. We scan at a very regular pattern in az, so an
+#    azimuth filter can be expressed as a time-domain fourier space filter.
+#    If we do this, then we can compensate for this filter by using notches
+#    in the noise model.
+# 5. Noise spike notch filter. As before.
+#
+# However, many of these are affected by not having a period that matches
+# the TOD period. How much are the spikes blurred in this case?
+# int_0^T sin(pi*i*t/T) sin(2*pi*f) dt
 
-def write_nmat(fname, nmat, group=None):
-	"""Write noise matrix nmat to the named file, optionally
-	under the named group."""
-	nmat.write(fname, group=group)
+# exp(ix)exp(iy) = exp(i(x+y)) = cos(x+y)+isin(x+y)
+# = cos(x)cos(y) - sin(x)sin(y) +i(cos(x)sin(y)+sin(x)cos(y))
+# so cos(x+y) - cos(x-y) = -sin(x)sin(y) + sin(x)sin(-y) = -2sin(x)sin(y)
+# So sin(x)sin(y) = 0.5*(cos(x-y)-cos(x+y))
+# So we have
+# 0.5 int_0^T (cos(pi*i*t/T-2*pi*f*t)-cos(pi*i*t/T+2*pi*f*t)) dt
+# 0.5 [-sin(pi*i*t/T-2*pi*f*t)+sin(pi*i*t/T+2*pi*f*t)]_0^T
+# 0.5 [-sin(pi*i-2*pi*f*T)+sin(pi*i+2*pi*f*T)] 
+# i even: sin(2*pi*f*T)
+# i odd: -sin(2*pi*f*T)
+# So power is in ancy case sin(2*pi*f*T)**2.
 
-def write_nmat_helper(fname, fields, group=None):
+class NmatScaled(NoiseMatrix):
+	"""A noise matrix similar to detvecs, but where the variance is binned in smaller
+	bins than the correlation."""
+	def __init__(self, scale, bins, nmat):
+		"""Construct an NmatMultires, which has different resolution for the
+		variances and correlation structure.
+		
+		scale[nsbin,ndet]: high-resolution covariance scaling
+		bins [nvbin,2]: from-to for each bin in arbitrary units. Will be scaled so that whole spec is covered.
+		nmat: NoiseMatrix to apply scaling to.
+		"""
+		self.nmat      = nmat
+		self.scale     = np.ascontiguousarray(scale)
+		self.inv_scale = 1/self.scale
+		self.bins      = np.ascontiguousarray(bins)
+
+		# Get the white noise approximation. This is a bit difficult due
+		# to the different binning the scaling uses. But it only needs to
+		# be an approximation anyway. So we will treat the scaling and
+		# the rest as separable.
+		bsize = self.bins[:,1]-self.bins[:,0]
+		avg_iS2 = (np.sum(self.inv_scale**2 * bsize[:,None],0)/np.sum(bsize))
+		self.tdiag = self.nmat.tdiag * avg_iS2
+	def apply(self, tod):
+		ft = enlib.fft.rfft(tod)
+		self.apply_ft(ft, tod.nsamp, tod.dtype)
+		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
+		return tod
+	def apply_ft(self, ft, nsamp, dtype):
+		ibins= get_ibins(self.bins, nsamp)
+		get_core(dtype).nmat_uncorr(ft.T, ibins.T, self.inv_scale)
+		self.nmat.apply_ft(ft, nsamp, dtype)
+		get_core(dtype).nmat_uncorr(ft.T, ibins.T, self.inv_scale)
+	def __getitem__(self, sel):
+		res, detslice, sampslice = self.getitem_helper(sel)
+		step = np.abs(sampslice.step or 1)
+		# Undo the internal scaling in nmat: We want to handle
+		# that using scale itself. A common use case of this
+		# class will be to let scale be rms values and nmat
+		# a correlation matrix. We want to preserve that
+		# distinction.
+		nmat = res.nmat[sel] * step**-1
+		# We have two frequency binnings now. First do the high-res var binning
+		scale_mask  = res.bins[:,0] < fmax
+		bins        = res.bins[mask]
+		bins[-1,-1] = fmax
+		return NmatScaled(res.scale/step**0.5, bins, nmat)
+	def __mul__(self, a):
+		return NmatScaled(self.scale*a**0.5, self.bins, self.nmat)
+	def export(self):
+		return {"type":"scaled", "bins":self.bins, "nmat": self.nmat.export()}
+	def write(self, fname):
+		fields = self.export()
+		write_nmat_helper(fname, fields)
+
+#def read_nmat(fname, group=None):
+#	"""Read a noise matrix from file, optionally from the named group
+#	in the file."""
+#	if isinstance(fname, basestring):
+#		f = h5py.File(fname, "r")
+#	else:
+#		f = fname
+#	g = f[group] if group else f
+#	typ = np.array(g["type"])[...]
+#	if typ == "detvecs":
+#		ebins = g["ebins"].value if "ebins" in g else g["vbins"].value # compatibility with old format
+#		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, ebins, g["dets"].value)
+#	elif typ == "sharedvecs":
+#		return NmatSharedvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["vbins"].value, g["dets"].value)
+#	elif typ == "binned":
+#		return NmatBinned(g["icovs"], g["bins"], g["dets"])
+#	else:
+#		raise IOError("Unrecognized noise matrix format %s" % typ)
+#	if isinstance(fname, basestring):
+#		f.close()
+
+def write_nmat(fname, nmat):
+	"""Write noise matrix nmat to the named file"""
+	nmat.write(fname)
+
+def write_nmat_helper(fname, fields, prefix=""):
 	if isinstance(fname, basestring):
 		f = h5py.File(fname, "w")
 	else:
 		f = fname
-	prefix = group + "/" if group else ""
-	for k, v in fields:
-		f[prefix+k] = v
+	for k, v in fields.iteritems():
+		if isinstance(v, dict):
+			write_nmat_helper(f, v, prefix+k+"/")
+		else:
+			f[prefix+k] = v
 	if isinstance(fname, basestring):
 		f.close()
 
@@ -285,23 +378,27 @@ def woodbury_invert(D, V, E, ebins=None, vbins=None):
 	"""Given a compressed representation C = D + V'EV, compute a
 	corresponding representation for inv(C) using the Woodbury
 	formula."""
-	if ebins is None:
-		iD, iE  = 1./D, 1./E
-		iD[~np.isfinite(iD)] = 0
-		iE[~np.isfinite(iE)] = 0
-		if len(iE) == 0: return iD, V, iE
-		arg = np.diag(iE) + (V*iD[None,:]).dot(V.T)
-		core, sign = sichol(arg)
-		iV = core.T.dot(V)*iD[None,:]
-		return iD, iV, np.zeros(len(E))-sign
-	else:
-		assert(D.ndim == 2)
-		iD, iE = D.copy(), E.copy()
-		iV = np.zeros([E.shape[0],V.shape[1]])
-		if vbins is None: vbins = ebins.copy()
-		for b, (eb,vb) in enumerate(zip(ebins,vbins)):
-			iD[b], iV[eb[0]:eb[1]], iE[eb[0]:eb[1]] = woodbury_invert(D[b], V[vb[0]:vb[1]], E[eb[0]:eb[1]])
-		return iD, iV, iE
+	if ebins is None: return woodbury_invert_single(D,V,E)
+	assert(D.ndim == 2)
+	iD, iE = D.copy(), E.copy()
+	iV = np.zeros([E.shape[0],V.shape[1]])
+	if vbins is None: vbins = ebins.copy()
+	for b, (eb,vb) in enumerate(zip(ebins,vbins)):
+		iD[b], iV[eb[0]:eb[1]], iE[eb[0]:eb[1]] = woodbury_invert_single(D[b], V[vb[0]:vb[1]], E[eb[0]:eb[1]])
+	return iD, iV, iE
+
+def woodbury_invert_single(D, V, E):
+	"""Given a compressed representation C = D + V'EV, compute a
+	corresponding representation for inv(C) using the Woodbury
+	formula."""
+	iD, iE  = 1./D, 1./E
+	iD[~np.isfinite(iD)] = 0
+	iE[~np.isfinite(iE)] = 0
+	if len(iE) == 0: return iD, V, iE
+	arg = np.diag(iE) + (V*iD[None,:]).dot(V.T)
+	core, sign = sichol(arg)
+	iV = core.T.dot(V)*iD[None,:]
+	return iD, iV, np.zeros(len(E))-sign
 
 def sichol(A):
 	iA = np.linalg.inv(A)
@@ -395,3 +492,9 @@ def apply_window(tod, width, inverse=False):
 	if width == 0: return
 	core = get_core(tod.dtype)
 	core.apply_window(tod.T, -width if inverse else width)
+
+def get_ibins(bins, n):
+	nf = n/2+1
+	ibins = (bins*nf/bins[-1,-1]).astype(np.int32)
+	ibins[-1,-1] = nf
+	return ibins

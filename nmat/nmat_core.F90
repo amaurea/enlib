@@ -103,6 +103,25 @@ contains
 		end do
 	end subroutine
 
+	! ftod[d1,f] -> iNu[d1] ftod[d1,f]
+	subroutine nmat_uncorr(ftod, bins, iNu)
+		implicit none
+		complex(_), intent(inout) :: ftod(:,:)
+		integer(4), intent(in)    :: bins(:,:)
+		real(_),    intent(in)    :: iNu(:,:)
+		integer :: nfreq, ndet, nbin, di, bi, b1,b2
+		nfreq = size(ftod,1)
+		ndet  = size(ftod,2)
+		nbin  = size(bins,2)
+		do di = 1, ndet
+			do bi = 1, nbin
+				b1 = bins(1,bi)+1;   b2 = bins(2,bi)
+				b1 = min(b1, nfreq); b2 = min(b2,nfreq)
+				ftod(b1:b2,di) = ftod(b1:b2,di)*iNu(bi,di)
+			end do
+		end do
+	end subroutine
+
 	! V and E here are not the same as in the commend at the top.
 	! Instead, they are defined as Q = VE**0.5
 	subroutine nmat_detvecs_old(ftod, bins, iNu, V, E, ebins)
