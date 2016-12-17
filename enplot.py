@@ -1,6 +1,6 @@
 import numpy as np, argparse, time, sys, warnings, os, shlex, glob, PIL.Image, PIL.ImageDraw
 from scipy import ndimage
-from enlib import enmap, colorize, mpi, cgrid, utils, memory, bunch
+from enlib import enmap, colorize, mpi, cgrid, utils, memory, bunch, wcs as enwcs
 # Optional dependency array_ops needed for contour drawing
 try: from enlib import array_ops
 except ImportError: pass
@@ -148,8 +148,9 @@ def parse_args(args=sys.argv[1:], noglob=False):
 		l[ine]   lat lon dy dx lat lon dy dx [width [color]]
 	dy and dx are pixel-unit offsets from the specified lat/lon.""")
 	parser.add_argument("--stamps", type=str, default=None, help="Plot stamps instead of the whole map. Format is srcfile:size:nmax, where the last two are optional. srcfile is a file with [dec ra] in degrees, size is the size in pixels of each stamp, and nmax is the max number of stamps to produce.")
-	parser.add_argument("-S", "--symmetric", action="store_true")
-	parser.add_argument("-z", "--zenith", action="store_true")
+	parser.add_argument("-S", "--symmetric", action="store_true", help="Treat the non-pixel axes as being asymmetric matrix, and only plot a non-redundant triangle of this matrix.")
+	parser.add_argument("-z", "--zenith",    action="store_true", help="Plot the zenith angle instead of the declination.")
+	parser.add_argument("-F", "--fix-wcs",   action="store_true", help="Fix the wcs for maps in cylindrical projections where the reference point was placed too far away from the map center.")
 	if isinstance(args, basestring):
 		args = shlex.split(args)
 	res = parser.parse_args(args)
@@ -176,6 +177,8 @@ def get_map(ifile, args, return_info=False):
 		toks = ifile.split(":")
 		ifile, slice = toks[0], ":".join(toks[1:])
 		m0 = enmap.read_map(ifile)
+		if args.fix_wcs:
+			m0.wcs = enwcs.fix_wcs(m0.wcs)
 		# Save the original map, so we can compare its wcs later
 		m  = m0
 		# Submap slicing currently has wrapping issues
