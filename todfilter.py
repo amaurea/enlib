@@ -60,10 +60,10 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 				continue
 		else:
 			w = weights.reshape(-1,weights.shape[-1])
-			amps = np.zeros([naz+nt,d.shape[0]],dtype=tod.dtype)
+			amps = np.zeros([naz+nt+nhwp,d.shape[0]],dtype=tod.dtype)
 			for di in range(len(tod)):
 				try:
-					amps[:,di] = np.linalg.solve(B.dot(w[di,:,None]*B.T),B.dot(w[di]*d[di]))
+					amps[:,di] = np.linalg.solve((B*w[di]).dot(B.T),B.dot(w[di]*d[di]))
 				except np.linalg.LinAlgError as e:
 					print "LinAlgError in todfilter di %d. Skipping" % di
 					continue
@@ -72,9 +72,11 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 		if asign > 0: d -= amps[:naz].T.dot(B[:naz])
 		if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[naz:naz+nt])
 		if hsign > 0: d -= amps[naz+nt:naz+nt+nhwp].T.dot(B[naz+nt:naz+nt+nhwp])
+	# Why was this necessary?
 	if do_gapfill: gapfill.gapfill(d, cuts, inplace=True)
 	if deslope: utils.deslope(tod, w=8, inplace=True)
-	return d.reshape(tod.shape)
+	res = d.reshape(tod.shape)
+	return res
 
 
 def deproject_vecs(tods, dark, nmode=50, cuts=None, deslope=True, inplace=True):

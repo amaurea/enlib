@@ -14,7 +14,7 @@ def gapfill(arr, ranges, inplace=False, overlap=None):
 			"cubic":gapfill_cubic
 		}[config.get("gapfill")]
 	overlap = config.get("gapfill_context", overlap)
-	gapfiller(arr, ranges, inplace=inplace, overlap=overlap)
+	return gapfiller(arr, ranges, inplace=inplace, overlap=overlap)
 
 @multify
 def gapfill_linear(arr, ranges, inplace=False, overlap=None):

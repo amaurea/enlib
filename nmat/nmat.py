@@ -174,7 +174,7 @@ class NmatDetvecs(NmatBinned):
 		# To summarize, iN, RHS and div are all D times too small because we don't properly
 		# rescale the noise when downsampling.
 		# FIXED: I now scale D and E when downsampling.
-		self.apply_ft(ft, tod.nsamp, tod.dtype)
+		self.apply_ft(ft, tod.shape[-1], tod.dtype)
 		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
 	def apply_ft(self, ft, nsamp, dtype):

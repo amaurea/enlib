@@ -765,9 +765,10 @@ def sum_by_id(a, ids, axis=0):
 	rb = fb.reshape((fb.shape[0],)+ra.shape[1:])
 	return moveaxis(rb, 0, axis)
 
-def allreduce(a, comm):
+def allreduce(a, comm, op=None):
 	res = a.copy()
-	comm.Allreduce(a, res)
+	if op is None: comm.Allreduce(a, res)
+	else:          comm.Allreduce(a, res, op)
 	return res
 
 def allgather(a, comm):
@@ -1001,14 +1002,19 @@ def block_mean_filter(a, width):
 	"""Perform a binwise smoothing of a, where all samples
 	in each bin of the given width are replaced by the mean
 	of the samples in that bin."""
-	a      = np.asarray(a)
-	width  = int(width)
-	nblock = (a.size+width-1)/width
-	work   = np.zeros((2,nblock*width),dtype=a.dtype)
-	work[:,:a.size] = [a,a*0+1]
-	work   = work.reshape(2,-1,width)
-	work[0]= (np.sum(work[0]*work[1],-1)/np.sum(work[1],-1))[:,None]
-	return work[0].reshape(-1)[:a.size]
+	a = np.array(a)
+	if a.shape[-1] < width:
+		a[:] = np.mean(a,-1)[...,None]
+	else:
+		width  = int(width)
+		nblock = (a.shape[-1]+width-1)/width
+		apad   = np.concatenate([a,a[...,-2::-1]],-1)
+		work   = apad[...,:width*nblock]
+		work   = work.reshape(work.shape[:-1]+(nblock,width))
+		work[:]= np.mean(work,-1)[...,None]
+		work   = work.reshape(work.shape[:-2]+(-1,))
+		a[:]   = work[...,:a.shape[-1]]
+	return a
 
 def ctime2date(timestamp, tzone=0, fmt="%Y-%m-%d"):
 	return datetime.datetime.utcfromtimestamp(timestamp+tzone*3600).strftime(fmt)

@@ -46,6 +46,8 @@ class FormatDB(Basedb):
 		for line in data.splitlines():
 			line = line.strip()
 			if len(line) < 1 or line[0] == "#": continue
+			# Ignore part after hash
+			line = line.split("#")[0]
 			# Split into part before first : and the rest
 			toks = pre_split(line)
 			if len(toks) == 1: toks = toks + [""]
