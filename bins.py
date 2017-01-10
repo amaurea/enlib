@@ -37,7 +37,7 @@ def expbin(n, nbin=None, nmin=8, nmax=0):
 	tmp[-1] = n
 	return np.vstack((tmp[:-1],tmp[1:])).T
 
-def bin_data(d, bins, op=np.mean):
+def bin_data(bins, d, op=np.mean):
 	"""Bin the data d into the specified bins along the last dimension. The result has
 	shape d.shape + (nbin,)."""
 	nbin  = bins.shape[0]
@@ -46,3 +46,9 @@ def bin_data(d, bins, op=np.mean):
 	for bi, b in enumerate(bins):
 		dbin[:,bi] = op(dflat[:,b[0]:b[1]],1)
 	return dbin.reshape(d.shape[:-1]+(nbin,))
+
+def bin_expand(bins, bdata):
+	res = np.zeros(bdata.shape[:-1]+(bins[-1,1],),bdata.dtype)
+	for bi, b in enumerate(bins):
+		res[...,b[0]:b[1]] = bdata[...,bi]
+	return res
