@@ -252,8 +252,7 @@ class flatview:
 			self.flat = np.ascontiguousarray(self.flat)
 		return self.flat
 	def __exit__(self, type, value, traceback):
-		# Copy back out from flat into the original array,
-		# if necessary
+		# Copy back out from flat into the original array, if necessary
 		if "w" not in self.mode: return
 		if np.may_share_memory(self.array, self.flat): return
 		# We need to copy back out
@@ -1051,3 +1050,129 @@ def triangle_wave(x, period=1):
 	res[m2] = 2-x[m2]
 	res[m3] = x[m3]-4
 	return res
+
+### Binning ####
+
+def edges2bins(edges):
+	res = np.zeros((edges.size-1,2),int)
+	res[:,0] = edges[:-1]
+	res[:,1] = edges[1:]
+	return res
+
+def bins2edges(bins):
+	return np.concatenate([bins[:,0],bins[1,-1:]])
+
+def linbin(n, nbin=None, nmin=None):
+	"""Given a number of points to bin and the number of approximately
+	equal-sized bins to generate, returns [nbin_out,{from,to}].
+	nbin_out may be smaller than nbin. The nmin argument specifies
+	the minimum number of points per bin, but it is not implemented yet.
+	nbin defaults to the square root of n if not specified."""
+	if not nbin: nbin = int(np.round(n**0.5))
+	tmp  = np.arange(nbin+1)*n/nbin
+	return np.vstack((tmp[:-1],tmp[1:])).T
+
+def expbin(n, nbin=None, nmin=8, nmax=0):
+	"""Given a number of points to bin and the number of exponentially spaced
+	bins to generate, returns [nbin_out,{from,to}].
+	nbin_out may be smaller than nbin. The nmin argument specifies
+	the minimum number of points per bin. nbin defaults to n**0.5"""
+	if not nbin: nbin = int(np.round(n**0.5))
+	tmp  = np.array(np.exp(np.arange(nbin+1)*np.log(n+1)/nbin)-1,dtype=int)
+	fixed = [tmp[0]]
+	i = 0
+	while i < nbin:
+		for j in range(i+1,nbin+1):
+			if tmp[j]-tmp[i] >= nmin:
+				fixed.append(tmp[j])
+				i = j
+	# Optionally split too large bins
+	if nmax:
+		tmp = [fixed[0]]
+		for v in fixed[1:]:
+			dv = v-tmp[-1]
+			nsplit = (dv+nmax-1)/nmax
+			tmp += [tmp[-1]+dv*(i+1)/nsplit for i in range(nsplit)]
+		fixed = tmp
+	tmp = np.array(fixed)
+	tmp[-1] = n
+	return np.vstack((tmp[:-1],tmp[1:])).T
+
+def bin_data(bins, d, op=np.mean):
+	"""Bin the data d into the specified bins along the last dimension. The result has
+	shape d.shape + (nbin,)."""
+	nbin  = bins.shape[0]
+	dflat = d.reshape(-1,d.shape[-1])
+	dbin  = np.zeros([dflat.shape[0], nbin])
+	for bi, b in enumerate(bins):
+		dbin[:,bi] = op(dflat[:,b[0]:b[1]],1)
+	return dbin.reshape(d.shape[:-1]+(nbin,))
+
+def bin_expand(bins, bdata):
+	res = np.zeros(bdata.shape[:-1]+(bins[-1,1],),bdata.dtype)
+	for bi, b in enumerate(bins):
+		res[...,b[0]:b[1]] = bdata[...,bi]
+	return res
+
+def is_int_valued(a): return a%1 == 0
+
+#### Matrix operations that don't need fortran ####
+
+# Don't do matmul - it's better expressed with einsum
+
+def solve(A, b, axes=[-2,-1], masked=False):
+	"""Solve the linear system Ax=b along the specified axes
+	for A, and axes[0] for b. If masked is True, then entries
+	where A00 along the given axes is zero will be skipped."""
+	A,b = np.asanyarray(A), np.asanyarray(b)
+	baxes = axes if A.ndim == b.ndim else [axes[0]%A.ndim]
+	fA = partial_flatten(A, axes)
+	fb = partial_flatten(b, baxes)
+	if masked:
+		mask = fA[...,0,0] != 0
+		fb[~mask] = 0
+		fb[mask]  = np.linalg.solve(fA[mask],fb[mask])
+	else:
+		fb = np.linalg.solve(fA,fb)
+	return partial_expand(fb, b.shape, baxes)
+
+def eigpow(A, e, axes=[-2,-1], rlim=None, alim=None):
+	"""Compute the e'th power of the matrix A (or the last
+	two axes of A for higher-dimensional A) by exponentiating
+	the eigenvalues. A should be real and symmetric.
+
+	When e is not a positive integer, negative eigenvalues
+	could result in a complex result. To avoid this, negative
+	eigenvalues are set to zero in this case.
+
+	Also, when e is not positive, tiny eigenvalues dominated by
+	numerical errors can be blown up enough to drown out the
+	well-measured ones. To avoid this, eigenvalues
+	smaller than 1e-13 for float64 or 1e-4 for float32 of the
+	largest one (rlim), or with an absolute value less than 2e-304 for float64 or
+	1e-34 for float32 (alim) are set to zero for negative e. Set alim
+	and rlim to 0 to disable this behavior.
+	"""
+	# This function basically does
+	# E,V = np.linalg.eigh(A)
+	# E **= e
+	# return (V*E).dot(V.T)
+	# All the complicated stuff is there to support axes and tolerances.
+	if axes[0]%A.ndim != A.ndim-2 or axes[1]%A.ndim != A.ndim-1:
+		fa = partial_flatten(A, axes)
+		fa = eigpow(fa, e, rlim=rlim, alim=alim)
+		return partial_expand(fa, A.shape, axes)
+	else:
+		E, V = np.linalg.eigh(A)
+		if rlim is None: rlim = np.finfo(E.dtype).resolution*100
+		if alim is None: alim = np.finfo(E.dtype).tiny*1e4
+		mask = np.full(E.shape, False, np.bool)
+		if not is_int_valued(e):
+			mask |= E < 0
+		if e < 0:
+			aE = np.abs(E)
+			mask |= (aE < np.max(aE)*rlim) | (aE < alim)
+		E[~mask] **= e
+		E[mask]    = 0
+		res = np.einsum("...ij,...kj->...ik",V*E[...,None,:],V)
+		return res

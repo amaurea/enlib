@@ -122,6 +122,29 @@ contains
 		end do
 	end subroutine
 
+	subroutine scale_lin(ftod, ifreqs, vals, exp)
+		implicit none
+		complex(_), intent(inout) :: ftod(:,:)
+		integer(4), intent(in)    :: ifreqs(:)
+		real(_),    intent(in)    :: vals(:,:), exp
+		integer :: nfreq, ndet, nbin, di, bi, i1, i2, i
+		real(_) :: x, y
+		nfreq  = size(ftod,1)
+		ndet   = size(ftod,2)
+		nbin   = size(ifreqs)-1
+		do di = 1, ndet
+			do bi = 1, nbin
+				i1 = ifreqs(bi)+1
+				i2 = ifreqs(bi+1)
+				do i = i1, i2
+					x = (i-i1)*1d0/(i2-i1+1)
+					y = vals(bi,di)*(1-x)+vals(bi+1,di)*x
+					ftod(i,di) = ftod(i,di) * y**exp
+				end do
+			end do
+		end do
+	end subroutine
+
 	! V and E here are not the same as in the commend at the top.
 	! Instead, they are defined as Q = VE**0.5
 	subroutine nmat_detvecs_old(ftod, bins, iNu, V, E, ebins)

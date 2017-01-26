@@ -1,28 +1,4 @@
 import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, enlib.powspec, astropy.io.fits, sys
-try:
-	import h5py
-except ImportError:
-	pass
-try:
-	# Ensure that our numpy has stacked array support
-	np.linalg.cholesky(np.array([1]).reshape(1,1,1))
-	def svd_pow(a,e):
-		U, s, Vh = np.linalg.svd(a)
-		if e < 0: s[s==0] = np.inf
-		seU = s[:,None,:]**e*U
-		return np.einsum("xij,xjk->xik",seU,Vh)
-except np.linalg.LinAlgError:
-	try:
-		from linmulti import svd_pow
-	except ImportError:
-		# This fallback is quite slow, even though the loop only has 10000 or so iterations
-		def svd_pow(a, e):
-			res = np.zeros(a.shape)
-			for i in range(res.shape[0]):
-				if not np.all(a[i]==0):
-					U, s, Vh = np.linalg.svd(a[i])
-					res[i] = (s**e*U).dot(Vh)
-			return res
 
 # Things that could be improved:
 #  1. We assume exactly 2 WCS axes in spherical projection in {dec,ra} order.
@@ -688,8 +664,7 @@ def _convolute_sym(a,b):
 def multi_pow(mat, exp, axes=[0,1]):
 	"""Raise each sub-matrix of mat (ncomp,ncomp,...) to
 	the given exponent in eigen-space."""
-	res = enlib.utils.partial_expand(svd_pow(enlib.utils.partial_flatten(mat, axes, 0), exp), mat.shape, axes, 0)
-	return samewcs(res, mat)
+	return samewcs(enlib.utils.eigpow(mat, exp, axes=axes), mat)
 
 def downgrade(emap, factor):
 	"""Returns enmap "emap" downgraded by the given integer factor
@@ -1025,6 +1000,7 @@ def read_fits(fname, hdu=0):
 def write_hdf(fname, emap, extra={}):
 	"""Write an enmap as an hdf file, preserving all
 	the WCS metadata."""
+	import h5py
 	with h5py.File(fname, "w") as hfile:
 		hfile["data"] = emap
 		header = emap.wcs.to_header()
@@ -1041,6 +1017,7 @@ def read_hdf(fname):
 	available. With the old format, plate carree projection
 	is assumed. Note: some of the old files have a slightly
 	buggy wcs, which can result in 1-pixel errors."""
+	import h5py
 	with h5py.File(fname,"r") as hfile:
 		data = hfile["data"].value
 		if "wcs" in hfile:

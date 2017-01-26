@@ -72,6 +72,10 @@ def scale(wcs, scale=1, rowmajor=False):
 	wcs.wcs.crpix += 0.5
 	return wcs
 
+# I need to update this to work better with full-sky stuff.
+# Should be easy to construct something that's part of a
+# clenshaw-curtis or fejer sky.
+
 def plain(pos, res=None, shape=None, rowmajor=False, ref=None):
 	"""Set up a plain coordinate system (non-cyclical)"""
 	pos, res, shape, mid = validate(pos, res, shape, rowmajor)
