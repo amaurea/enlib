@@ -250,16 +250,17 @@ class DGeometry(object):
 			# another. comm must *not* be deepcopied, as that breaks it.
 			for key in ["shape","tshape","comm","dtype"]:
 				setattr(self, key, getattr(shape, key))
-			for key in ["wcs","tile_bufinfo","work_bufinfo","bbpix","tile_loc2glob",
-					"tile_boxes", "tile_glob2loc","work_geometry","tile_geometry",
-					"tile_ownership"]:
+			for key in ["wcs","tile_pos","tile_boxes",
+					"tile_geometry","work_geometry",
+					"tile_ownership","tile_glob2loc","tile_loc2glob",
+					"tile_bufinfo", "work_bufinfo" ]:
 				setattr(self, key, copy.deepcopy(getattr(shape, key)))
 		except AttributeError:
 			# 1. Set up basic properties
 			assert shape is not None
 			if wcs is None: _, wcs = enmap.geometry(pos=np.array([[-1,-1],[1,1]])*5*np.pi/180, shape=shape[-2:])
 			if comm is None: comm = mpi.COMM_WORLD
-			if tshape is None: tshape = (240,240)
+			if tshape is None: tshape = (720,720)
 			if dtype is None: dtype = np.float64
 			if bbpix is None:
 				if bbox is None: bbpix = [[0,0],shape[-2:]]
@@ -460,7 +461,7 @@ def write_map(name, map, ext="fits", merged=True):
 	if not merged:
 		# Write as individual tiles in directory of the specified name
 		utils.mkdir(name)
-		for pos, tile in zip(map.locinds,dmap.tiles):
+		for pos, tile in zip(map.loc_pos,map.tiles):
 			enmap.write_map(name + "/tile%03d_%03d.%s" % (tuple(pos)+(ext,)), tile)
 	else:
 		# Write to a single file. This currently creates the full map
@@ -501,7 +502,7 @@ def read_map(name, bbpix=None, bbox=None, tshape=None, comm=None):
 		dtype = tile1.dtype
 		# Construct our dmap and read our tiles
 		map = Dmap(geometry(shape, wcs, bbpix=bbpix, bbox=bbox, tshape=tshape, dtype=dtype, comm=comm))
-		for pos, tile in zip(map.locinds,map.tiles):
+		for pos, tile in zip(map.loc_pos,map.tiles):
 			tile[:] = enmap.read_map(name+"/"+tfiles[pos[0]][pos[1]])
 	else:
 		# Map is in a single file. Get map info
@@ -711,3 +712,56 @@ class DmapZipper(zipper.ArrayZipper):
 			for b,t,m in zip(self.bins, self.template.tiles, self.mask.tiles):
 				t[m] = x[b[0]:b[1]]
 		return self.template
+
+# Helper functions for working with tiles on disk
+
+def retile(ipathfmt, opathfmt, combine=2, downsample=2, pad_to=None, comm=None, verbose=False):
+	"""Given a set of tiles on disk at locaiton ipathfmt % {"y":...,"x"...},
+	combine them into larger tiles, downsample and write the result to
+	opathfmt % {"y":...,"x":...}. x and y must be contiguous and start at 0."""
+	# Expand combine and downsample to 2d
+	comby, combx = np.zeros(2,int)+combine
+	downy, downx = np.zeros(2,int)+downsample
+	if pad_to is not None:
+		padtoy, padtox = np.zeros(2,int)+pad_to
+	# Handle optional mpi
+	rank, size = (comm.rank, comm.size) if comm is not None else (0, 1)
+	# First discover the input x and y bounds
+	inx, iny = 0, 0
+	while os.path.exists(ipathfmt % {"y": iny, "x": 0}): iny += 1
+	while os.path.exists(ipathfmt % {"y": 0, "x": inx}): inx += 1
+	# Loop over the output
+	ony = (iny+combx-1)/comby
+	onx = (inx+combx-1)/combx
+	oyx = [(oy,ox) for oy in range(ony) for ox in range(onx)]
+	for i in range(rank, len(oyx), size):
+		oy, ox = oyx[i]
+		# Read in all associated tiles into a list of lists
+		rows = []
+		for dy in range(comby):
+			iy = oy*comby + dy
+			if iy >= iny: continue
+			cols = []
+			for dx in range(combx):
+				ix = ox*combx + dx
+				if ix >= inx: continue
+				itname = ipathfmt % {"y": iy, "x": ix}
+				cols.append(enmap.read_map(itname))
+			rows.append(cols)
+		# Stack them next to each other into a big tile
+		print "----"
+		for row in rows:
+			print [c.shape for c in row]
+		omap = enmap.tile_maps(rows)
+		# Downgrade if necessary
+		if downx > 1 or downy > 1:
+			omap = enmap.downgrade(omap, (downy,downx))
+		if pad_to is not None:
+			print omap.shape
+			omap = enmap.pad(omap, [[0,0],[padtoy-omap.shape[-2],padtox-omap.shape[-1]]])
+			print omap.shape
+		# And output
+		otname = opathfmt % {"y": oy, "x": ox}
+		utils.mkdir(os.path.dirname(otname))
+		enmap.write_map(otname, omap)
+		if verbose: print otname

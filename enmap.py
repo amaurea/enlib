@@ -887,6 +887,20 @@ def padslice(map, box, default=np.nan):
 	res[...,o[0]:o[0]+w[0],o[1]:o[1]+w[1]] = map[...,ibox[0,0]:ibox[1,0],ibox[0,1]:ibox[1,1]]
 	return res
 
+def tile_maps(maps):
+	"""Given a 2d list of enmaps representing contiguous tiles in the
+	same global pixelization, stack them into a total map and return it.
+	E.g. if maps = [[a,b],[c,d]], then the result would be
+	      c d
+	map = a b
+	"""
+	# First stack the actual data:
+	m = np.concatenate([np.concatenate(row,-1) for row in maps],-2)
+	# Then figure out the wcs of the result. crpix counts from the
+	# lower left corner, so a and the total map should have the same wcs
+	m = samewcs(m, maps[0][0])
+	return m
+
 def stamps(map, pos, shape, aslist=False):
 	"""Given a map, extract a set of identically shaped postage stamps with corners
 	at pos[ntile,2]. The result will be an enmap with shape [ntile,...,ny,nx]

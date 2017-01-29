@@ -1,4 +1,4 @@
-import numpy as np, logging
+import numpy as np, logging, h5py, sys
 from enlib import scan as enscan, errors, utils, coordinates, dmap2 as dmap
 L = logging.getLogger(__name__)
 
@@ -7,7 +7,8 @@ def calc_sky_bbox_scan(scan, osys):
 	ocorners = np.array([coordinates.transform(scan.sys,osys,b[1:,None],time=scan.mjd0+b[0,None]/3600/24,site=scan.site)[::-1,0] for b in icorners])
 	# Take care of angle wrapping along the ra direction
 	ocorners[...,1] = utils.rewind(ocorners[...,1], ref="auto")
-	return utils.bounding_box(ocorners)
+	obox = utils.bounding_box(ocorners)
+	return obox
 
 def distribute_scans(myinds, mycosts, myboxes, comm):
 	"""Given the costs[nmyscan] and bounding boxes[nmyscan,2,2] of our local scans,
@@ -25,15 +26,29 @@ def distribute_scans(myinds, mycosts, myboxes, comm):
 		myinds = all_inds[utils.equal_split(all_costs, comm.size)[comm.rank]]
 		return myinds
 	else:
+		#hfile = h5py.File("tmp%02d.hdf" % comm.rank, "w")
 		all_boxes = np.array(comm.allreduce(myboxes))
-		# Avoid angle wraps.
-		all_boxes[...,1] = np.sort(utils.rewind(all_boxes[...,1], ref="auto"),-1)
+		#hfile["all1"] = all_boxes/utils.degree
+		# Avoid angle wraps. We assume that the boxes are all correctly wrapped
+		# individually.
+		ras    = all_boxes[:,:,1]
+		ra_ref = np.median(np.mean(ras,1))
+		rashift= ra_ref + (ras[:,0]-ra_ref+np.pi)%(2*np.pi) - np.pi - ras[:,0]
+		ras += rashift[:,None]
+		all_boxes[:,:,1] = ras
+		#hfile["all2"] = all_boxes/utils.degree
 		myinds_old = myinds
+		#hfile["myinds1"] = myinds
 		# Split into nearby scans
 		mygroups = dmap.split_boxes_rimwise(all_boxes, all_costs, comm.size)[comm.rank]
 		myinds = [all_inds[i] for group in mygroups for i in group]
+		#hfile["myinds2"] = myinds
 		mysubs = [gi for gi, group in enumerate(mygroups) for i in group]
+		#hfile["mysubs"] = mysubs
+		#hfile["myboxes"] = np.array([all_boxes[i] for i in mygroups[0]])/utils.degree
 		mybbox = [utils.bounding_box([all_boxes[i] for i in group]) for group in mygroups]
+		#hfile["mybbox"] = mybbox[0]/utils.degree
+		#hfile.close()
 		return myinds, mysubs, mybbox
 
 def get_scan_bounds(myscans):
