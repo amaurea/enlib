@@ -715,7 +715,7 @@ class DmapZipper(zipper.ArrayZipper):
 
 # Helper functions for working with tiles on disk
 
-def retile(ipathfmt, opathfmt, combine=2, downsample=2, pad_to=None, comm=None, verbose=False):
+def combine_tiles(ipathfmt, opathfmt, combine=2, downsample=2, pad_to=None, comm=None, verbose=False):
 	"""Given a set of tiles on disk at locaiton ipathfmt % {"y":...,"x"...},
 	combine them into larger tiles, downsample and write the result to
 	opathfmt % {"y":...,"x":...}. x and y must be contiguous and start at 0."""
@@ -749,19 +749,100 @@ def retile(ipathfmt, opathfmt, combine=2, downsample=2, pad_to=None, comm=None, 
 				cols.append(enmap.read_map(itname))
 			rows.append(cols)
 		# Stack them next to each other into a big tile
-		print "----"
-		for row in rows:
-			print [c.shape for c in row]
 		omap = enmap.tile_maps(rows)
 		# Downgrade if necessary
 		if downx > 1 or downy > 1:
 			omap = enmap.downgrade(omap, (downy,downx))
 		if pad_to is not None:
-			print omap.shape
 			omap = enmap.pad(omap, [[0,0],[padtoy-omap.shape[-2],padtox-omap.shape[-1]]])
-			print omap.shape
 		# And output
 		otname = opathfmt % {"y": oy, "x": ox}
 		utils.mkdir(os.path.dirname(otname))
 		enmap.write_map(otname, omap)
 		if verbose: print otname
+
+def range_overlap(a,b):
+	return np.array([np.maximum(a[0],b[0]),np.minimum(a[1],b[1])])
+
+def retile(ipathfmt, opathfmt, itileoff=(0,0), itilenum=(None,None),
+		otileoff=(0,0), otilenum=(None,None), ocorner=(-np.pi/2,-np.pi),
+		otilesize=(675,675), comm=None, verbose=False):
+	"""Given a set of tiles on disk with locations ipathfmt % {"y":...,"x":...},
+	retile them into a new tiling and write the result to opathfmt % {"y":...,"x":...}.
+	The new tiling will have tile size given by otilesize[2]. Negative size means the
+	tiling will to down/left instead of up/right. The corner of the tiling will
+	be at sky coordinates ocorner[2] in radians. The new tiling will be pixel-
+	compatible with the input tiling - w.g. the wcs will only differ by crpix.
+
+	The output tiling will logically cover the whole sky, but only output tiles
+	that overlap with input tiles will actually be written. This can be modified
+	by using otileoff[2] and otilenum[2]. otileoff gives the tile indices of the
+	corner tile, while otilenum indicates the number of tiles to write."""
+	# Set up mpi
+	rank, size = (comm.rank, comm.size) if comm is not None else (0, 1)
+	# Expand any scalars
+	otilesize = np.zeros(2,int)+otilesize
+	otileoff  = np.zeros(2,int)+otileoff
+	itileoff  = np.zeros(2,int)+itileoff
+	# To fill in the rest of the information we need to know more
+	# about the input tiling, so read the first tile
+	ibase = enmap.read_map(ipathfmt % {"y":itileoff[0],"x":itileoff[1]})
+	itilesize = ibase.shape[-2:]
+	# Find out how many input tiles there are
+	itilenum = list(itilenum)
+	for i in range(2):
+		if itilenum[i] is None:
+			itilenum[i] = 0
+			while os.path.exists(ipathfmt % {"y": itileoff[i]+itilenum[i], "x": itileoff[1-i]}):
+				itilenum[i] += 1
+	# Find the pixel position of our output corners according to the wcs.
+	# This is the last place we need to do a coordinate transformation.
+	# All the rest can be done in pure pixel logic.
+	pixoff = np.round(ibase.sky2pix(ocorner)).astype(int)
+	# Find the number of output tiles
+	otilenum = list(otilenum)
+	for i in range(2):
+		if otilenum[i] is None:
+			otilenum[i] = max(
+					(itilenum[i]*itilesize[i]-pixoff[i]+otilesize[i]-1)/otilesize[i],
+					(-pixoff[i]+otilesize[i]-1)/otilesize[i])
+	# We can now loop over output tiles
+	oyx = [(oy,ox) for oy in range(otilenum[0]) for ox in range(otilenum[1])]
+	for i in range(rank, len(oyx), size):
+		otile = np.array(oyx[i])
+		omap  = enmap.zeros(ibase.shape[:-2] + tuple(np.abs(otilesize)), ibase.wcs, ibase.dtype)
+		# Find out which input tiles overlap with this output tile.
+		# Our tile stretches from opix1:opix2 relative to the global input pixels
+		opix1 = otile*otilesize + pixoff
+		opix2 = (otile+1)*otilesize + pixoff
+		# output tiles and input tiles may increase in opposite directions
+		opix1, opix2 = np.minimum(opix1,opix2), np.maximum(opix1,opix2)
+		itile1 = opix1/itilesize
+		itile2 = (opix2-1)/itilesize+1
+		# Loop over these tiles
+		noverlap = 0
+		for ity in range(itile1[0],itile2[0]):
+			if ity < 0 or ity >= itilenum[0]: continue
+			# Start/end of this tile in global input pixels
+			ipy1, ipy2 = ity*itilesize[0], (ity+1)*itilesize[0]
+			overlap = range_overlap([opix1[0],opix2[0]],[ipy1,ipy2])
+			oy1,oy2 = overlap-opix1[0]
+			iy1,iy2 = overlap-ipy1
+			for itx in range(itile1[1],itile2[1]):
+				if itx < 0 or itx >= itilenum[1]: continue
+				ipx1, ipx2 = itx*itilesize[1], (itx+1)*itilesize[1]
+				overlap = range_overlap([opix1[1],opix2[1]],[ipx1,ipx2])
+				ox1,ox2 = overlap-opix1[1]
+				ix1,ix2 = overlap-ipx1
+				# Read the input tile and copy over
+				iname = ipathfmt % {"y":ity,"x":itx}
+				imap  = enmap.read_map(iname)
+				omap[...,oy1:oy2,ox1:ox2] = imap[...,iy1:iy2,ix1:ix2]
+				noverlap += 1
+		if noverlap == 0: continue
+		# Set up the wcs for the output tile
+		omap.wcs.wcs.crpix -= opix1[::-1]
+		oname = opathfmt % {"y":otile[0],"x":otile[1]}
+		utils.mkdir(os.path.dirname(oname))
+		enmap.write_map(oname, omap)
+		if verbose: print oname
