@@ -1,5 +1,5 @@
 import numpy as np, logging, h5py, sys
-from enlib import scan as enscan, errors, utils, coordinates, dmap2 as dmap
+from enlib import scan as enscan, errors, utils, coordinates, dmap
 L = logging.getLogger(__name__)
 
 def calc_sky_bbox_scan(scan, osys):
