@@ -115,6 +115,7 @@ class SignalMapFast(SignalMap):
 		if scan not in self.data: return
 		self.data[scan].backward(tod, work, self.pix, self.phase)
 
+config.default("dmap_format","merged","How to store dmaps on disk. 'merged': combine into a single fits file before writing. This is memory intensive. 'tiles': Write the tiles that make up the dmap directly to disk.")
 class SignalDmap(Signal):
 	def __init__(self, scans, subinds, area, cuts=None, name="main", ofmt="{name}", output=True,
 			ext="fits", pmat_order=None, sys=None, nuisance=False, data=None):
@@ -125,6 +126,7 @@ class SignalDmap(Signal):
 		self.dtype= area.dtype
 		self.subs = subinds
 		if data is None:
+			data = {}
 			work = area.tile2work()
 			for scan, subind in zip(scans, subinds):
 				data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys), subind]
@@ -147,7 +149,8 @@ class SignalDmap(Signal):
 		if not self.output: return
 		oname = self.ofmt.format(name=self.name)
 		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
-		dmap.write_map(oname, m)
+		merged= config.get("dmap_format") == "merged"
+		dmap.write_map(oname, m, merged=merged)
 
 class SignalDmapFast(SignalMap):
 	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True,

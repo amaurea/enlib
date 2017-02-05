@@ -205,6 +205,7 @@ def get_map(ifile, args, return_info=False):
 			flip = (m.wcs.wcs.cdelt*m0.wcs.wcs.cdelt)[::-1]<0
 			assert m.ndim >= 2, "Image must have at least 2 dimensions"
 			# Apply arbitrary map operations
+			m1 = m
 			if args.op is not None:
 				m = eval(args.op, {"m":m},np.__dict__)
 			# Scale if requested
