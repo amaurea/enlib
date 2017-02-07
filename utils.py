@@ -273,10 +273,8 @@ def dedup(a):
 	return a[np.concatenate([[True],a[1:]!=a[:-1]])]
 
 def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0, prefilter=True):
-	"""Given an array a[{x},{y}] and a list of
-	float indices into a, inds[len(y),{z}],
-	returns interpolated values at these positions
-	as [{x},{z}]."""
+	"""Given an array a[{x},{y}] and a list of float indices into a,
+	inds[len(y),{z}], returns interpolated values at these positions as [{x},{z}]."""
 	a    = np.asanyarray(a)
 	inds = np.asanyarray(inds)
 	inds_orig_nd = inds.ndim
@@ -1182,3 +1180,7 @@ def eigpow(A, e, axes=[-2,-1], rlim=None, alim=None):
 		E[mask]    = 0
 		res = np.einsum("...ij,...kj->...ik",V*E[...,None,:],V)
 		return res
+
+def nint(a):
+	"""Return a rounded to the nearest integer, as an integer."""
+	return np.int0(np.round(a))

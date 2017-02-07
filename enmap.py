@@ -957,7 +957,7 @@ def write_map(fname, emap, fmt=None, extra={}):
 	else:
 		raise ValueError
 
-def read_map(fname, fmt=None):
+def read_map(fname, fmt=None, sel=None):
 	"""Read an enmap from file. The file type is inferred
 	from the file extension, unless fmt is passed.
 	fmt must be one of 'fits' and 'hdf'."""
@@ -969,9 +969,9 @@ def read_map(fname, fmt=None):
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
-		res = read_fits(fname)
+		res = read_fits(fname, sel=sel)
 	elif fmt == "hdf":
-		res = read_hdf(fname)
+		res = read_hdf(fname, sel=sel)
 	else:
 		raise ValueError
 	if len(toks) > 1:
@@ -996,7 +996,7 @@ def write_fits(fname, emap, extra={}):
 		warnings.filterwarnings('ignore')
 		hdus.writeto(fname, clobber=True)
 
-def read_fits(fname, hdu=0):
+def read_fits(fname, hdu=0, sel=None):
 	"""Read an enmap from the specified fits file. By default,
 	the map and coordinate system will be read from HDU 0. Use
 	the hdu argument to change this. The map must be stored as
@@ -1006,7 +1006,14 @@ def read_fits(fname, hdu=0):
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
 	with warnings.catch_warnings():
 		wcs = enlib.wcs.WCS(hdu.header).sub(2)
-	res = ndmap(hdu.data, wcs)
+	data = hdu.data
+	# Slice if requested. Slicing at this point avoids unneccessary
+	# data actually being read
+	if sel:
+		sel1, sel2 = enlib.slice.split_slice(sel, [data.ndim-2,2])
+		_, wcs = slice_wcs(data.shape, wcs, sel2)
+		data   = data[sel]
+	res = ndmap(data, wcs)
 	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		res = res.byteswap().newbyteorder()
 	return res
@@ -1023,7 +1030,7 @@ def write_hdf(fname, emap, extra={}):
 		for key, val in extra.items():
 			hfile[key] = val
 
-def read_hdf(fname):
+def read_hdf(fname, sel=None):
 	"""Read an enmap from the specified hdf file. Two formats
 	are supported. The old enmap format, which simply used
 	a bounding box to specify the coordinates, and the new
@@ -1033,20 +1040,19 @@ def read_hdf(fname):
 	buggy wcs, which can result in 1-pixel errors."""
 	import h5py
 	with h5py.File(fname,"r") as hfile:
-		data = hfile["data"].value
-		if "wcs" in hfile:
-			hwcs = hfile["wcs"]
-			header = astropy.io.fits.Header()
-			for key in hwcs:
-				header[key] = hwcs[key].value
-			wcs = enlib.wcs.WCS(header).sub(2)
-			res = ndmap(data, wcs)
-		else:
-			# Compatibility for old format
-			csys = hfile["system"].value if "system" in hfile else "equ"
-			if csys == "equ": csys = "car"
-			wcs = enlib.wcs.build(hfile["box"].value, shape=data.shape, system=csys, rowmajor=True)
-			res = ndmap(data, wcs)
+		data = hfile["data"]
+		hwcs = hfile["wcs"]
+		header = astropy.io.fits.Header()
+		for key in hwcs:
+			header[key] = hwcs[key].value
+		wcs = enlib.wcs.WCS(header).sub(2)
+		# Slice if requested. Slicing at this point avoids unneccessary
+		# data actually being read
+		if sel:
+			sel1, sel2 = enlib.slice.split_slice(sel, [data.ndim-2,2])
+			_, wcs = slice_wcs(data.shape, wcs, sel2)
+			data   = data[sel]
+		res = ndmap(data.value, wcs)
 	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		res = res.byteswap().newbyteorder()
 	return res
