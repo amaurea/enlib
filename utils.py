@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, os, errno, scipy.optimize, time, datetime, warnings
+import numpy as np, scipy.ndimage, os, errno, scipy.optimize, time, datetime, warnings, re
 
 degree = np.pi/180
 arcmin = degree/60
@@ -1184,3 +1184,57 @@ def eigpow(A, e, axes=[-2,-1], rlim=None, alim=None):
 def nint(a):
 	"""Return a rounded to the nearest integer, as an integer."""
 	return np.int0(np.round(a))
+
+format_regex = r"%(\([a-zA-Z]\w*\)|\(\d+)\)?([ +0#-]*)(\d*|\*)(\.\d+|\.\*)?(ll|[lhqL])?(.)"
+def format_to_glob(format):
+	"""Given a printf format, construct a glob pattern that will match
+	its outputs. However, since globs are not very powerful, the resulting
+	glob will be much more premissive than the input format, and you will
+	probably want to filter the results further."""
+	# This matches a pretty general printf format
+	def subfun(m):
+		name, flags, width, prec, size, type = m.groups()
+		if type == '%': return '%'
+		else: return '*'
+	return re.sub(format_regex, subfun, format)
+
+def format_to_regex(format):
+	"""Given a printf format, construct a regex that will match its outputs."""
+	ireg = r"([^%]*)"+format_regex+r"([^%]*)"
+	def subfun(m):
+		pre, name, flags, width, prec, size, type, post = m.groups()
+		opre  = re.escape(pre)
+		opost = re.escape(post)
+		open  = r"(?P<"+name[1:-1]+">" if name is not None else "("
+		# Expand variable widths
+		iwidth = 0 if width is None or width == '*' or width == '' else int(width)
+		iprec  = 0 if prec  is None or prec  == '*' else int(prec[1:])
+		if type == '%': return opre + '%' + opost
+		if type == 's':
+			if "-" in flags: return opre + open + ".*) *" + opost
+			else:            return opre + r" *" + open + ".*)" + opost
+		else:
+			# Numeric type
+			if   "+" in flags: omid = r"[+-]"
+			elif " " in flags: omid = r"[ -]"
+			else: omid = r"-?"
+			if "-" in flags:
+				prepad  = ""
+				postpad = " *"
+			else:
+				prepad  = r"0*" if "0" in flags else r" *"
+				postpad = ""
+			if type in ['d','i','u'] or type in ['f','F'] and prec == '0':
+				num = r"\d+"
+			elif type == 'o': num = r"[0-7]+"
+			elif type == 'x': num = r"[0-9a-f]+"
+			elif type == 'X': num = r"[0-9A-F]+"
+			elif type == 'f': num = r"\d+\.\d*"
+			elif type == 'e': num = r"\d+\.\d*e[+-]\d+"
+			elif type == 'E': num = r"\d+\.\d*E[+-]\d+"
+			elif type == 'g': num = r"(\d+(\.\d*)?)|(\d+\.\d*e[+-]\d+)"
+			elif type == 'G': num = r"(\d+(\.\d*)?)|(\d+\.\d*E[+-]\d+)"
+			else: return NotImplementedError("Format character '%s'" % type)
+			omid = prepad + open + omid + num + r")" + postpad
+			return opre + omid + opost
+	return re.sub(ireg, subfun, format)
