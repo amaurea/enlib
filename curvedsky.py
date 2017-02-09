@@ -108,14 +108,17 @@ def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False,
 		raise ValueError("Unknown alm2map method %s" % method)
 	return map
 
-def map2alm(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False, copy=False, oversample=2.0, method="auto"):
+def map2alm(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False, copy=False,
+		oversample=2.0, method="auto", rtol=None, atol=None):
 	if method == "cyl":
-		alm = map2alm_cyl(map, alm, ainfo=ainfo, lmax=lmax, spin=spin, direct=direct, copy=copy)
+		alm = map2alm_cyl(map, alm, ainfo=ainfo, lmax=lmax, spin=spin, direct=direct,
+				copy=copy, rtol=rtol, atol=atol)
 	elif method == "pos":
 		raise NotImplementedError("map2alm for noncylindrical layouts not implemented")
 	elif method == "auto":
 		try:
-			alm = map2alm_cyl(map, alm, ainfo=ainfo, lmax=lmax, spin=spin, direct=direct, copy=copy)
+			alm = map2alm_cyl(map, alm, ainfo=ainfo, lmax=lmax, spin=spin, direct=direct,
+					copy=copy, rtol=rtol, atol=atol)
 		except AssertionError as e:
 			raise NotImplementedError("map2alm for noncylindrical layouts not implemented")
 	else:
@@ -200,7 +203,8 @@ def alm2map_healpix(alm, healmap=None, ainfo=None, nside=None, spin=2, deriv=Fal
 	return alm2map_raw(alm, healmap[...,None], ainfo=ainfo, minfo=minfo,
 			spin=spin, deriv=deriv, copy=copy)
 
-def map2alm_cyl(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False, copy=False):
+def map2alm_cyl(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False,
+		copy=False, rtol=None, atol=None):
 	"""When called as map2alm_cyl(map, alm) computes the alms corresponding
 	to the given map. alms will be ordered according to ainfo if specified.
 	The map must be in a cylindrical projection. If no ring weights
@@ -231,7 +235,7 @@ def map2alm_cyl(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False, copy
 		tmap[tslice] = map[mslice]
 	# We don't have ring weights for general cylindrical projections.
 	# See if our pixelization matches one with known weights.
-	minfo = match_predefined_minfo(tmap)
+	minfo = match_predefined_minfo(tmap, rtol=rtol, atol=atol)
 	return map2alm_raw(tmap, alm, minfo, ainfo, spin=spin)
 
 def map2alm_healpix(healmap, alm=None, ainfo=None, lmax=None, spin=2, deriv=False, copy=False):
@@ -384,10 +388,12 @@ def map2minfo(m):
 	nphi   = m.shape[-1]
 	return sharp.map_info(theta, nphi, phi0)
 
-def match_predefined_minfo(m, rtol=1e-3*utils.arcmin, atol=1*utils.arcmin):
+def match_predefined_minfo(m, rtol=None, atol=None):
 	"""Given an enmapwith constant-latitude rows and constant longitude
 	intervals, return the libsharp predefined minfo with ringweights that's
 	the closest match to our pixelization."""
+	if rtol is None: rtol = 1e-3*utils.arcmin
+	if atol is None: atol = 1.0*utils.arcmin
 	# Make sure the colatitude ascends
 	flipy  = m.wcs.wcs.cdelt[1] > 0
 	if flipy: m = m[...,::-1,:]

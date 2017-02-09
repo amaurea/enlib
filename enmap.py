@@ -933,7 +933,7 @@ def to_flipper(imap, omap=None):
 	if omap is None:
 		omap = np.empty(iflat.shape[:-2],dtype=object)
 	for i, m in enumerate(iflat):
-		omap[i] = flipper.liteMap.liteMapFromDataAndWCS(iflat[i], iflat.wcs)
+		omap[i] = flipper.liteMap.liteMapFromDataAndWCS(iflat[i], iflat.wcs.to_fits()[0])
 	return omap.reshape(imap.shape[:-1])
 
 ############
