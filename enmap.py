@@ -927,14 +927,23 @@ def to_flipper(imap, omap=None):
 	omap is given, the output will be written to it. Otherwise, a an array of
 	flipper maps will be constructed. If the input map has dimensions
 	[a,b,c,ny,nx], then the output will be an [a,b,c] array with elements
-	that are flipper maps with dimension [ny,nx]."""
+	that are flipper maps with dimension [ny,nx]. This will result in a
+	zero-dimensional array if the input had only pixel dimensions (ndim=2).
+	These can be tedious to work with, but can be unpacked by doing
+	m.reshape(-1)[0]."""
 	import flipper
 	iflat = imap.preflat
 	if omap is None:
 		omap = np.empty(iflat.shape[:-2],dtype=object)
+	# flipper wants a different kind of wcs object than we have.
+	header = imap.wcs.to_header(relax=True)
+	header['NAXIS']  = 2
+	header['NAXIS1'] = imap.shape[-1]
+	header['NAXIS2'] = imap.shape[-2]
+	flipwcs = flipper.liteMap.astLib.astWCS.WCS(header, mode="pyfits")
 	for i, m in enumerate(iflat):
-		omap[i] = flipper.liteMap.liteMapFromDataAndWCS(iflat[i], iflat.wcs.to_fits()[0])
-	return omap.reshape(imap.shape[:-1])
+		omap[i] = flipper.liteMap.liteMapFromDataAndWCS(iflat[i], flipwcs)
+	return omap.reshape(imap.shape[:-2])
 
 ############
 # File I/O #
