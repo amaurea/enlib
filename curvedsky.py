@@ -63,7 +63,32 @@ def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128, m_major=
 	if ps.ndim == 1: alm = alm[0]
 	return alm
 
+##########################
+### Top-level wrappers ###
+##########################
+
 def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False, oversample=2.0, method="auto"):
+	"""Project the spherical harmonics coefficients alm[...,nalm] onto the
+	enmap map[...,ny,nx].
+
+	The map does not need to be full-sky - an intermediate map will be
+	constructed for the SHT itself. If map is in a cylindrical projection, the
+	intermediate map will have compatible pixels, and no interpolation is needed.
+	Otherwise, the intermediate map will be oversample times higher resolution
+	than the output map, and bicubic spline interpolation will be used to tranfer
+	its values to the output map. This uses more memory, is slower and less
+	accurate than the direct evaluation used for cylindrical projections. If
+	method is "cyl" only the cylindrical method will be used, resulting in an
+	AssertionError if the pixelization is not actually cylindrical. If method is
+	"pos", then the slow, general method will always be used.
+
+	If ainfo is provided, it is an alm_info describing the layout of the input alm.
+	Otherwise it will be inferred from the alm itself.
+
+	spin describes the spin of the transformation used for the polarization
+	components.
+
+	If deriv is True, then the resulting map will be the gradient of the input alms."""
 	if method == "cyl":
 		alm2map_cyl(alm, map, ainfo=ainfo, spin=spin, deriv=deriv, direct=direct, copy=copy)
 	elif method == "pos":
@@ -82,6 +107,61 @@ def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False,
 	else:
 		raise ValueError("Unknown alm2map method %s" % method)
 	return map
+
+def map2alm(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False, copy=False,
+		oversample=2.0, method="auto", rtol=None, atol=None):
+	if method == "cyl":
+		alm = map2alm_cyl(map, alm, ainfo=ainfo, lmax=lmax, spin=spin, direct=direct,
+				copy=copy, rtol=rtol, atol=atol)
+	elif method == "pos":
+		raise NotImplementedError("map2alm for noncylindrical layouts not implemented")
+	elif method == "auto":
+		try:
+			alm = map2alm_cyl(map, alm, ainfo=ainfo, lmax=lmax, spin=spin, direct=direct,
+					copy=copy, rtol=rtol, atol=atol)
+		except AssertionError as e:
+			raise NotImplementedError("map2alm for noncylindrical layouts not implemented")
+	else:
+		raise ValueError("Unknown alm2map method %s" % method)
+	return alm
+
+#################################
+### Position-based transforms ###
+#################################
+
+# These perform SHTs at arbitrary sample positions
+
+def alm2map_pos(alm, pos, ainfo=None, oversample=2.0, spin=2, deriv=False):
+	"""Projects the given alms (with layout) on the specified pixel positions.
+	alm[ncomp,nelem], pos[2,...] => res[ncomp,...]. It projects on a large
+	cylindrical grid and then interpolates to the actual pixels. This is the
+	general way of doing things, but not the fastest. Computing pos and
+	interpolating takes a significant amount of time."""
+	alm_full = np.atleast_2d(alm)
+	if ainfo is None: ainfo = sharp.alm_info(nalm=alm_full.shape[-1])
+	ashape, ncomp = alm_full.shape[:-2], alm_full.shape[-2]
+	if deriv:
+		# If we're computing derivatives, spin isn't allowed.
+		# alm must be either [ntrans,nelem] or [nelem],
+		# and the output will be [ntrans,2,ny,nx] or [2,ny,nx]
+		ashape = ashape + (ncomp,)
+		ncomp = 2
+	tmap   = make_projectable_map_by_pos(pos, ainfo.lmax, ashape+(ncomp,), oversample, alm.real.dtype)
+	alm2map_cyl(alm, tmap, ainfo=ainfo, spin=spin, deriv=deriv, direct=True)
+	# Project down on our final pixels. This will result in a slight smoothing
+	res = enmap.samewcs(tmap.at(pos[:2], mode="wrap"), pos)
+	# Remove any extra dimensions we added
+	if alm.ndim == alm_full.ndim-1: res = res[0]
+	return res
+
+##############################
+### Cylindrical transforms ###
+##############################
+
+# These assume we're using a cylindrical projection, but
+# not necessarily that whole rings are covered. The coordinate
+# system is extended internally if necessary. minfo is built
+# internally automatically.
 
 def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False):
 	"""When called as alm2map(alm, map) projects those alms onto that map.
@@ -104,78 +184,140 @@ def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=Fa
 	# Work on views of alm and map with shape alm_full[ntrans,ncomp,nalm]
 	# and map[ntrans,ncomp/nderiv,ny,nx] to avoid lots of if tests later.
 	# We undo the reshape before returning.
+	alm, ainfo = prepare_alm(alm, ainfo)
+	if copy: map = map.copy()
+	if direct: tmap, mslices, tslices = map, [(Ellipsis,)], [(Ellipsis,)]
+	else:      tmap, mslices, tslices = make_projectable_map_cyl(map)
+	alm2map_raw(alm, tmap, ainfo, map2minfo(tmap), spin=spin, deriv=deriv)
+	for mslice, tslice in zip(mslices, tslices):
+		map[mslice] = tmap[tslice]
+	return map
+
+def alm2map_healpix(alm, healmap=None, ainfo=None, nside=None, spin=2, deriv=False, copy=False):
+	"""Projects the given alm[...,ncomp,nalm] onto the given healpix map
+	healmap[...,ncomp,npix]."""
+	alm, ainfo = prepare_alm(alm, ainfo)
+	healmap    = prepare_healmap(healmap, nside, alm.shape[:-1], alm.real.dtype)
+	nside = npix2nside(healmap.shape[-1])
+	minfo = sharp.map_info_healpix(nside)
+	return alm2map_raw(alm, healmap[...,None], ainfo=ainfo, minfo=minfo,
+			spin=spin, deriv=deriv, copy=copy)
+
+def map2alm_cyl(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False,
+		copy=False, rtol=None, atol=None):
+	"""When called as map2alm_cyl(map, alm) computes the alms corresponding
+	to the given map. alms will be ordered according to ainfo if specified.
+	The map must be in a cylindrical projection. If no ring weights
+	can be determined, it will either use an approximation or raise an
+	exception, depending on the value of tolerance, which specifies the
+	maximum pixel position error allowed.
+
+	Possible shapes:
+		alm[nelem] -> map[ny,nx]
+		alm[ncomp,nelem] -> map[ncomp,ny,nx]
+		alm[ntrans,ncomp,nelem] -> map[ntrans,ncomp,ny,nx]
+
+	Spin specifies the spin of the transform. If direct is true, the
+	input map is assumed to already cover the whole sky horizontally,
+	so that no intermediate maps need to be computed.
+
+	If copy=True, the input alm is not overwritten.
+	"""
+	# Work on views of alm and map with shape alm_full[ntrans,ncomp,nalm]
+	# and map[ntrans,ncomp/nderiv,ny,nx] to avoid lots of if tests later.
+	# We undo the reshape before returning.
+	alm, ainfo = prepare_alm(alm, ainfo, lmax, map.shape[:-2], map.dtype)
+	if copy: map = map.copy()
+	if direct: tmap, mslices, tslices = map, [(Ellipsis,)], [(Ellipsis,)]
+	else:      tmap, mslices, tslices = make_projectable_map_cyl(map)
+	tmap[:] = 0
+	for mslice, tslice in zip(mslices, tslices):
+		tmap[tslice] = map[mslice]
+	# We don't have ring weights for general cylindrical projections.
+	# See if our pixelization matches one with known weights.
+	minfo = match_predefined_minfo(tmap, rtol=rtol, atol=atol)
+	return map2alm_raw(tmap, alm, minfo, ainfo, spin=spin)
+
+def map2alm_healpix(healmap, alm=None, ainfo=None, lmax=None, spin=2, deriv=False, copy=False):
+	"""Projects the given alm[...,ncomp,nalm] onto the given healpix map
+	healmap[...,ncomp,npix]."""
+	alm, ainfo = prepare_alm(alm, ainfo, lmax, healmap.shape[:-1], healmap.dtype)
+	nside = npix2nside(healmap.shape[-1])
+	minfo = sharp.map_info_healpix(nside)
+	return map2alm_raw(healmap[...,None], alm, minfo=minfo, ainfo=ainfo,
+			spin=spin, deriv=deriv, copy=copy)
+
+######################
+### Raw transforms ###
+######################
+
+# These assume the maps are already in the appropriate pixelization,
+# E.g. cylindrical projection with complete equi-latitude rings.
+# They assume the imap is [...,ny,nx], but these dimensions are
+# flattened internally, so a healpix map could be used by adding a fake
+# last axis. The map does not need to be an enmap - the world coordinate
+# system is ignored as minfo handles all that.
+
+def alm2map_raw(alm, map, ainfo, minfo, spin=2, deriv=False, copy=False):
+	"""Direct wrapper of libsharp's alm2map. Requires ainfo and minfo
+	to already be set up, and that the map and alm must be fully compatible
+	with these."""
+	if copy: map = map.copy()
 	alm_full = utils.to_Nd(alm, 2 if deriv else 3)
 	map_full = utils.to_Nd(map, 4)
-	if ainfo is None: ainfo = sharp.alm_info(nalm=alm_full.shape[-1])
-	if copy: map_full = map_full.copy()
-	if direct:
-		tmap, mslices, tslices = map_full, [(Ellipsis,)], [(Ellipsis,)]
-	else:
-		tmap, mslices, tslices = make_projectable_map_cyl(map_full)
-	sht    = sharp.sht(map2minfo(tmap), ainfo)
-	# We need a pixel-flattened version for the SHTs.
-	tflat  = tmap.reshape(tmap.shape[:-2]+(-1,))
-
+	map_flat = map_full.reshape(map_full.shape[:-2]+(-1,))
+	sht      = sharp.sht(minfo, ainfo)
 	# Perform the SHT
 	if deriv:
-		# We need alm_full[ntrans,nalm] -> tflat[ntrans,2,npix]
-		# or alm_full[nalm] -> tflat[2,npix]
-		tflat = sht.alm2map_der1(alm_full, tflat)
+		# We need alm_full[ntrans,nalm] -> map_flat[ntrans,2,npix]
+		# or alm_full[nalm] -> map_flat[2,npix]
+		map_flat[:] = sht.alm2map_der1(alm_full, map_flat)
 		# sharp's theta is a zenith angle, but we want a declination.
 		# Actually, we may need to take into account left-handed
 		# coordinates too, though I'm not sure how to detect those in
 		# general.
-		tflat[:,0] = -tflat[:,0]
+		map_flat[:,0] = -map_flat[:,0]
 	else:
-		tflat[:,:1,:] = sht.alm2map(alm_full[:,:1,:], tflat[:,:1,:])
-		if tflat.shape[1] > 1:
-			tflat[:,1:,:] = sht.alm2map(alm_full[:,1:,:], tflat[:,1:,:], spin=spin)
-
-	for mslice, tslice in zip(mslices, tslices):
-		map_full[mslice] = tmap[tslice]
+		map_flat[:,:1,:] = sht.alm2map(alm_full[:,:1,:], map_flat[:,:1,:])
+		if map_flat.shape[1] > 1:
+			map_flat[:,1:,:] = sht.alm2map(alm_full[:,1:,:], map_flat[:,1:,:], spin=spin)
 	return map
 
-def alm2map_pos(alm, pos=None, ainfo=None, oversample=2.0, spin=2, deriv=False):
-	"""Projects the given alms (with layout) on the specified pixel positions.
-	alm[ncomp,nelem], pos[2,...] => res[ncomp,...]. It projects on a large
-	cylindrical grid and then interpolates to the actual pixels. This is the
-	general way of doing things, but not the fastest. Computing pos and
-	interpolating takes a significant amount of time."""
-	alm_full = np.atleast_2d(alm)
-	if ainfo is None: ainfo = sharp.alm_info(nalm=alm_full.shape[-1])
-	ashape, ncomp = alm_full.shape[:-2], alm_full.shape[-2]
-	if deriv:
-		# If we're computing derivatives, spin isn't allowed.
-		# alm must be either [ntrans,nelem] or [nelem],
-		# and the output will be [ntrans,2,ny,nx] or [2,ny,nx]
-		ashape = ashape + (ncomp,)
-		ncomp = 2
-	tmap   = make_projectable_map(pos, ainfo.lmax, ashape+(ncomp,), oversample, alm.real.dtype)
-	alm2map_cyl(alm, tmap, ainfo=ainfo, spin=spin, deriv=deriv, direct=True)
-	# Project down on our final pixels. This will result in a slight smoothing
-	pix = tmap.sky2pix(pos[:2])
-	res = enmap.samewcs(utils.interpol(tmap, pix, mode="wrap"), pos)
-	# Remove any extra dimensions we added
-	if alm.ndim == alm_full.ndim-1: res = res[0]
-	return res
+def map2alm_raw(map, alm, minfo, ainfo, spin=2, copy=False):
+	"""Direct wrapper of libsharp's map2alm. Requires ainfo and minfo
+	to already be set up, and that the map and alm must be fully compatible
+	with these."""
+	if copy: alm = alm.copy()
+	alm_full = utils.to_Nd(alm, 3)
+	map_full = utils.to_Nd(map, 4)
+	map_flat = map_full.reshape(map_full.shape[:-2]+(-1,))
+	sht      = sharp.sht(minfo, ainfo)
+	alm_full[:,:1,:] = sht.map2alm(map_flat[:,:1,:],alm_full[:,:1,:])
+	if map_flat.shape[1] > 1:
+		alm_full[:,1:,:] = sht.map2alm(map_flat[:,1:,:], alm_full[:,1:,:], spin=spin)
+	return alm
+
+### Helper function ###
 
 def make_projectable_map_cyl(map):
 	"""Given an enmap in a cylindrical projection, return a map with
 	the same pixelization, but extended to cover a whole band in phi
 	around the sky. Also returns the slice required to recover the
 	input map from the output map."""
-	# First check that the map has the right properties
+	# First check if we need flipping. Sharp wants theta,phi increasing,
+	# which means dec decreasing and ra increasing.
+	flipx = map.wcs.wcs.cdelt[0] < 0
+	flipy = map.wcs.wcs.cdelt[1] > 0
+	if flipx: map = map[...,:,::-1]
+	if flipy: map = map[...,::-1,:]
+	# Then theck if the map satisfies the lat-ring requirements
 	ny, nx = map.shape[-2:]
 	vy,vx = enmap.pix2sky(map.shape, map.wcs, [np.arange(ny),np.zeros(ny)])
 	hy,hx = enmap.pix2sky(map.shape, map.wcs, [np.zeros(nx),np.arange(nx)])
-	dx = hx[1:]-hx[:-1]
-	flip = dx[0] < 0
-	if flip:
-		# Sharp requires increasing phi
-		map = map[...,::-1]
-		dx  = np.abs(dx)
+	dx    = hx[1:]-hx[:-1]
+	dx    = dx[np.isfinite(dx)] # Handle overextended coordinates
 	assert np.allclose(dx,dx[0]), "Map must have constant phi spacing"
-	nphi = int(np.round(2*np.pi/dx[0]))
+	nphi = utils.nint(2*np.pi/dx[0])
 	assert np.allclose(2*np.pi/nphi,dx[0]), "Pixels must evenly circumference"
 	assert np.allclose(vx,vx[0]), "Different phi0 per row indicates non-cylindrical enmap"
 	phi0 = vx[0]
@@ -183,25 +325,27 @@ def make_projectable_map_cyl(map):
 	# We can do this simply by extending it in the positive pixel dimension.
 	oshape = map.shape[:-1]+(nphi,)
 	owcs   = map.wcs
+	# Our input map could in theory cover multiple copies of the sky, which
+	# would require us to copy out multiple slices.
 	nslice = (nx+nphi-1)/nphi
 	islice, oslice = [], []
 	for i in range(nslice):
+		# i1:i2 is the range of pixels in the original map to use
 		i1, i2 = i*nphi, min((i+1)*nphi,nx)
 		islice.append((Ellipsis, slice(i1,i2)))
-		if not flip:
-			oslice.append((Ellipsis, slice(0, i2-i1)))
-		else:
-			# Flip back. Reverse slices are awkward
-			end = nx-1-(i2-i1)
-			if end < 0: end = None
-			oslice.append((Ellipsis, slice(nx-1, end, -1)))
+		# yslice and xslice give the range of pixels in our temporary map to use.
+		# This is 0:(i2-i1) if we're not flipping, but if we flip we count from
+		# the opposite direction: -1:-1-(i2-i1):-1
+		yslice = slice(-1,None,-1)       if flipy else slice(None)
+		xslice = slice(-1,-1-(i2-i1),-1) if flipx else slice(0,i2-i1)
+		oslice.append((Ellipsis,yslice,xslice))
 	return enmap.empty(oshape, owcs, dtype=map.dtype), islice, oslice
 
-def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
+def make_projectable_map_by_pos(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	"""Make a map suitable as an intermediate step in projecting alms up to
 	lmax on to the given positions. Helper function for alm2map."""
 	# First find the theta range of the pixels, with a 10% margin
-	ra0      = np.mean(pos[1])/utils.degree
+	ra_ref   = np.mean(pos[1])/utils.degree
 	decrange = np.array([np.min(pos[0]),np.max(pos[0])])
 	decrange = (decrange-np.mean(decrange))*1.1+np.mean(decrange)
 	decrange = np.array([max(-np.pi/2,decrange[0]),min(np.pi/2,decrange[1])])
@@ -211,22 +355,110 @@ def make_projectable_map(pos, lmax, dims=(), oversample=2.0, dtype=float):
 	# two samples per mode.
 	res = 180./lmax/oversample
 	# Set up an intermediate coordinate system for the SHT. We will use
-	# CAR coordinates conformal on the equator.
-	nx,ny = int(360/res), int(wdec/res)
+	# CAR coordinates conformal on the equator, with a pixel on each pole.
+	# This will give it clenshaw curtis pixelization.
+	nx    = utils.nint(360/res)
+	nytot = utils.nint(180/res)
+	# First set up the pixelization for the whole sky. Negative cdelt to
+	# make sharp extra happy. Not really necessary, but makes some things
+	# simpler later.
 	wcs   = enwcs.WCS(naxis=2)
-	wcs.wcs.crval = [ra0,0]
-	wcs.wcs.cdelt = [360./nx,wdec/ny]
-	# +1 in dec to include end points here. We do this to avoid wrapping from
-	# the south pole to the north pole for full-sky maps
-	wcs.wcs.crpix = [nx/2,-decrange[0]/res+1]
 	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
+	wcs.wcs.crval = [ra_ref,0]
+	wcs.wcs.cdelt = [360./nx,-180./nytot]
+	wcs.wcs.crpix = [nx/2.0+1,nytot/2.0+1]
+	# Then find the subset that includes the dec range we want
+	y1= utils.nint(wcs.wcs_world2pix(0,decrange[0],0)[1])
+	y2= utils.nint(wcs.wcs_world2pix(0,decrange[1],0)[1])
+	y1, y2 = min(y1,y2), max(y1,y2)
+	# Offset wcs to start at our target range
+	ny = y2-y1
+	wcs.wcs.crpix[1] -= y1
+	# Construct the map. +1 to put extra pixel at pole when we are fullsky
 	tmap = enmap.zeros(dims+(ny+1,nx),wcs)
 	return tmap
 
 def map2minfo(m):
 	"""Given an enmap with constant-latitude rows and constant longitude
 	intervals, return a corresponding sharp map_info."""
-	theta  = np.pi/2 - m[...,:,:1].posmap(corner=False)[0,:,0]
-	phi0   = m[...,1:2,1:2].posmap(corner=False)[1,0,0]
+	theta  = np.pi/2 - m[...,:,:1].posmap()[0,:,0]
+	# Slice to make calculation faster. Could have just queried m.wcs cirectly here
+	# instead. Offset by 1 away from bottom to avoid any pole-related problems.
+	phi0   = m[...,1:2,0:1].posmap()[1,0,0]
 	nphi   = m.shape[-1]
 	return sharp.map_info(theta, nphi, phi0)
+
+def match_predefined_minfo(m, rtol=None, atol=None):
+	"""Given an enmapwith constant-latitude rows and constant longitude
+	intervals, return the libsharp predefined minfo with ringweights that's
+	the closest match to our pixelization."""
+	if rtol is None: rtol = 1e-3*utils.arcmin
+	if atol is None: atol = 1.0*utils.arcmin
+	# Make sure the colatitude ascends
+	flipy  = m.wcs.wcs.cdelt[1] > 0
+	if flipy: m = m[...,::-1,:]
+	theta  = np.pi/2 - m[...,:,:1].posmap()[0,:,0]
+	phi0   = m[...,1:2,0:1].posmap()[1,0,0]
+	ntheta, nphi = m.shape[-2:]
+	# First find out how many lat rings there are in the whole sky.
+	# Find the first and last pixel center inside bounds
+	y1   = int(np.ceil(m.sky2pix([np.pi/2,0])[0]))
+	y2   = int(np.floor(m.sky2pix([-np.pi/2,0])[0]))
+	phi0 = m.pix2sky([0,0])[1]
+	ny   = utils.nint(y2-y1+1)
+	nx   = utils.nint(np.abs(360./m.wcs.wcs.cdelt[0]))
+	# Define our candidate pixelizations
+	minfos = []
+	for i in range(-1,2):
+		#minfos.append(sharp.map_info_gauss_legendre(ny+i, nx, phi0))
+		minfos.append(sharp.map_info_clenshaw_curtis(ny+i, nx, phi0))
+		minfos.append(sharp.map_info_fejer1(ny+i, nx, phi0))
+		minfos.append(sharp.map_info_fejer2(ny+i, nx, phi0))
+		minfos.append(sharp.map_info_mw(ny+i, nx, phi0))
+	# For each pixelization find the first ring in the map
+	aroffs, scores = [], []
+	for minfo in minfos:
+		# Find theta closest to our first theta
+		i1 = np.argmin(np.abs(theta[0]-minfo.theta))
+		# Find the largest theta offset for all y in our input map
+		offs = theta-minfo.theta[i1:i1+len(theta)]
+		aoff = np.max(np.abs(offs))
+		# Find the largest offset after applying a small pointing offset
+		roff = np.max(np.abs(offs-np.mean(offs)))
+		aroffs.append([aoff,roff,i1])
+		scores.append(aoff/atol + roff/rtol)
+	# Choose the one with the lowest score (lowest mismatch)
+	best  = np.argmin(scores)
+	aoff, roff, i1 = aroffs[best]
+	i2 = i1+ntheta
+	assert aoff < atol, "Could not find a map_info with predefined weights matching input map (abs offset %e >= %e)" % (aoff, atol)
+	assert roff < rtol, "Could not find a map_info with predefined weights matching input map (%rel offset e >= %e)" % (aoff, atol)
+	minfo = minfos[best]
+	# Modify the minfo to restrict it to only the rows contained in m
+	minfo_cut = sharp.map_info(
+			minfo.theta[i1:i2],  minfo.nphi[i1:i2], minfo.phi0[i1:i2],
+			minfo.offsets[i1:i2]-minfo.offsets[i1], minfo.stride[i1:i2],
+			minfo.weight[i1:i2])
+	if flipy:
+		# Actual map is flipped in y relative to the one we computed the map info
+		minfo_cut = sharp.map_info(
+				minfo_cut.theta[::-1], minfo_cut.nphi[::-1], minfo_cut.phi0[::-1],
+				minfo_cut.offsets[:], minfo_cut.stride[:], minfo_cut.weight[::-1])
+	# Phew! Return the result
+	return minfo_cut
+
+def npix2nside(npix):
+	return utils.nint((healmap.shape[-1]/12)**0.5)
+
+def prepare_alm(alm=None, ainfo=None, lmax=None, pre=(), dtype=np.float64):
+	"""Set up alm and ainfo based on which ones of them are available."""
+	if alm is None:
+		if ainfo is None: ainfo = sharp.alm_info(lmax)
+		alm = np.zeros(pre+(ainfo.nelem,), dtype=np.result_type(dtype,0j))
+	else:
+		ainfo = sharp.alm_info(nalm=alm.shape[-1])
+	return alm, ainfo
+
+def prepare_healmap(healmap, nside=None, pre=(), dtype=np.float64):
+	if healmap is not None: return healmap
+	return np.zeros(pre + (12*nside**2,), dtype)

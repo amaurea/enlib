@@ -161,7 +161,7 @@ def read_camb_scalar(fname, inds=True, scale=True, expand=True, ncmb=3):
 def read_camb_full_lens(fname, inds=True, scale=True, expand=True, ncmb=3):
 	"""Reads the CAMB lens_potential_output spectra, which contain
 	l TT EE BB TE dd dT dE. These are rescaled appropriately is scale is True, and returned
-	as [T,E,B,d] if expand is True."""
+	as [d,T,E,B] if expand is True."""
 	a = np.loadtxt(fname, ndmin=2).T
 	if inds: a = expand_inds(a[0].astype(int), a[1:])
 	if scale:
