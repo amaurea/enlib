@@ -721,6 +721,27 @@ def box2corners(box):
 	ndim= box.shape[1]
 	return np.array([[box[b,bi] for bi,b in enumerate(unpackbits(i)[:ndim])] for i in range(2**ndim)])
 
+def box2contour(box, nperedge=5):
+	"""Given a [{from,to},:] bounding box, returns [npoint,:] coordinates
+	definiting its edges. Nperedge is the number of samples per edge of
+	the box to use. For nperedge=2 this is equal to box2corners. Nperegege
+	can be a list, in which case the number indicates the number to use in
+	each dimension."""
+	box      = np.asarray(box)
+	ndim     = box.shape[1]
+	nperedge = np.zeros(ndim,int)+nperedge
+	# Generate the range of each coordinate
+	points = []
+	for i in range(ndim):
+		x = np.linspace(box[0,i],box[1,i],nperedge[i])
+		for j in range(2**ndim):
+			bits = unpackbits(j)[:ndim]
+			if bits[i]: continue
+			y = np.zeros((len(x),ndim))
+			y[:] = box[bits,np.arange(ndim)]; y[:,i] = x
+			points.append(y)
+	return np.concatenate(points,0)
+
 def box_slice(a, b):
 	"""Given two boxes/boxarrays of shape [{from,to},dims] or [:,{from,to},dims],
 	compute the bounds of the part of each b that overlaps with each a, relative
