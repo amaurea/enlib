@@ -442,7 +442,7 @@ def range_sub(a,b, mapping=False):
 	from the set of cut a and b range to indices into a and b, with
 	b indices being encoded as -i-1. a and b are assumed
 	to be internally non-overlapping.
-	
+
 	Example: utils.range_sub([[0,100],[200,1000]], [[1,2],[3,4],[8,999]], mapping=True)
 	(array([[   0,    1],
 	        [   2,    3],
@@ -450,7 +450,7 @@ def range_sub(a,b, mapping=False):
 	        [ 999, 1000]]),
 	array([0, 0, 0, 1]),
 	array([ 0, -1,  1, -2,  2, -3,  3]))
-	
+
 	The last array can be interpreted as: Moving along the number line,
 	we first encounter [0,1], which is a part of range 0 in c. We then
 	encounter range 0 in b ([1,2]), before we hit [2,3] which is
@@ -635,7 +635,7 @@ def greedy_split(data, n=2, costfun=max, workfun=lambda w,x: x if w is None else
 	specifies how to combine multiple values. workfun(datum,workval)
 	=> workval. scorefun then operates on a list of the total workval
 	for each group score = scorefun([workval,workval,....]).
-	
+
 	Example: greedy_split(range(10)) => [[9,6,5,2,1,0],[8,7,4,3]]
 	         greedy_split([1,10,100]) => [[2],[1,0]]
 	         greedy_split("012345",costfun=lambda x:sum([xi**2 for xi in x]),
@@ -773,6 +773,23 @@ def widen_box(box, margin=1e-3, relative=True):
 	margin = np.asarray(margin) # Support 1d case
 	margin[box[0]>box[1]] *= -1
 	return np.array([box[0]-margin/2, box[1]+margin/2])
+
+def unwrap_range(range, nwrap=2*np.pi):
+	"""Given a logically ordered range[{from,to},...] that
+	may have been exposed to wrapping with period nwrap,
+	undo the wrapping so that range[1] > range[0]
+	but range[1]-range[0] is as small as possible.
+	Also makes the range straddle 0 if possible.
+
+	Unlike unwind and rewind, this function will not
+	turn a very wide range into a small one because it
+	doesn't assume that ranges are shorter than half the
+	sky. But it still shortens ranges that are longer than
+	a whole wrapping period."""
+	range = np.asanyarray(range)
+	range[1] -= np.floor((range[1]-range[0])/nwrap)*nwrap
+	range    -= np.floor(range[1,None]/nwrap)*nwrap
+	return range
 
 def sum_by_id(a, ids, axis=0):
 	ra = moveaxis(a, axis, 0)
@@ -1016,7 +1033,7 @@ def minmax(a, axis=None):
 def point_in_polygon(points, polys):
 	"""Given a points[n|None,2] and a set of polys[n|None,nvertex,2], return
 	inside[n|None].
-	
+
 	Examples:
 	utils.point_in_polygon([0.5,0.5],[[0,0],[0,1],[1,1],[1,0]]) -> True
 	utils.point_in_polygon([[0.5,0.5],[2,1]],[[0,0],[0,1],[1,1],[1,0]]) -> [True, False]

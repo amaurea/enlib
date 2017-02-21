@@ -664,6 +664,15 @@ contains
 			iwx = nint(wx)
 			! work y = pix x - box corner x - shift + dir factor
 			wy  = p(2) - wbox(2,1) - wshift(iwx,sdir(si)+1) + sdir(si)*nwy
+			!if(wy-sdir(si)*nwy >= nwy .or. wx >= nwx) then
+			!	write(*,*) "t",t,"az",az,"p",p
+			!	write(*,*) "wy-sdir", wy-sdir(si)*nwy, "wx", wx
+			!	write(*,*) "wbox y", wbox(2,1:2)
+			!	write(*,*) "wbox x", wbox(1,1:2)
+			!	write(*,*) "wshift 1", wshift(1:size(wshift,1),1)
+			!	write(*,*) "wshift 2", wshift(1:size(wshift,1),2)
+			!	stop
+			!end if
 			pix(si) = (nint(wy)-1)*nwx+nint(wx)
 			! Make 1-indexed
 			phase(1:2,si) = det_comps(2:3)
@@ -693,7 +702,7 @@ contains
 		nwy  = wbox(2,2)-wbox(2,1)
 		pcut = -(nphi-nx)/2
 		! It would be most natural to have wmap(ncomp,nwx,nwy,sdir),
-		! but then it wouldn't be compatible with our binnin functions,
+		! but then it wouldn't be compatible with our binning functions,
 		! which expect a 3d map. Instead, we can unroll it such that
 		! the sdir == 1 case follows after the sdir == 0 case in memory.
 		! So the real size would be 2*nwy. From the point of view of the

@@ -152,14 +152,15 @@ class SignalDmap(Signal):
 		merged= config.get("dmap_format") == "merged"
 		dmap.write_map(oname, m, merged=merged)
 
-class SignalDmapFast(SignalMap):
-	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True,
+class SignalDmapFast(SignalDmap):
+	def __init__(self, scans, subinds, area, cuts=None, name="main", ofmt="{name}", output=True,
 			ext="fits", sys=None, nuisance=False, data=None):
 		if data is None:
+			data = {}
 			work = area.tile2work()
 			for scan, subind in zip(scans, subinds):
 				data[scan] = [pmat.PmatMapFast(scan, work[subind], sys=sys), subind]
-		SignalDmap.__init__(self, scans, area, comm=comm, cuts=cuts, name=name, ofmt=ofmt,
+		SignalDmap.__init__(self, scans, subinds, area, cuts=cuts, name=name, ofmt=ofmt,
 				output=output, ext=ext, sys=sys, nuisance=nuisance, data=data)
 	def precompute(self, scan):
 		if scan not in self.data: return
@@ -390,8 +391,8 @@ class PreconDmapHitcount:
 		self.signal = signal
 	def __call__(self, m):
 		for htile, mtile in zip(self.hits.tiles, m.tiles):
-			hits = np.maximum(hits, 1)
-			mtile /= hits
+			htile = np.maximum(htile, 1)
+			mtile /= htile
 	def write(self, prefix):
 		self.signal.write(prefix, "hits", self.hits)
 
