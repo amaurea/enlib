@@ -784,12 +784,16 @@ def sum_by_id(a, ids, axis=0):
 	return moveaxis(rb, 0, axis)
 
 def allreduce(a, comm, op=None):
+	"""Convenience wrapper for Allreduce that returns the result
+	rather than needing an output argument."""
 	res = a.copy()
 	if op is None: comm.Allreduce(a, res)
 	else:          comm.Allreduce(a, res, op)
 	return res
 
 def allgather(a, comm):
+	"""Convenience wrapper for Allgather that returns the result
+	rather than needing an output argument."""
 	a   = np.asarray(a)
 	res = np.zeros((comm.size,)+a.shape,dtype=a.dtype)
 	if np.issubdtype(a.dtype, str):
@@ -822,6 +826,21 @@ def allgatherv(a, comm, axis=0):
 	if must_fix:
 		fb = fb.view(dtype=a.dtype)
 	return moveaxis(fb, 0, axis)
+
+def send(a, comm, dest=0, tag=0):
+	"""Faster version of comm.send for numpy arrays.
+	Avoids slow pickling. Used with recv below."""
+	a = np.asanyarray(a)
+	comm.send((a.shape,a.dtype), dest=dest, tag=tag)
+	comm.Send(a, dest=dest, tag=tag)
+
+def recv(comm, source=0, tag=0):
+	"""Faster version of comm.recv for numpy arrays.
+	Avoids slow pickling. Used with send above."""
+	shape, dtype = comm.recv(source=source, tag=tag)
+	res = np.empty(shape, dtype)
+	comm.Recv(res, source=source, tag=tag)
+	return res
 
 def uncat(a, lens):
 	"""Undo a concatenation operation. If a = np.concatenate(b)
