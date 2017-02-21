@@ -131,7 +131,7 @@ class ndmap(np.ndarray):
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
 
-def slice_wcs(shape, wcs, sel):
+def slice_wcs(shape, wcs, sel, nowrap=False):
 	"""Slice a geometry specified by shape and wcs according to the
 	slice sel. Returns a tuple of the output shape and the correponding
 	wcs."""
@@ -140,7 +140,7 @@ def slice_wcs(shape, wcs, sel):
 	oshape = np.array(shape)
 	# The wcs object has the indices in reverse order
 	for i,s in enumerate(sel):
-		s = enlib.slice.expand_slice(s, shape[i])
+		s = enlib.slice.expand_slice(s, shape[i], nowrap=nowrap)
 		j = -1-i
 		start = s.start if s.step > 0 else s.start + 1
 		wcs.wcs.crpix[j] -= start+0.5

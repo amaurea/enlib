@@ -6,7 +6,7 @@ forward will update tod based on m, and backward will update m based on tod.
 The reason for allowing the other argument to be modified is to make it easier
 to incrementally project different parts of the signal.
 """
-import numpy as np, time
+import numpy as np, time, sys
 from enlib import enmap, interpol, utils, coordinates, config, errors, array_ops
 from enlib import parallax, bunch
 import pmat_core_32
@@ -73,7 +73,7 @@ class PmatMapFast(PointingMatrix):
 		self.sdir  = get_scan_dir(scan.boresight[:,1])
 		self.period= get_scan_period(scan.boresight[:,1], scan.srate)
 		self.wbox, self.wshift = build_work_shift(self.trans, scan.box, self.period)
-		self.nphi = int(np.abs(360./template.wcs.wcs.cdelt[0]))
+		self.nphi = int(np.round(np.abs(360./template.wcs.wcs.cdelt[0])))
 		self.dtype= template.dtype
 		self.core = get_core(self.dtype)
 		self.scan = scan
@@ -133,9 +133,10 @@ def build_work_shift(transform, hor_box, scan_period):
 	# time into account, through an extra parameter.
 
 	# Find the pixel bounds corresponding to our hor bounds
-	hor_corn = utils.box2corners(hor_box)
+	hor_corn = utils.box2contour(hor_box, 100)
 	pix_corn = transform(hor_corn.T)[:2].T
 	pix_box  = utils.bounding_box(pix_corn)
+	pix_box  = utils.widen_box(pix_box, 10, relative=False)
 	# The y bounds are the most relevant. Our wshift must
 	# be defined for every output y in the range.
 	y0 = int(np.floor(pix_box[0,0]))
@@ -171,6 +172,9 @@ def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, n
 	y0, y1 = yrange
 	pad = padstep
 	for i in range(ntry):
+		print "FIXME: This will break near north. Padding of the box earlier"
+		print "may make it impossible to reach the upper y bound"
+		print "Need to implement extrapolation"
 		az0, az1 = utils.widen_box(azrange, pad, relative=False)
 		ipos = np.zeros([3,nsamp])
 		# Forward sweep
@@ -178,10 +182,6 @@ def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, n
 		ipos[1] = np.linspace(az0,       az1,       nsamp)
 		ipos[2] = el
 		opix = np.round(transform(ipos)[:2]).astype(int)
-		#print "opix"
-		#sys.stdout.flush()
-		#np.savetxt("/dev/stdout", opix.T, "%6d")
-		#sys.stdout.flush()
 		# Get the entries with unique y values
 		uy, ui = np.unique(opix[0], return_index=True)
 		if uy[0] > y0 or uy[-1] <= y1:
@@ -202,6 +202,7 @@ def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, n
 	else:
 		# We didn't find a match! Just use a constant shift of zero.
 		# This shouldn't happen, though.
+		raise RuntimeError("Failed to find sweep")
 		wshift = np.zeros(y1-y0,int)
 	return wshift
 
@@ -450,8 +451,10 @@ class pos2pix:
 			# When mapping the full sky, angle wraps can't be hidden
 			# ouside the image. We must therefore unwind along each
 			# interpolation axis to avoid discontinuous interpolation
-			nx = int(np.abs(360/self.template.wcs.wcs.cdelt[0]))
+			nx = int(np.round(np.abs(360/self.template.wcs.wcs.cdelt[0])))
 			opix[1] = utils.unwind(opix[1].reshape(shape), period=nx, axes=range(len(shape))).reshape(-1)
+			# Prefer positive numbers
+			opix[1] -= np.floor(opix[1].reshape(-1)[0]/nx)*nx
 		else:
 			# If we have no template, output angles instead of pixels.
 			# Make sure the angles don't have any jumps in them
@@ -677,7 +680,7 @@ def build_pixbox(obox, template, margin=10):
 	# have empty ranges. If so, return a single-pixel box
 	if np.any(res[1]<=res[0]):
 		res = np.array([[0,0],[1,1]],dtype=np.int32)
-	nphi = int(np.abs(360./template.wcs.wcs.cdelt[0]))
+	nphi = int(np.round(np.abs(360./template.wcs.wcs.cdelt[0])))
 	return res, nphi
 
 def pmat_phase(dir, tod, map, az, dets, az0, daz):
