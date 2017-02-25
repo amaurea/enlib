@@ -800,6 +800,23 @@ def sum_by_id(a, ids, axis=0):
 	rb = fb.reshape((fb.shape[0],)+ra.shape[1:])
 	return moveaxis(rb, 0, axis)
 
+def pole_wrap(pos):
+	"""Given pos[{lat,lon},...], normalize coordinates so that
+	lat is always between -pi/2 and pi/2. Coordinates outside this
+	range are mirrored around the poles, and for each mirroring a phase
+	of pi is added to lon."""
+	pos = pos.copy()
+	lat, lon  = pos # references to columns of pos
+	halforbit = np.floor((lat+np.pi/2)/np.pi).astype(int)
+	front     = halforbit % 2 == 0
+	back      = ~front
+	# Get rid of most of the looping
+	lat -= np.pi*halforbit
+	# Then handle the "backside" of the sky, where lat is between pi/2 and 3pi/2
+	lat[back] = -lat[back]
+	lon[back]+= np.pi
+	return pos
+
 def allreduce(a, comm, op=None):
 	res = a.copy()
 	if op is None: comm.Allreduce(a, res)
