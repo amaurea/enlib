@@ -903,7 +903,8 @@ def to_healpix(imap, omap=None, nside=0, order=3, chunk=100000, destroy_input=Fa
 	in-place, which saves memory but modifies its values."""
 	import healpy
 	if not destroy_input and order > 1: imap = imap.copy()
-	imap = enlib.utils.interpol_prefilter(imap, order=order, inplace=True)
+	if order > 1:
+		imap = enlib.utils.interpol_prefilter(imap, order=order, inplace=True)
 	if omap is None:
 		# Generate an output map
 		if not nside:
