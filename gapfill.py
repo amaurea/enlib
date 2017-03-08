@@ -1,6 +1,6 @@
 """This module provides functions for filling gaps in an array based on ranges or masks."""
 import numpy as np, utils
-from enlib import fft, config
+from enlib import fft, config, resample
 from enlib.utils import repeat_filler
 from enlib.rangelist import Rangelist, Multirange, multify
 
@@ -9,8 +9,9 @@ config.default("gapfill_context", 10, "Samples of context to use for matching up
 
 def gapfill(arr, ranges, inplace=False, overlap=None):
 	gapfiller = {
-			"copy":gapfill_copy,
 			"linear":gapfill_linear,
+			"joneig":gapfill_joneig,
+			"copy":gapfill_copy,
 			"cubic":gapfill_cubic
 		}[config.get("gapfill")]
 	overlap = config.get("gapfill_context", overlap)
@@ -108,6 +109,38 @@ def gapfill_constant(arr, ranges, inplace=False, value=0.0, overlap=None):
 	for r1,r2 in ranges.ranges:
 		arr[r1:r2] = value
 	return arr
+
+def gapfill_joneig(tod, cut, thresh=4, niter=4, nloop=4, inplace=False, gapfill=gapfill_linear, cov_step=10, amp_step=10, overlap=None):
+	"""Gapfill a tod[ndet,nsamp] in cuts cut[ndet,{ranges}] using
+	Jon's eigenmode iteration. It's about 20 times slower than linear
+	gapfilling, mostly due to calling gapfill_linear niter*nloop times
+	internally."""
+	tod = gapfill(tod, cut, inplace=inplace)
+	cut_small = cut[:,::amp_step]
+	for i in range(nloop):
+		# Find the most important basis vectors for the current data
+		sub = np.ascontiguousarray(tod[:,::cov_step])
+		cov = sub.dot(sub.T)
+		cov = 0.5*(cov+cov.T)
+		e, v = np.linalg.eigh(cov)
+		# v is [ndet,nmode]
+		mask = e > (thresh**2*np.median(e))
+		e, v = e[mask], v[:,mask]
+		basis = v.T.dot(tod) # [nmode, nsamp]
+		# Iteratively subtract best basis vector fit and 
+		work_small  = resample.downsample_bin(tod, [amp_step], [-1])
+		basis_small = resample.downsample_bin(basis, [amp_step], [-1])
+		div = basis_small.dot(basis_small.T)
+		amps_tot = 0
+		for j in range(niter):
+			amps = np.linalg.solve(div, basis_small.dot(work_small.T))
+			amps_tot += amps
+			work_small -= amps.T.dot(basis_small)
+			gapfill(work_small, cut_small, inplace=True)
+		tod -= amps_tot.T.dot(basis)
+		gapfill(tod, cut, inplace=True)
+		tod += amps_tot.T.dot(basis)
+	return tod
 
 @multify
 def gapfill_copy(arr, ranges, overlap=10, inplace=False):

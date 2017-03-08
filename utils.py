@@ -1427,7 +1427,7 @@ def eigpow(A, e, axes=[-2,-1], rlim=None, alim=None):
 			mask |= E < 0
 		if e < 0:
 			aE = np.abs(E)
-			mask |= (aE < np.max(aE)*rlim) | (aE < alim)
+			mask |= (aE < np.max(aE,1)[:,None]*rlim) | (aE < alim)
 		E[~mask] **= e
 		E[mask]    = 0
 		res = np.einsum("...ij,...kj->...ik",V*E[...,None,:],V)
