@@ -285,7 +285,7 @@ def read_retile(ipathfmt, tpos, otilesize=None, pixoff=(0,0), margin=0,
 	data from the tiling, i.e. from the neighboring tiles."""
 	if otilesize is None:
 		geo = read_tileset_geometry(ipathfmt, itile1, itile2)
-		otilesize = geo.tsize
+		otilesize = geo.tshape
 	tpos   = np.zeros(2,int)+tpos
 	pixoff = np.zeros(2,int)+pixoff
 	margin = np.zeros((2,2),int)+margin
@@ -305,7 +305,7 @@ def retile_iterator(ipathfmt, otilesize=None, pixoff=(0,0), margin=0,
 	rank, nproc = (0,1) if comm is None else (comm.rank, comm.size)
 	# Find the number of tiles to iterate over
 	geo = read_tileset_geometry(ipathfmt, itile1, itile2)
-	if otilesize is None: otilesize = geo.tsize
+	if otilesize is None: otilesize = geo.tshape
 	otilesize = np.array(otilesize)
 	notile = (np.array(geo.shape[-2:])-pixoff+otilesize-1)/otilesize
 	tyx = [(y,x) for y in range(notile[0]) for x in range(notile[1])]
