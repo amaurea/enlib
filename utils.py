@@ -876,6 +876,184 @@ def recv(comm, source=0, tag=0):
 	comm.Recv(res, source=source, tag=tag)
 	return res
 
+def tuplify(a):
+	try: return tuple(a)
+	except TypeError: return (a,)
+
+def resize_array(arr, size, axis=None, val=0):
+	"""Return a new array equal to arr but with the given
+	axis reshaped to the given sizes. Inserted elements will
+	be set to val."""
+	arr    = np.asarray(arr)
+	size   = tuplify(size)
+	axis   = range(len(size)) if axis is None else tuplify(axis)
+	axis   = [a%arr.ndim for a in axis]
+	oshape = np.array(arr.shape)
+	oshape[np.array(axis)] = size
+	res    = np.full(oshape, val, arr.dtype)
+	slices = tuple([slice(0,min(s1,s2)) for s1,s2 in zip(arr.shape,res.shape)])
+	res[slices] = arr[slices]
+	return res
+
+def redistribute(iarr, ibox, obox, comm, wrap=None):
+	"""Given the array iarra[{pre},{dims}] which represents a
+	slice garr[...,ibox[0,0]:ibox[1,0]:ibox[2,0],ibox[0,1]:ibox[1,1]:ibox[2,1],etc]
+	of some larger, distributed array garr, returns a different
+	slice of the global array given by obox."""
+	iarr   = np.asanyarray(iarr)
+	ibox   = resize_array(ibox, 3, 0, 1)
+	obox   = resize_array(obox, 3, 0, 1)
+	ndim   = ibox.shape[-1]
+	oshape = tuple(sbox_size(obox))
+	oarr   = np.zeros(iarr.shape[:-2]+oshape,iarr.dtype)
+	presize= np.product(iarr.shape[:-2],dtype=int)
+	# Find out what we must send to and receive from each other task.
+	# rboxes will contain slices into oarr and sboxes into iarr.
+	# Due to wrapping, a single pair of boxes can have multiple intersections,
+	# so we may need to send multiple arrays to each other task.
+	# We handle this by flattening and concatenating into a single buffer.
+	# sbox_intersection must return a list of lists of boxes
+	iboxes = allgather(ibox, comm)
+	rboxes = sbox_intersection(iboxes, obox, wrap=wrap, local=True)
+	oboxes = allgather(obox, comm)
+	sboxes = sbox_intersection(oboxes, ibox, wrap=wrap, local=True)
+	print "sboxes", comm.rank, sboxes
+	print "rboxes", comm.rank, rboxes
+	# Set up our send and receive buffers
+	nsend =[sum([np.product(sbox_size(subbox),dtype=int)*presize for subbox in sbox]) for sbox in sboxes]
+	nrecv =[sum([np.product(sbox_size(subbox),dtype=int)*presize for subbox in rbox]) for rbox in rboxes]
+	sendbuf = [iarr[sbox2slice(subbox)].reshape(-1) for sbox in sboxes for subbox in sbox]
+	sendbuf = np.concatenate(sendbuf)
+	recvbuf = np.empty(np.sum(nrecv),iarr.dtype)
+	# Perform the all-to-all send
+	print "all2all"
+	print "sbuf", comm.rank, sendbuf.shape, sendbuf.dtype
+	print "rbuf", comm.rank, recvbuf.shape, recvbuf.dtype
+	print "nsend", comm.rank, nsend,cumsum(nsend)
+	print "nrecv", comm.rank, nrecv,cumsum(nrecv)
+	sbufinfo = (nsend,cumsum(nsend))
+	rbufinfo = (nrecv,cumsum(nrecv))
+	print "sbufinfo", comm.rank, sbufinfo
+	print "rbufinfo", comm.rank, rbufinfo
+	comm.Alltoallv((sendbuf, sbufinfo), (recvbuf,rbufinfo))
+	# Copy out the result
+	i = 0
+	for rbox in rboxes:
+		for subbox in rbox:
+			subshape = sbox_size(subbox)
+			data = recvbuf[i:i+np.product(subshape)*presize]
+			oarr[sbox2slice(subbox)] = data.reshape(iarr.shape[:-2]+tuple(subshape))
+			i += data.size
+	return oarr
+
+def sbox_intersection(sbox, refbox, wrap=None, local=False):
+	"""Given a set of slices sbox[...,{start,end,step},ndim],
+	refbox[...,{start,end,step},ndim] into some array, compute
+	the overlap between each sbox and refbox, and express this
+	overlap as a new such slice. If wrap is specified, it should
+	be a list of the wrapping width of each dimension. Each of
+	these can be None to turn off wrapping for that dimension.
+	If local is True, then the result will be relative to
+	refbox: It will be a slice into arr[refbox] instead of
+	just a slice into arr."""
+	# Expand boxes to include stride if missing
+	sbox  = resize_array(sbox,  3, -2, 1)
+	refbox= resize_array(refbox,3, -2, 1)
+	ndim  = sbox.shape[-1]
+	if wrap is None: wrap = (None,)*ndim
+	# Flatten pre-dimensions
+	sflat = sbox.reshape((-1,)+sbox.shape[-2:])
+	rflat = refbox.reshape((-1,)+refbox.shape[-2:])
+	# Set up output array
+	res = np.empty([sflat.shape[0],rflat.shape[0]],dtype=np.object)
+	for si, selem in enumerate(sflat):
+		for ri, relem in enumerate(rflat):
+			peraxis = [
+				sbox_intersection_1d(selem[:,dim],relem[:,dim],wrap=wrap[dim],local=local) for dim in range(ndim)
+			]
+			nper  = tuple([len(p) for p in peraxis])
+			iflat = np.arange(np.product(nper))
+			ifull = np.array(np.unravel_index(iflat, nper)).T
+			subres= [
+				[p[i] for i,p in zip(inds,peraxis)] for inds in ifull
+			]
+			res[si,ri] = np.transpose(subres, (0,2,1)) if len(subres)>0 else subres
+	res = res.reshape(sbox.shape[:-2]+refbox.shape[:-2])
+	if res.ndim == 0: res = res.reshape(-1)[0]
+	return res
+
+def sbox_intersection_1d(a, b, wrap=None, local=False):
+	"""1d version of sbox_intersection. Operates on a[start,end,step]
+	and b[start,end,step]. See sbox_intersection for details."""
+	# First subtract b[0] from all coordinates, since the absolute
+	# position does not matter
+	a = np.array(a)
+	b = np.array(b)
+	if local:
+		res = sbox_intersection_1d(a,b,wrap=wrap)
+		for i, r in enumerate(res): res[i] = sbox_div(r, b)
+		return res
+	# Handle negative slicing.
+	def flip(a):
+		return [a[1]-a[2],a[0]-a[2],-a[2]]
+	if a[2] < 0 and b[2] < 0:
+		return sbox_intersection_1d(flip(a),flip(b))
+	elif a[2]*b[2] < 0:
+		res = sbox_intersection_1d(a if a[2]>0 else flip(a), b if b[2]>0 else flip(b))
+		for i,r in enumerate(res): res[i] = flip(r)
+		return res
+	b0 = b[0]
+	a[:2] -= b0
+	b[:2] -= b0
+	if wrap:
+		# Compute overlap for each side of the wrapping,
+		# after aligning a and b on the same wrap.
+		wa = a[1]-a[0]
+		a1 = np.array(a)
+		a2 = np.array(a)
+		a1[0] %= wrap
+		a1[1] = a1[0] + wa
+		a2[:2] = a1[:2] - wrap
+		res1 = sbox_intersection_1d(a1,b)
+		res2 = sbox_intersection_1d(a2,b)
+		return res1+res2
+	else:
+		# We only get here if both a and b have positive stride,
+		# and wrapping has been taken care of.
+		# In global coordinates, the common stride is
+		c = lcm(a[2],b[2])
+		# Find a point where the two steps overlap, ignoring
+		# bounds. This may not have a solution. For exapmle
+		# [0::2] and [1::2] have no overlap. My math is
+		# failing me here, so I'll use an exhaustive search
+		match = np.where((np.arange(c/a[2])*a[2]+a[0])%b[2] == 0)[0]
+		if len(match) == 0: return []
+		i1 = match[0]*a[2]+a[0]
+		i1 = max(i1,i1%c)
+		i2 = min(a[1],b[1])
+		if i2 <= i1: return []
+		return [[i1+b0,i2+b0,c]]
+
+def sbox_size(sbox):
+	sbox = resize_array(sbox, 3, 0, 1)
+	sbox *= np.sign(sbox[2,None])
+	return ((sbox[1]-sbox[0]-1)/sbox[2]).astype(int)+1
+
+def sbox_div(a,b):
+	"""Find c such that arr[a] = arr[b][c]."""
+	return np.array([(a[0]-b[0])/b[2],(a[1]-b[0])/b[2],a[2]/b[2]])
+
+def sbox2slice(sbox):
+	sbox = resize_array(sbox, 3, 0, 1)
+	return (Ellipsis,)+tuple([slice(s[0],s[1] if s[1]>=0 else None,s[2]) for s in sbox.T])
+
+def gcd(a, b):
+	"""Greatest common divisor of a and b"""
+	return gcd(b, a % b) if b else a
+def lcm(a, b):
+	"""Least common multiple of a and b"""
+	return a*b/gcd(a,b)
+
 def uncat(a, lens):
 	"""Undo a concatenation operation. If a = np.concatenate(b)
 	and lens = [len(x) for x in b], then uncat(a,lens) returns

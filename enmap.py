@@ -190,7 +190,7 @@ def enmap(arr, wcs=None, dtype=None, copy=True):
 		if isinstance(arr, ndmap):
 			wcs = arr.wcs
 		else:
-			wcs = create_wcs(arr.shape)
+			wcs = enlib.wcs.WCS(naxis=2)
 	return ndmap(arr, wcs)
 
 def empty(shape, wcs=None, dtype=None):
@@ -993,7 +993,7 @@ def write_fits(fname, emap, extra={}):
 	"""Write an enmap to a fits file."""
 	# The fits write routines may attempt to modify
 	# the map. So make a copy.
-	emap = emap.copy()
+	emap = enmap(emap, copy=True)
 	# Get our basic wcs header
 	header = emap.wcs.to_header(relax=True)
 	# Add our map headers
@@ -1033,6 +1033,7 @@ def write_hdf(fname, emap, extra={}):
 	"""Write an enmap as an hdf file, preserving all
 	the WCS metadata."""
 	import h5py
+	emap = enmap(emap, copy=False)
 	with h5py.File(fname, "w") as hfile:
 		hfile["data"] = emap
 		header = emap.wcs.to_header()
