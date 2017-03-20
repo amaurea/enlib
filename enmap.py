@@ -551,7 +551,7 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs)
 		shape = tuple(np.floor(faredge+0.5).astype(int))
 	return pre+tuple(shape), wcs
 
-def fullsky_geometry(res=0.1*utils.degree, dims=()):
+def fullsky_geometry(res=0.1*enlib.utils.degree, dims=()):
 	"""Build an enmap covering the full sky, with the outermost pixel centers
 	at the poles and wrap-around points. Assumes CAR projection
 	for now."""
