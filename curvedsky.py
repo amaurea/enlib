@@ -420,6 +420,9 @@ def match_predefined_minfo(m, rtol=None, atol=None):
 	for minfo in minfos:
 		# Find theta closest to our first theta
 		i1 = np.argmin(np.abs(theta[0]-minfo.theta))
+		# If we're already on the full sky, the the +1
+		# pixel alternative will not work.
+		if i1+len(theta) > minfo.theta.size: continue
 		# Find the largest theta offset for all y in our input map
 		offs = theta-minfo.theta[i1:i1+len(theta)]
 		aoff = np.max(np.abs(offs))
