@@ -16,6 +16,8 @@ import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice
 #     geometry object would make this less tedious, as long as it is
 #     simple to override individual properties.
 
+extent_model = ["intermediate"]
+
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
 # itself uses column-major ordering. So an array which is (ncomp,ny,nx)
 # will be (nx,ny,ncomp) in the file. This means that the axes in the ndmap
@@ -314,7 +316,8 @@ def rand_gauss_iso_harm(shape, wcs, cov):
 	data = map_mul(spec2flat(shape, wcs, cov, 0.5, mode="constant"), rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
 
-def extent(shape, wcs, method="intermediate", nsub=None):
+def extent(shape, wcs, method="default", nsub=None):
+	if method == "default": method = extent_model[-1]
 	if method == "intermediate":
 		return extent_intermediate(shape, wcs)
 	elif method == "subgrid":

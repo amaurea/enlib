@@ -268,6 +268,11 @@ contains
 			! No clobber avoidance needed
 			do si = 1, nsamp
 				p = nint(pix(:,si))
+				! Skip all out-of-bounds pixels. Accumulating them at the edge is useless
+				if(p(1) .eq. 0) then
+					if(tmul .ne. 0) tod(si) = tod(si)*tmul
+					cycle
+				end if
 				if(tmul .eq. 0) then
 					tod(si) = map(1,p(2),p(1)) + sum(map(2:3,p(2),p(1))*phase(1:2,si))
 				else
@@ -278,6 +283,7 @@ contains
 			if(nproc > 1) then
 				do si = 1, nsamp
 					p = nint(pix(:,si))
+					if(p(1) .eq. 0) cycle ! skip OOB pixels
 					!$omp atomic
 					map(1,p(2),p(1)) = map(1,p(2),p(1)) + tod(si)*tmul
 					do ci = 2, 3
@@ -290,6 +296,7 @@ contains
 				! Avoid slowing down single-proc case with atomics
 				do si = 1, nsamp
 					p = nint(pix(:,si))
+					if(p(1) .eq. 0) cycle ! skip OOB pixels
 					map(1,p(2),p(1)) = map(1,p(2),p(1)) + tod(si)*tmul
 					do ci = 2, 3
 						v = (tod(si)*tmul)*phase(ci-1,si)
@@ -786,16 +793,19 @@ contains
 		implicit none
 		integer(4), intent(in)    :: pbox(:,:)
 		real(8),    intent(inout) :: pix(:,:)
-		real(8)    :: psize(2)
+		real(8)    :: psize(2), moo(2)
 		integer(4) :: si
 		psize = pbox(:,2)-pbox(:,1)
 		!$!omp simd
 		do si = 1, size(pix,2)
 			pix(:,si) = pix(:,si) - pbox(:,1)
-			! We will round this later. The numbers ensure that we will
-			! still be in bounds after rounding.
-			pix(1,si) = min(psize(1)+0.49999d0,max(0.5d0,pix(1,si)))
-			pix(2,si) = min(psize(2)+0.49999d0,max(0.5d0,pix(2,si)))
+			! Out of bounds pixels are indicated with a 0 value. They
+			! will be ignored in the projection code.
+			if(any(pix(1:2,si) < 0.5d0) .or. any(pix(1:2,si) >= psize + 0.5d0)) pix(1:2,si) = 0
+			!! We will round this later. The numbers ensure that we will
+			!! still be in bounds after rounding.
+			!pix(1,si) = min(psize(1)+0.49999d0,max(0.5d0,pix(1,si)))
+			!pix(2,si) = min(psize(2)+0.49999d0,max(0.5d0,pix(2,si)))
 		end do
 	end subroutine
 

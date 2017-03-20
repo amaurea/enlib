@@ -1226,8 +1226,8 @@ def minmax(a, axis=None):
 	return np.array([np.min(a, axis=axis),np.max(a, axis=axis)])
 
 def point_in_polygon(points, polys):
-	"""Given a points[n|None,2] and a set of polys[n|None,nvertex,2], return
-	inside[n|None].
+	"""Given a points[...,2] and a set of polys[...,nvertex,2], return
+	inside[...]. points[...,0] and polys[...,0,0] must broadcast correctly.
 
 	Examples:
 	utils.point_in_polygon([0.5,0.5],[[0,0],[0,1],[1,1],[1,0]]) -> True
@@ -1236,16 +1236,17 @@ def point_in_polygon(points, polys):
 	# Make sure we have arrays, and that they have a floating point data type
 	points = np.asarray(points)+0.0
 	polys  = np.asarray(polys) +0.0
-	npre   = max(points.ndim-1,polys.ndim-2)
-	nvert  = polys.shape[-2]
-	dirs   = np.zeros(max(polys.shape[0],points.shape[0]) if npre else (), dtype=np.int32)
-	def direction(a,b): return np.sign(a[...,0]*b[...,1]-a[...,1]*b[...,0]).astype(np.int32)
-	for i in range(nvert):
-		v1 = polys[...,i-1,:]
-		v2 = polys[...,i,:]
-		dirs += direction(v2-v1, points-v1)
-	inside = np.abs(dirs) == nvert
-	return inside
+	verts  = polys - points[...,None,:]
+	ncross = np.zeros(verts.shape[:-2], dtype=np.int32)
+	# For each vertex, check if it crosses y=0 by computing the x
+	# position of that crossing, and seeing if that x is within the
+	# poly's bounds.
+	for i in range(verts.shape[-2]):
+		x1, y1 = verts[...,i-1,:].T
+		x2, y2 = verts[...,i,:].T
+		x = -y1*(x2-x1)/(y2-y1) + x1
+		ncross += ((y1*y2 < 0) & (x > 0)).T
+	return ncross.T % 2 == 1
 
 def block_mean_filter(a, width):
 	"""Perform a binwise smoothing of a, where all samples

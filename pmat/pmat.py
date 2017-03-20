@@ -455,6 +455,9 @@ class pos2pix:
 			opix[1] = utils.unwind(opix[1].reshape(shape), period=nx, axes=range(len(shape))).reshape(-1)
 			# Prefer positive numbers
 			opix[1] -= np.floor(opix[1].reshape(-1)[0]/nx)*nx
+			# but not if they put everything outside our patch
+			if np.min(opix[1]) > self.template.shape[-1]:
+				opix[1] -= nx
 		else:
 			# If we have no template, output angles instead of pixels.
 			# Make sure the angles don't have any jumps in them
@@ -673,14 +676,27 @@ def extract_interpol_params(ipol, dtype):
 	return rbox, nbox, yvals
 
 def build_pixbox(obox, template, margin=10):
+	"""Given a pixel bounding box obox[{from,to},{y,x}], adjust
+	it to be suitable for a work map by paddint it with
+	a margin and handling the empty case. Also computes the
+	pixel width of the full sky, which is needed for wrapping."""
 	# We allow negative and positive overshoot to allow the
-	# pointing matrix to handle pixel wraparound.
-	res = np.array([np.floor(obox[0]-margin),np.floor(obox[1]+margin)]).astype(np.int32)
+	# pointing matrix to handle pixel wraparound in the x direction.
+	# In the y direction we can cap.
+	res = np.array([
+		[max(obox[0,0],0),np.floor(obox[0,1]-margin)],
+		[min(obox[1,0],template.shape[-2]),np.floor(obox[1,1]+margin)]
+	]).astype(np.int32)
 	# If the original box extends outside [[0,0],n], this box may
 	# have empty ranges. If so, return a single-pixel box
 	if np.any(res[1]<=res[0]):
 		res = np.array([[0,0],[1,1]],dtype=np.int32)
 	nphi = int(np.round(np.abs(360./template.wcs.wcs.cdelt[0])))
+	# We can't possibly wrap around to ourselves if obox x-width
+	# + template x-width < nphi. This is the case when mapping
+	# thumbnails, for example
+	if res[1,1]-res[0,1] + template.shape[-1] < nphi:
+		res[:,1] = [0,template.shape[-1]]
 	return res, nphi
 
 def pmat_phase(dir, tod, map, az, dets, az0, daz):
