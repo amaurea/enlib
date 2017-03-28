@@ -40,6 +40,10 @@ values in boresight to determine the effective duration of each sample.
 I therefore go with option #1 above, and explicitly do not provide a way
 of skipping samples here.
 """
+
+# This module has become really crusty. It's time to redo this whole
+# system, especially considering the large overlap with Dataset.
+
 import numpy as np, enlib.slice, copy as cpy, h5py, os
 from enlib import rangelist, nmat, config, resample, utils, bunch
 
@@ -123,11 +127,15 @@ class H5Scan(Scan):
 			neach = hfile["cut/neach"].value
 			flat  = hfile["cut/flat"].value
 			self.cut  = rangelist.Multirange((n,neach,flat),copy=False)
+			self.cut_noiseest = self.cut.copy()
 			self.noise= nmat.read_nmat(hfile, "noise")
 			self.site = bunch.Bunch({k:hfile["site/"+k].value for k in hfile["site"]})
 			self.subdets = np.arange(self.ndet)
+			self.hwp = np.zeros(n)
+			self.hwp_phase = np.zeros([n,2])
 			self.sampslices = []
 			self.id = os.path.basename(fname)
+			self.entry = bunch.Bunch(id=self.id)
 	def get_samples(self):
 		"""Return the actual detector samples. Slow! Data is read from disk,
 		so store the result if you need to reuse it."""
@@ -157,7 +165,7 @@ def write_scan(fname, scan):
 		if flat.size == 0: flat = np.zeros([1,2],dtype=np.int32)
 		hfile["cut/neach"] = neach
 		hfile["cut/flat"]  = flat
-		nmat.write_nmat(hfile, scan.noise, "noise")
+		nmat.write_nmat(hfile.create_group("noise"), scan.noise)
 		for k in scan.site:
 			hfile["site/"+k] = scan.site[k]
 		hfile["tod"]       = scan.get_samples()

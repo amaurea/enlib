@@ -395,26 +395,25 @@ class NmatScaled2(NoiseMatrix):
 		write_nmat_helper(fname, fields)
 
 
-#def read_nmat(fname, group=None):
-#	"""Read a noise matrix from file, optionally from the named group
-#	in the file."""
-#	if isinstance(fname, basestring):
-#		f = h5py.File(fname, "r")
-#	else:
-#		f = fname
-#	g = f[group] if group else f
-#	typ = np.array(g["type"])[...]
-#	if typ == "detvecs":
-#		ebins = g["ebins"].value if "ebins" in g else g["vbins"].value # compatibility with old format
-#		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, ebins, g["dets"].value)
-#	elif typ == "sharedvecs":
-#		return NmatSharedvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["vbins"].value, g["dets"].value)
-#	elif typ == "binned":
-#		return NmatBinned(g["icovs"], g["bins"], g["dets"])
-#	else:
-#		raise IOError("Unrecognized noise matrix format %s" % typ)
-#	if isinstance(fname, basestring):
-#		f.close()
+def read_nmat(fname, group=None):
+	"""Read a noise matrix from file, optionally from the named group
+	in the file."""
+	if isinstance(fname, basestring):
+		f = h5py.File(fname, "r")
+	else:
+		f = fname
+	g = f[group] if group else f
+	typ = np.array(g["type"])[...]
+	if typ == "detvecs":
+		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["dets"].value)
+	elif typ == "sharedvecs":
+		return NmatSharedvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["vbins"].value, g["dets"].value)
+	elif typ == "binned":
+		return NmatBinned(g["icovs"], g["bins"], g["dets"])
+	else:
+		raise IOError("Unrecognized noise matrix format %s" % typ)
+	if isinstance(fname, basestring):
+		f.close()
 
 def write_nmat(fname, nmat):
 	"""Write noise matrix nmat to the named file"""

@@ -63,9 +63,9 @@ def scan_ceslike(nsamp, box, sys="equ", srate=100, azrate=0.123):
 def scan_grid(box, res, sys="equ", dir=0, margin=0):
 	box[np.argmin(box,0)] += margin
 	box[np.argmax(box,0)] -= margin
-	n = (np.asarray(box[1]-box[0])/res).astype(int)
-	dec = np.linspace(box[0,0],box[1,0],n[0])
-	ra  = np.linspace(box[0,1],box[1,1],n[1])
+	n = np.round(np.asarray(box[1]-box[0])/res).astype(int)
+	dec = np.linspace(box[0,0],box[1,0],n[0],endpoint=False) + res/2
+	ra  = np.linspace(box[0,1],box[1,1],n[1],endpoint=False) + res/2
 	if dir % 2 == 0:
 		decra = np.empty([2,dec.size,ra.size])
 		decra[0] = dec[:,None]
@@ -135,7 +135,7 @@ class SimSrcs(scan.Scan):
 		for di in range(self.ndet):
 			for i, (pos,amp,beam) in enumerate(zip(self.srcs.pos,self.srcs.amps,self.srcs.beam)):
 				point = (self.boresight+self.offsets[di,None,:])[:,1:]
-				point = coordinates.transform(self.sys, self.simsys, point, time=self.boresight[:,0]+self.mjd0, site=self.site)
+				point = coordinates.transform(self.sys, self.simsys, point.T, time=self.boresight[:,0]+self.mjd0, site=self.site).T
 				r2 = np.sum((point-pos[None,:])**2,1)/beam**2
 				I  = np.where(r2 < self.nsigma**2)[0]
 				tod[di,I] += np.exp(-0.5*r2[I])*np.sum(amp*self.comps[di])

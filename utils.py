@@ -1491,3 +1491,21 @@ def format_to_regex(format):
 			omid = prepad + open + omid + num + r")" + postpad
 			return opre + omid + opost
 	return re.sub(ireg, subfun, format)
+
+# Not sure if this belongs here...
+class Printer:
+	def __init__(self, level=1, prefix=""):
+		self.level  = level
+		self.prefix = prefix
+	def write(self, desc, level, exact=False, newline=True, prepend=""):
+		if level == self.level or not exact and level <= self.level:
+			sys.stderr.write(prepend + self.prefix + desc + ("\n" if newline else ""))
+	def push(self, desc):
+		return Printer(self.level, self.prefix + desc)
+	def time(self, desc, level, exact=False, newline=True):
+		class PrintTimer:
+			def __init__(self, printer): self.printer = printer
+			def __enter__(self): self.time = time.time()
+			def __exit__(self, type, value, traceback):
+				self.printer.write(desc, level, exact=exact, newline=newline, prepend="%6.2f " % (time.time()-self.time))
+		return PrintTimer(self)

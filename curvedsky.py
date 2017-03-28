@@ -456,7 +456,10 @@ def npix2nside(npix):
 def prepare_alm(alm=None, ainfo=None, lmax=None, pre=(), dtype=np.float64):
 	"""Set up alm and ainfo based on which ones of them are available."""
 	if alm is None:
-		if ainfo is None: ainfo = sharp.alm_info(lmax)
+		if ainfo is None:
+			if lmax is None:
+				raise ValueError("prepare_alm needs either alm, ainfo or lmax to be specified")
+			ainfo = sharp.alm_info(lmax)
 		alm = np.zeros(pre+(ainfo.nelem,), dtype=np.result_type(dtype,0j))
 	else:
 		ainfo = sharp.alm_info(nalm=alm.shape[-1])
