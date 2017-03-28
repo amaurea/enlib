@@ -310,7 +310,7 @@ def make_projectable_map_cyl(map):
 	flipy = map.wcs.wcs.cdelt[1] > 0
 	if flipx: map = map[...,:,::-1]
 	if flipy: map = map[...,::-1,:]
-	# Then theck if the map satisfies the lat-ring requirements
+	# Then check if the map satisfies the lat-ring requirements
 	ny, nx = map.shape[-2:]
 	vy,vx = enmap.pix2sky(map.shape, map.wcs, [np.arange(ny),np.zeros(ny)])
 	hy,hx = enmap.pix2sky(map.shape, map.wcs, [np.zeros(nx),np.arange(nx)])
@@ -329,15 +329,16 @@ def make_projectable_map_cyl(map):
 	# would require us to copy out multiple slices.
 	nslice = (nx+nphi-1)/nphi
 	islice, oslice = [], []
+	def negnone(x): return x if x >= 0 else None
 	for i in range(nslice):
 		# i1:i2 is the range of pixels in the original map to use
 		i1, i2 = i*nphi, min((i+1)*nphi,nx)
 		islice.append((Ellipsis, slice(i1,i2)))
 		# yslice and xslice give the range of pixels in our temporary map to use.
 		# This is 0:(i2-i1) if we're not flipping, but if we flip we count from
-		# the opposite direction: -1:-1-(i2-i1):-1
-		yslice = slice(-1,None,-1)       if flipy else slice(None)
-		xslice = slice(-1,-1-(i2-i1),-1) if flipx else slice(0,i2-i1)
+		# the opposite direction: nx-1:nx-1-(i2-i1):-1
+		yslice = slice(-1,None,-1)  if flipy else slice(None)
+		xslice = slice(nx-1,negnone(nx-1-(i2-i1)),-1) if flipx else slice(0,i2-i1)
 		oslice.append((Ellipsis,yslice,xslice))
 	return enmap.empty(oshape, owcs, dtype=map.dtype), islice, oslice
 
