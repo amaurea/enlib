@@ -983,7 +983,7 @@ def write_map(fname, emap, fmt=None, extra={}):
 	else:
 		raise ValueError
 
-def read_map(fname, fmt=None, sel=None):
+def read_map(fname, fmt=None, sel=None, hdu=None):
 	"""Read an enmap from file. The file type is inferred
 	from the file extension, unless fmt is passed.
 	fmt must be one of 'fits' and 'hdf'."""
@@ -995,7 +995,7 @@ def read_map(fname, fmt=None, sel=None):
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
-		res = read_fits(fname, sel=sel)
+		res = read_fits(fname, sel=sel, hdu=hdu)
 	elif fmt == "hdf":
 		res = read_hdf(fname, sel=sel)
 	else:
@@ -1022,11 +1022,12 @@ def write_fits(fname, emap, extra={}):
 		warnings.filterwarnings('ignore')
 		hdus.writeto(fname, clobber=True)
 
-def read_fits(fname, hdu=0, sel=None):
+def read_fits(fname, hdu=None, sel=None):
 	"""Read an enmap from the specified fits file. By default,
 	the map and coordinate system will be read from HDU 0. Use
 	the hdu argument to change this. The map must be stored as
 	a fits image."""
+	if hdu is None: hdu = 0
 	hdu = astropy.io.fits.open(fname)[hdu]
 	if hdu.header["NAXIS"] < 2:
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
