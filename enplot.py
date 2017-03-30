@@ -148,6 +148,8 @@ def parse_args(args=sys.argv[1:], noglob=False):
 		l[ine]   lat lon dy dx lat lon dy dx [width [color]]
 	dy and dx are pixel-unit offsets from the specified lat/lon.""")
 	parser.add_argument("--stamps", type=str, default=None, help="Plot stamps instead of the whole map. Format is srcfile:size:nmax, where the last two are optional. srcfile is a file with [dec ra] in degrees, size is the size in pixels of each stamp, and nmax is the max number of stamps to produce.")
+	parser.add_argument("--tile",  type=str, default=None, help="Stack components vertically and horizontally. --tile 5,4 stacks into 5 rows and 4 columns. --tile 5 or --tile 5,-1 stacks into 5 rows and however many columns are needed. --tile -1,5 stacks into 5 columns and as many rows are needed. --tile -1 allocates both rows and columns to make the result as square as possible. The result is treated as a single enmap, so the wcs will only be right for one of the tiles.")
+	parser.add_argument("--tile-transpose", action="store_true", help="Transpose the ordering of the fields when tacking. Normally row-major stacking is used. This sets column-major order instead.")
 	parser.add_argument("-S", "--symmetric", action="store_true", help="Treat the non-pixel axes as being asymmetric matrix, and only plot a non-redundant triangle of this matrix.")
 	parser.add_argument("-z", "--zenith",    action="store_true", help="Plot the zenith angle instead of the declination.")
 	parser.add_argument("-F", "--fix-wcs",   action="store_true", help="Fix the wcs for maps in cylindrical projections where the reference point was placed too far away from the map center.")
@@ -228,6 +230,12 @@ def get_map(ifile, args, return_info=False):
 			m, wcslist = m[0], None
 		# Flatten pre-dimensions
 		mf = m.reshape((-1,)+m.shape[-2:])
+		# Stack
+		if args.tile is not None:
+			toks = [int(i) for i in args.tile.split(",")]
+			nrow = toks[0] if len(toks) > 0 else -1
+			ncol = toks[1] if len(toks) > 1 else -1
+			mf = hwstack(hwexpand(mf, nrow, ncol, args.tile_transpose))[None]
 		# Mask bad data
 		if args.mask is not None:
 			if not np.isfinite(args.mask): mf[np.abs(mf)==args.mask] = np.nan
@@ -615,3 +623,23 @@ def draw_ellipse(image, bounds, width=1, outline='white', antialias=1):
 	mask = mask.resize(esize, PIL.Image.LANCZOS)
 	# paste outline color to input image through the mask
 	image.paste(outline, tuple(bounds[:2]-width), mask=mask)
+
+def hwexpand(mflat, nrow=-1, ncol=-1, transpose=False):
+	"""Stack the maps in mflat[n,ny,nx] into a single flat map mflat[nrow,ncol,ny,nx]"""
+	n, ny, nx = mflat.shape
+	if nrow < 0 and ncol < 0:
+		ncol = int(np.ceil(n**0.5))
+	if nrow < 0: nrow = (n+ncol-1)/ncol
+	if ncol < 0: ncol = (n+nrow-1)/nrow
+	if not transpose:
+		omap = enmap.zeros([nrow,ncol,ny,nx],mflat.wcs,mflat.dtype)
+		omap.reshape(-1,ny,nx)[:n] = mflat
+	else:
+		omap = enmap.zeros([ncol,nrow,ny,nx],mflat.wcs,mflat.dtype)
+		omap.reshape(-1,ny,nx)[:n] = mflat
+		omap = np.transpose(omap,(1,0,2,3))
+	return omap
+
+def hwstack(mexp):
+	nr,nc,ny,nx = mexp.shape
+	return np.transpose(mexp,(0,2,1,3)).reshape(nr*ny,nc*nx)
