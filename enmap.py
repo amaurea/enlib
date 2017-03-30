@@ -491,7 +491,7 @@ def smooth_gauss(emap, sigma):
 	if sigma == 0: return emap.copy()
 	f  = map2harm(emap)
 	l2 = np.sum(emap.lmap()**2,0)
-	f *= np.exp(-l2*sigma**2)
+	f *= np.exp(-0.5*l2*sigma**2)
 	return harm2map(f)
 
 def calc_window(shape):
