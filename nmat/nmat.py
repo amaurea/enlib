@@ -151,7 +151,7 @@ class NmatDetvecs(NmatBinned):
 	def icovs(self): return expand_detvecs(self.iD, self.iE, self.iV, self.ebins)
 	@property
 	def covs(self): return expand_detvecs(self.D, self.E, self.V, self.ebins)
-	def apply(self, tod):
+	def apply(self, tod, inverse=False):
 		ft = enlib.fft.rfft(tod)
 		# Unit of noise model we apply:
 		#  Assume we start from white noise with stddev s.
@@ -171,13 +171,16 @@ class NmatDetvecs(NmatBinned):
 		# To summarize, iN, RHS and div are all D times too small because we don't properly
 		# rescale the noise when downsampling.
 		# FIXED: I now scale D and E when downsampling.
-		self.apply_ft(ft, tod.shape[-1], tod.dtype)
+		self.apply_ft(ft, tod.shape[-1], tod.dtype, inverse=inverse)
 		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
-	def apply_ft(self, ft, nsamp, dtype):
+	def apply_ft(self, ft, nsamp, dtype, inverse=False):
 		fft_norm = nsamp
 		core = get_core(dtype)
-		core.nmat_detvecs(ft.T, get_ibins(self.bins, nsamp).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
+		if not inverse:
+			core.nmat_detvecs(ft.T, get_ibins(self.bins, nsamp).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
+		else:
+			core.nmat_detvecs(ft.T, get_ibins(self.bins, nsamp).T, self.D.T/fft_norm, self.V.T, self.E/fft_norm, self.ebins.T)
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
 		dets = res.dets[detslice]
