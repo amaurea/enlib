@@ -16,6 +16,8 @@ import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice
 #     geometry object would make this less tedious, as long as it is
 #     simple to override individual properties.
 
+extent_model = ["intermediate"]
+
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
 # itself uses column-major ordering. So an array which is (ncomp,ny,nx)
 # will be (nx,ny,ncomp) in the file. This means that the axes in the ndmap
@@ -63,7 +65,7 @@ class ndmap(np.ndarray):
 	def npix(self): return np.product(self.shape[-2:])
 	@property
 	def geometry(self): return self.shape, self.wcs
-	def project(self, shape, wcs, order=3, mode="nearest"): return project(self, shape, wcs, order, mode=mode, cval=0)
+	def project(self, shape, wcs, order=3, mode="nearest", cval=0): return project(self, shape, wcs, order, mode=mode, cval=cval)
 	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width, profile="cos", fill="zero"): return apod(self, width, profile=profile, fill=fill)
@@ -131,7 +133,7 @@ class ndmap(np.ndarray):
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
 
-def slice_wcs(shape, wcs, sel):
+def slice_wcs(shape, wcs, sel, nowrap=False):
 	"""Slice a geometry specified by shape and wcs according to the
 	slice sel. Returns a tuple of the output shape and the correponding
 	wcs."""
@@ -140,7 +142,7 @@ def slice_wcs(shape, wcs, sel):
 	oshape = np.array(shape)
 	# The wcs object has the indices in reverse order
 	for i,s in enumerate(sel):
-		s = enlib.slice.expand_slice(s, shape[i])
+		s = enlib.slice.expand_slice(s, shape[i], nowrap=nowrap)
 		j = -1-i
 		start = s.start if s.step > 0 else s.start + 1
 		wcs.wcs.crpix[j] -= start+0.5
@@ -190,7 +192,7 @@ def enmap(arr, wcs=None, dtype=None, copy=True):
 		if isinstance(arr, ndmap):
 			wcs = arr.wcs
 		else:
-			wcs = create_wcs(arr.shape)
+			wcs = enlib.wcs.WCS(naxis=2)
 	return ndmap(arr, wcs)
 
 def empty(shape, wcs=None, dtype=None):
@@ -314,7 +316,8 @@ def rand_gauss_iso_harm(shape, wcs, cov):
 	data = map_mul(spec2flat(shape, wcs, cov, 0.5, mode="constant"), rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
 
-def extent(shape, wcs, method="intermediate", nsub=None):
+def extent(shape, wcs, method="default", nsub=None):
+	if method == "default": method = extent_model[-1]
 	if method == "intermediate":
 		return extent_intermediate(shape, wcs)
 	elif method == "subgrid":
@@ -488,7 +491,7 @@ def smooth_gauss(emap, sigma):
 	if sigma == 0: return emap.copy()
 	f  = map2harm(emap)
 	l2 = np.sum(emap.lmap()**2,0)
-	f *= np.exp(-l2*sigma**2)
+	f *= np.exp(-0.5*l2*sigma**2)
 	return harm2map(f)
 
 def calc_window(shape):
@@ -547,6 +550,18 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs)
 		faredge = wcs.wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
 		shape = tuple(np.floor(faredge+0.5).astype(int))
 	return pre+tuple(shape), wcs
+
+def fullsky_geometry(res=0.1*enlib.utils.degree, dims=()):
+	"""Build an enmap covering the full sky, with the outermost pixel centers
+	at the poles and wrap-around points. Assumes CAR projection
+	for now."""
+	nx,ny = int(2*np.pi/res), int(np.pi/res)
+	wcs   = enlib.wcs.WCS(naxis=2)
+	wcs.wcs.crval = [0,0]
+	wcs.wcs.cdelt = [360./nx,180./ny]
+	wcs.wcs.crpix = [nx/2+1,ny/2+1]
+	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
+	return dims+(ny+1,nx+0), wcs
 
 def create_wcs(shape, box=None, proj="cea"):
 	if box is None:
@@ -903,7 +918,8 @@ def to_healpix(imap, omap=None, nside=0, order=3, chunk=100000, destroy_input=Fa
 	in-place, which saves memory but modifies its values."""
 	import healpy
 	if not destroy_input and order > 1: imap = imap.copy()
-	imap = enlib.utils.interpol_prefilter(imap, order=order, inplace=True)
+	if order > 1:
+		imap = enlib.utils.interpol_prefilter(imap, order=order, inplace=True)
 	if omap is None:
 		# Generate an output map
 		if not nside:
@@ -967,7 +983,7 @@ def write_map(fname, emap, fmt=None, extra={}):
 	else:
 		raise ValueError
 
-def read_map(fname, fmt=None, sel=None):
+def read_map(fname, fmt=None, sel=None, hdu=None):
 	"""Read an enmap from file. The file type is inferred
 	from the file extension, unless fmt is passed.
 	fmt must be one of 'fits' and 'hdf'."""
@@ -979,7 +995,7 @@ def read_map(fname, fmt=None, sel=None):
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
-		res = read_fits(fname, sel=sel)
+		res = read_fits(fname, sel=sel, hdu=hdu)
 	elif fmt == "hdf":
 		res = read_hdf(fname, sel=sel)
 	else:
@@ -992,7 +1008,7 @@ def write_fits(fname, emap, extra={}):
 	"""Write an enmap to a fits file."""
 	# The fits write routines may attempt to modify
 	# the map. So make a copy.
-	emap = emap.copy()
+	emap = enmap(emap, copy=True)
 	# Get our basic wcs header
 	header = emap.wcs.to_header(relax=True)
 	# Add our map headers
@@ -1006,11 +1022,12 @@ def write_fits(fname, emap, extra={}):
 		warnings.filterwarnings('ignore')
 		hdus.writeto(fname, clobber=True)
 
-def read_fits(fname, hdu=0, sel=None):
+def read_fits(fname, hdu=None, sel=None):
 	"""Read an enmap from the specified fits file. By default,
 	the map and coordinate system will be read from HDU 0. Use
 	the hdu argument to change this. The map must be stored as
 	a fits image."""
+	if hdu is None: hdu = 0
 	hdu = astropy.io.fits.open(fname)[hdu]
 	if hdu.header["NAXIS"] < 2:
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
@@ -1032,6 +1049,7 @@ def write_hdf(fname, emap, extra={}):
 	"""Write an enmap as an hdf file, preserving all
 	the WCS metadata."""
 	import h5py
+	emap = enmap(emap, copy=False)
 	with h5py.File(fname, "w") as hfile:
 		hfile["data"] = emap
 		header = emap.wcs.to_header()

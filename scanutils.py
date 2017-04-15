@@ -2,12 +2,16 @@ import numpy as np, logging, h5py, sys
 from enlib import scan as enscan, errors, utils, coordinates, dmap
 L = logging.getLogger(__name__)
 
-def calc_sky_bbox_scan(scan, osys):
-	icorners = utils.box2corners(scan.box)
-	ocorners = np.array([coordinates.transform(scan.sys,osys,b[1:,None],time=scan.mjd0+b[0,None]/3600/24,site=scan.site)[::-1,0] for b in icorners])
+def calc_sky_bbox_scan(scan, osys, nsamp=100):
+	"""Compute the bounding box of the scan in the osys coordinate system.
+	Returns [{from,to},{dec,ra}]."""
+	ipoints = utils.box2contour(scan.box, nsamp)
+	opoints = np.array([coordinates.transform(scan.sys,osys,b[1:,None],time=scan.mjd0+b[0,None]/3600/24,site=scan.site)[::-1,0] for b in ipoints])
 	# Take care of angle wrapping along the ra direction
-	ocorners[...,1] = utils.rewind(ocorners[...,1], ref="auto")
-	obox = utils.bounding_box(ocorners)
+	opoints[...,1] = utils.rewind(opoints[...,1], ref="auto")
+	obox = utils.bounding_box(opoints)
+	# Grow slighly to account for non-infinite nsamp
+	obox = utils.widen_box(obox, 5*utils.arcmin, relative=False)
 	return obox
 
 def distribute_scans(myinds, mycosts, myboxes, comm):

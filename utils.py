@@ -442,7 +442,7 @@ def range_sub(a,b, mapping=False):
 	from the set of cut a and b range to indices into a and b, with
 	b indices being encoded as -i-1. a and b are assumed
 	to be internally non-overlapping.
-	
+
 	Example: utils.range_sub([[0,100],[200,1000]], [[1,2],[3,4],[8,999]], mapping=True)
 	(array([[   0,    1],
 	        [   2,    3],
@@ -450,7 +450,7 @@ def range_sub(a,b, mapping=False):
 	        [ 999, 1000]]),
 	array([0, 0, 0, 1]),
 	array([ 0, -1,  1, -2,  2, -3,  3]))
-	
+
 	The last array can be interpreted as: Moving along the number line,
 	we first encounter [0,1], which is a part of range 0 in c. We then
 	encounter range 0 in b ([1,2]), before we hit [2,3] which is
@@ -635,7 +635,7 @@ def greedy_split(data, n=2, costfun=max, workfun=lambda w,x: x if w is None else
 	specifies how to combine multiple values. workfun(datum,workval)
 	=> workval. scorefun then operates on a list of the total workval
 	for each group score = scorefun([workval,workval,....]).
-	
+
 	Example: greedy_split(range(10)) => [[9,6,5,2,1,0],[8,7,4,3]]
 	         greedy_split([1,10,100]) => [[2],[1,0]]
 	         greedy_split("012345",costfun=lambda x:sum([xi**2 for xi in x]),
@@ -721,6 +721,27 @@ def box2corners(box):
 	ndim= box.shape[1]
 	return np.array([[box[b,bi] for bi,b in enumerate(unpackbits(i)[:ndim])] for i in range(2**ndim)])
 
+def box2contour(box, nperedge=5):
+	"""Given a [{from,to},:] bounding box, returns [npoint,:] coordinates
+	definiting its edges. Nperedge is the number of samples per edge of
+	the box to use. For nperedge=2 this is equal to box2corners. Nperegege
+	can be a list, in which case the number indicates the number to use in
+	each dimension."""
+	box      = np.asarray(box)
+	ndim     = box.shape[1]
+	nperedge = np.zeros(ndim,int)+nperedge
+	# Generate the range of each coordinate
+	points = []
+	for i in range(ndim):
+		x = np.linspace(box[0,i],box[1,i],nperedge[i])
+		for j in range(2**ndim):
+			bits = unpackbits(j)[:ndim]
+			if bits[i]: continue
+			y = np.zeros((len(x),ndim))
+			y[:] = box[bits,np.arange(ndim)]; y[:,i] = x
+			points.append(y)
+	return np.concatenate(points,0)
+
 def box_slice(a, b):
 	"""Given two boxes/boxarrays of shape [{from,to},dims] or [:,{from,to},dims],
 	compute the bounds of the part of each b that overlaps with each a, relative
@@ -753,6 +774,23 @@ def widen_box(box, margin=1e-3, relative=True):
 	margin[box[0]>box[1]] *= -1
 	return np.array([box[0]-margin/2, box[1]+margin/2])
 
+def unwrap_range(range, nwrap=2*np.pi):
+	"""Given a logically ordered range[{from,to},...] that
+	may have been exposed to wrapping with period nwrap,
+	undo the wrapping so that range[1] > range[0]
+	but range[1]-range[0] is as small as possible.
+	Also makes the range straddle 0 if possible.
+
+	Unlike unwind and rewind, this function will not
+	turn a very wide range into a small one because it
+	doesn't assume that ranges are shorter than half the
+	sky. But it still shortens ranges that are longer than
+	a whole wrapping period."""
+	range = np.asanyarray(range)
+	range[1] -= np.floor((range[1]-range[0])/nwrap)*nwrap
+	range    -= np.floor(range[1,None]/nwrap)*nwrap
+	return range
+
 def sum_by_id(a, ids, axis=0):
 	ra = moveaxis(a, axis, 0)
 	fa = ra.reshape(ra.shape[0],-1)
@@ -762,13 +800,34 @@ def sum_by_id(a, ids, axis=0):
 	rb = fb.reshape((fb.shape[0],)+ra.shape[1:])
 	return moveaxis(rb, 0, axis)
 
+def pole_wrap(pos):
+	"""Given pos[{lat,lon},...], normalize coordinates so that
+	lat is always between -pi/2 and pi/2. Coordinates outside this
+	range are mirrored around the poles, and for each mirroring a phase
+	of pi is added to lon."""
+	pos = pos.copy()
+	lat, lon  = pos # references to columns of pos
+	halforbit = np.floor((lat+np.pi/2)/np.pi).astype(int)
+	front     = halforbit % 2 == 0
+	back      = ~front
+	# Get rid of most of the looping
+	lat -= np.pi*halforbit
+	# Then handle the "backside" of the sky, where lat is between pi/2 and 3pi/2
+	lat[back] = -lat[back]
+	lon[back]+= np.pi
+	return pos
+
 def allreduce(a, comm, op=None):
+	"""Convenience wrapper for Allreduce that returns the result
+	rather than needing an output argument."""
 	res = a.copy()
 	if op is None: comm.Allreduce(a, res)
 	else:          comm.Allreduce(a, res, op)
 	return res
 
 def allgather(a, comm):
+	"""Convenience wrapper for Allgather that returns the result
+	rather than needing an output argument."""
 	a   = np.asarray(a)
 	res = np.zeros((comm.size,)+a.shape,dtype=a.dtype)
 	if np.issubdtype(a.dtype, str):
@@ -801,6 +860,210 @@ def allgatherv(a, comm, axis=0):
 	if must_fix:
 		fb = fb.view(dtype=a.dtype)
 	return moveaxis(fb, 0, axis)
+
+def send(a, comm, dest=0, tag=0):
+	"""Faster version of comm.send for numpy arrays.
+	Avoids slow pickling. Used with recv below."""
+	a = np.asanyarray(a)
+	comm.send((a.shape,a.dtype), dest=dest, tag=tag)
+	comm.Send(a, dest=dest, tag=tag)
+
+def recv(comm, source=0, tag=0):
+	"""Faster version of comm.recv for numpy arrays.
+	Avoids slow pickling. Used with send above."""
+	shape, dtype = comm.recv(source=source, tag=tag)
+	res = np.empty(shape, dtype)
+	comm.Recv(res, source=source, tag=tag)
+	return res
+
+def tuplify(a):
+	try: return tuple(a)
+	except TypeError: return (a,)
+
+def resize_array(arr, size, axis=None, val=0):
+	"""Return a new array equal to arr but with the given
+	axis reshaped to the given sizes. Inserted elements will
+	be set to val."""
+	arr    = np.asarray(arr)
+	size   = tuplify(size)
+	axis   = range(len(size)) if axis is None else tuplify(axis)
+	axis   = [a%arr.ndim for a in axis]
+	oshape = np.array(arr.shape)
+	oshape[np.array(axis)] = size
+	res    = np.full(oshape, val, arr.dtype)
+	slices = tuple([slice(0,min(s1,s2)) for s1,s2 in zip(arr.shape,res.shape)])
+	res[slices] = arr[slices]
+	return res
+
+def redistribute(iarr, ibox, obox, comm, wrap=0):
+	"""Given the array iarra[{pre},{dims}] which represents a
+	slice garr[...,ibox[0,0]:ibox[0,1]:ibox[0,2],ibox[1,0]:ibox[1,1]:ibox[1,2],etc]
+	of some larger, distributed array garr, returns a different
+	slice of the global array given by obox."""
+	iarr   = np.asanyarray(iarr)
+	ibox   = sbox_fix(ibox)
+	obox   = sbox_fix(obox)
+	ndim   = ibox.shape[-2]
+	oshape = tuple(sbox_size(obox))
+	oarr   = np.zeros(iarr.shape[:-2]+oshape,iarr.dtype)
+	presize= np.product(iarr.shape[:-2],dtype=int)
+	# Find out what we must send to and receive from each other task.
+	# rboxes will contain slices into oarr and sboxes into iarr.
+	# Due to wrapping, a single pair of boxes can have multiple intersections,
+	# so we may need to send multiple arrays to each other task.
+	# We handle this by flattening and concatenating into a single buffer.
+	# sbox_intersect must return a list of lists of boxes
+	iboxes = allgather(ibox, comm)
+	#print "iboxes", iboxes
+	#print "obox", obox
+	#print "wrap", wrap
+	def safe_div(a,b,wrap=0):
+		return sbox_div(a,b,wrap=wrap) if len(a) > 0 else [np.array([[0,0,1]]*ndim)]
+	rboxes = sbox_intersect(iboxes, obox, wrap=wrap)
+	for rbox in rboxes: rbox[:] = safe_div(rbox, obox, wrap=wrap)
+	oboxes = allgather(obox, comm)
+	sboxes = sbox_intersect(oboxes, ibox, wrap=wrap)
+	for sbox in sboxes: sbox[:] = safe_div(sbox, ibox, wrap=wrap)
+	#print "sboxes", comm.rank, sboxes
+	#print "rboxes", comm.rank, rboxes
+	# Set up our send and receive buffers
+	nsend =[sum([np.product(sbox_size(subbox),dtype=int)*presize for subbox in sbox]) for sbox in sboxes]
+	nrecv =[sum([np.product(sbox_size(subbox),dtype=int)*presize for subbox in rbox]) for rbox in rboxes]
+	sendbuf = [iarr[sbox2slice(subbox)].reshape(-1) for sbox in sboxes for subbox in sbox]
+	sendbuf = np.concatenate(sendbuf)
+	recvbuf = np.empty(np.sum(nrecv),iarr.dtype)
+	# Perform the all-to-all send
+	#print "all2all"
+	#print "sbuf", comm.rank, sendbuf.shape, sendbuf.dtype
+	#print "rbuf", comm.rank, recvbuf.shape, recvbuf.dtype
+	#print "nsend", comm.rank, nsend,cumsum(nsend)
+	#print "nrecv", comm.rank, nrecv,cumsum(nrecv)
+	sbufinfo = (nsend,cumsum(nsend))
+	rbufinfo = (nrecv,cumsum(nrecv))
+	#print "sbufinfo", comm.rank, sbufinfo
+	#print "rbufinfo", comm.rank, rbufinfo
+	comm.Alltoallv((sendbuf, sbufinfo), (recvbuf,rbufinfo))
+	# Copy out the result
+	i = 0
+	for rbox in rboxes:
+		for subbox in rbox:
+			subshape = sbox_size(subbox)
+			data = recvbuf[i:i+np.product(subshape)*presize]
+			oarr[sbox2slice(subbox)] = data.reshape(iarr.shape[:-2]+tuple(subshape))
+			i += data.size
+	return oarr
+
+def sbox_intersect(a,b,wrap=0):
+	"""Given two Nd sboxes a,b [...,ndim,{start,end,step}] into the
+	same array, compute an sbox representing
+	their intersection. The resulting sbox will have poxitive step size.
+	The result is a possibly empty list of sboxes - it is empty if there is
+	no overlap. If wrap is specified, then it should be a list of length ndim
+	of pixel wraps, each of which can be zero to disable wrapping in
+	that direction."""
+	# First get intersection along each axis
+	a = sbox_fix(a)
+	b = sbox_fix(b)
+	fa = a.reshape((-1,)+a.shape[-2:])
+	fb = b.reshape((-1,)+b.shape[-2:])
+	ndim = a.shape[-2]
+	wrap = np.zeros(ndim,int)+wrap
+	# Loop over all combinations
+	res = np.empty((fa.shape[0],fb.shape[0]),dtype=np.object)
+	for ai, a1 in enumerate(fa):
+		for bi, b1 in enumerate(fb):
+			peraxis = [sbox_intersect_1d(a1[d],b1[d],wrap=wrap[d]) for d in range(ndim)]
+			# Get the outer product of these
+			nper    = tuple([len(p) for p in peraxis])
+			iflat   = np.arange(np.product(nper))
+			ifull   = np.array(np.unravel_index(iflat, nper)).T
+			subres  = [[p[i] for i,p in zip(inds,peraxis)] for inds in ifull]
+			res[ai,bi] = subres
+	res = res.reshape(a.shape[:-2]+b.shape[:-2])
+	if res.ndim == 0:
+		res = res.reshape(-1)[0]
+	return res
+
+def sbox_intersect_1d(a,b,wrap=0):
+	"""Given two 1d sboxes into the same array, compute an sbox representing
+	their intersecting area. The resulting sbox will have positive step size. The result
+	is a list of intersection sboxes. This can be empty if there is no intersection,
+	such as between [0,n,2] and [1,n,2]. If wrap is not 0, then it
+	should be an integer at which pixels repeat, so i and i+wrap would be
+	equivalent. This can lead to more intersections than one would usually get.
+	"""
+	a = sbox_fix(a)
+	b = sbox_fix(b)
+	if a[2] < 0: a = sbox_flip(a)
+	if b[2] < 0: b = sbox_flip(b)
+	segs = [(a,b)]
+	if wrap:
+		a, b = np.array(a), np.array(b)
+		a[:2]  -= a[0]/wrap*wrap
+		b[:2]  -= b[0]/wrap*wrap
+		if a[1] > wrap: segs.append((a-[wrap,wrap,0],b))
+		if b[1] > wrap: segs.append((a,b-[wrap,wrap,0]))
+	res = []
+	for a,b in segs:
+		if b[0] < a[0]: a,b = b,a
+		step  = lcm(abs(a[2]),abs(b[2]))
+		# Find the first point in the intersection
+		rel_inds = np.arange(b[0]-a[0],b[0]-a[0]+step,b[2])
+		match = np.where(rel_inds % a[2] == 0)[0]
+		if len(match) == 0: continue
+		start = rel_inds[match[0]]+a[0]
+		# Find the last point in the intersection
+		end   =(min(a[1]-a[2],b[1]-b[2])-start)/step*step+start+step
+		if end <= start: continue
+		res.append([start,end,step])
+	return res
+
+def sbox_div(a,b,wrap=0):
+	"""Find c such that arr[a] = arr[b][c]."""
+	a = sbox_fix(a)
+	b = sbox_fix(b)
+	step  = a[...,2]/b[...,2]
+	num   = (a[...,1]-a[...,0])/a[...,2]
+	start = (a[...,0]-b[...,0])/b[...,2]
+	end   = start + step*num
+	res   = np.stack([start,end,step],-1)
+	if wrap:
+		wrap  = np.asarray(wrap,int)[...,None]
+		swrap = wrap.copy()
+		swrap[wrap==0] = 1
+		res[...,:2] -= res[...,0,None]/swrap*wrap
+	return res
+
+def sbox_flip(a):
+	a = resize_array(a,3,-1,1)
+	return np.stack([a[...,1]-a[...,2],a[...,0]-a[...,2],-a[...,2]],-1)
+
+def sbox2slice(sbox):
+	sbox  = resize_array(sbox,3,-1,1)
+	return (Ellipsis,)+tuple([slice(s[0],s[1] if s[1]>=0 else None,s[2]) for s in sbox])
+
+def sbox_size(sbox):
+	"""Return the size [...,n] of an sbox [...,{start,end,step}].
+	The end must be a whole multiple of step away from start, like
+	as with the other sbox functions."""
+	sbox = resize_array(sbox,3,-1,1)
+	sbox = sbox*np.sign(sbox[...,2,None])
+	return (((sbox[...,1]-sbox[...,0])-1)/sbox[...,2]).astype(int)+1
+
+def sbox_fix(sbox):
+	# Ensure that we have a step, setting it to 1 if missing
+	sbox = resize_array(sbox,3,-1,1).astype(int)
+	# Make sure our end point is a whole multiple of the step
+	# from the start
+	sbox[...,1] = sbox[...,0] + sbox_size(sbox)*sbox[...,2]
+	return sbox
+
+def gcd(a, b):
+	"""Greatest common divisor of a and b"""
+	return gcd(b, a % b) if b else a
+def lcm(a, b):
+	"""Least common multiple of a and b"""
+	return a*b/gcd(a,b)
 
 def uncat(a, lens):
 	"""Undo a concatenation operation. If a = np.concatenate(b)
@@ -974,9 +1237,9 @@ def minmax(a, axis=None):
 	return np.array([np.min(a, axis=axis),np.max(a, axis=axis)])
 
 def point_in_polygon(points, polys):
-	"""Given a points[n|None,2] and a set of polys[n|None,nvertex,2], return
-	inside[n|None].
-	
+	"""Given a points[...,2] and a set of polys[...,nvertex,2], return
+	inside[...]. points[...,0] and polys[...,0,0] must broadcast correctly.
+
 	Examples:
 	utils.point_in_polygon([0.5,0.5],[[0,0],[0,1],[1,1],[1,0]]) -> True
 	utils.point_in_polygon([[0.5,0.5],[2,1]],[[0,0],[0,1],[1,1],[1,0]]) -> [True, False]
@@ -984,16 +1247,17 @@ def point_in_polygon(points, polys):
 	# Make sure we have arrays, and that they have a floating point data type
 	points = np.asarray(points)+0.0
 	polys  = np.asarray(polys) +0.0
-	npre   = max(points.ndim-1,polys.ndim-2)
-	nvert  = polys.shape[-2]
-	dirs   = np.zeros(max(polys.shape[0],points.shape[0]) if npre else (), dtype=np.int32)
-	def direction(a,b): return np.sign(a[...,0]*b[...,1]-a[...,1]*b[...,0]).astype(np.int32)
-	for i in range(nvert):
-		v1 = polys[...,i-1,:]
-		v2 = polys[...,i,:]
-		dirs += direction(v2-v1, points-v1)
-	inside = np.abs(dirs) == nvert
-	return inside
+	verts  = polys - points[...,None,:]
+	ncross = np.zeros(verts.shape[:-2], dtype=np.int32)
+	# For each vertex, check if it crosses y=0 by computing the x
+	# position of that crossing, and seeing if that x is within the
+	# poly's bounds.
+	for i in range(verts.shape[-2]):
+		x1, y1 = verts[...,i-1,:].T
+		x2, y2 = verts[...,i,:].T
+		x = -y1*(x2-x1)/(y2-y1) + x1
+		ncross += ((y1*y2 < 0) & (x > 0)).T
+	return ncross.T % 2 == 1
 
 def block_mean_filter(a, width):
 	"""Perform a binwise smoothing of a, where all samples
@@ -1175,7 +1439,7 @@ def eigpow(A, e, axes=[-2,-1], rlim=None, alim=None):
 			mask |= E < 0
 		if e < 0:
 			aE = np.abs(E)
-			mask |= (aE < np.max(aE)*rlim) | (aE < alim)
+			mask |= (aE < np.max(aE,1)[:,None]*rlim) | (aE < alim)
 		E[~mask] **= e
 		E[mask]    = 0
 		res = np.einsum("...ij,...kj->...ik",V*E[...,None,:],V)
@@ -1238,3 +1502,21 @@ def format_to_regex(format):
 			omid = prepad + open + omid + num + r")" + postpad
 			return opre + omid + opost
 	return re.sub(ireg, subfun, format)
+
+# Not sure if this belongs here...
+class Printer:
+	def __init__(self, level=1, prefix=""):
+		self.level  = level
+		self.prefix = prefix
+	def write(self, desc, level, exact=False, newline=True, prepend=""):
+		if level == self.level or not exact and level <= self.level:
+			sys.stderr.write(prepend + self.prefix + desc + ("\n" if newline else ""))
+	def push(self, desc):
+		return Printer(self.level, self.prefix + desc)
+	def time(self, desc, level, exact=False, newline=True):
+		class PrintTimer:
+			def __init__(self, printer): self.printer = printer
+			def __enter__(self): self.time = time.time()
+			def __exit__(self, type, value, traceback):
+				self.printer.write(desc, level, exact=exact, newline=newline, prepend="%6.2f " % (time.time()-self.time))
+		return PrintTimer(self)

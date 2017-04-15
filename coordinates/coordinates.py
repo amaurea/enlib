@@ -253,7 +253,11 @@ def getsys_full(sys, time=None, site=None):
 	optional parts), or a list of [base, ref, refsys]. Returns a parsed
 	and expanded version, where the systems have been replaced by full
 	system objects (or None), and the reference point has been expanded
-	into coordinates (or None), and rotated into the base system."""
+	into coordinates (or None), and rotated into the base system.
+	Coordinates are separated by _.
+
+	Example: Horizontal-based coordinates with the Moon centered at [0,0]
+	would be hor:Moon/0_0."""
 	if isinstance(sys, basestring): sys = sys.split(":")
 	else:
 		try: sys = list(sys)

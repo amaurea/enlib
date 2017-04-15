@@ -151,7 +151,7 @@ class NmatDetvecs(NmatBinned):
 	def icovs(self): return expand_detvecs(self.iD, self.iE, self.iV, self.ebins)
 	@property
 	def covs(self): return expand_detvecs(self.D, self.E, self.V, self.ebins)
-	def apply(self, tod):
+	def apply(self, tod, inverse=False):
 		ft = enlib.fft.rfft(tod)
 		# Unit of noise model we apply:
 		#  Assume we start from white noise with stddev s.
@@ -171,13 +171,16 @@ class NmatDetvecs(NmatBinned):
 		# To summarize, iN, RHS and div are all D times too small because we don't properly
 		# rescale the noise when downsampling.
 		# FIXED: I now scale D and E when downsampling.
-		self.apply_ft(ft, tod.shape[-1], tod.dtype)
+		self.apply_ft(ft, tod.shape[-1], tod.dtype, inverse=inverse)
 		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
-	def apply_ft(self, ft, nsamp, dtype):
+	def apply_ft(self, ft, nsamp, dtype, inverse=False):
 		fft_norm = nsamp
 		core = get_core(dtype)
-		core.nmat_detvecs(ft.T, get_ibins(self.bins, nsamp).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
+		if not inverse:
+			core.nmat_detvecs(ft.T, get_ibins(self.bins, nsamp).T, self.iD.T/fft_norm, self.iV.T, self.iE/fft_norm, self.ebins.T)
+		else:
+			core.nmat_detvecs(ft.T, get_ibins(self.bins, nsamp).T, self.D.T/fft_norm, self.V.T, self.E/fft_norm, self.ebins.T)
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
 		dets = res.dets[detslice]
@@ -395,26 +398,25 @@ class NmatScaled2(NoiseMatrix):
 		write_nmat_helper(fname, fields)
 
 
-#def read_nmat(fname, group=None):
-#	"""Read a noise matrix from file, optionally from the named group
-#	in the file."""
-#	if isinstance(fname, basestring):
-#		f = h5py.File(fname, "r")
-#	else:
-#		f = fname
-#	g = f[group] if group else f
-#	typ = np.array(g["type"])[...]
-#	if typ == "detvecs":
-#		ebins = g["ebins"].value if "ebins" in g else g["vbins"].value # compatibility with old format
-#		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, ebins, g["dets"].value)
-#	elif typ == "sharedvecs":
-#		return NmatSharedvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["vbins"].value, g["dets"].value)
-#	elif typ == "binned":
-#		return NmatBinned(g["icovs"], g["bins"], g["dets"])
-#	else:
-#		raise IOError("Unrecognized noise matrix format %s" % typ)
-#	if isinstance(fname, basestring):
-#		f.close()
+def read_nmat(fname, group=None):
+	"""Read a noise matrix from file, optionally from the named group
+	in the file."""
+	if isinstance(fname, basestring):
+		f = h5py.File(fname, "r")
+	else:
+		f = fname
+	g = f[group] if group else f
+	typ = np.array(g["type"])[...]
+	if typ == "detvecs":
+		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["dets"].value)
+	elif typ == "sharedvecs":
+		return NmatSharedvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["vbins"].value, g["dets"].value)
+	elif typ == "binned":
+		return NmatBinned(g["icovs"], g["bins"], g["dets"])
+	else:
+		raise IOError("Unrecognized noise matrix format %s" % typ)
+	if isinstance(fname, basestring):
+		f.close()
 
 def write_nmat(fname, nmat):
 	"""Write noise matrix nmat to the named file"""

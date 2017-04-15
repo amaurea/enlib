@@ -1,17 +1,24 @@
 import numpy as np, glob, re, sys, os
 from enlib import utils, enmap, bunch
 
-def leaftile(idir, odir, tsize=675, comm=None, verbose=False, lrange=[0,-6]):
+def leaftile(idir, odir, tsize=675, comm=None, verbose=False, lrange=[0,-6],
+		monolithic=False):
 	"""Given a input directory containing a tiled dmap in standard
 	ordering, outputs a leaflet-compatible hierarchy of tiles in
 	odir with tile size tsize."""
 	# First create our base tiles. These have opposite y ordering than
 	# dmap tiles, and may be different-sized.
 	otilename = "tile_%(y)d_%(x)d.fits"
-	retile(idir + "/tile%(y)03d_%(x)03d.fits",
+	if not monolithic:
+		itilename = idir + "/tile%(y)03d_%(x)03d.fits"
+		itile1, itile2 = None, None
+	else:
+		itilename = idir
+		itile1, itile2 = (0,0), (1,1)
+	retile(itilename,
 			"%s/%d/%s" % (odir,lrange[0],otilename),
 			ocorner=(np.pi/2,-np.pi), otilesize=(-tsize,tsize),
-			comm=comm, verbose=verbose)
+			comm=comm, verbose=verbose, itile1=itile1, itile2=itile2)
 	# Then loop over the smaller levels
 	for level in range(lrange[0]-1,lrange[1],-1):
 		if comm: comm.barrier()
@@ -125,6 +132,7 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 	otile1, otile2 = np.minimum(otile1,otile2), np.maximum(otile1,otile2)
 	otile2 += 1
 	# We can now loop over output tiles
+	cache = [None,None,None]
 	oyx = [(oy,ox) for oy in range(otile1[0],otile2[0]) for ox in range(otile1[1],otile2[1])]
 	for i in range(rank, len(oyx), size):
 		otile = np.array(oyx[i])
@@ -134,7 +142,7 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		opix2 = (otile+1)*otilesize + pixoff
 		# output tiles and input tiles may increase in opposite directions
 		opix1, opix2 = np.minimum(opix1,opix2), np.maximum(opix1,opix2)
-		try: omap = read_area(ipathfmt, [opix1,opix2],itile1=itile1, itile2=itile2)
+		try: omap = read_area(ipathfmt, [opix1,opix2],itile1=itile1, itile2=itile2,cache=cache)
 		except IOError: continue
 		oname = opathfmt % {"y":otile[0]+otileoff[0],"x":otile[1]+otileoff[1]}
 		utils.mkdir(os.path.dirname(oname))
@@ -170,11 +178,11 @@ def find_tile_range(pathfmt, tile1=(None,None), tile2=(None,None)):
 	If tile1[2] is specified, then this will override the start
 	of the result. If tile2[2] is specified, then it will override
 	the end of the result."""
-	if tile1 is None: ntile  = (None,None)
-	if tile2 is None: offset = (None,None)
+	if tile1 is None: tile1 = (None,None)
+	if tile2 is None: tile2 = (None,None)
 	# If both offset and ntile are specified, we don't need any
 	# complicated disk search.
-	if tile1[0] is not None and tile1[1] is not None and tile2[0] is not None and tile2[1] is not None: return tile1, tile2
+	if tile1[0] is not None and tile1[1] is not None and tile2[0] is not None and tile2[1] is not None: return np.asarray(tile1), np.asarray(tile2)
 	# Find the min/max on disk. We do that by constructing a glob to
 	# roughly match them, and them filtering them with a regex.
 	ranges = [None,None]
@@ -208,7 +216,8 @@ def read_tileset_geometry(ipathfmt, itile1=(None,None), itile2=(None,None)):
 	return bunch.Bunch(shape=m1.shape[:-2]+oshape, wcs=m1.wcs, dtype=m1.dtype,
 			tshape=m1.shape[-2:])
 
-def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=False):
+def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=False,
+		cache=None):
 	"""Given a set of tiles on disk with locations ipathfmt % {"y":...,"x":...},
 	read the data corresponding to the pixel range opix[{from,to],{y,x}] in
 	the full map."""
@@ -217,7 +226,10 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 	itile1, itile2 = find_tile_range(ipathfmt, itile1, itile2)
 	# To fill in the rest of the information we need to know more
 	# about the input tiling, so read the first tile
-	geo   = read_tileset_geometry(ipathfmt, itile1=itile1, itile2=itile2)
+	if cache is None or cache[2] is None:
+		geo = read_tileset_geometry(ipathfmt, itile1=itile1, itile2=itile2)
+	else: geo = cache[2]
+	if cache is not None: cache[2] = geo
 	isize = geo.tshape
 	osize = opix[1]-opix[0]
 	omap  = enmap.zeros(geo.shape[:-2]+tuple(osize), geo.wcs, geo.dtype)
@@ -241,7 +253,11 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 			ix1,ix2 = overlap-ipx1
 			# Read the input tile and copy over
 			iname = ipathfmt % {"y":ity,"x":itx}
-			imap  = enmap.read_map(iname)
+			if cache is None or cache[0] != iname:
+				imap  = enmap.read_map(iname)
+			else: imap = cache[1]
+			if cache is not None:
+				cache[0], cache[1] = iname, imap
 			if verbose: print iname
 			# Edge input tiles may be smaller than the standard
 			# size.
@@ -269,7 +285,7 @@ def read_retile(ipathfmt, tpos, otilesize=None, pixoff=(0,0), margin=0,
 	data from the tiling, i.e. from the neighboring tiles."""
 	if otilesize is None:
 		geo = read_tileset_geometry(ipathfmt, itile1, itile2)
-		otilesize = geo.tsize
+		otilesize = geo.tshape
 	tpos   = np.zeros(2,int)+tpos
 	pixoff = np.zeros(2,int)+pixoff
 	margin = np.zeros((2,2),int)+margin
@@ -289,7 +305,7 @@ def retile_iterator(ipathfmt, otilesize=None, pixoff=(0,0), margin=0,
 	rank, nproc = (0,1) if comm is None else (comm.rank, comm.size)
 	# Find the number of tiles to iterate over
 	geo = read_tileset_geometry(ipathfmt, itile1, itile2)
-	if otilesize is None: otilesize = geo.tsize
+	if otilesize is None: otilesize = geo.tshape
 	otilesize = np.array(otilesize)
 	notile = (np.array(geo.shape[-2:])-pixoff+otilesize-1)/otilesize
 	tyx = [(y,x) for y in range(notile[0]) for x in range(notile[1])]

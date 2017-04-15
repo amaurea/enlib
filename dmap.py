@@ -265,6 +265,7 @@ class DGeometry(object):
 			if bbpix is None:
 				if bbox is None: bbpix = [[0,0],shape[-2:]]
 				else: bbpix = box2pix(shape, wcs, bbox)
+			nphi  = int(np.round(np.abs(360/wcs.wcs.cdelt[0])))
 			# Reorder from/to if necessary, and expand to [:,2,2]
 			bbpix = sanitize_pixbox(bbpix, shape)
 			dtype = np.dtype(dtype)
@@ -272,7 +273,7 @@ class DGeometry(object):
 			self.tshape, self.dtype, self.comm  = tuple(tshape), dtype, comm
 
 			# 2. Set up workspace descriptions
-			work_geometry = [enmap.slice_wcs(shape, wcs, (slice(b[0,0],b[1,0]),slice(b[0,1],b[1,1]))) for b in bbpix]
+			work_geometry = [enmap.slice_wcs(shape, wcs, (slice(b[0,0],b[1,0]),slice(b[0,1],b[1,1])), nowrap=True) for b in bbpix]
 			# 3. Define global workspace ownership
 			nwork = utils.allgather([len(bbpix)],comm)
 			wown  = np.concatenate([np.full(n,i,dtype=int) for i,n in enumerate(nwork)])
@@ -287,8 +288,12 @@ class DGeometry(object):
 			# 4. Define tile ownership.
 			# a) For each task compute the overlap of each tile with its workspaces, and
 			#    concatenate across tasks to form a [nworktot,ntile] array.
-			wslices = utils.allgatherv(utils.box_slice(bbpix, tbox),comm, axis=0) # slices into work
-			tslices = utils.allgatherv(utils.box_slice(tbox, bbpix),comm, axis=1) # slices into tiles
+			wslices = select_nonempty( # slices into work
+					utils.allgatherv(utils.box_slice(bbpix, tbox),comm, axis=0), # normal
+					utils.allgatherv(utils.box_slice(bbpix+[0,nphi], tbox),comm, axis=0)) # wrapped
+			tslices = select_nonempty( # slices into tiles
+					utils.allgatherv(utils.box_slice(tbox, bbpix),comm, axis=1), # normal
+					utils.allgatherv(utils.box_slice(tbox, bbpix+[0,nphi]),comm, axis=1)) # wrapped
 			# b) Compute the total overlap each mpi task has with each tile, and use this
 			# to decide who should get which tiles
 			overlaps    = utils.box_area(wslices)
@@ -558,11 +563,21 @@ def dmap2enmap(dmap, emap, root=0):
 
 def box2pix(shape, wcs, box):
 	"""Convert one or several bounding boxes of shape [2,2] or [n,2,2]
-	into pixel counding boxes in standard python half-open format."""
+	into pixel counding boxes in standard python half-open format.
+	The box must be [{from,to},...].
+	"""
+	nphi = int(np.round(np.abs(360./wcs.wcs.cdelt[0])))
 	box  = np.asarray(box)
 	fbox = box.reshape(-1,2,2)
+	if wcs.wcs.cdelt[0] < 0: fbox[...,1] = fbox[...,::-1,1]
 	# Must rollaxis because sky2pix expects [{dec,ra},...]
 	ibox = enmap.sky2pix(shape, wcs, utils.moveaxis(fbox,2,0), corner=True)
+	# FIXME: This is one of many places in the code that will break if a bounding
+	# box goes more than half the way around the sky. Properly fixing
+	# this will require a big overhaul, especially if we want to handle
+	# bounding boxes that are bigger than the full sky.
+	ibox[1] = utils.unwrap_range(ibox[1].T, nphi).T
+	#ibox[1] = utils.unwind(ibox[1], nphi)
 	# We now have [{y,x},:,{from,to}
 	# Truncate to integer, and add one to endpoint to make halfopen interval
 	ibox = np.floor(np.sort(ibox, 2)).astype(int)
@@ -582,8 +597,8 @@ def sanitize_pixbox(bbpix, shape):
 	bbpix = np.sort(bbpix, 1)
 	# Some scans may extend partially beyond the end of our map. We must therefore
 	# truncate the bounding box.
-	bbpix[:,0,:] = np.maximum(bbpix[:,0,:],0)
-	bbpix[:,1,:] = np.minimum(bbpix[:,1,:],shape[-2:])
+	#bbpix[:,0,:] = np.maximum(bbpix[:,0,:],0)
+	#bbpix[:,1,:] = np.minimum(bbpix[:,1,:],shape[-2:])
 	return bbpix
 
 def build_tiles(shape, tshape):
@@ -712,3 +727,7 @@ class DmapZipper(zipper.ArrayZipper):
 			for b,t,m in zip(self.bins, self.template.tiles, self.mask.tiles):
 				t[m] = x[b[0]:b[1]]
 		return self.template
+
+def select_nonempty(a, b):
+	asize = np.product(a[...,1,:]-a[...,0,:],-1)
+	return np.where(asize[...,None,None] > 0, a, b)

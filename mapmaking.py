@@ -37,7 +37,7 @@
 # signal_phase = SignalPhase(..., cut=signal_cut)
 # signals = [signal_cut, signal_map, signal_phase]
 import numpy as np, h5py, zipper, logging, gc
-from enlib import enmap, dmap2 as dmap, array_ops, pmat, utils, todfilter
+from enlib import enmap, dmap, array_ops, pmat, utils, todfilter
 from enlib import config, nmat, bench, gapfill, mpi
 from enlib.cg import CG
 L = logging.getLogger(__name__)
@@ -152,14 +152,15 @@ class SignalDmap(Signal):
 		merged= config.get("dmap_format") == "merged"
 		dmap.write_map(oname, m, merged=merged)
 
-class SignalDmapFast(SignalMap):
-	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True,
+class SignalDmapFast(SignalDmap):
+	def __init__(self, scans, subinds, area, cuts=None, name="main", ofmt="{name}", output=True,
 			ext="fits", sys=None, nuisance=False, data=None):
 		if data is None:
+			data = {}
 			work = area.tile2work()
 			for scan, subind in zip(scans, subinds):
 				data[scan] = [pmat.PmatMapFast(scan, work[subind], sys=sys), subind]
-		SignalDmap.__init__(self, scans, area, comm=comm, cuts=cuts, name=name, ofmt=ofmt,
+		SignalDmap.__init__(self, scans, subinds, area, cuts=cuts, name=name, ofmt=ofmt,
 				output=output, ext=ext, sys=sys, nuisance=nuisance, data=data)
 	def precompute(self, scan):
 		if scan not in self.data: return
@@ -390,8 +391,8 @@ class PreconDmapHitcount:
 		self.signal = signal
 	def __call__(self, m):
 		for htile, mtile in zip(self.hits.tiles, m.tiles):
-			hits = np.maximum(hits, 1)
-			mtile /= hits
+			htile = np.maximum(htile, 1)
+			mtile /= htile
 	def write(self, prefix):
 		self.signal.write(prefix, "hits", self.hits)
 
@@ -506,6 +507,12 @@ def calc_hits_map(hits, signal, signal_cut, scans):
 
 class PriorNull:
 	def __call__(self, scans, xin, xout): pass
+
+class PriorNorm:
+	def __init__(self, epsilon=1e-3):
+		self.epsilon = epsilon
+	def __call__(self, scans, imap, omap):
+		omap += self.epsilon * imap
 
 class PriorMapNohor:
 	def __init__(self, weight=1):
@@ -772,11 +779,12 @@ class FilterGapfill:
 ######## Equation system ########
 
 class Eqsys:
-	def __init__(self, scans, signals, filters=[], weights=[], dtype=np.float64, comm=None):
+	def __init__(self, scans, signals, filters=[], filters2=[], weights=[], dtype=np.float64, comm=None):
 		self.scans   = scans
 		self.signals = signals
 		self.dtype   = dtype
 		self.filters = filters
+		self.filters2= filters2
 		self.weights = weights
 		self.dof     = zipper.MultiZipper([signal.dof for signal in signals], comm=comm)
 		self.b       = None
@@ -855,6 +863,8 @@ class Eqsys:
 				for weight in self.weights: weight(scan, tod)
 			with bench.mark("b_N_build"):
 				scan.noise = scan.noise.update(tod, scan.srate)
+			with bench.mark("b_filter2"):
+				for filter in self.filters2: filter(scan, tod)
 			with bench.mark("b_N"):
 				scan.noise.apply(tod)
 			with bench.mark("b_weight"):

@@ -310,7 +310,7 @@ def make_projectable_map_cyl(map):
 	flipy = map.wcs.wcs.cdelt[1] > 0
 	if flipx: map = map[...,:,::-1]
 	if flipy: map = map[...,::-1,:]
-	# Then theck if the map satisfies the lat-ring requirements
+	# Then check if the map satisfies the lat-ring requirements
 	ny, nx = map.shape[-2:]
 	vy,vx = enmap.pix2sky(map.shape, map.wcs, [np.arange(ny),np.zeros(ny)])
 	hy,hx = enmap.pix2sky(map.shape, map.wcs, [np.zeros(nx),np.arange(nx)])
@@ -329,15 +329,16 @@ def make_projectable_map_cyl(map):
 	# would require us to copy out multiple slices.
 	nslice = (nx+nphi-1)/nphi
 	islice, oslice = [], []
+	def negnone(x): return x if x >= 0 else None
 	for i in range(nslice):
 		# i1:i2 is the range of pixels in the original map to use
 		i1, i2 = i*nphi, min((i+1)*nphi,nx)
 		islice.append((Ellipsis, slice(i1,i2)))
 		# yslice and xslice give the range of pixels in our temporary map to use.
 		# This is 0:(i2-i1) if we're not flipping, but if we flip we count from
-		# the opposite direction: -1:-1-(i2-i1):-1
-		yslice = slice(-1,None,-1)       if flipy else slice(None)
-		xslice = slice(-1,-1-(i2-i1),-1) if flipx else slice(0,i2-i1)
+		# the opposite direction: nx-1:nx-1-(i2-i1):-1
+		yslice = slice(-1,None,-1)  if flipy else slice(None)
+		xslice = slice(nx-1,negnone(nx-1-(i2-i1)),-1) if flipx else slice(0,i2-i1)
 		oslice.append((Ellipsis,yslice,xslice))
 	return enmap.empty(oshape, owcs, dtype=map.dtype), islice, oslice
 
@@ -420,6 +421,9 @@ def match_predefined_minfo(m, rtol=None, atol=None):
 	for minfo in minfos:
 		# Find theta closest to our first theta
 		i1 = np.argmin(np.abs(theta[0]-minfo.theta))
+		# If we're already on the full sky, the the +1
+		# pixel alternative will not work.
+		if i1+len(theta) > minfo.theta.size: continue
 		# Find the largest theta offset for all y in our input map
 		offs = theta-minfo.theta[i1:i1+len(theta)]
 		aoff = np.max(np.abs(offs))
@@ -453,7 +457,10 @@ def npix2nside(npix):
 def prepare_alm(alm=None, ainfo=None, lmax=None, pre=(), dtype=np.float64):
 	"""Set up alm and ainfo based on which ones of them are available."""
 	if alm is None:
-		if ainfo is None: ainfo = sharp.alm_info(lmax)
+		if ainfo is None:
+			if lmax is None:
+				raise ValueError("prepare_alm needs either alm, ainfo or lmax to be specified")
+			ainfo = sharp.alm_info(lmax)
 		alm = np.zeros(pre+(ainfo.nelem,), dtype=np.result_type(dtype,0j))
 	else:
 		ainfo = sharp.alm_info(nalm=alm.shape[-1])
