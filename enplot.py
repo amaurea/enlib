@@ -611,7 +611,7 @@ def draw_ellipse(image, bounds, width=1, outline='white', antialias=1):
 	# Use a single channel image (mode='L') as mask.
 	# The size of the mask can be increased relative to the imput image
 	# to get smoother looking results. 
-	mask = PIL.Image.new(size=esize*antialias, mode='L', color='black')
+	mask = PIL.Image.new(size=tuple(esize*antialias), mode='L', color='black')
 	draw = PIL.ImageDraw.Draw(mask)
 	# draw outer shape in white (color) and inner shape in black (transparent)
 	for offset, fill in (width/-2.0, 'white'), (width/2.0, 'black'):
