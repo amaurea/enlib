@@ -257,25 +257,33 @@ def getsys_full(sys, time=None, site=None):
 	Coordinates are separated by _.
 
 	Example: Horizontal-based coordinates with the Moon centered at [0,0]
-	would be hor:Moon/0_0."""
-	if isinstance(sys, basestring): sys = sys.split(":")
+	would be hor:Moon/0_0.
+	
+	Used to be sys:center_on/center_at:sys_of_center_coordinates. But much
+	more flexible to do sys:center_on:sys/center_at:sys. This syntax
+	would be backwards compatible, though it's starting to get a bit clunky.
+	"""
+	if isinstance(sys, basestring): sys = sys.split(":",1)
 	else:
 		try: sys = list(sys)
 		except TypeError: sys = [sys]
-	if len(sys) < 3: sys += [None]*(3-len(sys))
-	base, ref, refsys = sys
-	base   = getsys(base)
-	refsys = getsys(refsys) if refsys is not None else base
+	if len(sys) < 2: sys += [None]*(2-len(sys))
+	base, ref = sys
+	base = getsys(base)
+	prevsys = base
+	#refsys = getsys(refsys) if refsys is not None else base
 	if ref is None: return [base, ref]
 	if isinstance(ref, basestring):
-		# The general formt here is from[/to], where from and to
-		# each are either an object name or a position in the format
+		# In general ref is ref:refsys/refto:reftosys. Here
+		# ref and refto are are either an object name or a position in the format
 		# lat_lon. comma would have been preferable, but we reserve that
 		# for from_sys,to_sys uses for backwards compatibility with
 		# existing programs.
 		ref_expanded = []
-		for r in ref.split("/"):
+		for ref_refsys in ref.split("/"):
 			# In our first format, ref is a set of coordinates in degrees
+			r = ref_refsys[0]
+			refsys = getsys(ref_refsys[1] if len(ref_refsys) > 1) else prevsys
 			try:
 				r = np.asfarray(r.split("_"))*utils.degree
 				assert(r.ndim == 1 and len(r) == 2)
@@ -285,6 +293,7 @@ def getsys_full(sys, time=None, site=None):
 				r = ephem_pos(r, time)
 				r = transform_raw("equ", base, r, time=time, site=site)
 			ref_expanded += list(r)
+			prevsys = refsys
 		ref = np.array(ref_expanded)
 	return [base, ref]
 
