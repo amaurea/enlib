@@ -16,7 +16,7 @@ import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice
 #     geometry object would make this less tedious, as long as it is
 #     simple to override individual properties.
 
-extent_model = ["intermediate"]
+extent_model = ["subgrid"]
 
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
 # itself uses column-major ordering. So an array which is (ncomp,ny,nx)
