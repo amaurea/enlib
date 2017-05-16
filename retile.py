@@ -2,7 +2,7 @@ import numpy as np, glob, re, sys, os
 from enlib import utils, enmap, bunch
 
 def leaftile(idir, odir, tsize=675, comm=None, verbose=False, lrange=[0,-6],
-		monolithic=False):
+		monolithic=False, slice=None):
 	"""Given a input directory containing a tiled dmap in standard
 	ordering, outputs a leaflet-compatible hierarchy of tiles in
 	odir with tile size tsize."""
@@ -18,7 +18,7 @@ def leaftile(idir, odir, tsize=675, comm=None, verbose=False, lrange=[0,-6],
 	retile(itilename,
 			"%s/%d/%s" % (odir,lrange[0],otilename),
 			ocorner=(np.pi/2,-np.pi), otilesize=(-tsize,tsize),
-			comm=comm, verbose=verbose, itile1=itile1, itile2=itile2)
+			comm=comm, verbose=verbose, itile1=itile1, itile2=itile2, slice=slice)
 	# Then loop over the smaller levels
 	for level in range(lrange[0]-1,lrange[1],-1):
 		if comm: comm.barrier()
@@ -98,7 +98,7 @@ def combine_tiles(ipathfmt, opathfmt, combine=2, downsample=2,
 
 def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		otileoff=(0,0), otilenum=(None,None), ocorner=(-np.pi/2,-np.pi),
-		otilesize=(675,675), comm=None, verbose=False):
+		otilesize=(675,675), comm=None, verbose=False, slice=None):
 	"""Given a set of tiles on disk with locations ipathfmt % {"y":...,"x":...},
 	retile them into a new tiling and write the result to opathfmt % {"y":...,"x":...}.
 	The new tiling will have tile size given by otilesize[2]. Negative size means the
@@ -120,6 +120,7 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 	# To fill in the rest of the information we need to know more
 	# about the input tiling, so read the first tile
 	ibase = enmap.read_map(ipathfmt % {"y":itile1[0],"x":itile1[1]})
+	if slice: ibase = eval("ibase"+slice)
 	itilesize = ibase.shape[-2:]
 	# Find the pixel position of our output corners according to the wcs.
 	# This is the last place we need to do a coordinate transformation.
@@ -142,20 +143,24 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		opix2 = (otile+1)*otilesize + pixoff
 		# output tiles and input tiles may increase in opposite directions
 		opix1, opix2 = np.minimum(opix1,opix2), np.maximum(opix1,opix2)
-		try: omap = read_area(ipathfmt, [opix1,opix2],itile1=itile1, itile2=itile2,cache=cache)
+		try: omap = read_area(ipathfmt, [opix1,opix2],itile1=itile1, itile2=itile2,cache=cache, slice=slice)
 		except IOError: continue
 		oname = opathfmt % {"y":otile[0]+otileoff[0],"x":otile[1]+otileoff[1]}
 		utils.mkdir(os.path.dirname(oname))
 		enmap.write_map(oname, omap)
 		if verbose: print oname
 
-def monolithic(idir, ofile, verbose=True):
+def monolithic(idir, ofile, verbose=True, slice=None):
 	# Find the range of input tiles
 	ipathfmt = idir + "/tile%(y)03d_%(x)03d.fits"
 	itile1, itile2 = find_tile_range(ipathfmt)
+	def read(fname):
+		m = enmap.read_map(fname)
+		if slice: m = eval("m" + slice)
+		return m
 	# Read the first and last tile to get the total dimensions
-	m1 = enmap.read_map(ipathfmt % {"y":itile1[0],"x":itile1[1]})
-	m2 = enmap.read_map(ipathfmt % {"y":itile2[0]-1,"x":itile2[1]-1})
+	m1 = read(ipathfmt % {"y":itile1[0],"x":itile1[1]})
+	m2 = read(ipathfmt % {"y":itile2[0]-1,"x":itile2[1]-1})
 	wy,wx  = m1.shape[-2:]
 	oshape = tuple(np.array(m1.shape[-2:])*(itile2-itile1-1) + np.array(m2.shape[-2:]))
 	omap  = enmap.zeros(m1.shape[:-2] + oshape, m1.wcs, m1.dtype)
@@ -163,7 +168,7 @@ def monolithic(idir, ofile, verbose=True):
 	# Now loop through all tiles and copy them in to the correct position
 	for ty in range(itile1[0],itile2[0]):
 		for tx in range(itile1[1],itile2[1]):
-			m = enmap.read_map(ipathfmt % {"y":ty,"x":tx})
+			m = read(ipathfmt % {"y":ty,"x":tx})
 			omap[...,ty*wy:(ty+1)*wy,tx*wx:(tx+1)*wx] = m
 			if verbose: print ipathfmt % {"y":ty,"x":tx}
 	enmap.write_map(ofile, omap)
@@ -217,7 +222,7 @@ def read_tileset_geometry(ipathfmt, itile1=(None,None), itile2=(None,None)):
 			tshape=m1.shape[-2:])
 
 def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=False,
-		cache=None):
+		cache=None, slice=None):
 	"""Given a set of tiles on disk with locations ipathfmt % {"y":...,"x":...},
 	read the data corresponding to the pixel range opix[{from,to],{y,x}] in
 	the full map."""
@@ -255,6 +260,7 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 			iname = ipathfmt % {"y":ity,"x":itx}
 			if cache is None or cache[0] != iname:
 				imap  = enmap.read_map(iname)
+				if slice: imap = eval("imap"+slice)
 			else: imap = cache[1]
 			if cache is not None:
 				cache[0], cache[1] = iname, imap

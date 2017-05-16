@@ -401,6 +401,7 @@ class PreconCut:
 		junk  = signal.zeros()
 		iwork = signal.prepare(junk)
 		owork = signal.prepare(junk)
+		iwork[:] = 1
 		for scan in scans:
 			with bench.mark("div_" + signal.name):
 				tod = np.zeros((scan.ndet, scan.nsamp), iwork.dtype)
