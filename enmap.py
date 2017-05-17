@@ -65,7 +65,7 @@ class ndmap(np.ndarray):
 	def npix(self): return np.product(self.shape[-2:])
 	@property
 	def geometry(self): return self.shape, self.wcs
-	def project(self, shape, wcs, order=3, mode="nearest", cval=0): return project(self, shape, wcs, order, mode=mode, cval=cval)
+	def project(self, shape, wcs, order=3, mode="nearest", cval=0, prefilter=True, mask_nan=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width, profile="cos", fill="zero"): return apod(self, width, profile=profile, fill=fill)
@@ -254,7 +254,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 			wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
 	return wpix[::-1].reshape(coords.shape)
 
-def project(map, shape, wcs, order=3, mode="nearest", cval=0.0, force=False):
+def project(map, shape, wcs, order=3, mode="nearest", cval=0.0, force=False, prefilter=True, mask_nan=True):
 	"""Project the map into a new map given by the specified
 	shape and wcs, interpolating as necessary. Handles nan
 	regions in the map by masking them before interpolating.
@@ -265,7 +265,7 @@ def project(map, shape, wcs, order=3, mode="nearest", cval=0.0, force=False):
 	if not force and enlib.wcs.equal(map.wcs, wcs) and tuple(shape[-2:]) == tuple(shape[-2:]):
 		return map
 	pix  = map.sky2pix(posmap(shape, wcs))
-	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval)
+	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	return ndmap(pmap, wcs)
 
 def at(map, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True):

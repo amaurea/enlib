@@ -306,8 +306,9 @@ def getsys_full(sys, time=None, site=None):
 		ref_expanded = []
 		for ref_refsys in ref.split("/"):
 			# In our first format, ref is a set of coordinates in degrees
-			r = ref_refsys[0]
-			refsys = getsys(ref_refsys[1]) if len(ref_refsys) > 1 else prevsys
+			toks = ref_refsys.split(":")
+			r = toks[0]
+			refsys = getsys(toks[1]) if len(toks) > 1 else prevsys
 			try:
 				r = np.asfarray(r.split("_"))*utils.degree
 				assert(r.ndim == 1 and len(r) == 2)
