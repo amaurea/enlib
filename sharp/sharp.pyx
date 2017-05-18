@@ -339,7 +339,7 @@ cdef class sht:
 		[nspin,npix] or [npix] where ntrans is the number of independent
 		transforms to perform in parallel, nspin is the number of spin
 		components per transform (1 or 2), and npix is the number of pixels per map."""
-		map = np.asarray(map, dtype=np.float64)
+		map = np.asarray(map)
 		ntrans, nspin = dim_helper(map, "map")
 		# Create a compatible output map
 		if alm is None:
