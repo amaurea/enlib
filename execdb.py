@@ -19,12 +19,16 @@ class ExecDB:
 	 else: moo = id[::-1]'
 	then a query with id = "hello" will result in
 	{'moo': 'hello', 'id'='hello', 'a': 4}"""
-	def __init__(self, db_file=None, vars_file=None, db_data=None, vars_data=None):
+	def __init__(self, db_file=None, vars_file=None, db_data=None, vars_data=None,
+			override=None):
 		self.db_source   = read_data(db_file,    db_data)
+		if override is not None:
+			self.db_source += "\n" + expand_override(override)
 		self.vars_source = read_data(vars_file, vars_data, "")
 		if self.db_source is None: raise ValueError("No database specified in ExecDB")
 		self.db_code    = compile(self.db_source,   "<exec_db,db_source>",   "exec")
 		self.vars_code  = compile(self.vars_source, "<exec_db,vars_source>", "exec")
+	def __getitem__(self, id): return self.query(id)
 	def query(self, id):
 		globs, locs = {"id":id}, {}
 		exec(self.vars_code, {}, globs)
@@ -35,7 +39,7 @@ class ExecDB:
 			locs[key] = globs[key]
 		return bunch.Bunch(locs)
 	def dump(self):
-		return self.source
+		return self.db_source
 
 def read_data(file_or_fname=None, data=None, default=None):
 	"""Helper function for ExecDB. Gets a string of data
@@ -60,3 +64,6 @@ def recursive_format(data, formats):
 	elif isinstance(data, basestring):
 		return data.format(**formats)
 	return data
+
+def expand_override(desc):
+	return "\n".join([w.replace(":", " = ") for w in desc.split(",")])
