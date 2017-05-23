@@ -199,7 +199,8 @@ def find_tile_range(pathfmt, tile1=(None,None), tile2=(None,None)):
 	for file in files:
 		m = re.match(regex, file)
 		if not m: continue
-		yx = [int(m.group(name)) for name in ["y","x"]]
+		try: yx = [int(m.group(name)) for name in ["y","x"]]
+		except IndexError: yx = [0,0]
 		for i in range(2):
 			if ranges[i] is None: ranges[i] = [yx[i],yx[i]+1]
 			ranges[i] = [min(ranges[i][0],yx[i]),max(ranges[i][1],yx[i]+1)]

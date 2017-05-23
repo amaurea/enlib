@@ -1,3 +1,5 @@
+from enlib import bunch
+
 class ExecDB:
 	"""ExecDB is a flexible way of mapping from dataset ids to
 	the files needed for analysing that dataset. It is based on two
@@ -17,19 +19,27 @@ class ExecDB:
 	 else: moo = id[::-1]'
 	then a query with id = "hello" will result in
 	{'moo': 'hello', 'id'='hello', 'a': 4}"""
-	def __init__(self, db_file=None, vars_file=None, db_data=None, vars_data=None):
-		db_data    = read_data(db_file,    db_data)
-		vars_data = read_data(vars_file, vars_data, "")
-		if db_data is None: raise ValueError("No database specified in ExecDB")
-		self.source = vars_data + "\n" + db_data
-		self.code   = compile(self.source, "<exec_db,source>", "exec")
+	def __init__(self, db_file=None, vars_file=None, db_data=None, vars_data=None,
+			override=None):
+		self.db_source   = read_data(db_file,    db_data)
+		if override is not None:
+			self.db_source += "\n" + expand_override(override)
+		self.vars_source = read_data(vars_file, vars_data, "")
+		if self.db_source is None: raise ValueError("No database specified in ExecDB")
+		self.db_code    = compile(self.db_source,   "<exec_db,db_source>",   "exec")
+		self.vars_code  = compile(self.vars_source, "<exec_db,vars_source>", "exec")
+	def __getitem__(self, id): return self.query(id)
 	def query(self, id):
-		locs = {"id":id}
-		exec(self.code, {}, locs)
-		locs = recursive_format(locs, locs.copy())
-		return locs
+		globs, locs = {"id":id}, {}
+		exec(self.vars_code, {}, globs)
+		exec(self.db_code, globs, locs)
+		globs.update(locs)
+		locs = recursive_format(locs, globs)
+		for key in globs["export"]:
+			locs[key] = globs[key]
+		return bunch.Bunch(locs)
 	def dump(self):
-		return self.source
+		return self.db_source
 
 def read_data(file_or_fname=None, data=None, default=None):
 	"""Helper function for ExecDB. Gets a string of data
@@ -54,3 +64,6 @@ def recursive_format(data, formats):
 	elif isinstance(data, basestring):
 		return data.format(**formats)
 	return data
+
+def expand_override(desc):
+	return "\n".join([w.replace(":", " = ") for w in desc.split(",")])
