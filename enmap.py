@@ -1004,6 +1004,25 @@ def read_map(fname, fmt=None, sel=None, hdu=None):
 		res = eval("res"+":".join(toks[1:]))
 	return res
 
+def read_map_geometry(fname, fmt=None, hdu=None):
+	"""Read an enmap from file. The file type is inferred
+	from the file extension, unless fmt is passed.
+	fmt must be one of 'fits' and 'hdf'."""
+	toks = fname.split(":")
+	fname = toks[0]
+	if fmt == None:
+		if   fname.endswith(".hdf"):     fmt = "hdf"
+		elif fname.endswith(".fits"):    fmt = "fits"
+		elif fname.endswith(".fits.gz"): fmt = "fits"
+		else: fmt = "fits"
+	if fmt == "fits":
+		return read_fits_geometry(fname, hdu=hdu)
+	elif fmt == "hdf":
+		return read_hdf_geometry(fname)
+	else:
+		raise ValueError
+	return res
+
 def write_fits(fname, emap, extra={}):
 	"""Write an enmap to a fits file."""
 	# The fits write routines may attempt to modify
@@ -1045,6 +1064,20 @@ def read_fits(fname, hdu=None, sel=None):
 		res = res.byteswap().newbyteorder()
 	return res
 
+def read_fits_geometry(fname, hdu=None):
+	"""Read an enmap wcs from the specified fits file. By default,
+	the map and coordinate system will be read from HDU 0. Use
+	the hdu argument to change this. The map must be stored as
+	a fits image."""
+	if hdu is None: hdu = 0
+	hdu = astropy.io.fits.open(fname)[hdu]
+	if hdu.header["NAXIS"] < 2:
+		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
+	with warnings.catch_warnings():
+		wcs = enlib.wcs.WCS(hdu.header).sub(2)
+	shape = tuple([hdu.header["NAXIS%d"%(i+1)] for i in range(hdu.header["NAXIS"])[::-1]])
+	return shape, wcs
+
 def write_hdf(fname, emap, extra={}):
 	"""Write an enmap as an hdf file, preserving all
 	the WCS metadata."""
@@ -1084,3 +1117,15 @@ def read_hdf(fname, sel=None):
 	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		res = res.byteswap().newbyteorder()
 	return res
+
+def read_hdf_wcs(fname):
+	"""Read an enmap wcs from the specified hdf file."""
+	import h5py
+	with h5py.File(fname,"r") as hfile:
+		hwcs = hfile["wcs"]
+		header = astropy.io.fits.Header()
+		for key in hwcs:
+			header[key] = hwcs[key].value
+		wcs   = enlib.wcs.WCS(header).sub(2)
+		shape = hfile["data"].shape
+	return shape, wcs
