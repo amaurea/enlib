@@ -121,7 +121,7 @@ def transform_meta(transfun, coords, fields=["ang","mag"], offset=5e-7):
 		res.mag = (tri_area(diff).T/tri_area(offsets[1:]-offsets[0]).T).T
 	return res
 
-def transform_raw(from_sys, to_sys, coords, time=None, site=None):
+def transform_raw(from_sys, to_sys, coords, time=None, site=default_site):
 	"""Transforms coords[2,...] from system from_sys to system to_sys, where
 	systems can be "hor", "cel" or "gal". For transformations involving
 	"hor", the optional arguments time (in modified julian days) and site (which must
@@ -270,7 +270,7 @@ def get_handedness(sys):
 	if sys in ["altaz"]: return 'R'
 	else: return 'L'
 
-def getsys_full(sys, time=None, site=None):
+def getsys_full(sys, time=None, site=default_site):
 	"""Handles our expanded coordinate system syntax: base[:ref[:refsys]].
 	This allows a system to be recentered on a given position or object.
 	The argument can either be a string of the above format (with [] indicating
@@ -340,7 +340,7 @@ def ephem_pos(name, mjd):
 			res[1,i] = float(obj.a_dec)
 		return res.reshape((2,)+djd.shape)
 
-def interpol_pos(from_sys, to_sys, name_or_pos, mjd, site=None, dt=10):
+def interpol_pos(from_sys, to_sys, name_or_pos, mjd, site=default_site, dt=10):
 	"""Given the name of an ephemeris object or a [ra,dec]-type position
 	in radians in from_sys, compute its position in the specified coordinate system for
 	each mjd. The mjds are assumed to be sampled densely enough that
