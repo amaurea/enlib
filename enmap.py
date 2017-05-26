@@ -268,6 +268,13 @@ def project(map, shape, wcs, order=3, mode="nearest", cval=0.0, force=False, pre
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	return ndmap(pmap, wcs)
 
+def extract(map, shape, wcs):
+	"""Like project, but only works for pixel-compatible wcs. Much
+	faster because it simply copies over pixels."""
+	# First check that our wcs is compatible
+	pass
+
+
 def at(map, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True):
 	if unit != "pix": pos = sky2pix(map.shape, map.wcs, pos, safe=safe)
 	return enlib.utils.interpol(map, pos, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
