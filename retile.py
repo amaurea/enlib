@@ -215,8 +215,10 @@ def find_tile_range(pathfmt, tile1=(None,None), tile2=(None,None)):
 
 def read_tileset_geometry(ipathfmt, itile1=(None,None), itile2=(None,None)):
 	itile1, itile2 = find_tile_range(ipathfmt, itile1, itile2)
-	m1 = enmap.read_map(ipathfmt % {"y":itile1[0],"x":itile1[1]})
-	m2 = enmap.read_map(ipathfmt % {"y":itile2[0]-1,"x":itile2[1]-1})
+	mfile1 = ipathfmt % {"y":itile1[0],"x":itile1[1]}
+	mfile2 = ipathfmt % {"y":itile2[0]-1,"x":itile2[1]-1}
+	m1 = enmap.read_map(mfile1)
+	m2 = m1 if mfile1 == mfile2 else enmap.read_map(mfile2)
 	wy,wx  = m1.shape[-2:]
 	oshape = tuple(np.array(m1.shape[-2:])*(itile2-itile1-1) + np.array(m2.shape[-2:]))
 	return bunch.Bunch(shape=m1.shape[:-2]+oshape, wcs=m1.wcs, dtype=m1.dtype,

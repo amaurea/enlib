@@ -1118,7 +1118,7 @@ def read_hdf(fname, sel=None):
 		res = res.byteswap().newbyteorder()
 	return res
 
-def read_hdf_wcs(fname):
+def read_hdf_geometry(fname):
 	"""Read an enmap wcs from the specified hdf file."""
 	import h5py
 	with h5py.File(fname,"r") as hfile:

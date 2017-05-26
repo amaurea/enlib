@@ -351,19 +351,22 @@ def nearest_product(n, factors, direction="below"):
 	if 1 in factors: return n
 	below = direction=="below"
 	nmax = n+1 if below else n*min(factors)+1
+	# a keeps track of all the visited multiples
 	a = np.zeros(nmax+1,dtype=bool)
 	a[1] = True
-	best = 1
+	best = None
 	for i in xrange(n+1):
 		if not a[i]: continue
 		for f in factors:
 			m = i*f
 			if below:
 				if m > n: continue
+				else: best = m
 			else:
-				if m >= n: return m
-			a[m] = True
-			best = m
+				if m >= n and (best is None or best > m):
+					best = m
+			if m < a.size:
+				a[m] = True
 	return best
 
 def mkdir(path):
