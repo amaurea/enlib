@@ -1018,6 +1018,7 @@ def sbox_intersect_1d(a,b,wrap=0):
 		a, b = np.array(a), np.array(b)
 		a[:2]  -= a[0]/wrap*wrap
 		b[:2]  -= b[0]/wrap*wrap
+		segs[0] = (a,b)
 		if a[1] > wrap: segs.append((a-[wrap,wrap,0],b))
 		if b[1] > wrap: segs.append((a,b-[wrap,wrap,0]))
 	res = []

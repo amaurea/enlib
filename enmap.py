@@ -160,12 +160,13 @@ def get_unit(wcs):
 	if enlib.wcs.is_plain(wcs): return 1
 	else: return enlib.utils.degree
 
-def box(shape, wcs, npoint=10):
+def box(shape, wcs, npoint=10, corner=True):
 	"""Compute a bounding box for the given geometry."""
 	# Because of wcs's wrapping, we need to evaluate several
 	# extra pixels to make our unwinding unambiguous
 	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
-		np.linspace(0,shape[-1],num=npoint,endpoint=True)])-0.5
+		np.linspace(0,shape[-1],num=npoint,endpoint=True)])
+	if corner: pix -= 0.5
 	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
 	if enlib.wcs.is_plain(wcs):
 		return np.array(coords).T[[0,-1]]
@@ -254,7 +255,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 			wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
 	return wpix[::-1].reshape(coords.shape)
 
-def project(map, shape, wcs, order=3, mode="nearest", cval=0.0, force=False, prefilter=True, mask_nan=True):
+def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, prefilter=True, mask_nan=True):
 	"""Project the map into a new map given by the specified
 	shape and wcs, interpolating as necessary. Handles nan
 	regions in the map by masking them before interpolating.
@@ -262,18 +263,50 @@ def project(map, shape, wcs, order=3, mode="nearest", cval=0.0, force=False, pre
 	when downgrading compared to averaging down."""
 	map  = map.copy()
 	# Skip expensive operation is map is compatible
-	if not force and enlib.wcs.equal(map.wcs, wcs) and tuple(shape[-2:]) == tuple(shape[-2:]):
-		return map
+	if not force:
+		if enlib.wcs.equal(map.wcs, wcs) and tuple(shape[-2:]) == tuple(shape[-2:]):
+			return map
+		elif enlib.wcs.is_compatible(map.wcs, wcs) and mode == "constant":
+			print "Using extract instead"
+			return extract(map, shape, wcs, cval=cval)
 	pix  = map.sky2pix(posmap(shape, wcs))
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	return ndmap(pmap, wcs)
 
-def extract(map, shape, wcs):
+def extract(map, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b,
+		cval=0):
 	"""Like project, but only works for pixel-compatible wcs. Much
-	faster because it simply copies over pixels."""
+	faster because it simply copies over pixels. Can be used in
+	co-adding by specifying an output map and a combining operation.
+	The deafult operation overwrites the output. Use np.ndarray.__iadd__
+	to get a copy-less += operation."""
 	# First check that our wcs is compatible
-	pass
-
+	assert enlib.wcs.is_compatible(map.wcs, wcs), "Incompatible wcs in enmap.extract: %s vs. %s" % (str(map.wcs), str(wcs))
+	# Find the bounding box of the output in terms of input pixels.
+	# This is simple because our wcses are compatible, so they
+	# can only differ by a simple pixel offset. Here pixoff is
+	# pos_input - pos_output
+	if omap is None:
+		omap = full(map.shape[:-2]+tuple(shape[-2:]), wcs, cval, map.dtype)
+	nphi   = enlib.utils.nint(360/np.abs(map.wcs.wcs.cdelt[0]))
+	pixoff = enlib.utils.nint((wcs.wcs.crpix-map.wcs.wcs.crpix) - (wcs.wcs.crval-map.wcs.wcs.crval)/map.wcs.wcs.cdelt)[::-1]
+	if wrap: pixoff[1] %= nphi
+	# Get bounding boxes in output map coordinates
+	obox = np.array([[0,0],[shape[-2],shape[-1]]])
+	ibox = np.array([pixoff,pixoff+np.array(map.shape[-2:])])
+	# This function copies the intersection of ibox and obox over
+	# from imap to omap
+	def icopy(imap, omap, ibox, obox, ioff, op):
+		uobox = np.array([np.maximum(obox[0],ibox[0]),np.minimum(obox[1],ibox[1])])
+		if np.any(uobox[1]-uobox[0] <= 0): return
+		uibox = uobox - ioff
+		oslice = (Ellipsis,slice(uobox[0,0],uobox[1,0]),slice(uobox[0,1],uobox[1,1]))
+		islice = (Ellipsis,slice(uibox[0,0],uibox[1,0]),slice(uibox[0,1],uibox[1,1]))
+		omap[oslice] = op(omap[oslice],imap[islice])
+	icopy(map, omap, ibox, obox, pixoff, op)
+	if wrap:
+		icopy(map, omap, ibox-[0,nphi], obox, pixoff-[0,nphi], op)
+	return omap
 
 def at(map, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True):
 	if unit != "pix": pos = sky2pix(map.shape, map.wcs, pos, safe=safe)

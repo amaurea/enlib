@@ -59,7 +59,8 @@ def is_compatible(wcs1, wcs2, tol=1e-3):
 	"""Checks whether two world coordinate systems represent
 	(shifted) versions of the same pixelizations, such that
 	every pixel center in wcs1 correspond to a pixel center in
-	wcs2."""
+	wcs2. For now, they also have to have the pixels going
+	in the same direction."""
 	h1 = wcs1.to_header()
 	h2 = wcs2.to_header()
 	for key in h1:

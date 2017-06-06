@@ -98,7 +98,7 @@ def combine_tiles(ipathfmt, opathfmt, combine=2, downsample=2,
 
 def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		otileoff=(0,0), otilenum=(None,None), ocorner=(-np.pi/2,-np.pi),
-		otilesize=(675,675), comm=None, verbose=False, slice=None):
+		otilesize=(675,675), comm=None, verbose=False, slice=None, wrap=True):
 	"""Given a set of tiles on disk with locations ipathfmt % {"y":...,"x":...},
 	retile them into a new tiling and write the result to opathfmt % {"y":...,"x":...}.
 	The new tiling will have tile size given by otilesize[2]. Negative size means the
@@ -113,6 +113,7 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 	# Set up mpi
 	rank, size = (comm.rank, comm.size) if comm is not None else (0, 1)
 	# Expand any scalars
+	if otilesize is None: otilesize=(675,675)
 	otilesize = np.zeros(2,int)+otilesize
 	otileoff  = np.zeros(2,int)+otileoff
 	# Find the range of input tiles
@@ -122,6 +123,9 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 	ibase = enmap.read_map(ipathfmt % {"y":itile1[0],"x":itile1[1]})
 	if slice: ibase = eval("ibase"+slice)
 	itilesize = ibase.shape[-2:]
+	ixres = ibase.wcs.wcs.cdelt[0]
+	nphi  = utils.nint(360/np.abs(ixres))
+	ntile_wrap = nphi/otilesize[1]
 	# Find the pixel position of our output corners according to the wcs.
 	# This is the last place we need to do a coordinate transformation.
 	# All the rest can be done in pure pixel logic.
@@ -145,7 +149,9 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		opix1, opix2 = np.minimum(opix1,opix2), np.maximum(opix1,opix2)
 		try: omap = read_area(ipathfmt, [opix1,opix2],itile1=itile1, itile2=itile2,cache=cache, slice=slice)
 		except IOError: continue
-		oname = opathfmt % {"y":otile[0]+otileoff[0],"x":otile[1]+otileoff[1]}
+		x = otile[1]+otileoff[1]
+		if wrap: x %= ntile_wrap
+		oname = opathfmt % {"y":otile[0]+otileoff[0],"x":x}
 		utils.mkdir(os.path.dirname(oname))
 		enmap.write_map(oname, omap)
 		if verbose: print oname
