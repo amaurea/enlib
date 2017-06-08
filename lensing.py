@@ -1,5 +1,10 @@
 import numpy as np
-from enlib import enmap, utils, powspec, sharp, curvedsky, interpol
+import logging
+from enlib import enmap, utils, powspec, interpol
+try:
+        import curvedsky
+except:
+        logging.warn("Couldn't load curvedsky. You probably need to install libsharp.")
 
 ####### Flat sky lensing #######
 
