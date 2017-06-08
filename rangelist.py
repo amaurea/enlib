@@ -36,10 +36,11 @@ class Rangelist:
 				return Rangelist(self.ranges, (sel.stop-sel.start)/sel.step)
 			if (sel.stop-sel.start)*sel.step < 0: return Rangelist(np.zeros([0,2],dtype=int),0)
 			if sel.step > 0:
-				return Rangelist(slice_helper(self.ranges, sel),(sel.stop-sel.start)/sel.step)
+				res = slice_helper(self.ranges, sel)
+				return Rangelist(res,(sel.stop-sel.start)/sel.step)
 			else:
 				res = slice_helper(self.n-self.ranges[::-1,::-1], slice(sel.stop+1, sel.start+1, -sel.step))
-				return Rangelist(res, (sel.stop-sel.start)/sel.step)
+				return  Rangelist(res, (sel.stop-sel.start)/sel.step)
 		else:
 			# Assume number
 			i = np.searchsorted(self.ranges[:,0], sel, side="right")

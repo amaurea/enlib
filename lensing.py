@@ -109,8 +109,8 @@ def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64
 	grad = curvedsky.alm2map(phi_alm, enmap.zeros((2,)+shape[-2:], wcs, dtype=dtype), deriv=True)
 	if verbose: print "Computing alpha map"
 	raw_pos = enmap.samewcs(offset_by_grad(obs_pos, grad, pol=True, geodesic=geodesic), obs_pos)
+	del obs_pos, phi_alm
 	if "a" not in output: del grad
-	del phi_alm
 	if "u" in output:
 		if verbose: print "Computing unlensed map"
 		cmb_raw = curvedsky.alm2map(cmb_alm, enmap.zeros(shape, wcs, dtype=dtype), spin=spin)
@@ -119,7 +119,7 @@ def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64
 	if raw_pos.shape[0] > 2 and np.any(raw_pos[2]):
 		if verbose: print "Rotating polarization"
 		cmb_obs = enmap.rotate_pol(cmb_obs, raw_pos[2])
-	del cmb_alm
+	del cmb_alm, raw_pos
 	# Output in same order as specified in output argument
 	res = []
 	for c in output:

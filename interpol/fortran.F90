@@ -465,6 +465,7 @@ subroutine interpol(idata, ishape, odata, pos, type, order, border, trans)
 			do i = 1,ndim
 				xi = inds(i) + off(i)
 				n  = ishape(i)
+				if(n < 0) write(*,*) "If I don't have this write here, ifort 15 optimizes away ishape and/or n"
 				xi = map_border(border, ishape(i), xi)
 				! If we don't map onto a valid point (because we use null-boundaries),
 				! this cell doesn't contribute, so go to the next one

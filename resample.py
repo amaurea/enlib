@@ -73,7 +73,7 @@ def resample_fft(d, factors=[0.5], axes=None):
 	for ax, factor in zip(axes, factors):
 		ax %= d.ndim
 		nold = d.shape[ax]
-		nnew = int(nold*factor)
+		nnew = int(nold*factor+0.5)
 		dn   = nnew-nold
 		if dn > 0:
 			padvals = np.zeros(fd.shape[:ax]+(dn,)+fd.shape[ax+1:])

@@ -19,6 +19,8 @@ class default_site:
 	hum  = 0.2
 	freq = 150.
 	lapse= 0.0065
+	base_tilt =    0.0107693
+	base_az   = -114.9733961
 
 def transform(from_sys, to_sys, coords, time=55500, site=default_site, pol=None, mag=None):
 	"""Transforms coords[2,...] from system from_sys to system to_sys, where
@@ -119,7 +121,7 @@ def transform_meta(transfun, coords, fields=["ang","mag"], offset=5e-7):
 		res.mag = (tri_area(diff).T/tri_area(offsets[1:]-offsets[0]).T).T
 	return res
 
-def transform_raw(from_sys, to_sys, coords, time=None, site=None):
+def transform_raw(from_sys, to_sys, coords, time=None, site=default_site):
 	"""Transforms coords[2,...] from system from_sys to system to_sys, where
 	systems can be "hor", "cel" or "gal". For transformations involving
 	"hor", the optional arguments time (in modified julian days) and site (which must
@@ -151,12 +153,24 @@ def transform_raw(from_sys, to_sys, coords, time=None, site=None):
 	# 3. cel-gal transformation, using astropy
 	(from_sys,from_ref), (to_sys,to_ref) = getsys_full(from_sys,time,site), getsys_full(to_sys,time,site)
 	if from_ref is not None: coords[:] = decenter(coords, from_ref)
-	if from_sys != to_sys:
-		if from_sys == "altaz":
+	while True:
+		if from_sys == to_sys: break
+		elif from_sys == "tele":
+			coords[:] = tele2hor(coords, site, copy=False)
+			from_sys  = "altaz"
+		elif from_sys == "altaz" and to_sys in ["tele"]:
+			coords[:] = hor2tele(coords, site, copy=False)
+			from_sys  = "tele"
+		elif from_sys == "altaz":
 			coords[:] = hor2cel(coords, time, site, copy=False)
-		coords[:] = transform_astropy(nohor(from_sys), nohor(to_sys), coords)
-		if to_sys == "altaz":
+			from_sys = "icrs"
+		elif from_sys == "icrs" and to_sys in ["altaz","tele"]:
 			coords[:] = cel2hor(coords, time, site, copy=False)
+			from_sys = "altaz"
+		else:
+			to_sys_astropy = nohor(to_sys)
+			coords[:] = transform_astropy(from_sys, to_sys_astropy, coords)
+			from_sys = to_sys_astropy
 	if to_ref is not None: coords[:] = recenter(coords, to_ref)
 	return coords.reshape(oshape)
 
@@ -195,6 +209,16 @@ def cel2hor(coord, time, site, copy=True):
 	am = pyfsla.sla_mappa(2000.0, trepr)
 	# This involves a transpose operation, which is not optimal
 	pyfsla.oamulti(time, coord.T, ao, am)
+	return coord
+
+def tele2hor(coord, site, copy=True):
+	coord = np.array(coord, copy=copy)
+	coord = euler_rot([site.base_az*utils.degree, site.base_tilt*utils.degree, -site.base_az*utils.degree], coord)
+	return coord
+
+def hor2tele(coord, site, copy=True):
+	coord = np.array(coord, copy=copy)
+	coord = euler_rot([site.base_az*utils.degree, -site.base_tilt*utils.degree, -site.base_az*utils.degree], coord)
 	return coord
 
 def euler_mat(euler_angles, kind="zyz"):
@@ -238,7 +262,7 @@ def decenter(angs, center):
 	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], 0, np.pi/2
 	return euler_rot([ra0,dec1-dec0,-ra1],  angs, kind="zyz")
 
-def nohor(sys): return sys if sys != "altaz" else "icrs"
+def nohor(sys): return sys if sys not in ["altaz","tele"] else "icrs"
 def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,basestring) else sys
 def get_handedness(sys):
 	"""Return the handedness of the coordinate system sys, as seen from inside
@@ -246,32 +270,45 @@ def get_handedness(sys):
 	if sys in ["altaz"]: return 'R'
 	else: return 'L'
 
-def getsys_full(sys, time=None, site=None):
+def getsys_full(sys, time=None, site=default_site):
 	"""Handles our expanded coordinate system syntax: base[:ref[:refsys]].
 	This allows a system to be recentered on a given position or object.
 	The argument can either be a string of the above format (with [] indicating
 	optional parts), or a list of [base, ref, refsys]. Returns a parsed
 	and expanded version, where the systems have been replaced by full
 	system objects (or None), and the reference point has been expanded
-	into coordinates (or None), and rotated into the base system."""
-	if isinstance(sys, basestring): sys = sys.split(":")
+	into coordinates (or None), and rotated into the base system.
+	Coordinates are separated by _.
+
+	Example: Horizontal-based coordinates with the Moon centered at [0,0]
+	would be hor:Moon/0_0.
+	
+	Used to be sys:center_on/center_at:sys_of_center_coordinates. But much
+	more flexible to do sys:center_on:sys/center_at:sys. This syntax
+	would be backwards compatible, though it's starting to get a bit clunky.
+	"""
+	if isinstance(sys, basestring): sys = sys.split(":",1)
 	else:
 		try: sys = list(sys)
 		except TypeError: sys = [sys]
-	if len(sys) < 3: sys += [None]*(3-len(sys))
-	base, ref, refsys = sys
-	base   = getsys(base)
-	refsys = getsys(refsys) if refsys is not None else base
+	if len(sys) < 2: sys += [None]*(2-len(sys))
+	base, ref = sys
+	base = getsys(base)
+	prevsys = base
+	#refsys = getsys(refsys) if refsys is not None else base
 	if ref is None: return [base, ref]
 	if isinstance(ref, basestring):
-		# The general formt here is from[/to], where from and to
-		# each are either an object name or a position in the format
+		# In general ref is ref:refsys/refto:reftosys. Here
+		# ref and refto are are either an object name or a position in the format
 		# lat_lon. comma would have been preferable, but we reserve that
 		# for from_sys,to_sys uses for backwards compatibility with
 		# existing programs.
 		ref_expanded = []
-		for r in ref.split("/"):
+		for ref_refsys in ref.split("/"):
 			# In our first format, ref is a set of coordinates in degrees
+			toks = ref_refsys.split(":")
+			r = toks[0]
+			refsys = getsys(toks[1]) if len(toks) > 1 else prevsys
 			try:
 				r = np.asfarray(r.split("_"))*utils.degree
 				assert(r.ndim == 1 and len(r) == 2)
@@ -281,6 +318,7 @@ def getsys_full(sys, time=None, site=None):
 				r = ephem_pos(r, time)
 				r = transform_raw("equ", base, r, time=time, site=site)
 			ref_expanded += list(r)
+			prevsys = refsys
 		ref = np.array(ref_expanded)
 	return [base, ref]
 
@@ -302,7 +340,7 @@ def ephem_pos(name, mjd):
 			res[1,i] = float(obj.a_dec)
 		return res.reshape((2,)+djd.shape)
 
-def interpol_pos(from_sys, to_sys, name_or_pos, mjd, site=None, dt=10):
+def interpol_pos(from_sys, to_sys, name_or_pos, mjd, site=default_site, dt=10):
 	"""Given the name of an ephemeris object or a [ra,dec]-type position
 	in radians in from_sys, compute its position in the specified coordinate system for
 	each mjd. The mjds are assumed to be sampled densely enough that
@@ -329,10 +367,13 @@ str2sys = make_mapping({
 	"galactic": ["gal", "galactic"],
 	"icrs":     ["equ", "equatorial", "cel", "celestial", "icrs"],
 	"altaz":    ["altaz", "azel", "hor", "horizontal"],
-	"barycentrictrueecliptic": ["ecl","ecliptic","barycentrictrueecliptic"]})
+	"tele":     ["tele","telescope"],
+	"barycentrictrueecliptic": ["ecl","ecliptic","barycentrictrueecliptic"],
+	})
 coord_names = {
 	"galactic": ["l","b"],
 	"icrs": ["ra","dec"],
 	"altaz":["az","alt"],
-	"barycentrictrueecliptic":["lon","lat"]
+	"barycentrictrueecliptic":["lon","lat"],
+	"tele":["az","alt"],
 	}
