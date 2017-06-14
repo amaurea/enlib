@@ -671,6 +671,21 @@ def greedy_split(data, n=2, costfun=max, workfun=lambda w,x: x if w is None else
 		cost = icost
 	return groups, cost, work
 
+def greedy_split_simple(data, n=2):
+	"""Split array "data" into n lists such that each list has approximately the same
+	sum, using a greedy algorithm."""
+	inds = np.argsort(data)[::-1]
+	rn   = range(n)
+	sums = [0  for i in rn]
+	res  = [[] for i in rn]
+	for i in inds:
+		small = 0
+		for j in rn:
+			if sums[j] < sums[small]: small = j
+		sums[small] += data[i]
+		res[small].append(i)
+	return res
+
 def cov2corr(C):
 	"""Scale rows and columns of C such that its diagonal becomes one.
 	This produces a correlation matrix from a covariance matrix. Returns
