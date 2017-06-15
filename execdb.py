@@ -66,4 +66,9 @@ def recursive_format(data, formats):
 	return data
 
 def expand_override(desc):
-	return "\n".join([w.replace(":", " = ") for w in desc.split(",")])
+	lines  = desc.split(",")
+	olines = []
+	for line in lines:
+		toks  = line.split(":")
+		olines.append('%s = "%s"' % (toks[0],toks[1]))
+	return "\n".join(olines)
