@@ -291,7 +291,7 @@ class NmatScaled(NoiseMatrix):
 		"""Construct an NmatMultires, which has different resolution for the
 		variances and correlation structure.
 		
-		scale[nsbin,ndet]: high-resolution covariance scaling
+		scale[nsbin,ndet]: high-resolution *rms* scaling. So the square of this will be applied to the covariance.
 		bins [nvbin,2]: from-to for each bin in arbitrary units. Will be scaled so that whole spec is covered.
 		nmat: NoiseMatrix to apply scaling to.
 		"""
@@ -340,62 +340,62 @@ class NmatScaled(NoiseMatrix):
 		fields = self.export()
 		write_nmat_helper(fname, fields)
 
-class NmatScaled2(NoiseMatrix):
-	"""A noise matrix similar to detvecs, but where the variance is binned in smaller
-	bins than the correlation."""
-	def __init__(self, vars, freqs, nmat):
-		"""Construct an NmatMultires, which has different resolution for the
-		variances and correlation structure.
-
-		vars[nvar,ndet]: variance model. Will be linearly interpolated
-		freqs[nvar]:     freq indices at which the variance model is specified
-		                 will be rescaled such that freqs[-1] = nfreq in tod
-		nmat: NoiseMatrix of scaled data
-		"""
-		self.nmat  = nmat
-		self.freqs = np.ascontiguouarray(freqs)
-		self.vars  = np.ascontiguousarray(vars)
-
-		# Get the white noise approximation. This is a bit difficult due
-		# to the different binning the scaling uses. But it only needs to
-		# be an approximation anyway. So we will treat the scaling and
-		# the rest as separable.
-		bins  = utils.edges2bins(self.freqs)
-		bsize = bins[:,1]-bins[:,0]
-		avg_ivar = np.sum(1/self.vars[:-1]*bsize[:,None],0)/np.sum(bsize)
-		self.tdiag = self.nmat.tdiag * avg_ivar
-	def apply(self, tod):
-		ft = enlib.fft.rfft(tod)
-		self.apply_ft(ft, tod.nsamp, tod.dtype)
-		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
-		return tod
-	def apply_ft(self, ft, nsamp, dtype):
-		ifreqs= get_ifreqs(self.freqs, nsamp)
-		get_core(dtype).scale_lin(ft.T, ifreqs, self.vars.T, -0.5)
-		self.nmat.apply_ft(ft, nsamp, dtype)
-		get_core(dtype).scale_lin(ft.T, ifreqs, self.vars.T, -0.5)
-	def __getitem__(self, sel):
-		res, detslice, sampslice = self.getitem_helper(sel)
-		step = np.abs(sampslice.step or 1)
-		# Undo the internal scaling in nmat: We want to handle
-		# that using scale itself. A common use case of this
-		# class will be to let scale be rms values and nmat
-		# a correlation matrix. We want to preserve that
-		# distinction.
-		nmat = res.nmat[sel] * step**-1
-		fmax = res.freqs[-1]/step
-		# We have two frequency binnings now. First do the high-res var binning
-		mask  = res.freqs < fmax
-		freqs = res.freqs[mask]
-		freqs[-1] = fmax
-		return NmatScaled2(res.vars/step**0.5, freqs, nmat)
-	def __mul__(self, a):
-		return NmatScaled2(self.vars*a, self.freqs, self.nmat)
-	def export(self):
-		return {"type":"scaled2", "freqs":self.freqs, "vars":self.vars, "nmat": self.nmat.export()}
-	def write(self, fname):
-		fields = self.export()
-		write_nmat_helper(fname, fields)
+#class NmatScaled2(NoiseMatrix):
+#	"""A noise matrix similar to detvecs, but where the variance is binned in smaller
+#	bins than the correlation."""
+#	def __init__(self, vars, freqs, nmat):
+#		"""Construct an NmatMultires, which has different resolution for the
+#		variances and correlation structure.
+#
+#		vars[nvar,ndet]: variance model. Will be linearly interpolated
+#		freqs[nvar]:     freq indices at which the variance model is specified
+#		                 will be rescaled such that freqs[-1] = nfreq in tod
+#		nmat: NoiseMatrix of scaled data
+#		"""
+#		self.nmat  = nmat
+#		self.freqs = np.ascontiguouarray(freqs)
+#		self.vars  = np.ascontiguousarray(vars)
+#
+#		# Get the white noise approximation. This is a bit difficult due
+#		# to the different binning the scaling uses. But it only needs to
+#		# be an approximation anyway. So we will treat the scaling and
+#		# the rest as separable.
+#		bins  = utils.edges2bins(self.freqs)
+#		bsize = bins[:,1]-bins[:,0]
+#		avg_ivar = np.sum(1/self.vars[:-1]*bsize[:,None],0)/np.sum(bsize)
+#		self.tdiag = self.nmat.tdiag * avg_ivar
+#	def apply(self, tod):
+#		ft = enlib.fft.rfft(tod)
+#		self.apply_ft(ft, tod.nsamp, tod.dtype)
+#		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
+#		return tod
+#	def apply_ft(self, ft, nsamp, dtype):
+#		ifreqs= get_ifreqs(self.freqs, nsamp)
+#		get_core(dtype).scale_lin(ft.T, ifreqs, self.vars.T, -0.5)
+#		self.nmat.apply_ft(ft, nsamp, dtype)
+#		get_core(dtype).scale_lin(ft.T, ifreqs, self.vars.T, -0.5)
+#	def __getitem__(self, sel):
+#		res, detslice, sampslice = self.getitem_helper(sel)
+#		step = np.abs(sampslice.step or 1)
+#		# Undo the internal scaling in nmat: We want to handle
+#		# that using scale itself. A common use case of this
+#		# class will be to let scale be rms values and nmat
+#		# a correlation matrix. We want to preserve that
+#		# distinction.
+#		nmat = res.nmat[sel] * step**-1
+#		fmax = res.freqs[-1]/step
+#		# We have two frequency binnings now. First do the high-res var binning
+#		mask  = res.freqs < fmax
+#		freqs = res.freqs[mask]
+#		freqs[-1] = fmax
+#		return NmatScaled2(res.vars/step**0.5, freqs, nmat)
+#	def __mul__(self, a):
+#		return NmatScaled2(self.vars*a, self.freqs, self.nmat)
+#	def export(self):
+#		return {"type":"scaled2", "freqs":self.freqs, "vars":self.vars, "nmat": self.nmat.export()}
+#	def write(self, fname):
+#		fields = self.export()
+#		write_nmat_helper(fname, fields)
 
 
 def read_nmat(fname, group=None):
