@@ -162,6 +162,12 @@ class DataSet:
 			del self.datafields[name]
 		else:
 			del self.__dict__[name]
+	def __getitem__(self, name):
+		return self.__dict__["datafields"][name].data
+	def __setitem__(self, name, value):
+		self.__dict__["datafields"][name].data = value
+	def __delitem__(self, name):
+		del self.datafields[name]
 	def __dir__(self): return sorted(self.__dict__.keys() + self.names)
 	def __repr__(self):
 		descs = ["%s%s" % (name, self.datafields[name].data_desc()) for name in self.datafields]
