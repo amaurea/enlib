@@ -291,7 +291,7 @@ class NmatScaled(NoiseMatrix):
 		"""Construct an NmatMultires, which has different resolution for the
 		variances and correlation structure.
 		
-		scale[nsbin,ndet]: high-resolution *rms* scaling. So the square of this will be applied to the covariance.
+		scale[ndet,nsbin]: high-resolution *rms* scaling. So the square of this will be applied to the covariance.
 		bins [nvbin,2]: from-to for each bin in arbitrary units. Will be scaled so that whole spec is covered.
 		nmat: NoiseMatrix to apply scaling to.
 		"""
@@ -305,7 +305,7 @@ class NmatScaled(NoiseMatrix):
 		# be an approximation anyway. So we will treat the scaling and
 		# the rest as separable.
 		bsize = self.bins[:,1]-self.bins[:,0]
-		avg_iS2 = (np.sum(self.inv_scale**2 * bsize[:,None],0)/np.sum(bsize))
+		avg_iS2 = (np.sum(self.inv_scale**2 * bsize,1)/np.sum(bsize))
 		self.tdiag = self.nmat.tdiag * avg_iS2
 	def apply(self, tod):
 		ft = enlib.fft.rfft(tod)
@@ -314,24 +314,22 @@ class NmatScaled(NoiseMatrix):
 		return tod
 	def apply_ft(self, ft, nsamp, dtype):
 		ibins= get_ibins(self.bins, nsamp)
-		get_core(dtype).nmat_uncorr(ft.T, ibins.T, self.inv_scale)
+		get_core(dtype).nmat_uncorr(ft.T, ibins.T, self.inv_scale.T)
 		self.nmat.apply_ft(ft, nsamp, dtype)
-		get_core(dtype).nmat_uncorr(ft.T, ibins.T, self.inv_scale)
+		get_core(dtype).nmat_uncorr(ft.T, ibins.T, self.inv_scale.T)
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
 		step = np.abs(sampslice.step or 1)
-		# Undo the internal scaling in nmat: We want to handle
-		# that using scale itself. A common use case of this
-		# class will be to let scale be rms values and nmat
-		# a correlation matrix. We want to preserve that
-		# distinction.
+		# First slice our internal noise matrix. But undo the
+		# step scaling, as the overall variance is our responsibility.
 		nmat = res.nmat[sel] * step**-1
-		# We have two frequency binnings now. First do the high-res var binning
+		# Then handle our part
 		fmax = res.bins[-1,-1]/step
-		scale_mask  = res.bins[:,0] < fmax
-		bins        = res.bins[mask]
+		mask = res.bins[:,0] < fmax
+		bins = res.bins[mask]
 		bins[-1,-1] = fmax
-		return NmatScaled(res.scale/step**0.5, bins, nmat)
+		scale= res.scale[detslice,mask]
+		return NmatScaled(scale/step**0.5, bins, nmat)
 	def __mul__(self, a):
 		return NmatScaled(self.scale*a**0.5, self.bins, self.nmat)
 	def export(self):
