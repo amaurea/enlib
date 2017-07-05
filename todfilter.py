@@ -2,7 +2,7 @@ import numpy as np, time, h5py
 from scipy import signal
 from enlib import config, fft, utils, gapfill, todops, pmat, rangelist
 
-config.default("gfilter_jon_naz", 8, "The number of azimuth modes to fit/subtract in Jon's polynomial ground filter.")
+config.default("gfilter_jon_naz", 16, "The number of azimuth modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_nt",  10, "The number of time modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_nhwp", 0, "The number of hwp modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_niter", 3, "The number of time modes to fit/subtract in Jon's polynomial ground filter.")
