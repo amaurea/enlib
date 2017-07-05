@@ -1,4 +1,5 @@
 import numpy as np, time, h5py
+from scipy import signal
 from enlib import config, fft, utils, gapfill, todops, pmat, rangelist
 
 config.default("gfilter_jon_naz", 8, "The number of azimuth modes to fit/subtract in Jon's polynomial ground filter.")
@@ -32,22 +33,79 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	if naz == 0 and nt == 0 and nhwp == 0: return tod
 	# Build our set of basis functions. These are shared
 	# across iterations.
-	B = np.zeros([naz+nt+nhwp,d.shape[-1]],dtype=tod.dtype)
-	if naz > 0:
-		# Build azimuth basis as polynomials
-		x = utils.rescale(az,[-1,1])
-		for i in range(naz): B[i] = x**(i+1)
-	if nt > 0:
-		x = np.linspace(-1,1,d.shape[-1],endpoint=False)
-		for i in range(nt): B[naz+i] = x**i
-	if nhwp > 0:
-		# Use sin and cos to avoid discontinuities
-		c = np.cos(hwp)
-		s = np.sin(hwp)
-		for i in range(nhwp):
-			j = i/2+1
-			x = np.cos(j*hwp) if i%2 == 0 else np.sin(j*hwp)
-			B[naz+nt+i] = x
+	with bench.show("A"):
+		B = np.zeros([naz+nt+nhwp,d.shape[-1]],dtype=tod.dtype)
+		if naz > 0:
+			# Build azimuth basis as polynomials
+			x = utils.rescale(az,[-1,1])
+			B[0] = x
+			for i in range(1,naz): B[i] = B[i-1]*x
+		if nt > 0:
+			x = np.linspace(-1,1,d.shape[-1],endpoint=False)
+			B[naz] = x
+			for i in range(1,nt): B[naz+i] = B[naz+i-1]*x
+		if nhwp > 0:
+			# Use sin and cos to avoid discontinuities
+			c = np.cos(hwp)
+			s = np.sin(hwp)
+			for i in range(nhwp):
+				j = i/2+1
+				x = np.cos(j*hwp) if i%2 == 0 else np.sin(j*hwp)
+				B[naz+nt+i] = x
+	for it in range(niter):
+		with bench.show("B"):
+			if do_gapfill: gapfill.gapfill(d, cuts, inplace=True)
+			# Solve for the best fit for each detector, [nbasis,ndet]
+			# B[b,n], d[d,n], amps[b,d]
+		with bench.show("C"):
+			if weights is None:
+				try:
+					amps = np.linalg.solve(B.dot(B.T),B.dot(d.T))
+				except np.linalg.LinAlgError as e:
+					print "LinAlgError in todfilter. Skipping"
+					continue
+			else:
+				w = weights.reshape(-1,weights.shape[-1])
+				amps = np.zeros([naz+nt+nhwp,d.shape[0]],dtype=tod.dtype)
+				for di in range(len(tod)):
+					try:
+						amps[:,di] = np.linalg.solve((B*w[di]).dot(B.T),B.dot(w[di]*d[di]))
+					except np.linalg.LinAlgError as e:
+						print "LinAlgError in todfilter di %d. Skipping" % di
+						continue
+		#print "amps", amps[:,2]
+		# Subtract the best fit
+		if asign > 0: d -= amps[:naz].T.dot(B[:naz])
+		if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[naz:naz+nt])
+		if hsign > 0: d -= amps[naz+nt:naz+nt+nhwp].T.dot(B[naz+nt:naz+nt+nhwp])
+	with bench.show("D"):
+		# Why was this necessary?
+		if do_gapfill: gapfill.gapfill(d, cuts, inplace=True)
+		if deslope: utils.deslope(tod, w=8, inplace=True)
+		res = d.reshape(tod.shape)
+	return res
+
+def build_poly_basis(x, i1, i2=None, out=None):
+	if i2 is None: i1, i2 = 0, i1
+	if out is None: out = np.zeros([i2-i1,len(x)],x.dtype)
+	if i2-i1 == 0: return out
+	out[0] = x**i1
+	for i in range(i1+1,i2):
+		out[i-i1] = out[i-i1-1]*x
+	return out
+
+def build_phase(az, smooth=1):
+	mi,ma = utils.minmax(az)
+	phase = (az-mi)/(ma-mi)
+	falling = phase[1:]-phase[:-1] < 0
+	falling = np.concatenate([falling[:1],falling])
+	phase[falling] = 2-phase[falling]
+	if smooth:
+		phase = signal.medfilt(phase, 2*smooth+1)
+	return phase
+
+def fit_basis(d, B, cuts=None, weights=None, niter=3, verbose=True):
+	if cuts is None: niter=1
 	for it in range(niter):
 		if do_gapfill: gapfill.gapfill(d, cuts, inplace=True)
 		# Solve for the best fit for each detector, [nbasis,ndet]
@@ -56,28 +114,18 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 			try:
 				amps = np.linalg.solve(B.dot(B.T),B.dot(d.T))
 			except np.linalg.LinAlgError as e:
-				print "LinAlgError in todfilter. Skipping"
+				if verbose: print "LinAlgError in todfilter. Skipping"
 				continue
 		else:
 			w = weights.reshape(-1,weights.shape[-1])
-			amps = np.zeros([naz+nt+nhwp,d.shape[0]],dtype=tod.dtype)
-			for di in range(len(tod)):
+			amps = np.zeros([B.shape[0],d.shape[0]],dtype=d.dtype)
+			for di in range(len(d)):
 				try:
 					amps[:,di] = np.linalg.solve((B*w[di]).dot(B.T),B.dot(w[di]*d[di]))
 				except np.linalg.LinAlgError as e:
-					print "LinAlgError in todfilter di %d. Skipping" % di
+					if verbose: print "LinAlgError in todfilter di %d. Skipping" % di
 					continue
-		#print "amps", amps[:,2]
-		# Subtract the best fit
-		if asign > 0: d -= amps[:naz].T.dot(B[:naz])
-		if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[naz:naz+nt])
-		if hsign > 0: d -= amps[naz+nt:naz+nt+nhwp].T.dot(B[naz+nt:naz+nt+nhwp])
-	# Why was this necessary?
-	if do_gapfill: gapfill.gapfill(d, cuts, inplace=True)
-	if deslope: utils.deslope(tod, w=8, inplace=True)
-	res = d.reshape(tod.shape)
-	return res
-
+		return amps
 
 def deproject_vecs(tods, dark, nmode=50, cuts=None, deslope=True, inplace=True):
 	"""Given a tod[ndet,nsamp] and a set of basis modes dark[nmode,nsamp], fit

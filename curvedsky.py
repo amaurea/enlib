@@ -403,8 +403,8 @@ def match_predefined_minfo(m, rtol=None, atol=None):
 	ntheta, nphi = m.shape[-2:]
 	# First find out how many lat rings there are in the whole sky.
 	# Find the first and last pixel center inside bounds
-	y1   = int(np.ceil(m.sky2pix([np.pi/2,0])[0]))
-	y2   = int(np.floor(m.sky2pix([-np.pi/2,0])[0]))
+	y1   = int(np.round(m.sky2pix([np.pi/2,0])[0]))
+	y2   = int(np.round(m.sky2pix([-np.pi/2,0])[0]))
 	phi0 = m.pix2sky([0,0])[1]
 	ny   = utils.nint(y2-y1+1)
 	nx   = utils.nint(np.abs(360./m.wcs.wcs.cdelt[0]))
@@ -417,7 +417,7 @@ def match_predefined_minfo(m, rtol=None, atol=None):
 		minfos.append(sharp.map_info_fejer2(ny+i, nx, phi0))
 		minfos.append(sharp.map_info_mw(ny+i, nx, phi0))
 	# For each pixelization find the first ring in the map
-	aroffs, scores = [], []
+	aroffs, scores, minfos2 = [], [], []
 	for minfo in minfos:
 		# Find theta closest to our first theta
 		i1 = np.argmin(np.abs(theta[0]-minfo.theta))
@@ -431,13 +431,14 @@ def match_predefined_minfo(m, rtol=None, atol=None):
 		roff = np.max(np.abs(offs-np.mean(offs)))
 		aroffs.append([aoff,roff,i1])
 		scores.append(aoff/atol + roff/rtol)
+		minfos2.append(minfo)
 	# Choose the one with the lowest score (lowest mismatch)
 	best  = np.argmin(scores)
 	aoff, roff, i1 = aroffs[best]
 	i2 = i1+ntheta
 	assert aoff < atol, "Could not find a map_info with predefined weights matching input map (abs offset %e >= %e)" % (aoff, atol)
 	assert roff < rtol, "Could not find a map_info with predefined weights matching input map (%rel offset e >= %e)" % (aoff, atol)
-	minfo = minfos[best]
+	minfo = minfos2[best]
 	# Modify the minfo to restrict it to only the rows contained in m
 	minfo_cut = sharp.map_info(
 			minfo.theta[i1:i2],  minfo.nphi[i1:i2], minfo.phi0[i1:i2],
