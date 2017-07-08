@@ -282,6 +282,9 @@ def getsys_full(sys, time=None, site=default_site):
 
 	Example: Horizontal-based coordinates with the Moon centered at [0,0]
 	would be hor:Moon/0_0.
+
+	Example: Put celestial coordinates ra=10, dec=20 at horizontal coordinates
+	az=0, el=0: hor:10_20:cel/0_0:hor. Yes, this is horrible.
 	
 	Used to be sys:center_on/center_at:sys_of_center_coordinates. But much
 	more flexible to do sys:center_on:sys/center_at:sys. This syntax

@@ -86,7 +86,7 @@ def map_info_clenshaw_curtis(int nrings, nphi=None, double phi0=0, stride_lon=No
 	with nrings iso-colatitude rings with nphi pixels each, such that the first and last
 	rings have colatitude 0 and pi respectively. This corresponds to Clenshaw-Curtis
 	quadrature."""
-	cdef int inphi = 2*nrings if nphi is None else nphi
+	cdef int inphi = 2*(nrings-1) if nphi is None else nphi
 	cdef int slon  = 1 if stride_lon is None else stride_lon
 	cdef int slat  = inphi*slon if stride_lat is None else stride_lat
 	cdef csharp.sharp_geom_info * geom

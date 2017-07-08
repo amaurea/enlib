@@ -31,8 +31,12 @@ class Tagdb:
 		self.default_query = default_query
 		# Set our sorting field
 		self.sort  = sort
-	def get_funcs(self):
-		return {"file_contains": file_contains}
+		self.functors = {}
+		self.add_func("file_contains", file_contains)
+	def add_func(self, name, func):
+		self.functors[name] = lambda data: func
+	def add_functor(self, name, init):
+		self.functors[name] = init
 	def copy(self):
 		return copy.deepcopy(self)
 	@property
@@ -47,7 +51,7 @@ class Tagdb:
 		ids, subids = split_ids(ids)
 		# Restrict to the subset of these ids
 		inds = utils.find(self.ids, ids)
-		odata = {key:val[...,inds] for key, val in self.data.iteritems()}
+		odata = dslice(self.data, inds)
 		# Update subids
 		odata["subids"] = np.array([merge_subid(a,b) for a, b in zip(odata["subids"], subids)])
 		res = self.copy()
@@ -59,6 +63,8 @@ class Tagdb:
 		be returned. More general syntax is also available. For example,
 		(a+b>c)|foo&bar,cow. This follows standard python and numpy syntax,
 		except that , is treated as a lower-priority version of &."""
+		# Make a copy of self.data so we can't modify it without changing ourself
+		data = self.data.copy()
 		# First split off any sorting field or slice
 		if query is None: query = ""
 		toks = utils.split_outside(query,":")
@@ -66,7 +72,7 @@ class Tagdb:
 		# Hack: Support id fields as tags, even if they contain
 		# illegal characters..
 		t1 = time.time()
-		for id in self.data["id"]:
+		for id in data["id"]:
 			if id not in query: continue
 			query = re.sub(r"""(?<!['"])\b%s\b""" % id, "(id=='%s')" % id, query)
 		# Split into ,-separated fields. Fields starting with a "+"
@@ -105,19 +111,18 @@ class Tagdb:
 		# each time. For example, this would be "selected" for act todinfo queries
 		if apply_default_query:
 			fields = fields + utils.split_outside(self.default_query,",")
-		# Back to strings. For our query, we want numpy-compatible syntax,
-		# with low precedence for the comma stuff.
-		query = "(" + ")&(".join(fields) + ")"
 		subid = ",".join(subid)
-		# Evaluate the query. First build up the scope dict
-		scope = np.__dict__.copy()
-		scope.update(self.data)
-		# Extra functions
-		scope.update(self.get_funcs())
-		with utils.nowarn():
-			hits = eval(query, scope)
-		ids  = self.data["id"][hits]
-		subs = self.data["subids"][hits]
+		# Now evaluate our fields one by one. This is done so that
+		# function fields can inspect the current state at that point
+		for field in fields:
+			scope = np.__dict__.copy()
+			scope.update(data)
+			for name, functor in self.functors.iteritems():
+				scope[name] = functor(data)
+			with utils.nowarn():
+				hits = eval(field, scope)
+			# Restrict all fields to the result
+			data = dslice(data, hits)
 		# Split the rest into a sorting field and a slice
 		toks = rest.split("[")
 		if   len(toks) == 1: sort, fsel, dsel = toks[0], "", ""
@@ -126,18 +131,16 @@ class Tagdb:
 		if self.sort and not sort: sort = self.sort
 		if sort:
 			# Evaluate sorting field
-			field = self.data[sort][hits]
+			field = data[sort]
 			field = eval("field" + fsel)
-			inds  = np.argsort(field)
-			# Apply sort
-			ids  = ids[inds]
-			subs = subs[inds]
+			data  = dslice(data, np.argsort(field))
 		# Finally apply the data slice
-		ids = eval("ids"  + dsel)
-		subs= eval("subs" + dsel)
+		inds = np.arange(len(data["id"]))
+		inds = eval("inds" + dsel)
+		data = dslice(data, inds)
 		# Build our subid extensions and append them to ids
-		subs = np.array([merge_subid(subid, sub) for sub in subs])
-		ids = append_subs(ids, subs)
+		subs = np.array([merge_subid(subid, sub) for sub in data["subids"]])
+		ids = append_subs(data["id"], subs)
 		return ids
 	def __add__(self, other):
 		"""Produce a new tagdb which contains the union of the
@@ -190,6 +193,9 @@ class Tagdb:
 		with h5py.File(fname, "w") as hfile:
 			for key in self.data:
 				hfile[key] = self.data[key]
+
+def dslice(data, inds):
+	return {key:val[...,inds] for key, val in data.iteritems()}
 
 # We want a way to build a dtype from file. Two main ways will be handy:
 # 1: The tag fileset.

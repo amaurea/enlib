@@ -59,6 +59,8 @@ class Register(defaultdict):
 		entry = self[name]
 		for info,v in zip(self.info,args):
 			entry[info[0]].add(v)
+	def get(self, name):
+		return self[name]["time"].mean
 	def __repr__(self):
 		# Sort by first ordering criterion
 		if len(self) == 0: return ""

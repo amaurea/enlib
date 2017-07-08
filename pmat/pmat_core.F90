@@ -1131,498 +1131,498 @@ contains
 			ol = ol+1
 			if(dir < 0) then
 				junk(ol) = sum(tod((bi-1)*w+1:n))
-				elseif(dir < 0) then
-					tod((bi-1)*w+1:n) = junk(ol)
-				end if
-			case(3)
-				! Exponential cuts. Full resolution near edges, low in the middle,
-				! with bin size doubling with distance to edge.
-				! Warning: Don't use this. It results in a step-function-like
-				! TOD with lots of sharp edges. This gives lare spurious modes
-				! in the solved map.
+			elseif(dir < 0) then
+				tod((bi-1)*w+1:n) = junk(ol)
+			end if
+		case(3)
+			! Exponential cuts. Full resolution near edges, low in the middle,
+			! with bin size doubling with distance to edge.
+			! Warning: Don't use this. It results in a step-function-like
+			! TOD with lots of sharp edges. This gives lare spurious modes
+			! in the solved map.
 
-				! Left edge
-				w  = 1
-				si = 1
-				do while(si+w < (n+1)/2)
-					ol = ol+1
-					if(dir < 0) then
-						junk(ol) = sum(tod(si:si+w-1))
-					elseif(dir > 0) then
-						tod(si:si+w-1) = junk(ol)
-					end if
-					si            = si+w
-					w             = w*2
-				end do
-				! Right edge
-				w   = 1
-				si2 = 1
-				do while(si2+w < (n+1)/2)
-					ol  = ol+1
-					si3 = n-si2+1
-					if(dir < 0) then
-						junk(ol) = sum(tod(si3-w+1:si3))
-					elseif(dir > 0) then
-						tod(si3-w+1:si3) = junk(ol)
-					end if
-					si2           = si2+w
-					w             = w*2
-				end do
+			! Left edge
+			w  = 1
+			si = 1
+			do while(si+w < (n+1)/2)
+				ol = ol+1
+				if(dir < 0) then
+					junk(ol) = sum(tod(si:si+w-1))
+				elseif(dir > 0) then
+					tod(si:si+w-1) = junk(ol)
+				end if
+				si            = si+w
+				w             = w*2
+			end do
+			! Right edge
+			w   = 1
+			si2 = 1
+			do while(si2+w < (n+1)/2)
 				ol  = ol+1
 				si3 = n-si2+1
-				! Middle
 				if(dir < 0) then
-					junk(ol)   = sum(tod(si:si3))
+					junk(ol) = sum(tod(si3-w+1:si3))
 				elseif(dir > 0) then
-					tod(si:si3) = junk(ol)
+					tod(si3-w+1:si3) = junk(ol)
 				end if
-			case(4)
-				! Legendre polynomial projection, taken from Jon. The odd determination of
-				! numbers of degrees of freedom is also from him.
-				select case(n)
-					case(0:1); w = 1
-					case(2:3); w = 2
-					case(4:6); w = 3
-					case(7:20);w = 4
-					case default;   w = 5 + n/cuttype(2)
-				end select
-				!w = min(n,4+n/cuttype(2))
-				if(w <= 1) then
-					if(dir > 0) then
-						tod = junk(1)
-					elseif(dir < 0) then
-						junk(1) = sum(tod)
-					end if
-					ol = 1
-				else
-					if(dir > 0) tod = 0
-					! This approach, with vectors for xv etc. Was several
-					! times faster than the scalar version due to greater
-					! parallelism.
-					allocate(x(n),Pa(n),Pb(n),Pc(n))
-					do si = 1, n
-						x(si) = -1d0 + 2d0*(si-1)/(n-1)
-					end do
-					ol = 0
-					do i = 0, w-1
-						ol = ol + 1
-						select case(i)
-							case(0); Pa = 1
-							case(1); Pb = 1; Pa = x
-							case default; Pc = Pb; Pb = Pa; Pa = ((2*i-1)*x*Pb-(i-1)*Pc)/i
-						end select
-						if(dir < 0) then
-							junk(ol) = sum(Pa*tod)
-						elseif(dir > 0) then
-							tod = tod + junk(ol) * Pa
-						end if
-					end do
-				end if
-			end select
-			! These samples have been handled, so remove them so that
-			! the map pmats do not use them again.
-			if(dir < 0 .and. cuttype(1) .ne. 0) tod = 0
-			if(present(olen)) olen = ol
-		end subroutine
-
-		pure function mean(a)
-			implicit none
-			real(_), intent(in)  :: a(:)
-			real(_)              :: mean
-			mean = sum(a)/size(a)
-		end function
-
-		!!! Azimuth binning stuff !!!
-		subroutine pmat_scan(dir, tod, model, inds, det_comps, comps)
-			use omp_lib
-			implicit none
-			integer(4), intent(in)    :: dir, inds(:)
-			real(_),    intent(inout) :: tod(:,:), model(:,:)
-			real(_),    intent(in)    :: det_comps(:,:)
-			integer(4), intent(in)    :: comps(:)
-			! Work
-			integer(4) :: ndet, nsamp, ncomp, npix, si, di, ci, nproc, id, i
-			real(_), allocatable :: wmodel(:,:,:)
-
-			! This is meant to be called together with pmat_tod, so it doesn't
-			! overwrite the tod, but instead adds to it.
-			nsamp = size(tod,1)
-			ndet  = size(tod,2)
-			npix  = size(model,1)
-			ncomp = size(model,2)
-
+				si2           = si2+w
+				w             = w*2
+			end do
+			ol  = ol+1
+			si3 = n-si2+1
+			! Middle
 			if(dir < 0) then
-				nproc = omp_get_max_threads()
-				allocate(wmodel(size(model,1),size(model,2),nproc))
-				!$omp parallel workshare
-				wmodel = 0
-				!$omp end parallel workshare
-				!$omp parallel private(di,si,ci,id)
-				id = omp_get_thread_num()+1
-				!$omp do
-				do di = 1, ndet
-					do ci = 1, ncomp
-						do si = 1, nsamp
-							wmodel(inds(si)+1,ci,id) = wmodel(inds(si)+1,ci,id) + tod(si,di)*det_comps(comps(ci)+1,di)
-						end do
-					end do
-				end do
-				!$omp end parallel
-				!$omp parallel do collapse(2) private(ci,i)
-				do ci = 1, ncomp
-					do i = 1, npix
-						model(i,ci) = sum(wmodel(i,ci,:))
-					end do
-				end do
-			else
-				!$omp parallel do private(di,si,ci)
-				do di = 1, ndet
-					do si = 1, nsamp
-						do ci = 1, ncomp
-							tod(si,di) = tod(si,di) + model(inds(si)+1,ci)*det_comps(comps(ci)+1,di)
-						end do
-					end do
-				end do
+				junk(ol)   = sum(tod(si:si3))
+			elseif(dir > 0) then
+				tod(si:si3) = junk(ol)
 			end if
-		end subroutine
-
-		subroutine pmat_map_rebin(dir, map_high, map_low)
-			use omp_lib
-			implicit none
-			! Parameters
-			integer(4), intent(in)    :: dir
-			real(_),    intent(inout) :: map_high(:,:,:), map_low(:,:,:)
-			! Work
-			integer(4) :: hx,hy,lx,ly, n, step
-			real(_)    :: val(size(map_low,3))
-
-			step = nint(real(size(map_high,1))/size(map_low,1))
-
-			if(dir > 0) then
-				!$omp parallel do collapse(2) private(ly,lx,hy,hx,n,val)
-				do ly = 0, size(map_low,2)-1
-					do lx = 0, size(map_low,1)-1
-						n = 0
-						val = 0
-						do hy = ly*step, min((ly+1)*step,size(map_high,2))-1
-							do hx = lx*step, min((lx+1)*step,size(map_high,1))-1
-								val = val + map_high(hx+1,hy+1,:)
-								n   = n + 1
-							end do
-						end do
-						map_low(lx+1,ly+1,:) = val/n
-					end do
-				end do
-			else
-				!$omp parallel do collapse(2) private(ly,lx,hy,hx)
-				do ly = 0, size(map_low,2)-1
-					do lx = 0, size(map_low,1)-1
-						do hy = ly*step, min((ly+1)*step,size(map_high,2))-1
-							do hx = lx*step, min((lx+1)*step,size(map_high,1))-1
-								map_high(hx+1,hy+1,:) = map_low(lx+1,ly+1,:)
-							end do
-						end do
-					end do
-				end do
-			end if
-		end subroutine
-
-		subroutine pmat_cut_rebin(dir, junk_high, cut_high, junk_low, cut_low)
-			use omp_lib
-			implicit none
-			integer(4), intent(in)    :: dir, cut_high(:,:), cut_low(:,:)
-			real(_),    intent(inout) :: junk_high(:), junk_low(:)
-			integer(4), parameter     :: det=1, lstart=2, llen=3, gstart=4, glen=5, cuttype=6
-			integer(4) :: ci, gl1, gl2, gh1, gh2, nl, nh, i
-			real(_), allocatable :: ibuf(:), obuf(:)
-			! Assume that the high-res and low-res cuts have the same number of entries
-			! and come in the same order.
-			!$omp parallel do default(private) shared(junk_high,junk_low,cut_high,cut_low,dir)
-			do ci = 1, size(cut_high,2)
-				gl1 = cut_low (gstart,ci)+1; gl2 = gl1+cut_low (glen,ci)-1
-				gh1 = cut_high(gstart,ci)+1; gh2 = gh1+cut_high(glen,ci)-1
-				nl  = cut_low (llen,ci);     nh  = cut_high(llen,ci)
-				allocate(ibuf(nh),obuf(nl))
+		case(4)
+			! Legendre polynomial projection, taken from Jon. The odd determination of
+			! numbers of degrees of freedom is also from him.
+			select case(n)
+				case(0:1); w = 1
+				case(2:3); w = 2
+				case(4:6); w = 3
+				case(7:20);w = 4
+				case default;   w = 5 + n/cuttype(2)
+			end select
+			!w = min(n,4+n/cuttype(2))
+			if(w <= 1) then
 				if(dir > 0) then
-					call pmat_cut_range( 1, ibuf, junk_high(gh1:gh2), cut_high(cuttype:,ci))
-					do i = 1, nl
-						obuf(i) = mean(ibuf((i-1)*nh/nl+1:min(nh,i*nh/nl)))
-					end do
-					call pmat_cut_range(-1, obuf, junk_low (gl1:gl2), cut_low (cuttype:,ci))
-				else
-					call pmat_cut_range(+1, obuf, junk_low (gl1:gl2), cut_low (cuttype:,ci))
-					do i = 1, nl
-						ibuf((i-1)*nh/nl+1:min(nh,i*nh/nl)) = obuf(i)
-					end do
-					call pmat_cut_range(-1, ibuf, junk_high(gh1:gh2), cut_high(cuttype:,ci))
+					tod = junk(1)
+				elseif(dir < 0) then
+					junk(1) = sum(tod)
 				end if
-				deallocate(ibuf,obuf)
-			end do
-		end subroutine
-
-		!!! Point source stuff !!!
-
-		! Fast point source projection for a single source. Can't do OMP over
-		! sources in this case. Current scheme can't easily OMP over dets,
-		! as each (source,det,range) maps to a different set of samples, which
-		! causes clobbering. I think this is hard to avoid in the range approach.
-		!
-		! Need to transpose the loop somehow:
-		!  for det, for samp, for relevant src
-		! But can't afford to compute distance from each source to each samp.
-		! The prepare function uses a grid lookup, which is a good appraoch.
-		! Precompute a grid that looks like:
-		!  srclist=(ny,nx,nmax), srchits(ny,nx)
-		! for det, samp
-		!  y,x = interpol(det,samp)
-		!  for src in srclist(y,x,1:srchits(ny,nx))
-		!   etc.
-		! This will have no TOD clobbering. The transpose operation involves
-		! much fewer degrees of freedom, so we can use duplicate arrays as normal.
-		!
-		! How accurate do the distances and angles need to be?
-		!  1. Euclidean pixels: Ignores cos(theta) variation inside image.
-		!     Probably not good enough - expect 10% ellipticitty
-		!  2. Semi-flat sky: r**2 = dtheta**2 + cos(theta_src)**2 * dphi**2
-		!     This is what the current approach uses.
-		!  3. Curved sky: r = acos(p_src*p_point), angles = something complicated
-		!     Probably too expensive if implemented directly.
-		!     But what about caching? For each source, precompute the transformation
-		!     from az,el,t to source-centered coordinates. Then both r and angle
-		!     are just a quick lookup away. If all interpolation arrays use the
-		!     same resolution grid, then this simply amounts to having an extra
-		!     ys_src(:,:,:,nsrc). HOWEVER, this approach requires a heavy
-		!     recomputation step every time the source changes position. We can't
-		!     afford that when fitting for the position.
-		! So precompute hit grid, normal interpolation and interpolation.
-		!
-		! What if we wanted to support both intrinsic and beam ellipticity?
-		! These are defined in different coordinate systems. But one gaussian
-		! convoluted with another gaussian is still a gaussian with
-		! cov_tot = cov_A + cov_B:  r'(A+B)"r. Chisquare not decomposable :/
-		! We will restrict ourselves either intrinsic or beam ellipticity, not both.
-		! It will be up to the user to disentangle these later. The user chooses
-		! which coordinate system to use based on how he sets up ys_src.
-		subroutine pmat_ptsrc2( &
-				dir, tmul, pmul,           &! Projection direction, tod multiplier, src multiplier
-				tod, srcs,                 &! Main inputs/outputs. tod(nsamp,ndet), srcs(nparam,ndir,nsrc)
-				bore, det_pos, det_comps,  &
-				rbox, nbox, yvals,         &! Coordinate transformation
-				beam, rbeam, rmax,         &! Beam profile and max radial offset to consider
-				cell_srcs, cell_nsrc, cbox &! Relevant source lookup. cell_srcs(:,nx,ny,ndir), cell_nsrc(nx,ny,ndir)
-			)
-			use omp_lib
-			implicit none
-			integer, intent(in)    :: dir
-			real(_), intent(in)    :: tmul, pmul
-			real(_), intent(inout) :: tod(:,:)
-			real(8), intent(inout) :: srcs(:,:,:)
-			real(8), intent(in)    :: bore(:,:), det_pos(:,:), rbox(:,:), yvals(:,:)
-			real(8), intent(in)    :: cbox(:,:), beam(:), rbeam, rmax
-			real(_), intent(in)    :: det_comps(:,:)
-			integer, intent(in)    :: nbox(:), cell_srcs(:,:,:,:), cell_nsrc(:,:,:)
-			! Work
-			integer :: nsamp, ndet, nsrc, nproc
-			! Not the same sdir as in the shift stuff
-			integer :: ic, i, id, di, si, xind(3), ig, ig2, cell(2), cell_ind, cid, sdir, ndir
-			integer :: steps(3), bind
-			real(8) :: x0(3), inv_dx(3), c0(2), inv_dc(2), xrel(3), work(size(yvals,1),4)
-			real(8) :: point(4), phase(3), dec, ra, ddec, dra, ibeam(3)
-			real(_) :: inv_bres, bx,by,br,brel,bval, c2p,s2p,c1p,s1p
-			real(_), parameter   :: pi = 3.14159265359d0
-			real(8), allocatable :: amps(:,:,:,:), cosdec(:,:), ys(:,:,:)
-			integer, allocatable :: scandir(:)
-			nsamp   = size(tod, 1)
-			ndet    = size(tod, 2)
-			ndir    = size(srcs,2)
-			nsrc    = size(srcs,3)
-
-			! Set up scanning direction. Two modes are supported. If ndir is 1, then
-			! the same set of parameters are used for both left and rightgoing scans.
-			! If ndir is 2, then these are separated.
-			allocate(scandir(nsamp))
-			if(ndir > 1) then
-				scandir(1) = 1
-				do si = 2, nsamp
-					scandir(si) = merge(1,2,bore(2,si)>=bore(2,si-1))
-				end do
+				ol = 1
 			else
-				scandir = 1
-			end if
-
-			! Precompute a few interpolation-relevant numbers
-			steps(size(steps)) = 1
-			do ic = size(steps)-1, 1, -1
-				steps(ic) = steps(ic+1)*nbox(ic+1)
-			end do
-			! inv_dx uses (nbox-1) because we use an endpoint-inclusive
-			! grid here: Last data point is exactly at rbox(:,2) --
-			! it isn't a cell that just ends there.
-			x0 = rbox(:,1); inv_dx = (nbox-1)/(rbox(:,2)-rbox(:,1))
-			c0 = cbox(:,1)
-			! inv_dc does not use -1 because it uses cells rather
-			! than points. The last cell ends at cbox(:,2), but
-			! starts one cell-width before that.
-			inv_dc(1) = size(cell_nsrc,2)/(cbox(1,2)-cbox(1,1))
-			inv_dc(2) = size(cell_nsrc,1)/(cbox(2,2)-cbox(2,1))
-			inv_bres = (size(beam)-1)/rbeam
-
-			! Precompute derivatives of yvals, called ys. This will be very
-			! fast, as we're only talking about at most 1e6 samples or so.
-			allocate(ys(size(yvals,1),3,size(yvals,2)))
-			do ig = 1, size(yvals,2)
-				do ic = 1, 3
-					! This is only valid up to nbox-1 of the interpolation grid, but
-					! that's the only part we will use when we use these derivatives
-					ig2 = min(size(yvals,2),ig+steps(ic))
-					ys(:,ic,ig) = yvals(:,ig2)-yvals(:,ig)
+				if(dir > 0) tod = 0
+				! This approach, with vectors for xv etc. Was several
+				! times faster than the scalar version due to greater
+				! parallelism.
+				allocate(x(n),Pa(n),Pb(n),Pc(n))
+				do si = 1, n
+					x(si) = -1d0 + 2d0*(si-1)/(n-1)
 				end do
-			end do
+				ol = 0
+				do i = 0, w-1
+					ol = ol + 1
+					select case(i)
+						case(0); Pa = 1
+						case(1); Pb = 1; Pa = x
+						case default; Pc = Pb; Pb = Pa; Pa = ((2*i-1)*x*Pb-(i-1)*Pc)/i
+					end select
+					if(dir < 0) then
+						junk(ol) = sum(Pa*tod)
+					elseif(dir > 0) then
+						tod = tod + junk(ol) * Pa
+					end if
+				end do
+			end if
+		end select
+		! These samples have been handled, so remove them so that
+		! the map pmats do not use them again.
+		if(dir < 0 .and. cuttype(1) .ne. 0) tod = 0
+		if(present(olen)) olen = ol
+	end subroutine
 
+	pure function mean(a)
+		implicit none
+		real(_), intent(in)  :: a(:)
+		real(_)              :: mean
+		mean = sum(a)/size(a)
+	end function
+
+	!!! Azimuth binning stuff !!!
+	subroutine pmat_scan(dir, tod, model, inds, det_comps, comps)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, inds(:)
+		real(_),    intent(inout) :: tod(:,:), model(:,:)
+		real(_),    intent(in)    :: det_comps(:,:)
+		integer(4), intent(in)    :: comps(:)
+		! Work
+		integer(4) :: ndet, nsamp, ncomp, npix, si, di, ci, nproc, id, i
+		real(_), allocatable :: wmodel(:,:,:)
+
+		! This is meant to be called together with pmat_tod, so it doesn't
+		! overwrite the tod, but instead adds to it.
+		nsamp = size(tod,1)
+		ndet  = size(tod,2)
+		npix  = size(model,1)
+		ncomp = size(model,2)
+
+		if(dir < 0) then
 			nproc = omp_get_max_threads()
-			allocate(cosdec(ndir,nsrc),amps(3,ndir,nsrc,nproc))
-			cosdec = cos(srcs(1,:,:))
-			if(dir > 0) then
-				do i = 1, nproc; amps(:,:,:,i) = srcs(3:5,:,:)*pmul; end do
-			else
-				amps = 0
-			end if
-			!$omp parallel private(id,di,si,xrel,xind,ig,work,point,phase,cell,cell_ind,cid,dec,ra,ibeam,ddec,dra,sdir,c2p,s2p,c1p,s1p,bx,by,br,brel,bind,bval)
+			allocate(wmodel(size(model,1),size(model,2),nproc))
+			!$omp parallel workshare
+			wmodel = 0
+			!$omp end parallel workshare
+			!$omp parallel private(di,si,ci,id)
 			id = omp_get_thread_num()+1
 			!$omp do
 			do di = 1, ndet
-				do si = 1, nsamp
-					sdir = scandir(si)
-					! Transform from hor to cel
-					include 'helper_bilin.F90'
-					! Find which point source lookup cell we are in.
-					! dec,ra -> cy,cx
-					cell = floor((point(1:2)-c0)*inv_dc)+1
-					! Bounds checking. Costs 2% performance. Worth it
-					cell(1) = min(size(cell_nsrc,2),max(1,cell(1)))
-					cell(2) = min(size(cell_nsrc,1),max(1,cell(2)))
-					if(dir > 0) tod(si,di) = tod(si,di)*tmul
-					! Avoid expensive operations if we don't hit any sources
-					if(cell_nsrc(cell(2),cell(1),sdir) == 0) cycle
-					! The spin-2 and spin-1 rotations associated with the transformation
-					! We need these to get the polarization rotation and beam orientation
-					! right.
-					c2p = point(3);                  s2p = point(4)
-					c1p = sign(sqrt((1+c2p)/2),s2p); s1p = sqrt((1-c2p)/2)
-					phase(1) = det_comps(1,di)
-					phase(2) = c2p*det_comps(2,di) - s2p*det_comps(3,di)
-					phase(3) = s2p*det_comps(2,di) + c2p*det_comps(3,di)
-					! Process each point source in this cell
-					do cell_ind = 1, cell_nsrc(cell(2),cell(1),sdir)
-						cid = cell_srcs(cell_ind,cell(2),cell(1),sdir)+1
-						dec   = srcs(1,sdir,cid)
-						ra    = srcs(2,sdir,cid)
-						ibeam = srcs(6:8,sdir,cid)
-						! Calc effective distance from this source in terms of the beam distortions.
-						! The beam shape is defined in the same coordinate system the polarization
-						! orientation is defined in. We can either rotate the beam (like we do phase)
-						! or rotate the offset vector the opposite direction. I choose the latter
-						! because it is simpler.
-						ddec = point(1)-dec
-						dra  = (point(2)-ra)*cosdec(sdir,cid) ! Caller should beware angle wrapping!
-						if(abs(ddec)>rmax .or. abs(dra)>rmax) cycle
-						bx   =  c1p*dra + s1p*ddec
-						by   = -s1p*dra + c1p*ddec
-						br   = sqrt(by*(ibeam(1)*by+2*ibeam(3)*bx) + bx**2*ibeam(2))
-						! Linearly interpolate the beam value
-						brel = br*inv_bres+1
-						bind = floor(brel)
-						if(bind >= size(beam)-1) cycle
-						brel = brel-bind
-						bval = beam(bind)*(1-brel) + beam(bind+1)*brel
-						! And perform the actual projection
-						if(dir > 0) then
-							tod(si,di) = tod(si,di) + sum(amps(:,sdir,cid,1)*phase)*bval
-						else
-							amps(:,sdir,cid,id) = amps(:,sdir,cid,id) + tod(si,di)*bval*phase
-						end if
+				do ci = 1, ncomp
+					do si = 1, nsamp
+						wmodel(inds(si)+1,ci,id) = wmodel(inds(si)+1,ci,id) + tod(si,di)*det_comps(comps(ci)+1,di)
 					end do
 				end do
 			end do
 			!$omp end parallel
-			if(dir < 0) then
-				srcs(3:5,:,:) = srcs(3:5,:,:)*pmul + sum(amps,4)*tmul
-			end if
-		end subroutine
-
-		subroutine pmat_az(dir, tod, map, az, dets, az0, daz)
-			implicit none
-			integer, intent(in)    :: dir, dets(:)
-			real(_), intent(inout) :: tod(:,:), map(:,:)
-			real(_), intent(in)    :: az0, daz, az(:)
-			integer, allocatable   :: ais(:)
-			integer :: di, si, ndet, nsamp, naz
-			ndet  = size(tod,2)
-			nsamp = size(tod,1)
-			naz   = size(map,1)
-			allocate(ais(nsamp))
-			ais = min(int((az-az0)/daz)+1,naz)
-
-			if(dir > 0) then
-				!$omp parallel do private(di,si)
-				do di = 1, ndet
-					do si = 1, nsamp
-						tod(si,di) = map(ais(si),dets(di)+1)
-					end do
+			!$omp parallel do collapse(2) private(ci,i)
+			do ci = 1, ncomp
+				do i = 1, npix
+					model(i,ci) = sum(wmodel(i,ci,:))
 				end do
-			elseif(dir < 0) then
-				!$omp parallel do private(di,si)
-				do di = 1, ndet
-					do si = 1, nsamp
-						map(ais(si),dets(di)+1) = map(ais(si),dets(di)+1) + tod(si,di)
-					end do
-				end do
-			end if
-		end subroutine
-
-		subroutine pmat_phase(dir, tod, map, az, dets, az0, daz)
-			implicit none
-			integer, intent(in)    :: dir, dets(:)
-			real(_), intent(inout) :: tod(:,:), map(:,:,:)
-			real(_), intent(in)    :: az0, daz, az(:)
-			integer, allocatable   :: ais(:), pis(:)
-			integer :: di, si, ndet, nsamp, naz
-			ndet  = size(tod,2)
-			nsamp = size(tod,1)
-			naz   = size(map,1)
-			allocate(ais(nsamp),pis(nsamp))
-			ais = min(int((az-az0)/daz)+1,naz)
-			pis(1) = 1
-			do si = 2, nsamp
-				if(az(si) >= az(si-1)) then
-					pis(si) = 1
-				else
-					pis(si) = 2
-				end if
 			end do
+		else
+			!$omp parallel do private(di,si,ci)
+			do di = 1, ndet
+				do si = 1, nsamp
+					do ci = 1, ncomp
+						tod(si,di) = tod(si,di) + model(inds(si)+1,ci)*det_comps(comps(ci)+1,di)
+					end do
+				end do
+			end do
+		end if
+	end subroutine
 
+	subroutine pmat_map_rebin(dir, map_high, map_low)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir
+		real(_),    intent(inout) :: map_high(:,:,:), map_low(:,:,:)
+		! Work
+		integer(4) :: hx,hy,lx,ly, n, step
+		real(_)    :: val(size(map_low,3))
+
+		step = nint(real(size(map_high,1))/size(map_low,1))
+
+		if(dir > 0) then
+			!$omp parallel do collapse(2) private(ly,lx,hy,hx,n,val)
+			do ly = 0, size(map_low,2)-1
+				do lx = 0, size(map_low,1)-1
+					n = 0
+					val = 0
+					do hy = ly*step, min((ly+1)*step,size(map_high,2))-1
+						do hx = lx*step, min((lx+1)*step,size(map_high,1))-1
+							val = val + map_high(hx+1,hy+1,:)
+							n   = n + 1
+						end do
+					end do
+					map_low(lx+1,ly+1,:) = val/n
+				end do
+			end do
+		else
+			!$omp parallel do collapse(2) private(ly,lx,hy,hx)
+			do ly = 0, size(map_low,2)-1
+				do lx = 0, size(map_low,1)-1
+					do hy = ly*step, min((ly+1)*step,size(map_high,2))-1
+						do hx = lx*step, min((lx+1)*step,size(map_high,1))-1
+							map_high(hx+1,hy+1,:) = map_low(lx+1,ly+1,:)
+						end do
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
+	subroutine pmat_cut_rebin(dir, junk_high, cut_high, junk_low, cut_low)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, cut_high(:,:), cut_low(:,:)
+		real(_),    intent(inout) :: junk_high(:), junk_low(:)
+		integer(4), parameter     :: det=1, lstart=2, llen=3, gstart=4, glen=5, cuttype=6
+		integer(4) :: ci, gl1, gl2, gh1, gh2, nl, nh, i
+		real(_), allocatable :: ibuf(:), obuf(:)
+		! Assume that the high-res and low-res cuts have the same number of entries
+		! and come in the same order.
+		!$omp parallel do default(private) shared(junk_high,junk_low,cut_high,cut_low,dir)
+		do ci = 1, size(cut_high,2)
+			gl1 = cut_low (gstart,ci)+1; gl2 = gl1+cut_low (glen,ci)-1
+			gh1 = cut_high(gstart,ci)+1; gh2 = gh1+cut_high(glen,ci)-1
+			nl  = cut_low (llen,ci);     nh  = cut_high(llen,ci)
+			allocate(ibuf(nh),obuf(nl))
 			if(dir > 0) then
-				!$omp parallel do private(di,si)
-				do di = 1, ndet
-					do si = 1, nsamp
-						tod(si,di) = tod(si,di) + map(ais(si),dets(di)+1,pis(si))
-					end do
+				call pmat_cut_range( 1, ibuf, junk_high(gh1:gh2), cut_high(cuttype:,ci))
+				do i = 1, nl
+					obuf(i) = mean(ibuf((i-1)*nh/nl+1:min(nh,i*nh/nl)))
 				end do
-			elseif(dir < 0) then
-				!$omp parallel do private(di,si)
-				do di = 1, ndet
-					do si = 1, nsamp
-						map(ais(si),dets(di)+1,pis(si)) = map(ais(si),dets(di)+1,pis(si)) + tod(si,di)
-					end do
+				call pmat_cut_range(-1, obuf, junk_low (gl1:gl2), cut_low (cuttype:,ci))
+			else
+				call pmat_cut_range(+1, obuf, junk_low (gl1:gl2), cut_low (cuttype:,ci))
+				do i = 1, nl
+					ibuf((i-1)*nh/nl+1:min(nh,i*nh/nl)) = obuf(i)
 				end do
+				call pmat_cut_range(-1, ibuf, junk_high(gh1:gh2), cut_high(cuttype:,ci))
 			end if
-		end subroutine
+			deallocate(ibuf,obuf)
+		end do
+	end subroutine
 
-		subroutine pmat_plain(dir, map, tod, pix)
-			use omp_lib
-			implicit none
-			integer, intent(in)    :: dir
-			real(_), intent(in)    :: pix(:,:)
+	!!! Point source stuff !!!
+
+	! Fast point source projection for a single source. Can't do OMP over
+	! sources in this case. Current scheme can't easily OMP over dets,
+	! as each (source,det,range) maps to a different set of samples, which
+	! causes clobbering. I think this is hard to avoid in the range approach.
+	!
+	! Need to transpose the loop somehow:
+	!  for det, for samp, for relevant src
+	! But can't afford to compute distance from each source to each samp.
+	! The prepare function uses a grid lookup, which is a good appraoch.
+	! Precompute a grid that looks like:
+	!  srclist=(ny,nx,nmax), srchits(ny,nx)
+	! for det, samp
+	!  y,x = interpol(det,samp)
+	!  for src in srclist(y,x,1:srchits(ny,nx))
+	!   etc.
+	! This will have no TOD clobbering. The transpose operation involves
+	! much fewer degrees of freedom, so we can use duplicate arrays as normal.
+	!
+	! How accurate do the distances and angles need to be?
+	!  1. Euclidean pixels: Ignores cos(theta) variation inside image.
+	!     Probably not good enough - expect 10% ellipticitty
+	!  2. Semi-flat sky: r**2 = dtheta**2 + cos(theta_src)**2 * dphi**2
+	!     This is what the current approach uses.
+	!  3. Curved sky: r = acos(p_src*p_point), angles = something complicated
+	!     Probably too expensive if implemented directly.
+	!     But what about caching? For each source, precompute the transformation
+	!     from az,el,t to source-centered coordinates. Then both r and angle
+	!     are just a quick lookup away. If all interpolation arrays use the
+	!     same resolution grid, then this simply amounts to having an extra
+	!     ys_src(:,:,:,nsrc). HOWEVER, this approach requires a heavy
+	!     recomputation step every time the source changes position. We can't
+	!     afford that when fitting for the position.
+	! So precompute hit grid, normal interpolation and interpolation.
+	!
+	! What if we wanted to support both intrinsic and beam ellipticity?
+	! These are defined in different coordinate systems. But one gaussian
+	! convoluted with another gaussian is still a gaussian with
+	! cov_tot = cov_A + cov_B:  r'(A+B)"r. Chisquare not decomposable :/
+	! We will restrict ourselves either intrinsic or beam ellipticity, not both.
+	! It will be up to the user to disentangle these later. The user chooses
+	! which coordinate system to use based on how he sets up ys_src.
+	subroutine pmat_ptsrc2( &
+			dir, tmul, pmul,           &! Projection direction, tod multiplier, src multiplier
+			tod, srcs,                 &! Main inputs/outputs. tod(nsamp,ndet), srcs(nparam,ndir,nsrc)
+			bore, det_pos, det_comps,  &
+			rbox, nbox, yvals,         &! Coordinate transformation
+			beam, rbeam, rmax,         &! Beam profile and max radial offset to consider
+			cell_srcs, cell_nsrc, cbox &! Relevant source lookup. cell_srcs(:,nx,ny,ndir), cell_nsrc(nx,ny,ndir)
+		)
+		use omp_lib
+		implicit none
+		integer, intent(in)    :: dir
+		real(_), intent(in)    :: tmul, pmul
+		real(_), intent(inout) :: tod(:,:)
+		real(8), intent(inout) :: srcs(:,:,:)
+		real(8), intent(in)    :: bore(:,:), det_pos(:,:), rbox(:,:), yvals(:,:)
+		real(8), intent(in)    :: cbox(:,:), beam(:), rbeam, rmax
+		real(_), intent(in)    :: det_comps(:,:)
+		integer, intent(in)    :: nbox(:), cell_srcs(:,:,:,:), cell_nsrc(:,:,:)
+		! Work
+		integer :: nsamp, ndet, nsrc, nproc
+		! Not the same sdir as in the shift stuff
+		integer :: ic, i, id, di, si, xind(3), ig, ig2, cell(2), cell_ind, cid, sdir, ndir
+		integer :: steps(3), bind
+		real(8) :: x0(3), inv_dx(3), c0(2), inv_dc(2), xrel(3), work(size(yvals,1),4)
+		real(8) :: point(4), phase(3), dec, ra, ddec, dra, ibeam(3)
+		real(_) :: inv_bres, bx,by,br,brel,bval, c2p,s2p,c1p,s1p
+		real(_), parameter   :: pi = 3.14159265359d0
+		real(8), allocatable :: amps(:,:,:,:), cosdec(:,:), ys(:,:,:)
+		integer, allocatable :: scandir(:)
+		nsamp   = size(tod, 1)
+		ndet    = size(tod, 2)
+		ndir    = size(srcs,2)
+		nsrc    = size(srcs,3)
+
+		! Set up scanning direction. Two modes are supported. If ndir is 1, then
+		! the same set of parameters are used for both left and rightgoing scans.
+		! If ndir is 2, then these are separated.
+		allocate(scandir(nsamp))
+		if(ndir > 1) then
+			scandir(1) = 1
+			do si = 2, nsamp
+				scandir(si) = merge(1,2,bore(2,si)>=bore(2,si-1))
+			end do
+		else
+			scandir = 1
+		end if
+
+		! Precompute a few interpolation-relevant numbers
+		steps(size(steps)) = 1
+		do ic = size(steps)-1, 1, -1
+			steps(ic) = steps(ic+1)*nbox(ic+1)
+		end do
+		! inv_dx uses (nbox-1) because we use an endpoint-inclusive
+		! grid here: Last data point is exactly at rbox(:,2) --
+		! it isn't a cell that just ends there.
+		x0 = rbox(:,1); inv_dx = (nbox-1)/(rbox(:,2)-rbox(:,1))
+		c0 = cbox(:,1)
+		! inv_dc does not use -1 because it uses cells rather
+		! than points. The last cell ends at cbox(:,2), but
+		! starts one cell-width before that.
+		inv_dc(1) = size(cell_nsrc,2)/(cbox(1,2)-cbox(1,1))
+		inv_dc(2) = size(cell_nsrc,1)/(cbox(2,2)-cbox(2,1))
+		inv_bres = (size(beam)-1)/rbeam
+
+		! Precompute derivatives of yvals, called ys. This will be very
+		! fast, as we're only talking about at most 1e6 samples or so.
+		allocate(ys(size(yvals,1),3,size(yvals,2)))
+		do ig = 1, size(yvals,2)
+			do ic = 1, 3
+				! This is only valid up to nbox-1 of the interpolation grid, but
+				! that's the only part we will use when we use these derivatives
+				ig2 = min(size(yvals,2),ig+steps(ic))
+				ys(:,ic,ig) = yvals(:,ig2)-yvals(:,ig)
+			end do
+		end do
+
+		nproc = omp_get_max_threads()
+		allocate(cosdec(ndir,nsrc),amps(3,ndir,nsrc,nproc))
+		cosdec = cos(srcs(1,:,:))
+		if(dir > 0) then
+			do i = 1, nproc; amps(:,:,:,i) = srcs(3:5,:,:)*pmul; end do
+		else
+			amps = 0
+		end if
+		!$omp parallel private(id,di,si,xrel,xind,ig,work,point,phase,cell,cell_ind,cid,dec,ra,ibeam,ddec,dra,sdir,c2p,s2p,c1p,s1p,bx,by,br,brel,bind,bval)
+		id = omp_get_thread_num()+1
+		!$omp do
+		do di = 1, ndet
+			do si = 1, nsamp
+				sdir = scandir(si)
+				! Transform from hor to cel
+				include 'helper_bilin.F90'
+				! Find which point source lookup cell we are in.
+				! dec,ra -> cy,cx
+				cell = floor((point(1:2)-c0)*inv_dc)+1
+				! Bounds checking. Costs 2% performance. Worth it
+				cell(1) = min(size(cell_nsrc,2),max(1,cell(1)))
+				cell(2) = min(size(cell_nsrc,1),max(1,cell(2)))
+				if(dir > 0) tod(si,di) = tod(si,di)*tmul
+				! Avoid expensive operations if we don't hit any sources
+				if(cell_nsrc(cell(2),cell(1),sdir) == 0) cycle
+				! The spin-2 and spin-1 rotations associated with the transformation
+				! We need these to get the polarization rotation and beam orientation
+				! right.
+				c2p = point(3);                  s2p = point(4)
+				c1p = sign(sqrt((1+c2p)/2),s2p); s1p = sqrt((1-c2p)/2)
+				phase(1) = det_comps(1,di)
+				phase(2) = c2p*det_comps(2,di) - s2p*det_comps(3,di)
+				phase(3) = s2p*det_comps(2,di) + c2p*det_comps(3,di)
+				! Process each point source in this cell
+				do cell_ind = 1, cell_nsrc(cell(2),cell(1),sdir)
+					cid = cell_srcs(cell_ind,cell(2),cell(1),sdir)+1
+					dec   = srcs(1,sdir,cid)
+					ra    = srcs(2,sdir,cid)
+					ibeam = srcs(6:8,sdir,cid)
+					! Calc effective distance from this source in terms of the beam distortions.
+					! The beam shape is defined in the same coordinate system the polarization
+					! orientation is defined in. We can either rotate the beam (like we do phase)
+					! or rotate the offset vector the opposite direction. I choose the latter
+					! because it is simpler.
+					ddec = point(1)-dec
+					dra  = (point(2)-ra)*cosdec(sdir,cid) ! Caller should beware angle wrapping!
+					if(abs(ddec)>rmax .or. abs(dra)>rmax) cycle
+					bx   =  c1p*dra + s1p*ddec
+					by   = -s1p*dra + c1p*ddec
+					br   = sqrt(by*(ibeam(1)*by+2*ibeam(3)*bx) + bx**2*ibeam(2))
+					! Linearly interpolate the beam value
+					brel = br*inv_bres+1
+					bind = floor(brel)
+					if(bind >= size(beam)-1) cycle
+					brel = brel-bind
+					bval = beam(bind)*(1-brel) + beam(bind+1)*brel
+					! And perform the actual projection
+					if(dir > 0) then
+						tod(si,di) = tod(si,di) + sum(amps(:,sdir,cid,1)*phase)*bval
+					else
+						amps(:,sdir,cid,id) = amps(:,sdir,cid,id) + tod(si,di)*bval*phase
+					end if
+				end do
+			end do
+		end do
+		!$omp end parallel
+		if(dir < 0) then
+			srcs(3:5,:,:) = srcs(3:5,:,:)*pmul + sum(amps,4)*tmul
+		end if
+	end subroutine
+
+	subroutine pmat_az(dir, tod, map, az, dets, az0, daz)
+		implicit none
+		integer, intent(in)    :: dir, dets(:)
+		real(_), intent(inout) :: tod(:,:), map(:,:)
+		real(_), intent(in)    :: az0, daz, az(:)
+		integer, allocatable   :: ais(:)
+		integer :: di, si, ndet, nsamp, naz
+		ndet  = size(tod,2)
+		nsamp = size(tod,1)
+		naz   = size(map,1)
+		allocate(ais(nsamp))
+		ais = min(int((az-az0)/daz)+1,naz)
+
+		if(dir > 0) then
+			!$omp parallel do private(di,si)
+			do di = 1, ndet
+				do si = 1, nsamp
+					tod(si,di) = map(ais(si),dets(di)+1)
+				end do
+			end do
+		elseif(dir < 0) then
+			!$omp parallel do private(di,si)
+			do di = 1, ndet
+				do si = 1, nsamp
+					map(ais(si),dets(di)+1) = map(ais(si),dets(di)+1) + tod(si,di)
+				end do
+			end do
+		end if
+	end subroutine
+
+	subroutine pmat_phase(dir, tod, map, az, dets, az0, daz)
+		implicit none
+		integer, intent(in)    :: dir, dets(:)
+		real(_), intent(inout) :: tod(:,:), map(:,:,:)
+		real(_), intent(in)    :: az0, daz, az(:)
+		integer, allocatable   :: ais(:), pis(:)
+		integer :: di, si, ndet, nsamp, naz
+		ndet  = size(tod,2)
+		nsamp = size(tod,1)
+		naz   = size(map,1)
+		allocate(ais(nsamp),pis(nsamp))
+		ais = min(int((az-az0)/daz)+1,naz)
+		pis(1) = 1
+		do si = 2, nsamp
+			if(az(si) >= az(si-1)) then
+				pis(si) = 1
+			else
+				pis(si) = 2
+			end if
+		end do
+
+		if(dir > 0) then
+			!$omp parallel do private(di,si)
+			do di = 1, ndet
+				do si = 1, nsamp
+					tod(si,di) = tod(si,di) + map(ais(si),dets(di)+1,pis(si))
+				end do
+			end do
+		elseif(dir < 0) then
+			!$omp parallel do private(di,si)
+			do di = 1, ndet
+				do si = 1, nsamp
+					map(ais(si),dets(di)+1,pis(si)) = map(ais(si),dets(di)+1,pis(si)) + tod(si,di)
+				end do
+			end do
+		end if
+	end subroutine
+
+	subroutine pmat_plain(dir, map, tod, pix)
+		use omp_lib
+		implicit none
+		integer, intent(in)    :: dir
+		real(_), intent(in)    :: pix(:,:)
 		real(_), intent(inout) :: map(:,:,:), tod(:,:)
 		integer :: npix, ipix(size(pix,1)), i, j, k, nproc, id
 		real(_), allocatable   :: wmap(:,:,:,:)
@@ -1662,6 +1662,24 @@ contains
 				end do
 			end do
 		end if
+	end subroutine
+
+	subroutine add_rows(map, ys, xranges, vals, nphi)
+		use omp_lib
+		implicit none
+		integer, intent(in)    :: ys(:), xranges(:,:), nphi
+		real(_), intent(in)    :: vals(:)
+		real(_), intent(inout) :: map(:,:)
+		integer :: y, x, xraw, i
+		do i = 1, size(ys)
+			y = max(1,min(size(map,2),ys(i)+1))
+			do xraw = xranges(1,i)+1, xranges(2,i)
+				x = xraw
+				if(nphi > 0) x = modulo(x-1,nphi)+1
+				x = max(1,min(size(map,1),x))
+				map(x,y) = map(x,y) + vals(i)
+			end do
+		end do
 	end subroutine
 
 end module

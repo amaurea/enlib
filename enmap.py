@@ -56,6 +56,7 @@ class ndmap(np.ndarray):
 	def area(self): return area(self.shape, self.wcs)
 	def pixsize(self): return pixsize(self.shape, self.wcs)
 	def pixshape(self): return pixshape(self.shape, self.wcs)
+	def pixsizemap(self): return pixsizemap(self.shape, self.wcs)
 	def extent(self, method="intermediate"): return extent(self.shape, self.wcs, method=method)
 	@property
 	def preflat(self):
@@ -410,6 +411,10 @@ def extent_subgrid(shape, wcs, nsub=None):
 	scale[0] = 1
 	ly = np.sum(((pos[:,1:,:-1]-pos[:,:-1,:-1])*scale)**2,0)**0.5
 	lx = np.sum(((pos[:,:-1,1:]-pos[:,:-1,:-1])*scale)**2,0)**0.5
+	# Replace invalid areas with mean
+	bad = ~np.isfinite(ly) | ~np.isfinite(lx)
+	ly[bad] = np.mean(ly[~bad])
+	lx[bad] = np.mean(lx[~bad])
 	areas = ly*lx
 	# Compute approximate overall lengths
 	Ay, Ax = np.sum(areas,0), np.sum(areas,1)
@@ -423,12 +428,36 @@ def area(shape, wcs, nsub=0x10):
 	return np.prod(extent(shape, wcs, nsub=nsub))
 
 def pixsize(shape, wcs):
-	"""Reaturns the area of a single pixel, in steradians."""
+	"""Returns the area of a single pixel, in steradians."""
 	return area(shape, wcs)/np.product(shape[-2:])
 
 def pixshape(shape, wcs):
 	"""Returns the height and width of a single pixel, in radians."""
 	return extent(shape, wcs)/shape[-2:]
+
+def pixsizemap(shape, wcs):
+	"""Returns the physical area of each pixel in the map in steradians.
+	Heavy for big maps."""
+	# First get the coordinates of all the pixel corners
+	pix  = np.mgrid[:shape[-2]+1,:shape[-1]+1]
+	with enlib.utils.nowarn():
+		y, x = pix2sky(shape, wcs, pix, safe=True, corner=True)
+	del pix
+	dy   = y[1:,1:]-y[:-1,:-1]
+	dx   = x[1:,1:]-x[:-1,:-1]
+	cy   = np.cos(y)
+	dx  *= 0.5*(cy[1:,1:]+cy[:-1,:-1])
+	del y, x, cy
+	area = dy*dx
+	del dy, dx
+	area = np.abs(area)
+	# Due to wcs fragility, we may have some nans at wraparound points.
+	# Fill these with the mean non-nan value. Since most maps will be cylindrical,
+	# it makes sense to do this by row
+	for a in area:
+		bad  = ~np.isfinite(a)
+		a[bad] = np.mean(a[~bad])
+	return area
 
 def lmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
@@ -591,14 +620,18 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs)
 		shape = tuple(np.floor(faredge+0.5).astype(int))
 	return pre+tuple(shape), wcs
 
-def fullsky_geometry(res=0.1*enlib.utils.degree, dims=()):
+def fullsky_geometry(res=None, shape=None, dims=(), proj="car"):
 	"""Build an enmap covering the full sky, with the outermost pixel centers
-	at the poles and wrap-around points. Assumes CAR projection
-	for now."""
-	nx,ny = int(2*np.pi/res), int(np.pi/res)
+	at the poles and wrap-around points. Assumes a CAR (clenshaw curtis variant)
+	projection for now."""
+	assert proj == "car", "Only CAR fullsky geometry implemented"
+	if shape is None:
+		res   = np.zeros(2)+res
+		shape = ([1*np.pi,2*np.pi]/res+0.5).astype(int)
+	ny,nx = shape
 	wcs   = enlib.wcs.WCS(naxis=2)
 	wcs.wcs.crval = [0,0]
-	wcs.wcs.cdelt = [360./nx,180./ny]
+	wcs.wcs.cdelt = [-360./nx,180./ny]
 	wcs.wcs.crpix = [nx/2+1,ny/2+1]
 	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
 	return dims+(ny+1,nx+0), wcs

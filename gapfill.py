@@ -42,6 +42,36 @@ def gapfill_linear(arr, ranges, inplace=False, overlap=None):
 			arr[r1:r2] = np.linspace(np.mean(arr[left:r1]), np.mean(arr[r2:right]), r2-r1+1,endpoint=False)[1:]
 	return arr
 
+def gapfill_pair(tod, cut, inplace=False, gapfill=gapfill_linear):
+	"""Gapfill a set of tod-pairs tod[npair*2,nsamp] in the cut regions
+	cut[npair*2,{ranges}], by gapfilling pair-difference rather than the
+	individual timestreams. Where only one det in a pair is cut, the
+	gapfilled pairdiff is used to recover the other. Where both are cut,
+	gapfilling is used on one of the detectors to give a baseline signal."""
+	if not inplace: tod = tod.copy()
+	# Split tods and cuts into the two members of our pair
+	d0,d1 = tod[0::2], tod[1::2]
+	c0,c1 = cut[0::2], cut[1::2]
+	# cut union for diff gapfilling, cut intersection for non-diff gapfilling
+	# and cut difference for diff-based reconstruction.
+	cut_union = c0+c1
+	cut_inter = (c0.invert()+c0.invert()).invert()
+	cut0n1    = (c0.invert()+c0).invert()
+	# First gapfill the pair difference
+	dtod = d0-d1
+	dtod = gapfill(dtod,cut_union)
+	# Then fill build the cut parts of one tod based on the corresponding
+	# uncut parts of the other, and the gapfilled diff
+	cut0n1.insert(d0,cut0n1.extract(d1)+cut0n1.extract(dtod))
+	# Gapfill the samples the previous method couldn't get us
+	d0 = gapfill(d0,cut_inter)
+	# And reconstruct the other tod the same way
+	cut_union.insert(d1,cut_union.extract(d0)-cut_union.extract(dtod))
+	# Copy back over into a single array
+	tod[0::2] = d0
+	tod[1::2] = d1
+	return tod
+
 def fit_linear(arr, ref=0, nsigma=2):
 	"""Fit b+ax to the array centered on a point a fraction ref
 	along the array. Bias the slope towards zero by nsigma standard
