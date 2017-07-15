@@ -1047,7 +1047,6 @@ def from_flipper(imap, omap=None):
 	"""Construct an enmap from a flipper map or array of flipper maps imap.
 	If omap is specified, it must have the correct shape, and the data will
 	be written there."""
-	import flipper
 	imap   = np.asarray(imap)
 	first  = imap.reshape(-1)[0]
 	# flipper and enmap wcs objects come from different wcs libraries, so
