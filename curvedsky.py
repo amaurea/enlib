@@ -3,7 +3,7 @@ full sky."""
 import numpy as np
 from enlib import sharp, enmap, powspec, wcs as enwcs, utils
 
-def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, method="auto"):
+def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, method="auto", direct=False, verbose=False):
 	"""Generates a CMB realization with the given power spectrum for an enmap
 	with the specified shape and WCS. This is identical to enlib.rand_map, except
 	that it takes into account the curvature of the full sky. This makes it much
@@ -16,9 +16,11 @@ def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=
 	ps = ps[:ncomp,:ncomp]
 
 	ctype = np.result_type(dtype,0j)
+	if verbose: print "Generating alms with seed %s up to lmax=%d dtype %s" % (str(seed), lmax, np.dtype(ctype).char)
 	alm   = rand_alm(ps, lmax=lmax, seed=seed, dtype=ctype)
+	if verbose: print "Allocating output map shape %s dtype %s" % (str((ncomp,)+shape[-2:]), np.dtype(dtype).char)
 	map   = enmap.empty((ncomp,)+shape[-2:], wcs, dtype=dtype)
-	alm2map(alm, map, spin=spin, oversample=oversample, method=method)
+	alm2map(alm, map, spin=spin, oversample=oversample, method=method, direct=direct, verbose=verbose)
 	if len(shape) == 2: map = map[0]
 	return map
 
@@ -67,7 +69,7 @@ def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128, m_major=
 ### Top-level wrappers ###
 ##########################
 
-def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False, oversample=2.0, method="auto"):
+def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False, oversample=2.0, method="auto", verbose=False):
 	"""Project the spherical harmonics coefficients alm[...,nalm] onto the
 	enmap map[...,ny,nx].
 
@@ -90,19 +92,21 @@ def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False,
 
 	If deriv is True, then the resulting map will be the gradient of the input alms."""
 	if method == "cyl":
-		alm2map_cyl(alm, map, ainfo=ainfo, spin=spin, deriv=deriv, direct=direct, copy=copy)
+		alm2map_cyl(alm, map, ainfo=ainfo, spin=spin, deriv=deriv, direct=direct, copy=copy, verbose=verbose)
 	elif method == "pos":
+		if verbose: print "Computing pixel positions %s dtype d" % str((2,)+map.shape[-2:])
 		pos = map.posmap()
-		res = alm2map_pos(alm, pos, ainfo=ainfo, oversample=oversample, spin=spin, deriv=deriv)
+		res = alm2map_pos(alm, pos, ainfo=ainfo, oversample=oversample, spin=spin, deriv=deriv, verbose=verbose)
 		map[:] = res
 	elif method == "auto":
 		# Cylindrical method if possible, else slow pos-based method
 		try:
-			alm2map_cyl(alm, map, ainfo=ainfo, spin=spin, deriv=deriv, direct=direct, copy=copy)
+			alm2map_cyl(alm, map, ainfo=ainfo, spin=spin, deriv=deriv, direct=direct, copy=copy, verbose=verbose)
 		except AssertionError as e:
 			# Wrong pixelization. Fall back on slow, general method
+			if verbose: print "Computing pixel positions %s dtype d" % str((2,)+map.shape[-2:])
 			pos = map.posmap()
-			res = alm2map_pos(alm, pos, ainfo=ainfo, oversample=oversample, spin=spin, deriv=deriv)
+			res = alm2map_pos(alm, pos, ainfo=ainfo, oversample=oversample, spin=spin, deriv=deriv, verbose=verbose)
 			map[:] = res
 	else:
 		raise ValueError("Unknown alm2map method %s" % method)
@@ -131,7 +135,7 @@ def map2alm(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False, copy=Fal
 
 # These perform SHTs at arbitrary sample positions
 
-def alm2map_pos(alm, pos, ainfo=None, oversample=2.0, spin=2, deriv=False):
+def alm2map_pos(alm, pos, ainfo=None, oversample=2.0, spin=2, deriv=False, verbose=False):
 	"""Projects the given alms (with layout) on the specified pixel positions.
 	alm[ncomp,nelem], pos[2,...] => res[ncomp,...]. It projects on a large
 	cylindrical grid and then interpolates to the actual pixels. This is the
@@ -147,7 +151,7 @@ def alm2map_pos(alm, pos, ainfo=None, oversample=2.0, spin=2, deriv=False):
 		ashape = ashape + (ncomp,)
 		ncomp = 2
 	tmap   = make_projectable_map_by_pos(pos, ainfo.lmax, ashape+(ncomp,), oversample, alm.real.dtype)
-	alm2map_cyl(alm, tmap, ainfo=ainfo, spin=spin, deriv=deriv, direct=True)
+	alm2map_cyl(alm, tmap, ainfo=ainfo, spin=spin, deriv=deriv, direct=True, verbose=verbose)
 	# Project down on our final pixels. This will result in a slight smoothing
 	res = enmap.samewcs(tmap.at(pos[:2], mode="wrap"), pos)
 	# Remove any extra dimensions we added
@@ -163,7 +167,7 @@ def alm2map_pos(alm, pos, ainfo=None, oversample=2.0, spin=2, deriv=False):
 # system is extended internally if necessary. minfo is built
 # internally automatically.
 
-def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False):
+def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False, verbose=False):
 	"""When called as alm2map(alm, map) projects those alms onto that map.
 	alms are interpreted according to ainfo if specified.
 
@@ -187,7 +191,8 @@ def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=Fa
 	alm, ainfo = prepare_alm(alm, ainfo)
 	if copy: map = map.copy()
 	if direct: tmap, mslices, tslices = map, [(Ellipsis,)], [(Ellipsis,)]
-	else:      tmap, mslices, tslices = make_projectable_map_cyl(map)
+	else:      tmap, mslices, tslices = make_projectable_map_cyl(map, verbose=verbose)
+	if verbose: print "Performing alm2map"
 	alm2map_raw(alm, tmap, ainfo, map2minfo(tmap), spin=spin, deriv=deriv)
 	for mslice, tslice in zip(mslices, tslices):
 		map[mslice] = tmap[tslice]
@@ -299,7 +304,7 @@ def map2alm_raw(map, alm, minfo, ainfo, spin=2, copy=False):
 
 ### Helper function ###
 
-def make_projectable_map_cyl(map):
+def make_projectable_map_cyl(map, verbose=False):
 	"""Given an enmap in a cylindrical projection, return a map with
 	the same pixelization, but extended to cover a whole band in phi
 	around the sky. Also returns the slice required to recover the
@@ -340,9 +345,10 @@ def make_projectable_map_cyl(map):
 		yslice = slice(-1,None,-1)  if flipy else slice(None)
 		xslice = slice(nx-1,negnone(nx-1-(i2-i1)),-1) if flipx else slice(0,i2-i1)
 		oslice.append((Ellipsis,yslice,xslice))
+	if verbose: print "Allocating shape %s dtype %s intermediate map" % (str(oshape),np.dtype(map.dtype).char)
 	return enmap.empty(oshape, owcs, dtype=map.dtype), islice, oslice
 
-def make_projectable_map_by_pos(pos, lmax, dims=(), oversample=2.0, dtype=float):
+def make_projectable_map_by_pos(pos, lmax, dims=(), oversample=2.0, dtype=float, verbose=False):
 	"""Make a map suitable as an intermediate step in projecting alms up to
 	lmax on to the given positions. Helper function for alm2map."""
 	# First find the theta range of the pixels, with a 10% margin
@@ -376,7 +382,8 @@ def make_projectable_map_by_pos(pos, lmax, dims=(), oversample=2.0, dtype=float)
 	ny = y2-y1
 	wcs.wcs.crpix[1] -= y1
 	# Construct the map. +1 to put extra pixel at pole when we are fullsky
-	tmap = enmap.zeros(dims+(ny+1,nx),wcs)
+	if verbose: print "Allocating shape %s dtype %s intermediate map" % (dims+(ny+1,nx),np.dtype(dtype).char)
+	tmap = enmap.zeros(dims+(ny+1,nx),wcs,dtype=dtype)
 	return tmap
 
 def map2minfo(m):
