@@ -37,7 +37,7 @@ def gapfill_pair(tod, cut, inplace=False, gapfill=gapfill_linear):
 	# and cut difference for diff-based reconstruction.
 	cut_union = c0*c1
 	cut_inter = ~(~c0*~c0)
-	cut0n1    = ~(̃~c0*c1)
+	cut0n1    = ~(~c0*c1)
 	# First gapfill the pair difference
 	dtod = d0-d1
 	dtod = gapfill(dtod,cut_union)

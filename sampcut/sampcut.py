@@ -26,7 +26,7 @@ class Sampcut:
 		detmap = np.zeros(ndet+1,np.int32)
 		return Sampcut(ranges, detmap, nsamp, copy=False)
 	@staticmethod
-	def full(ndet, nsamp)
+	def full(ndet, nsamp):
 		"""Create Sampcut for ndet detectors and nsamp samples, with
 		no samples cut."""
 		return ~Sampcut.empty(ndet, nsamp)
@@ -71,6 +71,10 @@ class Sampcut:
 	def ndet(self): return len(self.detmap)-1
 	@property
 	def nrange(self): return self.detmap[-1]
+	@property
+	def nranges(self): return self.detmap[1:]-self.detmap[:-1]
+	@property
+	def size(self): return self.ndet*self.nsamp
 	def sum(self, axis=None):
 		"""Compute the number of cut samples. If axis == 1, then
 		the result will be the per-detector sum. Otherwise it will
@@ -215,6 +219,7 @@ def insert_samples(cut, tod, samples):
 def gapfill_const(cut, tod, value, inplace=False):
 	"""Fill cut values in tod by the given value. Returns the result."""
 	if not inplace: tod = tod.copy()
+	if tod.ndim == 1: tod = tod.reshape(-1,tod.shape[-1])
 	get_core(tod.dtype).gapfill_const(cut.ranges.T, cut.detmap, tod.T, value)
 	return tod
 def gapfill_linear(cut, tod, context=1, inplace=False):
@@ -223,5 +228,6 @@ def gapfill_linear(cut, tod, context=1, inplace=False):
 	start and end value for each straight line. Defaults to 1 sample.
 	Returns the result."""
 	if not inplace: tod = tod.copy()
+	if tod.ndim == 1: tod = tod.reshape(-1,tod.shape[-1])
 	get_core(tod.dtype).gapfill_linear(cut.ranges.T, cut.detmap, tod.T, context)
 	return tod
