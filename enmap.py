@@ -76,7 +76,7 @@ class ndmap(np.ndarray):
 	def padslice(self, box, default=np.nan): return padslice(self, box, default=default)
 	def to_healpix(self, nside=0, order=3, omap=None, chunk=100000, destroy_input=False):
 		return to_healpix(self, nside=nside, order=order, omap=omap, chunk=chunk, destroy_input=destroy_input)
-	def to_flipper(self, omap=None): return to_flipper(self, omap=omap)
+	def to_flipper(self, omap=None, unpack=False): return to_flipper(self, omap=omap, unpack=unpack)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
@@ -1011,15 +1011,21 @@ def to_healpix(imap, omap=None, nside=0, order=3, chunk=100000, destroy_input=Fa
 		omap[...,i:i+chunk] = imap.at(pos, order=order, mask_nan=False, prefilter=False)
 	return omap
 
-def to_flipper(imap, omap=None):
+def to_flipper(imap, omap=None, unpack=False):
 	"""Convert the enmap "imap" into a flipper map with the same geometry. If
 	omap is given, the output will be written to it. Otherwise, a an array of
 	flipper maps will be constructed. If the input map has dimensions
 	[a,b,c,ny,nx], then the output will be an [a,b,c] array with elements
 	that are flipper maps with dimension [ny,nx]. This will result in a
 	zero-dimensional array if the input had only pixel dimensions (ndim=2).
-	These can be tedious to work with, but can be unpacked by doing
-	m.reshape(-1)[0]."""
+	To avoid this behavior, pass unpack=True. That will cause plain 2d maps
+	to be returned as a single, unwrapped flipper map.
+
+	Flipper needs cdelt0 to be in decreasing order. This function ensures that,
+	at the cost of losing the original orientation. Hence to_flipper followed
+	by from_flipper does not give back an exactly identical map to the one
+	on started with.
+	"""
 	import flipper
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
@@ -1033,7 +1039,26 @@ def to_flipper(imap, omap=None):
 		omap = np.empty(iflat.shape[:-2],dtype=object)
 	for i, m in enumerate(iflat):
 		omap[i] = flipper.liteMap.liteMapFromDataAndWCS(iflat[i], flipwcs)
-	return omap.reshape(imap.shape[:-2])
+	omap = omap.reshape(imap.shape[:-2])
+	if unpack and omap.ndim == 0: return omap.reshape(-1)[0]
+	else: return omap
+
+def from_flipper(imap, omap=None):
+	"""Construct an enmap from a flipper map or array of flipper maps imap.
+	If omap is specified, it must have the correct shape, and the data will
+	be written there."""
+	imap   = np.asarray(imap)
+	first  = imap.reshape(-1)[0]
+	# flipper and enmap wcs objects come from different wcs libraries, so
+	# they must be converted
+	wcs    = enlib.wcs.WCS(first.wcs.header).sub(2)
+	if omap is None:
+		omap = empty(imap.shape + first.data.shape, wcs, first.data.dtype)
+	# Copy over all components
+	iflat = imap.reshape(-1)
+	for im, om in zip(iflat, omap.preflat):
+		om[:] = im.data
+	return omap
 
 ############
 # File I/O #

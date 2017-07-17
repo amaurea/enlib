@@ -1,7 +1,7 @@
 """This module handles deprojection of a set of arrays from another set of
 arrays. This is useful for cleaning TODs of unwanted signals, for example."""
 import numpy as np, scipy.signal
-from enlib import utils, pmat, rangelist, gapfill, fft
+from enlib import utils, pmat, sampcut, gapfill, fft
 
 def estimate_white_noise(tod, nchunk=10, chunk_size=1000):
 	"""Robust time-domain estimation of white noise level."""
@@ -17,15 +17,13 @@ def estimate_white_noise(tod, nchunk=10, chunk_size=1000):
 
 def find_spikes(tod, nsigma=10, width=15, padding=7, noise=None):
 	res = []
-	ftod = tod.reshape(-1,tod.shape[-1])
-	if noise is None: noise = estimate_white_noise(ftod)**0.5
+	if noise is None: noise = estimate_white_noise(tod)**0.5
 	for di, d in enumerate(ftod):
 		smooth = scipy.signal.medfilt(d, width)
 		bad = np.abs(d-smooth) > noise[di]*nsigma
-		bad = rangelist.Rangelist(bad)
-		bad = bad.widen(padding)
-		res.append(rangelist.Rangelist(bad))
-	res = rangelist.Multirange(res)
+		bad = sampcut.from_mask(bad).widen(padding)
+		res.append(bad)
+	res = sampcut.stack(res)
 	res.data.reshape(tod.shape[:-1])
 	return res
 
