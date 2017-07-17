@@ -45,7 +45,7 @@ of skipping samples here.
 # system, especially considering the large overlap with Dataset.
 
 import numpy as np, enlib.slice, copy as cpy, h5py, os
-from enlib import rangelist, nmat, config, resample, utils, bunch
+from enlib import sampcut, nmat, config, resample, utils, bunch
 
 class Scan:
 	"""This defines the minimal interface for a Scan. It will usually be
@@ -56,7 +56,7 @@ class Scan:
 		self.boresight = np.asfarray(boresight) # [nsamp,coords]
 		self.offsets   = np.asfarray(offsets)   # [ndet,coords]
 		self.comps     = np.asfarray(comps)     # [ndet,comps]
-		self.cut       = rangelist.Multirange(cut) # Multirange[ndet,ranges]
+		self.cut       = cut.copy()             # Sampcut
 		self.noise     = noise
 		self.id        = id # Identifier of this scan, for printing purposes
 		# These are needed in order to interpret the coordinates
@@ -126,7 +126,7 @@ class H5Scan(Scan):
 			n = self.boresight.shape[0]
 			neach = hfile["cut/neach"].value
 			flat  = hfile["cut/flat"].value
-			self.cut  = rangelist.Multirange((n,neach,flat),copy=False)
+			self.cut  = sampcut.Sampcut(flat, utils.cumsum(neach, endpoint=True), n)
 			self.cut_noiseest = self.cut.copy()
 			self.noise= nmat.read_nmat(hfile, "noise")
 			self.site = bunch.Bunch({k:hfile["site/"+k].value for k in hfile["site"]})

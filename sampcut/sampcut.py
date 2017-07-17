@@ -26,6 +26,11 @@ class Sampcut:
 		detmap = np.zeros(ndet+1,np.int32)
 		return Sampcut(ranges, detmap, nsamp, copy=False)
 	@staticmethod
+	def full(ndet, nsamp)
+		"""Create Sampcut for ndet detectors and nsamp samples, with
+		no samples cut."""
+		return ~Sampcut.empty(ndet, nsamp)
+	@staticmethod
 	def from_list(rlist, nsamp):
 		"""Construct a Sampcut given a list of ranges[ndet][:,{from,to}]."""
 		if len(rlist) == 0:
@@ -46,6 +51,22 @@ class Sampcut:
 	def to_list(self):
 		"""Return a list of [ndet][ncut,2]"""
 		return [self.ranges[self.detmap[i]:self.detmap[i+1]] for i in range(self.ndet)]
+	@staticmethod
+	def from_mask(mask):
+		mask = np.asarray(mask)
+		if mask.ndim == 1: mask = mask[None]
+		assert mask.ndim == 2, "Sampcut.from_mask requires a 1 or 2 dimensional array, but got %d" % mask.ndim
+		mask = mask.view(np.int8)
+		ncut = icore.count_mask(mask.T)
+		ranges = np.empty([ncut,2],np.int32)
+		detmap = np.empty([mask.shape[0]+1],np.int32)
+		icore.mask_to_cut(mask.T, ranges.T, detmap)
+		return Sampcut(ranges, detmap, mask.shape[1])
+	def to_mask(self, omask=None):
+		if omask is None: omask = np.empty([self.ndet, self.nsamp], np.bool)
+		omask = omask.view(np.int8)
+		icore.cut_to_mask(self.ranges.T, self.detmap, omask.T)
+		return omask.view(np.bool)
 	@property
 	def ndet(self): return len(self.detmap)-1
 	@property
@@ -66,6 +87,24 @@ class Sampcut:
 		oranges = np.zeros([len(self.ranges)*n,2],np.int32)
 		icore.cut_mul(self.ranges.T, self.detmap, n, oranges.T, odetmap)
 		return Sampcut(oranges, odetmap, self.nsamp)
+	def widen(self, n):
+		# Allow us to pass either a single number or a separate pre and post padding
+		n = np.zeros(2,np.int32)+n
+		# Widen all the ranges
+		ranges = self.ranges.copy()
+		ranges[:,0] -= n[0]
+		ranges[:,1] += n[1]
+		# make sure we don't exceed our bounds
+		np.clip(ranges, 0, self.nsamp, ranges)
+		# merge any overlapping ranges
+		odetmap, oranges = self.detmap.copy(), ranges.copy()
+		icore.cut_union(ranges.T, self.detmap, oranges.T, odetmap)
+		oranges = oranges[:odetmap[-1]]
+		return Sampcut(oranges, odetmap, self.nsamp)
+	def extract_samples(self, tod):
+		return extract_samples(self, tod)
+	def insert_samples(self, tod, samples):
+		return insert_samples(self, tod, samples)
 	def __len__(self): return self.ndet
 	def __mul__(self, other):
 		"""Compute the composition of these cuts and the right-hand-side,
@@ -85,9 +124,9 @@ class Sampcut:
 		icore.cut_union(wranges.T, wdetmap, oranges.T, odetmap)
 		oranges = oranges[:odetmap[-1]]
 		return Sampcut(oranges, odetmap, self.nsamp, copy=False)
-	def __add__(self, other):
-		"""cut1 + cut2 stacks these cuts in the detector direction"""
-		return concatenate(self, other)
+	#def __add__(self, other):
+	#	"""cut1 + cut2 stacks these cuts in the detector direction"""
+	#	return stack(self, other)
 	def __invert__(self):
 		"""Make cut samples uncut, and vice versa"""
 		oranges = np.zeros((len(self.ranges)+self.ndet,2),np.int32)
@@ -141,14 +180,20 @@ def sampcut(ranges, detmap, nsamp, copy=True):
 def empty(ndet, nsamp):
 	"""Construct a Sampcut with ndet detectors and nsamp samples, with no samples cut"""
 	return Sampcut.empty(ndet, nsamp)
+def full(ndet, nsamp):
+	"""Constrct a Sampcut with ndet detectors and nsamp samples where everything is cut"""
+	return Sampcut.full(ndet, nsamp)
 def from_list(rlist, nsamp):
 	"""Construct a Sampcut from the given list [ndet][nrange][2]"""
 	return Sampcut.from_list(rlist, nsamp)
+def from_mask(mask):
+	"""Construct a Sampcut from the given bool mask[ndet,nsamp]"""
+	return Sampcut.from_mask(mask)
 
-def concatenate(cuts):
-	"""concatenate((c1, c2, ...)). Concatenates the sample cuts c1, c2, etc.
+def stack(cuts):
+	"""stack((c1, c2, ...)). Concatenates the sample cuts c1, c2, etc.
 	from the provided list in the detector direction. For example,
-	c3 = concatenate((c1,c2)). If c1 had 10 dets and c2 had 100 dets, the result
+	c3 = stack((c1,c2)). If c1 had 10 dets and c2 had 100 dets, the result
 	will have 110 dets, starting with c1's dets. All cuts must agree on nsamp."""
 	ranges = np.concatenate([c.ranges for c in cuts]).astype(np.int32, copy=False)
 	detmap = [[0]]

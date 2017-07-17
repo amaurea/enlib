@@ -298,5 +298,64 @@ contains
 		end do
 	end subroutine
 
+	function count_mask(mask) result(n)
+		implicit none
+		integer(1), intent(in) :: mask(:,:)
+		integer :: n, di, i
+		n = 0
+		!$omp parallel do private(di,i) reduction(+:n)
+		do di = 1, size(mask,2)
+			if(mask(1,di) .ne. 0) n = n+1
+			do i = 2, size(mask,1)
+				if(mask(i,di) .ne. 0) then
+					if(mask(i-1,di) .eq. 0) n = n+1
+				end if
+			end do
+		end do
+	end function
+
+	subroutine mask_to_cut(mask, oranges, odetmap)
+		implicit none
+		integer(1), intent(in)    :: mask(:,:)
+		integer,    intent(inout) :: oranges(:,:), odetmap(:)
+		logical :: incut
+		integer :: di, i, j
+		j = 0
+		do di = 1, size(mask,2)
+			odetmap(di) = j
+			incut = .false.
+			do i = 1, size(mask,1)
+				if(.not. incut .and. mask(i,di) .ne. 0) then
+					j = j+1
+					oranges(1,j) = i-1
+					incut = .true.
+				elseif(incut .and. mask(i,di) .eq. 0) then
+					oranges(2,j) = i
+					incut = .false.
+				end if
+			end do
+			if(incut) then
+				oranges(2,j) = size(mask,1)
+			end if
+		end do
+		odetmap(size(mask,2)+1) = j
+	end subroutine
+
+	subroutine cut_to_mask(ranges, detmap, mask)
+		implicit none
+		integer(1), intent(inout) :: mask(:,:)
+		integer,    intent(in)    :: ranges(:,:), detmap(:)
+		integer :: di, j
+		!$omp parallel workshare
+		mask = 0
+		!$omp end parallel workshare
+		!$omp parallel do private(j)
+		do di = 1, size(detmap)-1
+			do j = detmap(di)+1, detmap(di+1)
+				mask(ranges(1,j)+1:ranges(2,j),di) = 1
+			end do
+		end do
+	end subroutine
+
 end module
 

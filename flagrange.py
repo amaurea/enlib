@@ -1,5 +1,5 @@
 import numpy as np, h5py
-from enlib import rangelist
+from enlib import rangelist, sampcut
 
 # Flagranges implement the new cuts format,
 # where samples are tagged with flags instead
@@ -48,6 +48,11 @@ class Flagrange:
 	def __init__(self, nsamp, index_stack, flag_stack, stack_bounds, dets=None,
 			flag_names=None, derived_masks=None, derived_names=None,
 			sample_offset=0):
+		"""Construct a Flagrange.
+		nsamp int is the total number of samples in the dataset the flagrange applies to.
+		stack_bounds int[ndet+1] is the index of the boundaries between each det's ranges
+		index_stack int[:,2] are the """
+
 		self.nsamp        = int(nsamp)
 		self.sample_offset= int(sample_offset)
 		self.index_stack  = np.array(index_stack, np.uint32)
@@ -219,6 +224,11 @@ class Flagrange:
 	def to_rangelist(self):
 		ranges = self.to_ranges()
 		return rangelist.Multirange([rangelist.Rangelist(r, n=self.nsamp) for r in ranges])
+	def to_sampcut(self):
+		# This could be optimized, since sampcuts and flagranges have some similariteis
+		# int he internal representation
+		ranges = self.to_ranges()
+		return sampcut.from_list(ranges, self.nsamp)
 
 #def combine_flagranges(franges):
 #	offsets = [frange.sample_offset for frange in franges]
