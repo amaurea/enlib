@@ -108,6 +108,10 @@ contains
 		odetmap(1) = 0
 		oi = 0
 		do di = 1, size(idetmap)-1
+			! No ranges for this detector by default
+			odetmap(di+1) = odetmap(di)
+			! Add all ranges that fall within the remaining
+			! samples
 			do i = idetmap(di)+1, idetmap(di+1)
 				r = iranges(:,i)
 				r = r - from
@@ -261,7 +265,7 @@ contains
 		implicit none
 		integer, intent(in)    :: ranges(:,:), detmap(:), context
 		real(_), intent(inout) :: tod(:,:)
-		real(_) :: v1, v2
+		real(_) :: v1, v2, c1, c2
 		integer :: di, i, j, r0, r1, r2, r3, nsamp
 		nsamp = size(tod,1)
 		do di = 1, size(detmap)-1
@@ -290,8 +294,12 @@ contains
 				elseif(r2 == r3) then
 					tod(r1:r2-1,di) = v1
 				else
+					! v1 has a center of mass at (r0+r1-1)/2 instead of r1 where we
+					! want it.
+					c1 = (r0+r1-1)/2d0
+					c2 = (r2+r3-1)/2d0
 					do j = r1, r2-1
-						tod(j,di) = v1 + (v2-v1)*(j-r1+1)/(r2-r1+1)
+						tod(j,di) = v1 + (v2-v1)*(j-c1)/(c2-c1)
 					end do
 				end if
 			end do
@@ -330,7 +338,7 @@ contains
 					oranges(1,j) = i-1
 					incut = .true.
 				elseif(incut .and. mask(i,di) .eq. 0) then
-					oranges(2,j) = i
+					oranges(2,j) = i-1
 					incut = .false.
 				end if
 			end do
