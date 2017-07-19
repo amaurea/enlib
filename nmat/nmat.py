@@ -51,10 +51,18 @@ class NoiseMatrix:
 		return res, detslice, sampslice
 
 class NmatNull(NoiseMatrix):
+	def __init__(self, dets=None):
+		self.dets = dets
 	def apply(self, tod):
 		tod[:] = 0
 		return tod
+	@property
+	def ivar(self): return np.zeros(len(self.dets))
 	def white(self, tod): return self.apply(tod)
+	def __getitem__(self, sel):
+		res, detslice, sampslice = self.getitem_helper(sel)
+		if res.dets is not None: res.dets = res.dets[detslice]
+		return res
 
 class NmatBinned(NoiseMatrix):
 	"""TOD noise matrices where power is assumed to be constant
@@ -142,6 +150,7 @@ class NmatDetvecs(NmatBinned):
 		for d,b,eb in zip(self.iD, self.bins, self.ebins):
 			v, e = self.iV[eb[0]:eb[1]], self.iE[eb[0]:eb[1]]
 			tdiag += (d + np.sum(v**2*e[:,None],0))*(b[1]-b[0])
+			#tdiag += d*(b[1]-b[0])
 		tdiag /= np.sum(self.bins[:,1]-self.bins[:,0])
 
 		self.tdiag = tdiag

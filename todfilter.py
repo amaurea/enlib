@@ -1,6 +1,6 @@
 import numpy as np, time, h5py
 from scipy import signal
-from enlib import config, fft, utils, gapfill, todops, pmat, rangelist
+from enlib import config, fft, utils, gapfill, todops, pmat
 
 config.default("gfilter_jon_naz", 16, "The number of azimuth modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_nt",  10, "The number of time modes to fit/subtract in Jon's polynomial ground filter.")
@@ -34,11 +34,16 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	# across iterations.
 	B = np.zeros([naz+nt+nhwp,d.shape[-1]],dtype=tod.dtype)
 	if naz > 0:
-		# Build azimuth basis as polynomials
-		x = utils.rescale(az,[-1,1])
-		if use_phase: x = build_phase(x)
-		B[0] = x
-		for i in range(1,naz): B[i] = B[i-1]*x
+		if not use_phase:
+			# Build azimuth basis as polynomials
+			x = utils.rescale(az,[-1,1])
+			B[0] = x
+			for i in range(1,naz): B[i] = B[i-1]*x
+		else:
+			x = build_phase(az)*np.pi
+			for i in range(naz):
+				j = i/2+1
+				B[i] = np.cos(j*x) if i%2 == 0 else np.sin(j*x)
 	if nt > 0:
 		x = np.linspace(-1,1,d.shape[-1],endpoint=False)
 		B[naz] = x

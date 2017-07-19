@@ -382,20 +382,20 @@ class PmatCut(PointingMatrix):
 	scan."""
 	def __init__(self, scan, params=None):
 		params = config.get("pmat_cut_type", params)
-		n, neach, flat = scan.cut.flatten()
-		# Detectors for each cut
-		dets = np.concatenate([np.zeros(n,dtype=int)+i for i,n in enumerate(neach)])
 		# Extract the cut parameters. E.g. poly:foo_secs -> [4,foo_samps]
 		par  = np.array(self.parse_params(params, scan.srate))
 		# Meaning of cuts array: [:,{dets,offset,length,out_length,type,args..}]
-		self.cuts = np.zeros([flat.shape[0],5+len(par)],dtype=np.int32)
-		self.cuts[:,0] = dets
-		self.cuts[:,1] = flat[:,0]
-		self.cuts[:,2] = flat[:,1]-flat[:,0]
+		self.cuts = np.zeros([scan.cut.nrange,5+len(par)],dtype=np.int32)
+		# Detector each cut belongs to
+		self.cuts[:,0] = np.concatenate([np.full(nr, i, np.int32) for i,nr in enumerate(scan.cut.nranges)])
+		# Start of each cut
+		self.cuts[:,1] = scan.cut.ranges[:,0]
+		# Length of each cut
+		self.cuts[:,2] = scan.cut.ranges[:,1]-scan.cut.ranges[:,0]
 		# Set up the parameter arguments
 		self.cuts[:,5:]= par[None,:]
 		assert np.all(self.cuts[:,2] > 0),  "Empty cut range detected in %s" % scan.entry.id
-		assert np.all(self.cuts[:,1] >= 0) and np.all(flat[:,1] <= scan.nsamp), "Out of bounds cut range detected in %s" % scan.entry.id
+		assert np.all(self.cuts[:,1] >= 0) and np.all(scan.cut.ranges[:,1] <= scan.nsamp), "Out of bounds cut range detected in %s" % scan.entry.id
 		if self.cuts.size > 0:
 			get_core(np.float32).measure_cuts(self.cuts.T)
 		self.cuts[:,3] = utils.cumsum(self.cuts[:,4])
@@ -611,60 +611,6 @@ class PmatPhaseFlat(PointingMatrix):
 		if dir < 0: phase[:] = np.sum(map,1)
 	def forward(self, tod, phase, tmul=1): return self.apply(tod, phase, 1, tmul=tmul)
 	def backward(self,tod, phase, tmul=1): return self.apply(tod, phase,-1, tmul=tmul)
-
-def compress_ranges(ranges, nrange, cut, nsamp):
-	"""Given ranges[nsrc,ndet,nmax,2], nrange[nsrc,ndet] where ranges has
-	det-local numbering, return the same information in a compressed format
-	ranges[nr,2], rangesets[nind], offsets[nsrc,ndet,2], where ranges still has
-	per-detector ordering. It used to be in global sample ordering, but I always
-	ended up converting back afterwards."""
-	nsrc, ndet = nrange.shape
-	# Special case: None hit. We represent this as a single range hitting no samples,
-	# which isn't used by any of the srcs.
-	def dummy():
-		ranges  = np.array([[0,0]],dtype=np.int32)
-		rangesets = np.array([0],dtype=np.int32)
-		offsets = np.zeros([nsrc,ndet,2],dtype=np.int32)
-		return ranges, rangesets, offsets
-	if np.sum(nrange) == 0: return dummy()
-	# First collapse ranges,nrange to flat ranges and indices into it
-	det_ranges = []
-	maps       = []
-	nflat      = 0
-	offsets    = np.zeros([nsrc,ndet,2],dtype=np.int32)
-	for di in xrange(ndet):
-		# Collect the sample ranges for all the sources for a given detector
-		src_ranges = []
-		for si in xrange(nsrc):
-			# Offsets holds the indices to the first and last+1 range for each
-			# source and detector. We get this simply by counting how many ranges
-			# we have processed so far. After merging, these will be indices into
-			# the map array instead.
-			offsets[si,di,0] = nflat
-			if nrange[si,di] > 0:
-				current_ranges  = ranges[si,di,:nrange[si,di]]
-				cutsplit_ranges = utils.range_sub(current_ranges, cut[di].ranges)
-				nflat += len(cutsplit_ranges)
-				if len(cutsplit_ranges) > 0:
-					src_ranges.append(cutsplit_ranges)
-			offsets[si,di,1] = nflat
-		if len(src_ranges) > 0:
-			src_ranges = np.concatenate(src_ranges)
-			# Merge overlapping ranges for this detector. Map maps from
-			# indices into the unmerged array to indices into the merged array.
-			# We merge at this step rather than at the end to avoid merging
-			# samples from one detector with samples from the next.
-			src_merged, map = utils.range_union(src_ranges, mapping=True)
-			det_ranges.append(src_merged)
-			maps.append(map)
-	# Concatenate the detector ranges into one long list. Make sure
-	# that we actually have some ranges left. While we did check at the
-	# start, the cuts may have eliminated the ranges we started with.
-	if sum([len(r) for r in det_ranges]) == 0: return dummy()
-	oranges = np.concatenate(det_ranges)
-	moffs   = utils.cumsum([len(r) for r in det_ranges])
-	map     = np.concatenate([m+o for m,o in zip(maps,moffs)])
-	return oranges, map, offsets
 
 def extract_interpol_params(ipol, dtype):
 	"""Extracts flattend interpolation parameters from an Interpolator object

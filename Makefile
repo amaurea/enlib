@@ -1,4 +1,4 @@
-all: iers coordinates array_ops pmat nmat colorize ptsrc_data interpol pyactgetdata sharp
+all: iers coordinates sampcut array_ops pmat nmat colorize ptsrc_data interpol pyactgetdata sharp
 clean: clean_iers clean_coordinates clean_array_ops clean_pmat clean_nmat clean_colorize clean_ptsrc_data clean_interpol clean_pyactgetdata clean_sharp
 	rm -rf *.pyc
 
@@ -18,6 +18,10 @@ colorize: foo
 	make -C colorize
 clean_colorize: foo
 	make -C colorize clean
+sampcut: foo
+	make -C sampcut
+clean_sampcut:
+	make -C sampcut clean
 array_ops: foo
 	make -C array_ops
 clean_array_ops:

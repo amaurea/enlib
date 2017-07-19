@@ -76,7 +76,7 @@ class ndmap(np.ndarray):
 	def padslice(self, box, default=np.nan): return padslice(self, box, default=default)
 	def to_healpix(self, nside=0, order=3, omap=None, chunk=100000, destroy_input=False):
 		return to_healpix(self, nside=nside, order=order, omap=omap, chunk=chunk, destroy_input=destroy_input)
-	def to_flipper(self, omap=None): return to_flipper(self, omap=omap)
+	def to_flipper(self, omap=None, unpack=True): return to_flipper(self, omap=omap, unpack=unpack)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
@@ -113,7 +113,7 @@ class ndmap(np.ndarray):
 			inside the bounding box. Default: False."""
 		ibox = self.subinds(box, inclusive)
 		return self[...,ibox[0,0]:ibox[1,0]:ibox[2,0],ibox[0,1]:ibox[1,1]:ibox[2,1]]
-	def subinds(self, box, inclusive=False):
+	def subinds(self, box, inclusive=False, cap=True):
 		"""Helper function for submap. Translates the bounding
 		box provided into a pixel units. Assumes rectangular
 		coordinates."""
@@ -130,6 +130,10 @@ class ndmap(np.ndarray):
 			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
 		else:
 			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
+		# Make sure we stay inside our map bounds
+		if cap:
+			ibox[:,0] = np.maximum(ibox[:,0],0)
+			ibox[:,1] = np.minimum(ibox[:,1],self.shape[-2:])
 		return ibox
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
@@ -1012,15 +1016,20 @@ def to_healpix(imap, omap=None, nside=0, order=3, chunk=100000, destroy_input=Fa
 		omap[...,i:i+chunk] = imap.at(pos, order=order, mask_nan=False, prefilter=False)
 	return omap
 
-def to_flipper(imap, omap=None):
+def to_flipper(imap, omap=None, unpack=True):
 	"""Convert the enmap "imap" into a flipper map with the same geometry. If
 	omap is given, the output will be written to it. Otherwise, a an array of
 	flipper maps will be constructed. If the input map has dimensions
 	[a,b,c,ny,nx], then the output will be an [a,b,c] array with elements
-	that are flipper maps with dimension [ny,nx]. This will result in a
-	zero-dimensional array if the input had only pixel dimensions (ndim=2).
-	These can be tedious to work with, but can be unpacked by doing
-	m.reshape(-1)[0]."""
+	that are flipper maps with dimension [ny,nx]. The exception is for
+	a 2d enmap, which is returned as a plain flipper map, not a
+	0-dimensional array of flipper maps. To avoid this unpacking, pass
+
+	Flipper needs cdelt0 to be in decreasing order. This function ensures that,
+	at the cost of losing the original orientation. Hence to_flipper followed
+	by from_flipper does not give back an exactly identical map to the one
+	on started with.
+	"""
 	import flipper
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
@@ -1034,7 +1043,26 @@ def to_flipper(imap, omap=None):
 		omap = np.empty(iflat.shape[:-2],dtype=object)
 	for i, m in enumerate(iflat):
 		omap[i] = flipper.liteMap.liteMapFromDataAndWCS(iflat[i], flipwcs)
-	return omap.reshape(imap.shape[:-2])
+	omap = omap.reshape(imap.shape[:-2])
+	if unpack and omap.ndim == 0: return omap.reshape(-1)[0]
+	else: return omap
+
+def from_flipper(imap, omap=None):
+	"""Construct an enmap from a flipper map or array of flipper maps imap.
+	If omap is specified, it must have the correct shape, and the data will
+	be written there."""
+	imap   = np.asarray(imap)
+	first  = imap.reshape(-1)[0]
+	# flipper and enmap wcs objects come from different wcs libraries, so
+	# they must be converted
+	wcs    = enlib.wcs.WCS(first.wcs.header).sub(2)
+	if omap is None:
+		omap = empty(imap.shape + first.data.shape, wcs, first.data.dtype)
+	# Copy over all components
+	iflat = imap.reshape(-1)
+	for im, om in zip(iflat, omap.preflat):
+		om[:] = im.data
+	return omap
 
 ############
 # File I/O #

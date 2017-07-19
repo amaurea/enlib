@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, os, errno, scipy.optimize, time, datetime, warnings, re
+import numpy as np, scipy.ndimage, os, errno, scipy.optimize, time, datetime, warnings, re, sys
 
 degree = np.pi/180
 arcmin = degree/60
