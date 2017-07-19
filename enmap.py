@@ -76,7 +76,7 @@ class ndmap(np.ndarray):
 	def padslice(self, box, default=np.nan): return padslice(self, box, default=default)
 	def to_healpix(self, nside=0, order=3, omap=None, chunk=100000, destroy_input=False):
 		return to_healpix(self, nside=nside, order=order, omap=omap, chunk=chunk, destroy_input=destroy_input)
-	def to_flipper(self, omap=None, unpack=False): return to_flipper(self, omap=omap, unpack=unpack)
+	def to_flipper(self, omap=None, unpack=True): return to_flipper(self, omap=omap, unpack=unpack)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
@@ -1011,15 +1011,14 @@ def to_healpix(imap, omap=None, nside=0, order=3, chunk=100000, destroy_input=Fa
 		omap[...,i:i+chunk] = imap.at(pos, order=order, mask_nan=False, prefilter=False)
 	return omap
 
-def to_flipper(imap, omap=None, unpack=False):
+def to_flipper(imap, omap=None, unpack=True):
 	"""Convert the enmap "imap" into a flipper map with the same geometry. If
 	omap is given, the output will be written to it. Otherwise, a an array of
 	flipper maps will be constructed. If the input map has dimensions
 	[a,b,c,ny,nx], then the output will be an [a,b,c] array with elements
-	that are flipper maps with dimension [ny,nx]. This will result in a
-	zero-dimensional array if the input had only pixel dimensions (ndim=2).
-	To avoid this behavior, pass unpack=True. That will cause plain 2d maps
-	to be returned as a single, unwrapped flipper map.
+	that are flipper maps with dimension [ny,nx]. The exception is for
+	a 2d enmap, which is returned as a plain flipper map, not a
+	0-dimensional array of flipper maps. To avoid this unpacking, pass
 
 	Flipper needs cdelt0 to be in decreasing order. This function ensures that,
 	at the cost of losing the original orientation. Hence to_flipper followed
