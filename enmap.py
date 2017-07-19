@@ -113,7 +113,7 @@ class ndmap(np.ndarray):
 			inside the bounding box. Default: False."""
 		ibox = self.subinds(box, inclusive)
 		return self[...,ibox[0,0]:ibox[1,0]:ibox[2,0],ibox[0,1]:ibox[1,1]:ibox[2,1]]
-	def subinds(self, box, inclusive=False):
+	def subinds(self, box, inclusive=False, cap=True):
 		"""Helper function for submap. Translates the bounding
 		box provided into a pixel units. Assumes rectangular
 		coordinates."""
@@ -130,6 +130,10 @@ class ndmap(np.ndarray):
 			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
 		else:
 			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
+		# Make sure we stay inside our map bounds
+		if cap:
+			ibox[:,0] = np.maximum(ibox[:,0],0)
+			ibox[:,1] = np.minimum(ibox[:,1],self.shape[-2:])
 		return ibox
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
