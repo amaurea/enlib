@@ -502,7 +502,10 @@ def lmap(shape, wcs, oversample=1):
 
 def modlmap(shape, wcs, oversample=1):
 	"""Return a map of all the abs wavenumbers in the fourier transform
-	of a map with the given shape and wcs."""
+	of a map with the given shape and wcs.
+
+        What is lrmap?
+        """
 	slmap = lmap(shape,wcs,oversample=oversample)
         return np.sum(slmap**2,0)**0.5
 
@@ -1290,8 +1293,36 @@ def read_hdf_geometry(fname):
 	return shape, wcs
 
 
-def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car"):
+def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car",pol=False):
     hwidth = width_arcmin/2.
     arcmin =  enlib.utils.arcmin
     shape, wcs = geometry(pos=[[-hwidth*arcmin,-hwidth*arcmin],[hwidth*arcmin,hwidth*arcmin]], res=px_res_arcmin*arcmin, proj=proj)
+    if pol: shape = (3,)+shape
     return shape, wcs
+
+
+def power_from_fourier_teb(kmap1,kmap2=None):
+        pass
+
+def power_from_teb(map1,map2=None,mask1=None,mask2=None):
+        pass
+
+
+def power_from_fourier_iqu(map1,map2=None,mask1=None,mask2=None):
+        pass
+
+
+def power_from_iqu(map1,map2=None,mask1=None,mask2=None):
+        if mask1 is None: mask1 = map1*0.+1.
+        if mask2 is None: mask2 = mask1
+        if map2 is None: map2 = map1
+
+class FourierCalculator(object):
+
+        def __init__(self,shape,wcs):
+                self.shape = shape
+                self.wcs = wcs
+                self.rot = queb_rotmat(lmap(shape,wcs))
+
+
+
