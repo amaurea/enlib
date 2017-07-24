@@ -53,6 +53,8 @@ class ndmap(np.ndarray):
 	def posmap(self, safe=True, corner=False): return posmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
 	def lmap(self, oversample=1): return lmap(self.shape, self.wcs, oversample=oversample)
+	def modlmap(self, oversample=1): return modlmap(self.shape, self.wcs, oversample=oversample)
+	def modrmap(self, safe=True, corner=False): return modrmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def area(self): return area(self.shape, self.wcs)
 	def pixsize(self): return pixsize(self.shape, self.wcs)
 	def pixshape(self): return pixshape(self.shape, self.wcs)
@@ -336,15 +338,24 @@ def _arghelper(map, func, unit):
 	if unit == "coord": res = pix2sky(map.shape, map.wcs, res.T).T
 	return res
 
-def rand_map(shape, wcs, cov, scalar=False, seed=None):
+def rand_map(shape, wcs, cov, scalar=False, seed=None, power2d=False,pixel_units=False):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
-	the provided power spectrum."""
-	if seed is not None: np.random.seed(seed)
-	if scalar:
-		return ifft(rand_gauss_iso_harm(shape, wcs, cov)).real
-	else:
-		return harm2map(rand_gauss_iso_harm(shape, wcs, cov))
+	the provided power spectrum.
 
+        If power2d is True, cov is assumed to be an array of 2D power spectra.
+        If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
+        not in steradians. This flag has no effect if power2D is False.
+        """
+	if seed is not None: np.random.seed(seed)
+        kmap = rand_gauss_iso_harm(shape, wcs, cov, power2d, pixel_units)
+	if scalar:
+		return ifft(kmap).real
+	else:
+		return harm2map(kmap)
+
+
+        
+        
 def rand_gauss(shape, wcs, dtype=None):
 	"""Generate a map with random gaussian noise in pixel space."""
 	return ndmap(np.random.standard_normal(shape), wcs).astype(dtype,copy=False)
@@ -356,11 +367,27 @@ def rand_gauss_harm(shape, wcs):
 	passed, the result will be an enmap."""
 	return ndmap(np.random.standard_normal(shape)+1j*np.random.standard_normal(shape),wcs)
 
-def rand_gauss_iso_harm(shape, wcs, cov):
+def rand_gauss_iso_harm(shape, wcs, cov, power2d=False, pixel_units=False):
 	"""Generates an isotropic random map with component covariance
-	cov in harmonic space, where cov is a (comp,comp,l) array."""
-	data = map_mul(spec2flat(shape, wcs, cov, 0.5, mode="constant"), rand_gauss_harm(shape, wcs))
+	cov in harmonic space, where cov is a (comp,comp,l) array or a 
+        (comp,comp,Ny,Nx) array if power2d is True.
+
+        If power2d is True, cov is assumed to be an array of 2D power spectra.
+        If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
+        not in steradians. This flag has no effect if power2D is False.
+        """
+
+        if power2d:
+                if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
+                covsqrt = multi_pow(cov, 0.5)
+        else:
+                covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
+                        
+
+	data = map_mul(covsqrt, rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
+
+
 
 def extent(shape, wcs, method="default", nsub=None):
 	if method == "default": method = extent_model[-1]
@@ -472,6 +499,22 @@ def lmap(shape, wcs, oversample=1):
 	data[0] = ly[:,None]
 	data[1] = lx[None,:]
 	return ndmap(data, wcs)
+
+def modlmap(shape, wcs, oversample=1):
+	"""Return a map of all the abs wavenumbers in the fourier transform
+	of a map with the given shape and wcs."""
+	slmap = lmap(shape,wcs,oversample=oversample)
+        return np.sum(slmap**2,0)**0.5
+
+def modrmap(shape, wcs, safe=True, corner=False):
+	"""Return an enmap where each entry is the distance from center 
+        of that entry. Results are returned in radians, and
+	if safe is true (default), then sharp coordinate edges will be
+	avoided."""
+	slmap = posmap(shape,wcs,safe=safe,corner=corner)
+        return np.sum(slmap**2,0)**0.5
+
+
 
 def laxes(shape, wcs, oversample=1):
 	overample = int(oversample)
@@ -676,7 +719,7 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="constant", oversample=1, smooth="a
 	if smooth > 0:
 		cov = smooth_spectrum(cov, kernel="gauss", weight="mode", width=smooth)
 	# Translate from steradians to pixels
-	cov = cov * np.prod(shape[-2:])/area(shape,wcs)
+	cov = cov * np.prod(shape[-2:])/area(shape,wcs) 
 	if exp != 1.0: cov = multi_pow(cov, exp)
 	cov[~np.isfinite(cov)] = 0
 	cov   = cov[:oshape[-3],:oshape[-3]]
@@ -882,7 +925,12 @@ def padcrop(m, info):
 
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
-	return ifft(fft(m)*_widen(m.lmap(),m.ndim+1)*1j).real
+        return gradf(fft(m),normalized=True)
+
+def gradf(kmap,normalized=False):
+	"""Returns the gradient of the fourier transformed map kmap as [2,...]."""
+        if not(normalized): kmap /= np.prod(kmap.shape[-2:])**0.5
+	return ifft(kmap*_widen(kmap.lmap(),kmap.ndim+1)*1j).real
 
 def grad_pix(m):
 	"""The gradient of map m expressed in units of pixels.
@@ -892,9 +940,18 @@ def grad_pix(m):
 	nonstandard directions."""
 	return grad(m)*(m.shape[-2:]/m.extent())[(slice(None),)+(None,)*m.ndim]
 
-def div(m):
+def grad_pixf(kmap,normalized=False):
+	"""The gradient of map m expressed in units of pixels.
+	Not the same as the gradient of m with resepect to pixels.
+	Useful for avoiding sky2pix-calls for e.g. lensing,
+	and removes the complication of axes that increase in
+	nonstandard directions."""
+	return gradf(kmap,normalized=normalized)*(kmap.shape[-2:]/kmap.extent())[(slice(None),)+(None,)*kmap.ndim]
+
+
+def div(m,normalize=True):
 	"""Returns the divergence of the map m[2,...] as [...]."""
-	return ifft(np.sum(fft(m)*_widen(m.lmap(),m.ndim)*1j,0)).real
+	return ifft(np.sum(fft(m,normalize=normalize)*_widen(m.lmap(),m.ndim)*1j,0)).real
 
 def _widen(map,n):
 	"""Helper for gard and div. Adds degenerate axes between the first
@@ -1231,3 +1288,10 @@ def read_hdf_geometry(fname):
 		wcs   = enlib.wcs.WCS(header).sub(2)
 		shape = hfile["data"].shape
 	return shape, wcs
+
+
+def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car"):
+    hwidth = width_arcmin/2.
+    arcmin =  utils.arcmin
+    shape, wcs = geometry(pos=[[-hwidth*arcmin,-hwidth*arcmin],[hwidth*arcmin,hwidth*arcmin]], res=px_res_arcmin*arcmin, proj=proj)
+    return shape, wcs
