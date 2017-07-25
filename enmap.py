@@ -17,6 +17,7 @@ import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice
 #     simple to override individual properties.
 
 extent_model = ["subgrid"]
+iau_convention = True
 
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
 # itself uses column-major ordering. So an array which is (ncomp,ny,nx)
@@ -577,7 +578,11 @@ def queb_rotmat(lmap, inverse=False):
 	# tangential direction, not radial. This matches flipperpol too.
 	# This corresponds to the Healpix convention. To get IAU,
 	# flip the sign of a.
-	a    = 2*np.arctan2(-lmap[1], lmap[0])
+        if iau_convention:
+                sgn = -1
+        else:
+                sgn = 1
+	a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
 	c, s = np.cos(a), np.sin(a)
 	if inverse: s = -s
 	return samewcs(np.array([[c,-s],[s,c]]),lmap)
