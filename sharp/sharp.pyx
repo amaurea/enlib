@@ -86,7 +86,7 @@ def map_info_clenshaw_curtis(int nrings, nphi=None, double phi0=0, stride_lon=No
 	with nrings iso-colatitude rings with nphi pixels each, such that the first and last
 	rings have colatitude 0 and pi respectively. This corresponds to Clenshaw-Curtis
 	quadrature."""
-	cdef int inphi = 2*nrings if nphi is None else nphi
+	cdef int inphi = 2*(nrings-1) if nphi is None else nphi
 	cdef int slon  = 1 if stride_lon is None else stride_lon
 	cdef int slat  = inphi*slon if stride_lat is None else stride_lat
 	cdef csharp.sharp_geom_info * geom
@@ -339,7 +339,7 @@ cdef class sht:
 		[nspin,npix] or [npix] where ntrans is the number of independent
 		transforms to perform in parallel, nspin is the number of spin
 		components per transform (1 or 2), and npix is the number of pixels per map."""
-		map = np.asarray(map, dtype=np.float64)
+		map = np.asarray(map)
 		ntrans, nspin = dim_helper(map, "map")
 		# Create a compatible output map
 		if alm is None:

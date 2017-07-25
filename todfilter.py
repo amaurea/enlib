@@ -1,27 +1,27 @@
 import numpy as np, time, h5py
-from enlib import config, fft, utils, gapfill, todops, pmat, rangelist
+from scipy import signal
+from enlib import config, fft, utils, gapfill, todops, pmat
 
-config.default("gfilter_jon_naz", 8, "The number of azimuth modes to fit/subtract in Jon's polynomial ground filter.")
+config.default("gfilter_jon_naz", 16, "The number of azimuth modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_nt",  10, "The number of time modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_nhwp", 0, "The number of hwp modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_niter", 3, "The number of time modes to fit/subtract in Jon's polynomial ground filter.")
+config.default("gfilter_jon_phase", True, "Modify Jon's polynomial ground filter to use phase instead of azimuth.")
 
-def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=None, hwp=None, nhwp=None, deslope=True, inplace=True):
+def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=None, hwp=None, nhwp=None, deslope=True, inplace=True, use_phase=None):
 	"""Fix naz Legendre polynomials in az and nt other polynomials
 	in t jointly. Then subtract the best fit from the data.
 	The subtraction is inplace, so tod is modified. If naz or nt are
 	negative, they are fit for, but not subtracted.
 	NOTE: This function may leave tod nonperiodic.
 	"""
-	#moomoo = tod[:8].copy()
 	naz = config.get("gfilter_jon_naz", naz)
 	nt  = config.get("gfilter_jon_nt", nt)
 	nhwp= config.get("gfilter_jon_nhwp", nhwp)
 	niter = config.get("gfilter_jon_niter", niter)
+	use_phase = config.get("gfilter_jon_phase", use_phase)
 	if not inplace: tod = tod.copy()
 	do_gapfill = cuts is not None
-	#print "Mos", naz, nt, nhwp
-	#print hwp
 	# No point in iterating if we aren't gapfilling
 	if not do_gapfill: niter = 1
 	if hwp is None or np.all(hwp==0): nhwp = 0
@@ -34,16 +34,22 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	# across iterations.
 	B = np.zeros([naz+nt+nhwp,d.shape[-1]],dtype=tod.dtype)
 	if naz > 0:
-		# Build azimuth basis as polynomials
-		x = utils.rescale(az,[-1,1])
-		for i in range(naz): B[i] = x**(i+1)
+		if not use_phase:
+			# Build azimuth basis as polynomials
+			x = utils.rescale(az,[-1,1])
+			B[0] = x
+			for i in range(1,naz): B[i] = B[i-1]*x
+		else:
+			x = build_phase(az)*np.pi
+			for i in range(naz):
+				j = i/2+1
+				B[i] = np.cos(j*x) if i%2 == 0 else np.sin(j*x)
 	if nt > 0:
 		x = np.linspace(-1,1,d.shape[-1],endpoint=False)
-		for i in range(nt): B[naz+i] = x**i
+		B[naz] = x
+		for i in range(1,nt): B[naz+i] = B[naz+i-1]*x
 	if nhwp > 0:
 		# Use sin and cos to avoid discontinuities
-		c = np.cos(hwp)
-		s = np.sin(hwp)
 		for i in range(nhwp):
 			j = i/2+1
 			x = np.cos(j*hwp) if i%2 == 0 else np.sin(j*hwp)
@@ -67,7 +73,6 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 				except np.linalg.LinAlgError as e:
 					print "LinAlgError in todfilter di %d. Skipping" % di
 					continue
-		#print "amps", amps[:,2]
 		# Subtract the best fit
 		if asign > 0: d -= amps[:naz].T.dot(B[:naz])
 		if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[naz:naz+nt])
@@ -78,6 +83,17 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	res = d.reshape(tod.shape)
 	return res
 
+def build_phase(az, smooth=3):
+	""""Phase" is an angle that increases with az while az increases, but
+	continues to increase as az falls."""
+	mi,ma = utils.minmax(az)
+	phase = (az-mi)/(ma-mi)
+	falling = phase[1:]-phase[:-1] < 0
+	falling = np.concatenate([falling[:1],falling])
+	phase[falling] = 2-phase[falling]
+	if smooth:
+		phase = signal.medfilt(phase, 2*smooth+1)
+	return phase
 
 def deproject_vecs(tods, dark, nmode=50, cuts=None, deslope=True, inplace=True):
 	"""Given a tod[ndet,nsamp] and a set of basis modes dark[nmode,nsamp], fit

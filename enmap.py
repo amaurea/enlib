@@ -16,7 +16,8 @@ import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice
 #     geometry object would make this less tedious, as long as it is
 #     simple to override individual properties.
 
-extent_model = ["intermediate"]
+extent_model = ["subgrid"]
+iau_convention = True
 
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
 # itself uses column-major ordering. So an array which is (ncomp,ny,nx)
@@ -53,9 +54,12 @@ class ndmap(np.ndarray):
 	def posmap(self, safe=True, corner=False): return posmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
 	def lmap(self, oversample=1): return lmap(self.shape, self.wcs, oversample=oversample)
+	def modlmap(self, oversample=1): return modlmap(self.shape, self.wcs, oversample=oversample)
+	def modrmap(self, safe=True, corner=False): return modrmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def area(self): return area(self.shape, self.wcs)
 	def pixsize(self): return pixsize(self.shape, self.wcs)
 	def pixshape(self): return pixshape(self.shape, self.wcs)
+	def pixsizemap(self): return pixsizemap(self.shape, self.wcs)
 	def extent(self, method="intermediate"): return extent(self.shape, self.wcs, method=method)
 	@property
 	def preflat(self):
@@ -65,7 +69,7 @@ class ndmap(np.ndarray):
 	def npix(self): return np.product(self.shape[-2:])
 	@property
 	def geometry(self): return self.shape, self.wcs
-	def project(self, shape, wcs, order=3, mode="nearest", cval=0): return project(self, shape, wcs, order, mode=mode, cval=cval)
+	def project(self, shape, wcs, order=3, mode="nearest", cval=0, prefilter=True, mask_nan=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width, profile="cos", fill="zero"): return apod(self, width, profile=profile, fill=fill)
@@ -75,7 +79,7 @@ class ndmap(np.ndarray):
 	def padslice(self, box, default=np.nan): return padslice(self, box, default=default)
 	def to_healpix(self, nside=0, order=3, omap=None, chunk=100000, destroy_input=False):
 		return to_healpix(self, nside=nside, order=order, omap=omap, chunk=chunk, destroy_input=destroy_input)
-	def to_flipper(self, omap=None): return to_flipper(self, omap=omap)
+	def to_flipper(self, omap=None, unpack=True): return to_flipper(self, omap=omap, unpack=unpack)
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
@@ -112,7 +116,7 @@ class ndmap(np.ndarray):
 			inside the bounding box. Default: False."""
 		ibox = self.subinds(box, inclusive)
 		return self[...,ibox[0,0]:ibox[1,0]:ibox[2,0],ibox[0,1]:ibox[1,1]:ibox[2,1]]
-	def subinds(self, box, inclusive=False):
+	def subinds(self, box, inclusive=False, cap=True):
 		"""Helper function for submap. Translates the bounding
 		box provided into a pixel units. Assumes rectangular
 		coordinates."""
@@ -129,10 +133,15 @@ class ndmap(np.ndarray):
 			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
 		else:
 			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
+		# Make sure we stay inside our map bounds
+		if cap:
+			ibox[:,0] = np.maximum(ibox[:,0],0)
+			ibox[:,1] = np.minimum(ibox[:,1],self.shape[-2:])
 		return ibox
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
 
+                
 def slice_wcs(shape, wcs, sel, nowrap=False):
 	"""Slice a geometry specified by shape and wcs according to the
 	slice sel. Returns a tuple of the output shape and the correponding
@@ -160,12 +169,13 @@ def get_unit(wcs):
 	if enlib.wcs.is_plain(wcs): return 1
 	else: return enlib.utils.degree
 
-def box(shape, wcs, npoint=10):
+def box(shape, wcs, npoint=10, corner=True):
 	"""Compute a bounding box for the given geometry."""
 	# Because of wcs's wrapping, we need to evaluate several
 	# extra pixels to make our unwinding unambiguous
 	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
-		np.linspace(0,shape[-1],num=npoint,endpoint=True)])-0.5
+		np.linspace(0,shape[-1],num=npoint,endpoint=True)])
+	if corner: pix -= 0.5
 	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
 	if enlib.wcs.is_plain(wcs):
 		return np.array(coords).T[[0,-1]]
@@ -254,7 +264,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 			wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
 	return wpix[::-1].reshape(coords.shape)
 
-def project(map, shape, wcs, order=3, mode="nearest", cval=0.0, force=False):
+def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, prefilter=True, mask_nan=True):
 	"""Project the map into a new map given by the specified
 	shape and wcs, interpolating as necessary. Handles nan
 	regions in the map by masking them before interpolating.
@@ -262,11 +272,50 @@ def project(map, shape, wcs, order=3, mode="nearest", cval=0.0, force=False):
 	when downgrading compared to averaging down."""
 	map  = map.copy()
 	# Skip expensive operation is map is compatible
-	if not force and enlib.wcs.equal(map.wcs, wcs) and tuple(shape[-2:]) == tuple(shape[-2:]):
-		return map
+	if not force:
+		if enlib.wcs.equal(map.wcs, wcs) and tuple(shape[-2:]) == tuple(shape[-2:]):
+			return map
+		elif enlib.wcs.is_compatible(map.wcs, wcs) and mode == "constant":
+			print "Using extract instead"
+			return extract(map, shape, wcs, cval=cval)
 	pix  = map.sky2pix(posmap(shape, wcs))
-	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval)
+	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	return ndmap(pmap, wcs)
+
+def extract(map, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b,
+		cval=0):
+	"""Like project, but only works for pixel-compatible wcs. Much
+	faster because it simply copies over pixels. Can be used in
+	co-adding by specifying an output map and a combining operation.
+	The deafult operation overwrites the output. Use np.ndarray.__iadd__
+	to get a copy-less += operation."""
+	# First check that our wcs is compatible
+	assert enlib.wcs.is_compatible(map.wcs, wcs), "Incompatible wcs in enmap.extract: %s vs. %s" % (str(map.wcs), str(wcs))
+	# Find the bounding box of the output in terms of input pixels.
+	# This is simple because our wcses are compatible, so they
+	# can only differ by a simple pixel offset. Here pixoff is
+	# pos_input - pos_output
+	if omap is None:
+		omap = full(map.shape[:-2]+tuple(shape[-2:]), wcs, cval, map.dtype)
+	nphi   = enlib.utils.nint(360/np.abs(map.wcs.wcs.cdelt[0]))
+	pixoff = enlib.utils.nint((wcs.wcs.crpix-map.wcs.wcs.crpix) - (wcs.wcs.crval-map.wcs.wcs.crval)/map.wcs.wcs.cdelt)[::-1]
+	if wrap: pixoff[1] %= nphi
+	# Get bounding boxes in output map coordinates
+	obox = np.array([[0,0],[shape[-2],shape[-1]]])
+	ibox = np.array([pixoff,pixoff+np.array(map.shape[-2:])])
+	# This function copies the intersection of ibox and obox over
+	# from imap to omap
+	def icopy(imap, omap, ibox, obox, ioff, op):
+		uobox = np.array([np.maximum(obox[0],ibox[0]),np.minimum(obox[1],ibox[1])])
+		if np.any(uobox[1]-uobox[0] <= 0): return
+		uibox = uobox - ioff
+		oslice = (Ellipsis,slice(uobox[0,0],uobox[1,0]),slice(uobox[0,1],uobox[1,1]))
+		islice = (Ellipsis,slice(uibox[0,0],uibox[1,0]),slice(uibox[0,1],uibox[1,1]))
+		omap[oslice] = op(omap[oslice],imap[islice])
+	icopy(map, omap, ibox, obox, pixoff, op)
+	if wrap:
+		icopy(map, omap, ibox-[0,nphi], obox, pixoff-[0,nphi], op)
+	return omap
 
 def at(map, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True):
 	if unit != "pix": pos = sky2pix(map.shape, map.wcs, pos, safe=safe)
@@ -290,15 +339,24 @@ def _arghelper(map, func, unit):
 	if unit == "coord": res = pix2sky(map.shape, map.wcs, res.T).T
 	return res
 
-def rand_map(shape, wcs, cov, scalar=False, seed=None):
+def rand_map(shape, wcs, cov, scalar=False, seed=None, power2d=False,pixel_units=False):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
-	the provided power spectrum."""
-	if seed is not None: np.random.seed(seed)
-	if scalar:
-		return ifft(rand_gauss_iso_harm(shape, wcs, cov)).real
-	else:
-		return harm2map(rand_gauss_iso_harm(shape, wcs, cov))
+	the provided power spectrum.
 
+        If power2d is True, cov is assumed to be an array of 2D power spectra.
+        If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
+        not in steradians. This flag has no effect if power2D is False.
+        """
+	if seed is not None: np.random.seed(seed)
+        kmap = rand_gauss_iso_harm(shape, wcs, cov, power2d, pixel_units)
+	if scalar:
+		return ifft(kmap).real
+	else:
+		return harm2map(kmap)
+
+
+        
+        
 def rand_gauss(shape, wcs, dtype=None):
 	"""Generate a map with random gaussian noise in pixel space."""
 	return ndmap(np.random.standard_normal(shape), wcs).astype(dtype,copy=False)
@@ -310,11 +368,27 @@ def rand_gauss_harm(shape, wcs):
 	passed, the result will be an enmap."""
 	return ndmap(np.random.standard_normal(shape)+1j*np.random.standard_normal(shape),wcs)
 
-def rand_gauss_iso_harm(shape, wcs, cov):
+def rand_gauss_iso_harm(shape, wcs, cov, power2d=False, pixel_units=False):
 	"""Generates an isotropic random map with component covariance
-	cov in harmonic space, where cov is a (comp,comp,l) array."""
-	data = map_mul(spec2flat(shape, wcs, cov, 0.5, mode="constant"), rand_gauss_harm(shape, wcs))
+	cov in harmonic space, where cov is a (comp,comp,l) array or a 
+        (comp,comp,Ny,Nx) array if power2d is True.
+
+        If power2d is True, cov is assumed to be an array of 2D power spectra.
+        If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
+        not in steradians. This flag has no effect if power2D is False.
+        """
+
+        if power2d:
+                if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
+                covsqrt = multi_pow(cov, 0.5)
+        else:
+                covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
+                        
+
+	data = map_mul(covsqrt, rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
+
+
 
 def extent(shape, wcs, method="default", nsub=None):
 	if method == "default": method = extent_model[-1]
@@ -370,6 +444,10 @@ def extent_subgrid(shape, wcs, nsub=None):
 	scale[0] = 1
 	ly = np.sum(((pos[:,1:,:-1]-pos[:,:-1,:-1])*scale)**2,0)**0.5
 	lx = np.sum(((pos[:,:-1,1:]-pos[:,:-1,:-1])*scale)**2,0)**0.5
+	# Replace invalid areas with mean
+	bad = ~np.isfinite(ly) | ~np.isfinite(lx)
+	ly[bad] = np.mean(ly[~bad])
+	lx[bad] = np.mean(lx[~bad])
 	areas = ly*lx
 	# Compute approximate overall lengths
 	Ay, Ax = np.sum(areas,0), np.sum(areas,1)
@@ -383,12 +461,36 @@ def area(shape, wcs, nsub=0x10):
 	return np.prod(extent(shape, wcs, nsub=nsub))
 
 def pixsize(shape, wcs):
-	"""Reaturns the area of a single pixel, in steradians."""
+	"""Returns the area of a single pixel, in steradians."""
 	return area(shape, wcs)/np.product(shape[-2:])
 
 def pixshape(shape, wcs):
 	"""Returns the height and width of a single pixel, in radians."""
 	return extent(shape, wcs)/shape[-2:]
+
+def pixsizemap(shape, wcs):
+	"""Returns the physical area of each pixel in the map in steradians.
+	Heavy for big maps."""
+	# First get the coordinates of all the pixel corners
+	pix  = np.mgrid[:shape[-2]+1,:shape[-1]+1]
+	with enlib.utils.nowarn():
+		y, x = pix2sky(shape, wcs, pix, safe=True, corner=True)
+	del pix
+	dy   = y[1:,1:]-y[:-1,:-1]
+	dx   = x[1:,1:]-x[:-1,:-1]
+	cy   = np.cos(y)
+	dx  *= 0.5*(cy[1:,1:]+cy[:-1,:-1])
+	del y, x, cy
+	area = dy*dx
+	del dy, dx
+	area = np.abs(area)
+	# Due to wcs fragility, we may have some nans at wraparound points.
+	# Fill these with the mean non-nan value. Since most maps will be cylindrical,
+	# it makes sense to do this by row
+	for a in area:
+		bad  = ~np.isfinite(a)
+		a[bad] = np.mean(a[~bad])
+	return area
 
 def lmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
@@ -398,6 +500,25 @@ def lmap(shape, wcs, oversample=1):
 	data[0] = ly[:,None]
 	data[1] = lx[None,:]
 	return ndmap(data, wcs)
+
+def modlmap(shape, wcs, oversample=1):
+	"""Return a map of all the abs wavenumbers in the fourier transform
+	of a map with the given shape and wcs.
+
+        What is lrmap?
+        """
+	slmap = lmap(shape,wcs,oversample=oversample)
+        return np.sum(slmap**2,0)**0.5
+
+def modrmap(shape, wcs, safe=True, corner=False):
+	"""Return an enmap where each entry is the distance from center 
+        of that entry. Results are returned in radians, and
+	if safe is true (default), then sharp coordinate edges will be
+	avoided."""
+	slmap = posmap(shape,wcs,safe=safe,corner=corner)
+        return np.sum(slmap**2,0)**0.5
+
+
 
 def laxes(shape, wcs, oversample=1):
 	overample = int(oversample)
@@ -457,7 +578,11 @@ def queb_rotmat(lmap, inverse=False):
 	# tangential direction, not radial. This matches flipperpol too.
 	# This corresponds to the Healpix convention. To get IAU,
 	# flip the sign of a.
-	a    = 2*np.arctan2(-lmap[1], lmap[0])
+        if iau_convention:
+                sgn = -1
+        else:
+                sgn = 1
+	a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
 	c, s = np.cos(a), np.sin(a)
 	if inverse: s = -s
 	return samewcs(np.array([[c,-s],[s,c]]),lmap)
@@ -551,14 +676,18 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs)
 		shape = tuple(np.floor(faredge+0.5).astype(int))
 	return pre+tuple(shape), wcs
 
-def fullsky_geometry(res=0.1*enlib.utils.degree, dims=()):
+def fullsky_geometry(res=None, shape=None, dims=(), proj="car"):
 	"""Build an enmap covering the full sky, with the outermost pixel centers
-	at the poles and wrap-around points. Assumes CAR projection
-	for now."""
-	nx,ny = int(2*np.pi/res), int(np.pi/res)
+	at the poles and wrap-around points. Assumes a CAR (clenshaw curtis variant)
+	projection for now."""
+	assert proj == "car", "Only CAR fullsky geometry implemented"
+	if shape is None:
+		res   = np.zeros(2)+res
+		shape = ([1*np.pi,2*np.pi]/res+0.5).astype(int)
+	ny,nx = shape
 	wcs   = enlib.wcs.WCS(naxis=2)
 	wcs.wcs.crval = [0,0]
-	wcs.wcs.cdelt = [360./nx,180./ny]
+	wcs.wcs.cdelt = [-360./nx,180./ny]
 	wcs.wcs.crpix = [nx/2+1,ny/2+1]
 	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
 	return dims+(ny+1,nx+0), wcs
@@ -598,7 +727,7 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="constant", oversample=1, smooth="a
 	if smooth > 0:
 		cov = smooth_spectrum(cov, kernel="gauss", weight="mode", width=smooth)
 	# Translate from steradians to pixels
-	cov = cov * np.prod(shape[-2:])/area(shape,wcs)
+	cov = cov * np.prod(shape[-2:])/area(shape,wcs) 
 	if exp != 1.0: cov = multi_pow(cov, exp)
 	cov[~np.isfinite(cov)] = 0
 	cov   = cov[:oshape[-3],:oshape[-3]]
@@ -804,7 +933,12 @@ def padcrop(m, info):
 
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
-	return ifft(fft(m)*_widen(m.lmap(),m.ndim+1)*1j).real
+        return gradf(fft(m),normalized=True)
+
+def gradf(kmap,normalized=False):
+	"""Returns the gradient of the fourier transformed map kmap as [2,...]."""
+        if not(normalized): kmap /= np.prod(kmap.shape[-2:])**0.5
+	return ifft(kmap*_widen(kmap.lmap(),kmap.ndim+1)*1j).real
 
 def grad_pix(m):
 	"""The gradient of map m expressed in units of pixels.
@@ -814,9 +948,18 @@ def grad_pix(m):
 	nonstandard directions."""
 	return grad(m)*(m.shape[-2:]/m.extent())[(slice(None),)+(None,)*m.ndim]
 
-def div(m):
+def grad_pixf(kmap,normalized=False):
+	"""The gradient of map m expressed in units of pixels.
+	Not the same as the gradient of m with resepect to pixels.
+	Useful for avoiding sky2pix-calls for e.g. lensing,
+	and removes the complication of axes that increase in
+	nonstandard directions."""
+	return gradf(kmap,normalized=normalized)*(kmap.shape[-2:]/kmap.extent())[(slice(None),)+(None,)*kmap.ndim]
+
+
+def div(m,normalize=True):
 	"""Returns the divergence of the map m[2,...] as [...]."""
-	return ifft(np.sum(fft(m)*_widen(m.lmap(),m.ndim)*1j,0)).real
+	return ifft(np.sum(fft(m,normalize=normalize)*_widen(m.lmap(),m.ndim)*1j,0)).real
 
 def _widen(map,n):
 	"""Helper for gard and div. Adds degenerate axes between the first
@@ -938,15 +1081,20 @@ def to_healpix(imap, omap=None, nside=0, order=3, chunk=100000, destroy_input=Fa
 		omap[...,i:i+chunk] = imap.at(pos, order=order, mask_nan=False, prefilter=False)
 	return omap
 
-def to_flipper(imap, omap=None):
+def to_flipper(imap, omap=None, unpack=True):
 	"""Convert the enmap "imap" into a flipper map with the same geometry. If
 	omap is given, the output will be written to it. Otherwise, a an array of
 	flipper maps will be constructed. If the input map has dimensions
 	[a,b,c,ny,nx], then the output will be an [a,b,c] array with elements
-	that are flipper maps with dimension [ny,nx]. This will result in a
-	zero-dimensional array if the input had only pixel dimensions (ndim=2).
-	These can be tedious to work with, but can be unpacked by doing
-	m.reshape(-1)[0]."""
+	that are flipper maps with dimension [ny,nx]. The exception is for
+	a 2d enmap, which is returned as a plain flipper map, not a
+	0-dimensional array of flipper maps. To avoid this unpacking, pass
+
+	Flipper needs cdelt0 to be in decreasing order. This function ensures that,
+	at the cost of losing the original orientation. Hence to_flipper followed
+	by from_flipper does not give back an exactly identical map to the one
+	on started with.
+	"""
 	import flipper
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
@@ -960,7 +1108,26 @@ def to_flipper(imap, omap=None):
 		omap = np.empty(iflat.shape[:-2],dtype=object)
 	for i, m in enumerate(iflat):
 		omap[i] = flipper.liteMap.liteMapFromDataAndWCS(iflat[i], flipwcs)
-	return omap.reshape(imap.shape[:-2])
+	omap = omap.reshape(imap.shape[:-2])
+	if unpack and omap.ndim == 0: return omap.reshape(-1)[0]
+	else: return omap
+
+def from_flipper(imap, omap=None):
+	"""Construct an enmap from a flipper map or array of flipper maps imap.
+	If omap is specified, it must have the correct shape, and the data will
+	be written there."""
+	imap   = np.asarray(imap)
+	first  = imap.reshape(-1)[0]
+	# flipper and enmap wcs objects come from different wcs libraries, so
+	# they must be converted
+	wcs    = enlib.wcs.WCS(first.wcs.header).sub(2)
+	if omap is None:
+		omap = empty(imap.shape + first.data.shape, wcs, first.data.dtype)
+	# Copy over all components
+	iflat = imap.reshape(-1)
+	for im, om in zip(iflat, omap.preflat):
+		om[:] = im.data
+	return omap
 
 ############
 # File I/O #
@@ -1004,6 +1171,25 @@ def read_map(fname, fmt=None, sel=None, hdu=None):
 		res = eval("res"+":".join(toks[1:]))
 	return res
 
+def read_map_geometry(fname, fmt=None, hdu=None):
+	"""Read an enmap from file. The file type is inferred
+	from the file extension, unless fmt is passed.
+	fmt must be one of 'fits' and 'hdf'."""
+	toks = fname.split(":")
+	fname = toks[0]
+	if fmt == None:
+		if   fname.endswith(".hdf"):     fmt = "hdf"
+		elif fname.endswith(".fits"):    fmt = "fits"
+		elif fname.endswith(".fits.gz"): fmt = "fits"
+		else: fmt = "fits"
+	if fmt == "fits":
+		return read_fits_geometry(fname, hdu=hdu)
+	elif fmt == "hdf":
+		return read_hdf_geometry(fname)
+	else:
+		raise ValueError
+	return res
+
 def write_fits(fname, emap, extra={}):
 	"""Write an enmap to a fits file."""
 	# The fits write routines may attempt to modify
@@ -1045,6 +1231,20 @@ def read_fits(fname, hdu=None, sel=None):
 		res = res.byteswap().newbyteorder()
 	return res
 
+def read_fits_geometry(fname, hdu=None):
+	"""Read an enmap wcs from the specified fits file. By default,
+	the map and coordinate system will be read from HDU 0. Use
+	the hdu argument to change this. The map must be stored as
+	a fits image."""
+	if hdu is None: hdu = 0
+	hdu = astropy.io.fits.open(fname)[hdu]
+	if hdu.header["NAXIS"] < 2:
+		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
+	with warnings.catch_warnings():
+		wcs = enlib.wcs.WCS(hdu.header).sub(2)
+	shape = tuple([hdu.header["NAXIS%d"%(i+1)] for i in range(hdu.header["NAXIS"])[::-1]])
+	return shape, wcs
+
 def write_hdf(fname, emap, extra={}):
 	"""Write an enmap as an hdf file, preserving all
 	the WCS metadata."""
@@ -1084,3 +1284,50 @@ def read_hdf(fname, sel=None):
 	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		res = res.byteswap().newbyteorder()
 	return res
+
+def read_hdf_geometry(fname):
+	"""Read an enmap wcs from the specified hdf file."""
+	import h5py
+	with h5py.File(fname,"r") as hfile:
+		hwcs = hfile["wcs"]
+		header = astropy.io.fits.Header()
+		for key in hwcs:
+			header[key] = hwcs[key].value
+		wcs   = enlib.wcs.WCS(header).sub(2)
+		shape = hfile["data"].shape
+	return shape, wcs
+
+
+def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car",pol=False):
+    hwidth = width_arcmin/2.
+    arcmin =  enlib.utils.arcmin
+    shape, wcs = geometry(pos=[[-hwidth*arcmin,-hwidth*arcmin],[hwidth*arcmin,hwidth*arcmin]], res=px_res_arcmin*arcmin, proj=proj)
+    if pol: shape = (3,)+shape
+    return shape, wcs
+
+
+def power_from_fourier_teb(kmap1,kmap2=None):
+        pass
+
+def power_from_teb(map1,map2=None,mask1=None,mask2=None):
+        pass
+
+
+def power_from_fourier_iqu(map1,map2=None,mask1=None,mask2=None):
+        pass
+
+
+def power_from_iqu(map1,map2=None,mask1=None,mask2=None):
+        if mask1 is None: mask1 = map1*0.+1.
+        if mask2 is None: mask2 = mask1
+        if map2 is None: map2 = map1
+
+class FourierCalculator(object):
+
+        def __init__(self,shape,wcs):
+                self.shape = shape
+                self.wcs = wcs
+                self.rot = queb_rotmat(lmap(shape,wcs))
+
+
+

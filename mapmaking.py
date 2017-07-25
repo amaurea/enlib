@@ -401,6 +401,7 @@ class PreconCut:
 		junk  = signal.zeros()
 		iwork = signal.prepare(junk)
 		owork = signal.prepare(junk)
+		iwork[:] = 1
 		for scan in scans:
 			with bench.mark("div_" + signal.name):
 				tod = np.zeros((scan.ndet, scan.nsamp), iwork.dtype)
@@ -592,9 +593,9 @@ class FilterPickup:
 	def __init__(self, naz=None, nt=None, nhwp=None, niter=None):
 		self.naz, self.nt, self.nhwp, self.niter = naz, nt, nhwp, niter
 	def __call__(self, scan, tod):
-		print "Using weights in FilterPickup. This is slow. Should think about best way to do this."
-		weights = (1-scan.cut_noiseest.to_mask()).astype(tod.dtype)
-		todfilter.filter_poly_jon(tod, scan.boresight[:,1], hwp=scan.hwp, naz=self.naz, nt=self.nt, nhwp=self.nhwp, niter=self.niter, cuts=scan.cut, weights=weights)
+		#print "Using weights in FilterPickup. This is slow. Should think about best way to do this."
+		#weights = (1-scan.cut_noiseest.to_mask()).astype(tod.dtype)
+		todfilter.filter_poly_jon(tod, scan.boresight[:,1], hwp=scan.hwp, naz=self.naz, nt=self.nt, nhwp=self.nhwp, niter=self.niter, cuts=scan.cut)
 
 class PostPickup:
 	def __init__(self, scans, signal_map, signal_cut, prec_ptp, naz=None, nt=None, weighted=False):

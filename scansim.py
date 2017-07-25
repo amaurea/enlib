@@ -1,5 +1,5 @@
 import numpy as np, copy, warnings
-from enlib import scan, rangelist, coordinates, utils, nmat, pmat, array_ops, enmap, bunch
+from enlib import scan, coordinates, utils, nmat, pmat, array_ops, enmap, bunch
 from enlib.bins import linbin
 from scipy import ndimage
 warnings.filterwarnings("ignore")
@@ -94,7 +94,7 @@ def dets_scattered(nmul, nper=3, rad=0.5*np.pi/180):
 	return bunch.Bunch(comps=comps, offsets=offsets)
 
 def nocut(ndet, nsamp):
-	return rangelist.Multirange([rangelist.Rangelist(np.zeros([0,2],dtype=int),n=nsamp) for i  in range(ndet)])
+	return sampcut.empty(ndet, nsamp)
 
 class SimSrcs(scan.Scan):
 	def __init__(self, scanpattern, dets, srcs, noise, simsys="equ", cache=False, seed=0, noise_scale=1, nsigma=4):

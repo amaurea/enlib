@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, os, errno, scipy.optimize, time, datetime, warnings, re
+import numpy as np, scipy.ndimage, os, errno, scipy.optimize, time, datetime, warnings, re, sys
 
 degree = np.pi/180
 arcmin = degree/60
@@ -134,7 +134,7 @@ def repeat_filler(d, n):
 	dtot = np.concatenate([d]*nmul)
 	return dtot[:n]
 
-def deslope(d, w=1, inplace=False, axis=-1):
+def deslope(d, w=1, inplace=False, axis=-1, avg=np.mean):
 	"""Remove a slope and mean from d, matching up the beginning
 	and end of d. The w parameter controls the number of samples
 	from each end of d that is used to determine the value to
@@ -142,7 +142,7 @@ def deslope(d, w=1, inplace=False, axis=-1):
 	if not inplace: d = np.array(d)
 	with flatview(d, axes=[axis]) as dflat:
 		for di in dflat:
-			di -= np.arange(di.size)*(np.mean(di[-w:])-np.mean(di[:w]))/(di.size-1)+np.mean(di[:w])
+			di -= np.arange(di.size)*(avg(di[-w:])-avg(di[:w]))/(di.size-1)+avg(di[:w])
 	return d
 
 def ctime2mjd(ctime):
@@ -351,19 +351,22 @@ def nearest_product(n, factors, direction="below"):
 	if 1 in factors: return n
 	below = direction=="below"
 	nmax = n+1 if below else n*min(factors)+1
+	# a keeps track of all the visited multiples
 	a = np.zeros(nmax+1,dtype=bool)
 	a[1] = True
-	best = 1
+	best = None
 	for i in xrange(n+1):
 		if not a[i]: continue
 		for f in factors:
 			m = i*f
 			if below:
 				if m > n: continue
+				else: best = m
 			else:
-				if m >= n: return m
-			a[m] = True
-			best = m
+				if m >= n and (best is None or best > m):
+					best = m
+			if m < a.size:
+				a[m] = True
 	return best
 
 def mkdir(path):
@@ -668,6 +671,21 @@ def greedy_split(data, n=2, costfun=max, workfun=lambda w,x: x if w is None else
 		cost = icost
 	return groups, cost, work
 
+def greedy_split_simple(data, n=2):
+	"""Split array "data" into n lists such that each list has approximately the same
+	sum, using a greedy algorithm."""
+	inds = np.argsort(data)[::-1]
+	rn   = range(n)
+	sums = [0  for i in rn]
+	res  = [[] for i in rn]
+	for i in inds:
+		small = 0
+		for j in rn:
+			if sums[j] < sums[small]: small = j
+		sums[small] += data[i]
+		res[small].append(i)
+	return res
+
 def cov2corr(C):
 	"""Scale rows and columns of C such that its diagonal becomes one.
 	This produces a correlation matrix from a covariance matrix. Returns
@@ -895,63 +913,77 @@ def resize_array(arr, size, axis=None, val=0):
 	res[slices] = arr[slices]
 	return res
 
-def redistribute(iarr, ibox, obox, comm, wrap=0):
-	"""Given the array iarra[{pre},{dims}] which represents a
-	slice garr[...,ibox[0,0]:ibox[0,1]:ibox[0,2],ibox[1,0]:ibox[1,1]:ibox[1,2],etc]
+def redistribute(iarrs, iboxes, oboxes, comm, wrap=0):
+	"""Given the array iarrs[[{pre},{dims}]] which represents slices
+	garr[...,narr,ibox[0,0]:ibox[0,1]:ibox[0,2],ibox[1,0]:ibox[1,1]:ibox[1,2],etc]
 	of some larger, distributed array garr, returns a different
 	slice of the global array given by obox."""
-	iarr   = np.asanyarray(iarr)
-	ibox   = sbox_fix(ibox)
-	obox   = sbox_fix(obox)
-	ndim   = ibox.shape[-2]
-	oshape = tuple(sbox_size(obox))
-	oarr   = np.zeros(iarr.shape[:-2]+oshape,iarr.dtype)
-	presize= np.product(iarr.shape[:-2],dtype=int)
+	iarrs  = [np.asanyarray(iarr) for iarr in iarrs]
+	iboxes = sbox_fix(iboxes)
+	oboxes = sbox_fix(oboxes)
+	ndim   = iboxes[0].shape[-2]
+	dtype  = iarrs[0].dtype
+	preshape = iarrs[0].shape[:-2]
+	oshapes= [tuple(sbox_size(b)) for b in oboxes]
+	oarrs  = [np.zeros(preshape+oshape,dtype) for oshape in oshapes]
+	presize= np.product(preshape,dtype=int)
 	# Find out what we must send to and receive from each other task.
 	# rboxes will contain slices into oarr and sboxes into iarr.
 	# Due to wrapping, a single pair of boxes can have multiple intersections,
 	# so we may need to send multiple arrays to each other task.
 	# We handle this by flattening and concatenating into a single buffer.
 	# sbox_intersect must return a list of lists of boxes
-	iboxes = allgather(ibox, comm)
-	#print "iboxes", iboxes
-	#print "obox", obox
-	#print "wrap", wrap
+	niarrs = allgather(len(iboxes), comm)
+	nimap  = [i for i,a in enumerate(niarrs) for j in range(a)]
+	noarrs = allgather(len(oboxes), comm)
+	nomap  = [i for i,a in enumerate(noarrs) for j in range(a)]
 	def safe_div(a,b,wrap=0):
 		return sbox_div(a,b,wrap=wrap) if len(a) > 0 else [np.array([[0,0,1]]*ndim)]
-	rboxes = sbox_intersect(iboxes, obox, wrap=wrap)
-	for rbox in rboxes: rbox[:] = safe_div(rbox, obox, wrap=wrap)
-	oboxes = allgather(obox, comm)
-	sboxes = sbox_intersect(oboxes, ibox, wrap=wrap)
-	for sbox in sboxes: sbox[:] = safe_div(sbox, ibox, wrap=wrap)
-	#print "sboxes", comm.rank, sboxes
-	#print "rboxes", comm.rank, rboxes
-	# Set up our send and receive buffers
-	nsend =[sum([np.product(sbox_size(subbox),dtype=int)*presize for subbox in sbox]) for sbox in sboxes]
-	nrecv =[sum([np.product(sbox_size(subbox),dtype=int)*presize for subbox in rbox]) for rbox in rboxes]
-	sendbuf = [iarr[sbox2slice(subbox)].reshape(-1) for sbox in sboxes for subbox in sbox]
+
+	# Set up receive buffer
+	nrecv = np.zeros(len(niarrs), int)
+	all_iboxes = allgatherv(iboxes, comm)
+	rboxes     = sbox_intersect(all_iboxes, oboxes, wrap=wrap)
+	for i1 in range(rboxes.shape[0]):
+		count = 0
+		for i2 in range(rboxes.shape[1]):
+			rboxes[i1,i2] = safe_div(rboxes[i1,i2], oboxes[i2])
+			for box in rboxes[i1,i2]:
+				count += np.product(sbox_size(box))
+		nrecv[nimap[i1]] += count*presize
+	recvbuf = np.empty(np.sum(nrecv), dtype)
+
+	# Set up send buffer
+	nsend   = np.zeros(len(noarrs), int)
+	sendbuf = []
+	all_oboxes = allgatherv(oboxes, comm)
+	sboxes     = sbox_intersect(all_oboxes, iboxes, wrap=wrap)
+	for i1 in range(sboxes.shape[0]):
+		count = 0
+		for i2 in range(sboxes.shape[1]):
+			sboxes[i1,i2] = safe_div(sboxes[i1,i2], iboxes[i2])
+			for box in sboxes[i1,i2]:
+				count += np.product(sbox_size(box))
+				sendbuf.append(iarrs[i2][sbox2slice(box)].reshape(-1))
+		nsend[nomap[i1]] += count*presize
 	sendbuf = np.concatenate(sendbuf)
-	recvbuf = np.empty(np.sum(nrecv),iarr.dtype)
-	# Perform the all-to-all send
-	#print "all2all"
-	#print "sbuf", comm.rank, sendbuf.shape, sendbuf.dtype
-	#print "rbuf", comm.rank, recvbuf.shape, recvbuf.dtype
-	#print "nsend", comm.rank, nsend,cumsum(nsend)
-	#print "nrecv", comm.rank, nrecv,cumsum(nrecv)
+
+	# Perform the actual all-to-all send
 	sbufinfo = (nsend,cumsum(nsend))
 	rbufinfo = (nrecv,cumsum(nrecv))
-	#print "sbufinfo", comm.rank, sbufinfo
-	#print "rbufinfo", comm.rank, rbufinfo
+
 	comm.Alltoallv((sendbuf, sbufinfo), (recvbuf,rbufinfo))
+
 	# Copy out the result
-	i = 0
-	for rbox in rboxes:
-		for subbox in rbox:
-			subshape = sbox_size(subbox)
-			data = recvbuf[i:i+np.product(subshape)*presize]
-			oarr[sbox2slice(subbox)] = data.reshape(iarr.shape[:-2]+tuple(subshape))
-			i += data.size
-	return oarr
+	off = 0
+	for i1 in range(rboxes.shape[0]):
+		for i2 in range(rboxes.shape[1]):
+			for rbox in rboxes[i1,i2]:
+				rshape = tuple(sbox_size(rbox))
+				data   = recvbuf[off:off+np.product(rshape)*presize]
+				oarrs[i2][sbox2slice(rbox)] = data.reshape(preshape + rshape)
+				off += data.size
+	return oarrs
 
 def sbox_intersect(a,b,wrap=0):
 	"""Given two Nd sboxes a,b [...,ndim,{start,end,step}] into the
@@ -1001,6 +1033,7 @@ def sbox_intersect_1d(a,b,wrap=0):
 		a, b = np.array(a), np.array(b)
 		a[:2]  -= a[0]/wrap*wrap
 		b[:2]  -= b[0]/wrap*wrap
+		segs[0] = (a,b)
 		if a[1] > wrap: segs.append((a-[wrap,wrap,0],b))
 		if b[1] > wrap: segs.append((a,b-[wrap,wrap,0]))
 	res = []
