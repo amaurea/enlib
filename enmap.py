@@ -1160,8 +1160,8 @@ def read_fits(fname, hdu=None, sel=None):
 	if sel:
 		sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-2,2])
 		_, wcs = slice_wcs(hdu.shape, wcs, sel2)
-		hdu = hdu.section[sel]
-	data = hdu.data
+		data = hdu.section[sel]
+	else: data = hdu.data
 	res = ndmap(data, wcs)
 	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		res = res.byteswap().newbyteorder()
