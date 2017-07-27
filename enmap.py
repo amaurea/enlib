@@ -1146,20 +1146,22 @@ def read_fits(fname, hdu=None, sel=None):
 	"""Read an enmap from the specified fits file. By default,
 	the map and coordinate system will be read from HDU 0. Use
 	the hdu argument to change this. The map must be stored as
-	a fits image."""
+	a fits image. If sel is specified, it should be a slice
+	that will be applied to the image before reading. This avoids
+	reading more of the image than necessary."""
 	if hdu is None: hdu = 0
 	hdu = astropy.io.fits.open(fname)[hdu]
 	if hdu.header["NAXIS"] < 2:
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
 	with warnings.catch_warnings():
 		wcs = enlib.wcs.WCS(hdu.header).sub(2)
-	data = hdu.data
 	# Slice if requested. Slicing at this point avoids unneccessary
-	# data actually being read
+	# I/O and memory usage.
 	if sel:
-		sel1, sel2 = enlib.slice.split_slice(sel, [data.ndim-2,2])
-		_, wcs = slice_wcs(data.shape, wcs, sel2)
-		data   = data[sel]
+		sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-2,2])
+		_, wcs = slice_wcs(hdu.shape, wcs, sel2)
+		hdu = hdu.section[sel]
+	data = hdu.data
 	res = ndmap(data, wcs)
 	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		res = res.byteswap().newbyteorder()
