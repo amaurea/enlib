@@ -1061,6 +1061,7 @@ def from_flipper(imap, omap=None):
 	iflat = imap.reshape(-1)
 	for im, om in zip(iflat, omap.preflat):
 		om[:] = im.data
+	omap = fix_endian(omap)
 	return omap
 
 ############
@@ -1162,9 +1163,7 @@ def read_fits(fname, hdu=None, sel=None):
 		_, wcs = slice_wcs(hdu.shape, wcs, sel2)
 		data = hdu.section[sel]
 	else: data = hdu.data
-	res = ndmap(data, wcs)
-	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
-		res = res.byteswap().newbyteorder()
+	res = fix_endian(ndmap(data, wcs))
 	return res
 
 def read_fits_geometry(fname, hdu=None):
@@ -1216,9 +1215,7 @@ def read_hdf(fname, sel=None):
 			sel1, sel2 = enlib.slice.split_slice(sel, [data.ndim-2,2])
 			_, wcs = slice_wcs(data.shape, wcs, sel2)
 			data   = data[sel]
-		res = ndmap(data.value, wcs)
-	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
-		res = res.byteswap().newbyteorder()
+		res = fix_endian(ndmap(data.value, wcs))
 	return res
 
 def read_hdf_geometry(fname):
@@ -1232,3 +1229,10 @@ def read_hdf_geometry(fname):
 		wcs   = enlib.wcs.WCS(header).sub(2)
 		shape = hfile["data"].shape
 	return shape, wcs
+
+def fix_endian(map):
+	"""Make endianness of array map match the current machine.
+	Returns the result."""
+	if map.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
+		map = map.byteswap().newbyteorder()
+	return map
