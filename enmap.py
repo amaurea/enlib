@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, enlib.powspec, astropy.io.fits, sys
+import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, enlib.powspec, astropy.io.fits, sys, time
 
 # Things that could be improved:
 #  1. We assume exactly 2 WCS axes in spherical projection in {dec,ra} order.
@@ -57,7 +57,7 @@ class ndmap(np.ndarray):
 	def pixsize(self): return pixsize(self.shape, self.wcs)
 	def pixshape(self): return pixshape(self.shape, self.wcs)
 	def pixsizemap(self): return pixsizemap(self.shape, self.wcs)
-	def extent(self, method="intermediate"): return extent(self.shape, self.wcs, method=method)
+	def extent(self, method="default"): return extent(self.shape, self.wcs, method=method)
 	@property
 	def preflat(self):
 		"""Returns a view of the map with the non-pixel dimensions flattened."""
@@ -1142,7 +1142,7 @@ def write_fits(fname, emap, extra={}):
 		warnings.filterwarnings('ignore')
 		hdus.writeto(fname, clobber=True)
 
-def read_fits(fname, hdu=None, sel=None):
+def read_fits(fname, hdu=None, sel=None, sel_threshold=10e6):
 	"""Read an enmap from the specified fits file. By default,
 	the map and coordinate system will be read from HDU 0. Use
 	the hdu argument to change this. The map must be stored as
@@ -1158,9 +1158,18 @@ def read_fits(fname, hdu=None, sel=None):
 	# Slice if requested. Slicing at this point avoids unneccessary
 	# I/O and memory usage.
 	if sel:
+		# First slice the wcs
 		sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-2,2])
 		_, wcs = slice_wcs(hdu.shape, wcs, sel2)
-		data = hdu.section[sel]
+		# hdu.section is pretty slow. Work around that by not applying it
+		# for small maps, and by not applying it along the last axis for the rest.
+		if hdu.size > sel_threshold:
+			sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-1,1])
+			data = hdu.section[sel1]
+			data = data[(Ellipsis,)+sel2]
+		else:
+			data = hdu.data
+			data = data[sel]
 	else: data = hdu.data
 	res = ndmap(data, wcs)
 	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
