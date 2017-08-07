@@ -1298,7 +1298,7 @@ def read_hdf_geometry(fname):
 	return shape, wcs
 
 
-def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car",pol=False):
+def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmin=None,xoffset_degree=None,yoffset_degree=None):
     hwidth = width_arcmin/2.
     arcmin =  enlib.utils.arcmin
     shape, wcs = geometry(pos=[[-hwidth*arcmin,-hwidth*arcmin],[hwidth*arcmin,hwidth*arcmin]], res=px_res_arcmin*arcmin, proj=proj)
