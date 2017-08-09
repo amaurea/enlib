@@ -1298,10 +1298,15 @@ def read_hdf_geometry(fname):
 	return shape, wcs
 
 
-def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmin=None,xoffset_degree=None,yoffset_degree=None):
+def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmin=None,xoffset_degree=0.,yoffset_degree=0.):
     hwidth = width_arcmin/2.
+    if height_arcmin is None:
+            vwidth = hwidth
+    else:
+            vwidth = height_arcmin/2.
     arcmin =  enlib.utils.arcmin
-    shape, wcs = geometry(pos=[[-hwidth*arcmin,-hwidth*arcmin],[hwidth*arcmin,hwidth*arcmin]], res=px_res_arcmin*arcmin, proj=proj)
+    degree =  enlib.utils.degree
+    shape, wcs = geometry(pos=[[-hwidth*arcmin+yoffset_degree*degree,-vwidth*arcmin+xoffset_degree*degree],[hwidth*arcmin+yoffset_degree*degree,vwidth*arcmin+xoffset_degree*degree]], res=px_res_arcmin*arcmin, proj=proj)
     if pol: shape = (3,)+shape
     return shape, wcs
 
