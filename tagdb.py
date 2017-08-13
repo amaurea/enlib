@@ -42,11 +42,16 @@ class Tagdb:
 	@property
 	def ids(self):
 		return append_subs(self.data["id"], self.data["subids"])
+	@property
+	def tags(self):
+		return sorted(self.data.keys())
 	def __len__(self): return len(self.ids)
 	def __getitem__(self, query=""):
 		return self.query(query)
 	def select(self, ids):
 		"""Return a tagdb which only contains the selected ids."""
+		if isinstance(ids, basestring):
+			ids = self.query(ids)
 		# Extract the subids
 		ids, subids = split_ids(ids)
 		# Restrict to the subset of these ids
