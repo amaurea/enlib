@@ -3,6 +3,7 @@ import numpy as np
 from enlib import utils, fft
 
 def resample(d, factors=[0.5], axes=None, method="fft"):
+	factors = np.atleast_1d(factors)
 	if np.allclose(factors,1): return d
 	if method == "fft":
 		if axes is None: axes = range(-len(factors),0)
