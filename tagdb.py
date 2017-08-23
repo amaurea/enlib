@@ -99,6 +99,8 @@ class Tagdb:
 				elif tok.startswith("@"):
 					# Restrict dataset to those in the given file
 					tok = "file_contains('%s',id)" % tok[1:]
+				elif tok.startswith("~@"):
+					tok = "~file_contains('%s',id)" % tok[2:]
 				fields.append(tok)
 		if override_ids is not None:
 			# Append subids to our ids, and return immediately. All other fields
