@@ -53,6 +53,8 @@ class ndmap(np.ndarray):
 	def posmap(self, safe=True, corner=False): return posmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
 	def lmap(self, oversample=1): return lmap(self.shape, self.wcs, oversample=oversample)
+	def modlmap(self, oversample=1): return modlmap(self.shape, self.wcs, oversample=oversample)
+	def modrmap(self, safe=True, corner=False): return modrmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def area(self): return area(self.shape, self.wcs)
 	def pixsize(self): return pixsize(self.shape, self.wcs)
 	def pixshape(self): return pixshape(self.shape, self.wcs)
@@ -471,6 +473,22 @@ def lmap(shape, wcs, oversample=1):
 	data[0] = ly[:,None]
 	data[1] = lx[None,:]
 	return ndmap(data, wcs)
+
+def modlmap(shape, wcs, oversample=1):
+	"""Return a map of all the abs wavenumbers in the fourier transform
+	of a map with the given shape and wcs.
+        """
+	slmap = lmap(shape,wcs,oversample=oversample)
+        return np.sum(slmap**2,0)**0.5
+
+def modrmap(shape, wcs, safe=True, corner=False):
+	"""Return an enmap where each entry is the distance from center 
+        of that entry. Results are returned in radians, and
+	if safe is true (default), then sharp coordinate edges will be
+	avoided."""
+	slmap = posmap(shape,wcs,safe=safe,corner=corner)
+        return np.sum(slmap**2,0)**0.5
+
 
 def laxes(shape, wcs, oversample=1):
 	overample = int(oversample)
