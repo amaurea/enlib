@@ -513,8 +513,6 @@ def lmap(shape, wcs, oversample=1):
 def modlmap(shape, wcs, oversample=1):
 	"""Return a map of all the abs wavenumbers in the fourier transform
 	of a map with the given shape and wcs.
-
-        What is lrmap?
         """
 	slmap = lmap(shape,wcs,oversample=oversample)
         return np.sum(slmap**2,0)**0.5
@@ -526,7 +524,6 @@ def modrmap(shape, wcs, safe=True, corner=False):
 	avoided."""
 	slmap = posmap(shape,wcs,safe=safe,corner=corner)
         return np.sum(slmap**2,0)**0.5
-
 
 
 def laxes(shape, wcs, oversample=1):
