@@ -939,19 +939,13 @@ def padcrop(m, info):
 
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
-<<<<<<< HEAD
         return gradf(fft(m),normalized=True)
 
-def gradf(kmap,normalized=False):
-	"""Returns the gradient of the fourier transformed map kmap as [2,...]."""
-=======
-        return gradf(fft(m,normalize=True),normalized=True)
 
 def gradf(kmap,normalized=False):
 	"""Returns the gradient of the fourier transformed map kmap as [2,...].
         If normalized is True, assumes kmap came from fft(...,normalize=True)
         """
->>>>>>> streamline_grad_lensing
         if not(normalized): kmap /= np.prod(kmap.shape[-2:])**0.5
 	return ifft(kmap*_widen(kmap.lmap(),kmap.ndim+1)*1j).real
 
@@ -964,13 +958,9 @@ def grad_pix(m):
 	return grad(m)*(m.shape[-2:]/m.extent())[(slice(None),)+(None,)*m.ndim]
 
 def grad_pixf(kmap,normalized=False):
-<<<<<<< HEAD
-	"""The gradient of map m expressed in units of pixels.
-=======
 	"""The gradient of the fourier transformed map kmap 
         expressed in units of pixels.
         If normalized is True, assumes kmap came from fft(...,normalize=True).
->>>>>>> streamline_grad_lensing
 	Not the same as the gradient of m with resepect to pixels.
 	Useful for avoiding sky2pix-calls for e.g. lensing,
 	and removes the complication of axes that increase in
