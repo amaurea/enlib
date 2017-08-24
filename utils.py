@@ -913,6 +913,11 @@ def resize_array(arr, size, axis=None, val=0):
 	res[slices] = arr[slices]
 	return res
 
+# This function does a lot of slice logic, and that actually makes it pretty
+# slow when dealing with large numbers of small boxes. It's tempting to move
+# the slow parts into fortran... But the way I've set things up there's no
+# natural module to put that in. The slowest part is sbox_intersect, which
+# deals with variable-length lists, which is also bad for fortran.
 def redistribute(iarrs, iboxes, oboxes, comm, wrap=0):
 	"""Given the array iarrs[[{pre},{dims}]] which represents slices
 	garr[...,narr,ibox[0,0]:ibox[0,1]:ibox[0,2],ibox[1,0]:ibox[1,1]:ibox[1,2],etc]
@@ -922,7 +927,9 @@ def redistribute(iarrs, iboxes, oboxes, comm, wrap=0):
 	iboxes = sbox_fix(iboxes)
 	oboxes = sbox_fix(oboxes)
 	ndim   = iboxes[0].shape[-2]
-	dtype  = iarrs[0].dtype
+	# mpi4py can't handle all ways of expressing the same dtype.
+	# this attempts to force the dtype into an equivalent form it can handle
+	dtype  = np.dtype(np.dtype(iarrs[0].dtype).char)
 	preshape = iarrs[0].shape[:-2]
 	oshapes= [tuple(sbox_size(b)) for b in oboxes]
 	oarrs  = [np.zeros(preshape+oshape,dtype) for oshape in oshapes]
@@ -966,7 +973,7 @@ def redistribute(iarrs, iboxes, oboxes, comm, wrap=0):
 				count += np.product(sbox_size(box))
 				sendbuf.append(iarrs[i2][sbox2slice(box)].reshape(-1))
 		nsend[nomap[i1]] += count*presize
-	sendbuf = np.concatenate(sendbuf)
+	sendbuf = np.concatenate(sendbuf) if len(sendbuf) > 0 else np.zeros(0,dtype)
 
 	# Perform the actual all-to-all send
 	sbufinfo = (nsend,cumsum(nsend))
@@ -988,7 +995,7 @@ def redistribute(iarrs, iboxes, oboxes, comm, wrap=0):
 def sbox_intersect(a,b,wrap=0):
 	"""Given two Nd sboxes a,b [...,ndim,{start,end,step}] into the
 	same array, compute an sbox representing
-	their intersection. The resulting sbox will have poxitive step size.
+	their intersection. The resulting sbox will have positive step size.
 	The result is a possibly empty list of sboxes - it is empty if there is
 	no overlap. If wrap is specified, then it should be a list of length ndim
 	of pixel wraps, each of which can be zero to disable wrapping in
@@ -1067,25 +1074,56 @@ def sbox_div(a,b,wrap=0):
 		res[...,:2] -= res[...,0,None]/swrap*wrap
 	return res
 
+def sbox_mul(a,b):
+	"""Find c such that arr[c] = arr[a][b]"""
+	a = sbox_fix(a).copy()
+	b = sbox_fix(b).copy()
+	# It's easiest to implement this for sboxes in normal ordering.
+	# So we will flip a and b as needed, and then flip back the result
+	# if necessary. First compute which  result entries must be flipped.
+	flip = (a[...,2] < 0)^(b[...,2] < 0)
+	# Then flip
+	a[a[...,2]<0] = sbox_flip(a[a[...,2]<0])
+	b[b[...,2]<0] = sbox_flip(b[b[...,2]<0])
+	# Now that everything is in the right order, we combine
+	c0 = a[...,0] + b[...,0]*a[...,2]
+	c1 = np.minimum(a[...,0] + b[...,1]*a[...,2],a[...,1])
+	c2 = a[...,2]*b[...,2]
+	res = sbox_fix(np.stack([c0,c1,c2],-1))
+	# Flip back where necessary
+	res[flip] = sbox_flip(res[flip])
+	return res
+
 def sbox_flip(a):
-	a = resize_array(a,3,-1,1)
+	sbox = sbox_fix0(sbox)
 	return np.stack([a[...,1]-a[...,2],a[...,0]-a[...,2],-a[...,2]],-1)
 
 def sbox2slice(sbox):
-	sbox  = resize_array(sbox,3,-1,1)
+	sbox = sbox_fix0(sbox)
 	return (Ellipsis,)+tuple([slice(s[0],s[1] if s[1]>=0 else None,s[2]) for s in sbox])
 
 def sbox_size(sbox):
 	"""Return the size [...,n] of an sbox [...,{start,end,step}].
 	The end must be a whole multiple of step away from start, like
 	as with the other sbox functions."""
-	sbox = resize_array(sbox,3,-1,1)
+	sbox = sbox_fix0(sbox)
 	sbox = sbox*np.sign(sbox[...,2,None])
 	return (((sbox[...,1]-sbox[...,0])-1)/sbox[...,2]).astype(int)+1
 
+def sbox_fix0(sbox):
+	try: sbox.ndim
+	except AttributeError: sbox = np.asarray(sbox)
+	if sbox.shape[-1] == 2:
+		tmp = np.full(sbox.shape[:-1]+(3,),1,int)
+		tmp[...,:2] = sbox
+		sbox = tmp
+	if sbox.dtype != np.int:
+		sbox = sbox.astype(int)
+	return sbox
+
 def sbox_fix(sbox):
 	# Ensure that we have a step, setting it to 1 if missing
-	sbox = resize_array(sbox,3,-1,1).astype(int)
+	sbox = sbox_fix0(sbox)
 	# Make sure our end point is a whole multiple of the step
 	# from the start
 	sbox[...,1] = sbox[...,0] + sbox_size(sbox)*sbox[...,2]
@@ -1553,3 +1591,8 @@ class Printer:
 			def __exit__(self, type, value, traceback):
 				self.printer.write(desc, level, exact=exact, newline=newline, prepend="%6.2f " % (time.time()-self.time))
 		return PrintTimer(self)
+
+def ndigit(num):
+	"""Returns the number of digits in non-negative number num"""
+	with nowarn(): return np.int32(np.floor(np.maximum(0,np.log10(num))))+1
+

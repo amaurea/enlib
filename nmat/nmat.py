@@ -14,6 +14,7 @@ def get_core(dtype):
 		return nmat_core_64.nmat_core
 
 class NoiseMatrix:
+	def __init__(self, ndet=1): self.ndet = ndet
 	def apply(self, tod):
 		"""Apply the full inverse noise matrix to tod. tod is overwritten,
 		but also returned for convenience."""
@@ -33,9 +34,11 @@ class NoiseMatrix:
 		or a lower sampling rate (second slice). The last one must be
 		a slice object, which must have empty start and stop values,
 		and a positive step value."""
-		return self
+		res, detslice, sampslice = self.getitem_helper(sel)
+		res.ndet = len(np.arange(self.ndet)[detslice])
+		return res
 	@property
-	def ivar(self): raise NotImplementedError
+	def ivar(self): return np.full(self.ndet, 1.0)
 	def getitem_helper(self, sel):
 		"""Expands sel to a detector and sample slice.
 		The detector slice is straightforward. The sample slice

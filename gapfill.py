@@ -1,6 +1,6 @@
 """This module provides functions for filling gaps in an array based on ranges or masks."""
 import numpy as np, utils
-from enlib import fft, config, resample
+from enlib import fft, config, resample, bench
 from enlib.utils import repeat_filler
 from enlib import sampcut
 #from enlib.rangelist import Rangelist, Multirange, multify
@@ -31,7 +31,8 @@ def gapfill_pair(tod, cut, inplace=False, gapfill=gapfill_linear):
 	gapfilling is used on one of the detectors to give a baseline signal."""
 	if not inplace: tod = tod.copy()
 	# Split tods and cuts into the two members of our pair
-	d0,d1 = tod[0::2], tod[1::2]
+	d0 = np.ascontiguousarray(tod[0::2])
+	d1 = np.ascontiguousarray(tod[1::2])
 	c0,c1 = cut[0::2], cut[1::2]
 	# cut union for diff gapfilling, cut intersection for non-diff gapfilling
 	# and cut difference for diff-based reconstruction.

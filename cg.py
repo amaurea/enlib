@@ -38,19 +38,16 @@ class CG:
 			self.x = b*0
 			self.r = b
 		else:
-			self.x   = x0.copy()
-			self.r   = b-self.A(self.x)
+			self.x  = x0.copy()
+			self.r  = b-self.A(self.x)
 		# Internal work variables
 		n = b.size
-		self.z   = self.M(self.r)
-		self.rz  = self.dot(self.r, self.z)
+		z = self.M(self.r)
+		self.rz  = self.dot(self.r, z)
 		self.rz0 = float(self.rz)
-		self.p   = self.z
-		self.err = np.inf
-		self.d   = 4
-		self.arz = []
-		self.err_true = np.inf
+		self.p   = z
 		self.i   = 0
+		self.err = np.inf
 	def step(self):
 		"""Take a single step in the iteration. Results in .x, .i
 		and .err being updated. To solve the system, call step() in
@@ -60,18 +57,28 @@ class CG:
 		alpha = self.rz/self.dot(self.p, Ap)
 		self.x += alpha*self.p
 		self.r -= alpha*Ap
-		self.z = self.M(self.r)
-		next_rz = self.dot(self.r, self.z)
+		z       = self.M(self.r)
+		next_rz = self.dot(self.r, z)
 		self.err = next_rz/self.rz0
 		beta = next_rz/self.rz
 		self.rz = next_rz
-		self.p = self.z + beta*self.p
-		self.arz.append(self.rz*alpha)
-		# Update proper error
-		if len(self.arz) > self.d:
-			# Good estimate of error d steps ago
-			self.err_true = sum(self.arz[-self.d:])
+		self.p  = z + beta*self.p
 		self.i += 1
+	def save(self, fname):
+		"""Save the volatile internal parameters to hdf file fname. Useful
+		for later restoring cg iteration"""
+		import h5py
+		with h5py.File(fname, "w") as hfile:
+			for key in ["i","rz","rz0","x","r","p","err"]:
+				hfile[key] = getattr(self, key)
+	def load(self, fname):
+		"""Load the volatile internal parameters from the hdf file fname.
+		Useful for restoring a saved cg state, after first initializing the
+		object normally."""
+		import h5py
+		with h5py.File(fname, "r") as hfile:
+			for key in ["i","rz","rz0","x","r","p","err"]:
+				setattr(self, key, hfile[key].value)
 
 class BCG:
 	"""A simple Preconditioner Biconjugate gradients stabilized solver. Solves

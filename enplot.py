@@ -501,6 +501,7 @@ def draw_annotations(map, annots, args):
 		c[ircle] lat lon dy dx [rad [width [color]]]
 		t[ext]   lat lon dy dx text [size [color]]
 		l[ine]   lat lon dy dx lat lon dy dx [width [color]]
+		r[ect]   lat lon dy dx lat lon dy dx [width [color]]
 	dy and dx are pixel-unit offsets from the specified lat/lon.
 	This is useful for e.g. placing text next to circles."""
 	img  = PIL.Image.new("RGBA", map.shape[-2:][::-1])

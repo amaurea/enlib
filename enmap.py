@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, enlib.powspec, astropy.io.fits, sys
+import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, enlib.powspec, astropy.io.fits, sys, time
 
 # Things that could be improved:
 #  1. We assume exactly 2 WCS axes in spherical projection in {dec,ra} order.
@@ -60,7 +60,7 @@ class ndmap(np.ndarray):
 	def pixsize(self): return pixsize(self.shape, self.wcs)
 	def pixshape(self): return pixshape(self.shape, self.wcs)
 	def pixsizemap(self): return pixsizemap(self.shape, self.wcs)
-	def extent(self, method="intermediate"): return extent(self.shape, self.wcs, method=method)
+	def extent(self, method="default"): return extent(self.shape, self.wcs, method=method)
 	@property
 	def preflat(self):
 		"""Returns a view of the map with the non-pixel dimensions flattened."""
@@ -1127,6 +1127,7 @@ def from_flipper(imap, omap=None):
 	iflat = imap.reshape(-1)
 	for im, om in zip(iflat, omap.preflat):
 		om[:] = im.data
+	omap = fix_endian(omap)
 	return omap
 
 ############
@@ -1208,27 +1209,36 @@ def write_fits(fname, emap, extra={}):
 		warnings.filterwarnings('ignore')
 		hdus.writeto(fname, clobber=True)
 
-def read_fits(fname, hdu=None, sel=None):
+def read_fits(fname, hdu=None, sel=None, sel_threshold=10e6):
 	"""Read an enmap from the specified fits file. By default,
 	the map and coordinate system will be read from HDU 0. Use
 	the hdu argument to change this. The map must be stored as
-	a fits image."""
+	a fits image. If sel is specified, it should be a slice
+	that will be applied to the image before reading. This avoids
+	reading more of the image than necessary."""
 	if hdu is None: hdu = 0
 	hdu = astropy.io.fits.open(fname)[hdu]
 	if hdu.header["NAXIS"] < 2:
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
 	with warnings.catch_warnings():
 		wcs = enlib.wcs.WCS(hdu.header).sub(2)
-	data = hdu.data
 	# Slice if requested. Slicing at this point avoids unneccessary
-	# data actually being read
+	# I/O and memory usage.
 	if sel:
-		sel1, sel2 = enlib.slice.split_slice(sel, [data.ndim-2,2])
-		_, wcs = slice_wcs(data.shape, wcs, sel2)
-		data   = data[sel]
-	res = ndmap(data, wcs)
-	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
-		res = res.byteswap().newbyteorder()
+		# First slice the wcs
+		sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-2,2])
+		_, wcs = slice_wcs(hdu.shape, wcs, sel2)
+		# hdu.section is pretty slow. Work around that by not applying it
+		# for small maps, and by not applying it along the last axis for the rest.
+		if hdu.size > sel_threshold:
+			sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-1,1])
+			data = hdu.section[sel1]
+			data = data[(Ellipsis,)+sel2]
+		else:
+			data = hdu.data
+			data = data[sel]
+	else: data = hdu.data
+	res = fix_endian(ndmap(data, wcs))
 	return res
 
 def read_fits_geometry(fname, hdu=None):
@@ -1280,9 +1290,7 @@ def read_hdf(fname, sel=None):
 			sel1, sel2 = enlib.slice.split_slice(sel, [data.ndim-2,2])
 			_, wcs = slice_wcs(data.shape, wcs, sel2)
 			data   = data[sel]
-		res = ndmap(data.value, wcs)
-	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
-		res = res.byteswap().newbyteorder()
+		res = fix_endian(ndmap(data.value, wcs))
 	return res
 
 def read_hdf_geometry(fname):
@@ -1296,7 +1304,6 @@ def read_hdf_geometry(fname):
 		wcs   = enlib.wcs.WCS(header).sub(2)
 		shape = hfile["data"].shape
 	return shape, wcs
-
 
 def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmin=None,xoffset_degree=0.,yoffset_degree=0.):
     hwidth = width_arcmin/2.
@@ -1336,3 +1343,9 @@ class FourierCalculator(object):
 
 
 
+def fix_endian(map):
+	"""Make endianness of array map match the current machine.
+	Returns the result."""
+	if map.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
+		map = map.byteswap().newbyteorder()
+	return map

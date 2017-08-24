@@ -42,11 +42,16 @@ class Tagdb:
 	@property
 	def ids(self):
 		return append_subs(self.data["id"], self.data["subids"])
+	@property
+	def tags(self):
+		return sorted(self.data.keys())
 	def __len__(self): return len(self.ids)
 	def __getitem__(self, query=""):
 		return self.query(query)
 	def select(self, ids):
 		"""Return a tagdb which only contains the selected ids."""
+		if isinstance(ids, basestring):
+			ids = self.query(ids)
 		# Extract the subids
 		ids, subids = split_ids(ids)
 		# Restrict to the subset of these ids
@@ -99,6 +104,8 @@ class Tagdb:
 				elif tok.startswith("@"):
 					# Restrict dataset to those in the given file
 					tok = "file_contains('%s',id)" % tok[1:]
+				elif tok.startswith("~@"):
+					tok = "~file_contains('%s',id)" % tok[2:]
 				fields.append(tok)
 		if override_ids is not None:
 			# Append subids to our ids, and return immediately. All other fields
