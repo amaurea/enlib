@@ -77,15 +77,26 @@ def displace_map(imap, pix, order=3, mode="spline", border="cyclic", trans=False
 		out[:] = utils.moveaxes(iwork, (0,1), (-2,-1))
 	return out
 
+
 # Compatibility function. Not quite equivalent lens_map above due to taking phi rather than
 # its gradient as an argument.
-def lens_map_flat(cmb_map, phi_map):
-	raw_pix  = cmb_map.pixmap() + enmap.grad_pix(phi_map)
+def lens_map_flat(cmb_map, phi_map,order=4):
+	gpix = enmap.grad_pix(phi_map)
+        return lens_map_flat_pix(cmb_map, gpix,order=order)
+
+def lens_map_flat_pix(cmb_map, grad_pix_map,order=4):
+        """
+        Helper function for lens_map_flat. Useful if grad_pix has been pre-calculated.
+        """
+	raw_pix  = cmb_map.pixmap() + grad_pix_map
 	# And extract the interpolated values. Because of a bug in map_pixels with
 	# mode="wrap", we must handle wrapping ourselves.
 	npad = int(np.ceil(max(np.max(-raw_pix),np.max(raw_pix-np.array(cmb_map.shape[-2:])[:,None,None]))))
-	pmap = enmap.pad(cmb_map, npad, wrap=True)
-	return enmap.samewcs(utils.interpol(pmap, raw_pix+npad, order=4, mode="wrap"), cmb_map)
+        pmap = enmap.pad(cmb_map, npad, wrap=True) if npad>0 else cmb_map
+                
+	return enmap.samewcs(utils.interpol(pmap, raw_pix+npad, order=order, mode="wrap"), cmb_map)
+
+
 
 ######## Curved sky lensing ########
 
