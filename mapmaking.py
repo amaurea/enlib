@@ -38,7 +38,7 @@
 # signals = [signal_cut, signal_map, signal_phase]
 import numpy as np, h5py, zipper, logging, gc
 from enlib import enmap, dmap, array_ops, pmat, utils, todfilter
-from enlib import config, nmat, bench, gapfill, mpi
+from enlib import config, nmat, bench, gapfill, mpi, sampcut
 from enlib.cg import CG
 L = logging.getLogger(__name__)
 
@@ -864,6 +864,8 @@ class Eqsys:
 				for weight in self.weights: weight(scan, tod)
 			with bench.mark("b_N_build"):
 				scan.noise = scan.noise.update(tod, scan.srate)
+				#print "FIXME"
+				#sampcut.gapfill_const(scan.cut, tod, 0.0, True)
 			with bench.mark("b_filter2"):
 				for filter in self.filters2: filter(scan, tod)
 			with bench.mark("b_N"):

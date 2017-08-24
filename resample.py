@@ -3,9 +3,12 @@ import numpy as np
 from enlib import utils, fft
 
 def resample(d, factors=[0.5], axes=None, method="fft"):
+	factors = np.atleast_1d(factors)
 	if np.allclose(factors,1): return d
 	if method == "fft":
-		return resample_fft(d, factors, axes)
+		if axes is None: axes = range(-len(factors),0)
+		lens = [int(d.shape[ax]*fact+0.5) for ax, fact in zip(axes, factors)]
+		return resample_fft(d, lens, axes)
 	elif method == "bin":
 		return resample_bin(d, factors, axes)
 	else:
@@ -50,19 +53,25 @@ def upsample_bin(d, steps=[2], axes=None):
 	# Finally reshape back to proper dimensionality
 	return np.reshape(d, np.array(shape)*np.array(fullsteps))
 
-def resample_fft(d, factors=[0.5], axes=None):
+def resample_fft(d, n, axes=None):
 	"""Resample numpy array d via fourier-reshaping. Requires periodic data.
-	"factors" indicates the factors by which the axis lengths should be
-	increased. If less factors are specified than the number of axes,
-	the numbers apply to the last N axes, unless the "axes" argument
-	is used to specify which ones."""
-	if np.allclose(factors,1): return d
-	factors = np.atleast_1d(factors)
-	assert len(factors) <= d.ndim
-	if axes is None: axes = np.arange(-len(factors),0)
-	assert len(axes) == len(factors)
-	if d.ndim == 2 and len(factors) == 1 and factors[0] < 1:
-		return downsample_fft_simple(d, factors[0])
+	n indicates the desired output lengths of the axes that are to be
+	resampled. By the fault the last len(n) axes are resampled, but this
+	can be controlled via the axes argument."""
+	d = np.asanyarray(d)
+	# Compute output lengths from factors if necessary
+	n = np.atleast_1d(n)
+	if axes is None: axes = np.arange(-len(n),0)
+	else: axes = np.atleast_1d(axes)
+	if len(n) == 1: n = np.repeat(n, len(axes))
+	else: assert len(n) == len(axes)
+	assert len(n) <= d.ndim
+	# Nothing to do?
+	if np.all(d.shape[-len(n):] == n): return d
+	# Use the simple version if we can. It has lower memory overhead
+	if d.ndim == 2 and len(n) == 1 and (axes[0] == 1 or axes[0] == -1):
+		return resample_fft_simple(d, n[0])
+	# Perform the fourier transform
 	fd = fft.fft(d, axes=axes)
 	# Frequencies are 0 1 2 ... N/2 (-N)/2 (-N)/2+1 .. -1
 	# Ex 0* 1 2* -1 for n=4 and 0* 1 2 -2 -1 for n=5
@@ -70,13 +79,13 @@ def resample_fft(d, factors=[0.5], axes=None):
 	# To downgrade, remove (n_old-n_new) values after n_new/2
 	# The idea is simple, but arbitrary dimensionality makes it
 	# complicated.
-	for ax, factor in zip(axes, factors):
+	norm = 1.0
+	for ax, nnew in zip(axes, n):
 		ax %= d.ndim
 		nold = d.shape[ax]
-		nnew = int(nold*factor+0.5)
 		dn   = nnew-nold
 		if dn > 0:
-			padvals = np.zeros(fd.shape[:ax]+(dn,)+fd.shape[ax+1:])
+			padvals = np.zeros(fd.shape[:ax]+(dn,)+fd.shape[ax+1:],fd.dtype)
 			spre  = tuple([slice(None)]*ax+[slice(0,nold/2)]+[slice(None)]*(fd.ndim-ax-1))
 			spost = tuple([slice(None)]*ax+[slice(nold/2,None)]+[slice(None)]*(fd.ndim-ax-1))
 			fd = np.concatenate([fd[spre],padvals,fd[spost]],axis=ax)
@@ -84,24 +93,27 @@ def resample_fft(d, factors=[0.5], axes=None):
 			spre  = tuple([slice(None)]*ax+[slice(0,nnew/2)]+[slice(None)]*(fd.ndim-ax-1))
 			spost = tuple([slice(None)]*ax+[slice(nnew/2-dn,None)]+[slice(None)]*(fd.ndim-ax-1))
 			fd = np.concatenate([fd[spre],fd[spost]],axis=ax)
+		norm *= float(nnew)/nold
 	# And transform back
 	res  = fft.ifft(fd, axes=axes, normalize=True)
 	del fd
-	res *= np.product(factors)
+	res *= norm
 	return res if np.issubdtype(d.dtype, np.complexfloating) else res.real
 
-def downsample_fft_simple(d, factor=0.5, ngroup=100):
+def resample_fft_simple(d, n, ngroup=100):
 	"""Resample 2d numpy array d via fourier-reshaping along
 	last axis."""
-	if factor == 1: return d
 	nold = d.shape[1]
-	nnew = int(nold*factor)
-	res  = np.zeros([d.shape[0],nnew],dtype=d.dtype)
-	dn   = nnew-nold
+	if n == nold: return d
+	res  = np.zeros([d.shape[0],n],dtype=d.dtype)
+	dn   = n-nold
 	for di in range(0, d.shape[0], ngroup):
 		fd = fft.fft(d[di:di+ngroup])
-		fd = np.concatenate([fd[:,:nnew/2],fd[:,nnew/2-dn:]],1)
+		if n < nold:
+			fd = np.concatenate([fd[:,:n/2],fd[:,n/2-dn:]],1)
+		else:
+			fd = np.concatenate([fd[:,:nold/2],np.zeros([len(fd),n-nold],fd.dtype),fd[:,nold/2:]],-1)
 		res[di:di+ngroup] = fft.ifft(fd, normalize=True).real
 	del fd
-	res *= factor
+	res *= float(n)/nold
 	return res
