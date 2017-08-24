@@ -540,10 +540,7 @@ def queb_rotmat(lmap, inverse=False):
 	# This corresponds to the Healpix convention. To get IAU,
 	# flip the sign of a.
 
-        if iau_convention:
-                sgn = -1
-        else:
-                sgn = 1
+        sgn = -1 if iau_convention else 1
         a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
         c, s = np.cos(a), np.sin(a)
         if inverse: s = -s
