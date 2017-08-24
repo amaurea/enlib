@@ -909,9 +909,17 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 def padcrop(m, info):
 	return pad(m, info.pad)[info.slice]
 
+
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
-	return ifft(fft(m)*_widen(m.lmap(),m.ndim+1)*1j).real
+        return gradf(fft(m,normalize=True),normalized=True)
+
+def gradf(kmap,normalized=False):
+	"""Returns the gradient of the fourier transformed map kmap as [2,...].
+        If normalized is True, assumes kmap came from fft(...,normalize=True)
+        """
+        if not(normalized): kmap /= np.prod(kmap.shape[-2:])**0.5
+	return ifft(kmap*_widen(kmap.lmap(),kmap.ndim+1)*1j).real
 
 def grad_pix(m):
 	"""The gradient of map m expressed in units of pixels.
@@ -921,9 +929,20 @@ def grad_pix(m):
 	nonstandard directions."""
 	return grad(m)*(m.shape[-2:]/m.extent())[(slice(None),)+(None,)*m.ndim]
 
-def div(m):
+def grad_pixf(kmap,normalized=False):
+	"""The gradient of the fourier transformed map kmap
+        expressed in units of pixels.
+        If normalized is True, assumes kmap came from fft(...,normalize=True).
+	Not the same as the gradient of m with resepect to pixels.
+	Useful for avoiding sky2pix-calls for e.g. lensing,
+	and removes the complication of axes that increase in
+	nonstandard directions."""
+	return gradf(kmap,normalized=normalized)*(kmap.shape[-2:]/kmap.extent())[(slice(None),)+(None,)*kmap.ndim]
+
+
+def div(m,normalize=True):
 	"""Returns the divergence of the map m[2,...] as [...]."""
-	return ifft(np.sum(fft(m)*_widen(m.lmap(),m.ndim)*1j,0)).real
+	return ifft(np.sum(fft(m,normalize=normalize)*_widen(m.lmap(),m.ndim)*1j,0)).real
 
 def _widen(map,n):
 	"""Helper for gard and div. Adds degenerate axes between the first
