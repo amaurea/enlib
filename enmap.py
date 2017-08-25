@@ -337,23 +337,17 @@ def _arghelper(map, func, unit):
 	if unit == "coord": res = pix2sky(map.shape, map.wcs, res.T).T
 	return res
 
-
 def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
-	the provided power spectrum.
-
-        If cov.ndim is 4, 2D power is assumed else 1D power is assumed.
-
-        If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
-        not in steradians.
-        """
+	the provided power spectrum. If cov.ndim is 4, 2D power is assumed else 1D
+	power is assumed. If pixel_units is True, the 2D power spectra is assumed
+	to be in pixel units, not in steradians."""
 	if seed is not None: np.random.seed(seed)
-        kmap = rand_gauss_iso_harm(shape, wcs, cov, pixel_units)
+	kmap = rand_gauss_iso_harm(shape, wcs, cov, pixel_units)
 	if scalar:
 		return ifft(kmap).real
 	else:
 		return harm2map(kmap)
-
 
 def rand_gauss(shape, wcs, dtype=None):
 	"""Generate a map with random gaussian noise in pixel space."""
@@ -366,28 +360,23 @@ def rand_gauss_harm(shape, wcs):
 	passed, the result will be an enmap."""
 	return ndmap(np.random.standard_normal(shape)+1j*np.random.standard_normal(shape),wcs)
 
-
 def rand_gauss_iso_harm(shape, wcs, cov, pixel_units=False):
 	"""Generates a random map with component covariance
 	cov in harmonic space, where cov is a (comp,comp,l) array or a 
-        (comp,comp,Ny,Nx) array. Despite the name, the map doesn't need
-        to be isotropic since 2D power spectra are allowed.
+	(comp,comp,Ny,Nx) array. Despite the name, the map doesn't need
+	to be isotropic since 2D power spectra are allowed.
 
-        If cov.ndim is 4, cov is assumed to be an array of 2D power spectra.
-        else cov is assumed to be an array of 1D power spectra.
-        If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
-        not in steradians. 
-        """
-
-        if cov.ndim==4:
-                if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
-                covsqrt = multi_pow(cov, 0.5)
-        else:
-                covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
-
+	If cov.ndim is 4, cov is assumed to be an array of 2D power spectra.
+	else cov is assumed to be an array of 1D power spectra.
+	If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
+	not in steradians."""
+	if cov.ndim==4:
+		if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
+		covsqrt = multi_pow(cov, 0.5)
+	else:
+		covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
 	data = map_mul(covsqrt, rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
-
 
 def extent(shape, wcs, method="default", nsub=None):
 	if method == "default": method = extent_model[-1]
@@ -502,19 +491,16 @@ def lmap(shape, wcs, oversample=1):
 
 def modlmap(shape, wcs, oversample=1):
 	"""Return a map of all the abs wavenumbers in the fourier transform
-	of a map with the given shape and wcs.
-        """
+	of a map with the given shape and wcs."""
 	slmap = lmap(shape,wcs,oversample=oversample)
-        return np.sum(slmap**2,0)**0.5
+	return np.sum(slmap**2,0)**0.5
 
 def modrmap(shape, wcs, safe=True, corner=False):
-	"""Return an enmap where each entry is the distance from center 
-        of that entry. Results are returned in radians, and
-	if safe is true (default), then sharp coordinate edges will be
-	avoided."""
+	"""Return an enmap where each entry is the distance from center
+	of that entry. Results are returned in radians, and if safe is true
+	(default), then sharp coordinate edges will be avoided."""
 	slmap = posmap(shape,wcs,safe=safe,corner=corner)
-        return np.sum(slmap**2,0)**0.5
-
+	return np.sum(slmap**2,0)**0.5
 
 def laxes(shape, wcs, oversample=1):
 	overample = int(oversample)
