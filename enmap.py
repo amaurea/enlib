@@ -17,7 +17,16 @@ import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice
 #     simple to override individual properties.
 
 extent_model = ["subgrid"]
-iau_convention = True
+try:
+        from ConfigParser import SafeConfigParser 
+        iniFile = "config.ini"
+        Config = SafeConfigParser()
+        Config.optionxform=str
+        Config.read(iniFile)
+        iau_convention = Config.getboolean("general","iau_convention")
+except:
+        iau_convention = False
+
 
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
 # itself uses column-major ordering. So an array which is (ncomp,ny,nx)
@@ -367,21 +376,22 @@ def rand_gauss_harm(shape, wcs):
 def rand_gauss_iso_harm(shape, wcs, cov, pixel_units=False):
 	"""Generates a random map with component covariance
 	cov in harmonic space, where cov is a (comp,comp,l) array or a 
-	(comp,comp,Ny,Nx) array. Despite the name, the map doesn't need
-	to be isotropic since 2D power spectra are allowed.
+        (comp,comp,Ny,Nx) array. Despite the name, the map doesn't need
+        to be isotropic since 2D power spectra are allowed.
 
-	If cov.ndim is 4, cov is assumed to be an array of 2D power spectra.
-	else cov is assumed to be an array of 1D power spectra.
-	If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
-	not in steradians."""
-	if cov.ndim==4:
-		if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
-		covsqrt = multi_pow(cov, 0.5)
-	else:
-		covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
+        If cov.ndim is 4, cov is assumed to be an array of 2D power spectra.
+        else cov is assumed to be an array of 1D power spectra.
+        If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
+        not in steradians. 
+        """
+
+        if cov.ndim==4:
+                if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
+                covsqrt = multi_pow(cov, 0.5)
+        else:
+                covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
 	data = map_mul(covsqrt, rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
-
 
 
 def extent(shape, wcs, method="default", nsub=None):
@@ -498,8 +508,6 @@ def lmap(shape, wcs, oversample=1):
 def modlmap(shape, wcs, oversample=1):
 	"""Return a map of all the abs wavenumbers in the fourier transform
 	of a map with the given shape and wcs.
-
-        What is lrmap?
         """
 	slmap = lmap(shape,wcs,oversample=oversample)
         return np.sum(slmap**2,0)**0.5
@@ -570,15 +578,14 @@ def queb_rotmat(lmap, inverse=False):
 	# tangential direction, not radial. This matches flipperpol too.
 	# This corresponds to the Healpix convention. To get IAU,
 	# flip the sign of a.
-        if iau_convention:
-                sgn = -1
-        else:
-                sgn = 1
-	a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
-	c, s = np.cos(a), np.sin(a)
-	if inverse: s = -s
-	return samewcs(np.array([[c,-s],[s,c]]),lmap)
 
+        sgn = -1 if iau_convention else 1
+        a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
+        c, s = np.cos(a), np.sin(a)
+        if inverse: s = -s
+        return samewcs(np.array([[c,-s],[s,c]]),lmap)
+
+	
 def rotate_pol(emap, angle, comps=[-2,-1]):
 	c, s = np.cos(2*angle), np.sin(2*angle)
 	res = emap.copy()
@@ -923,12 +930,16 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 def padcrop(m, info):
 	return pad(m, info.pad)[info.slice]
 
+
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
         return gradf(fft(m),normalized=True)
 
+
 def gradf(kmap,normalized=False):
-	"""Returns the gradient of the fourier transformed map kmap as [2,...]."""
+	"""Returns the gradient of the fourier transformed map kmap as [2,...].
+        If normalized is True, assumes kmap came from fft(...,normalize=True)
+        """
         if not(normalized): kmap /= np.prod(kmap.shape[-2:])**0.5
 	return ifft(kmap*_widen(kmap.lmap(),kmap.ndim+1)*1j).real
 
@@ -941,7 +952,9 @@ def grad_pix(m):
 	return grad(m)*(m.shape[-2:]/m.extent())[(slice(None),)+(None,)*m.ndim]
 
 def grad_pixf(kmap,normalized=False):
-	"""The gradient of map m expressed in units of pixels.
+	"""The gradient of the fourier transformed map kmap 
+        expressed in units of pixels.
+        If normalized is True, assumes kmap came from fft(...,normalize=True).
 	Not the same as the gradient of m with resepect to pixels.
 	Useful for avoiding sky2pix-calls for e.g. lensing,
 	and removes the complication of axes that increase in
@@ -1296,8 +1309,6 @@ def read_hdf_geometry(fname):
 		wcs   = enlib.wcs.WCS(header).sub(2)
 		shape = hfile["data"].shape
 	return shape, wcs
-
-<<<<<<< HEAD
 
 def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmin=None,xoffset_degree=0.,yoffset_degree=0.):
     hwidth = width_arcmin/2.

@@ -1,10 +1,11 @@
 import numpy as np
-import logging
 from enlib import enmap, utils, powspec, interpol
 try:
         import curvedsky
 except:
-        logging.warn("Couldn't load curvedsky. You probably need to install libsharp.")
+        import traceback, logging
+        traceback.print_exc()
+        logging.warn("Enlib: Couldn't load curvedsky. You probably need to install libsharp. Some functions won't work.")
 
 ####### Flat sky lensing #######
 
@@ -82,25 +83,25 @@ def displace_map(imap, pix, order=3, mode="spline", border="cyclic", trans=False
 		out[:] = utils.moveaxes(iwork, (0,1), (-2,-1))
 	return out
 
+
 # Compatibility function. Not quite equivalent lens_map above due to taking phi rather than
 # its gradient as an argument.
 def lens_map_flat(cmb_map, phi_map,order=4):
 	gpix = enmap.grad_pix(phi_map)
         return lens_map_flat_pix(cmb_map, gpix,order=order)
 
-from orphics.tools.stats import timeit
-@timeit
 def lens_map_flat_pix(cmb_map, grad_pix_map,order=4):
+        """
+        Helper function for lens_map_flat. Useful if grad_pix has been pre-calculated.
+        """
 	raw_pix  = cmb_map.pixmap() + grad_pix_map
 	# And extract the interpolated values. Because of a bug in map_pixels with
 	# mode="wrap", we must handle wrapping ourselves.
 	npad = int(np.ceil(max(np.max(-raw_pix),np.max(raw_pix-np.array(cmb_map.shape[-2:])[:,None,None]))))
-	if npad>0:
-                pmap = enmap.pad(cmb_map, npad, wrap=True)
-        else:
-                pmap = cmb_map
+        pmap = enmap.pad(cmb_map, npad, wrap=True) if npad>0 else cmb_map
                 
 	return enmap.samewcs(utils.interpol(pmap, raw_pix+npad, order=order, mode="wrap"), cmb_map)
+
 
 
 ######## Curved sky lensing ########
