@@ -170,9 +170,13 @@ class Sampcut:
 		res2 = res.copy()
 		icore.cut_sampslice(res.ranges.T, res.detmap, sampslice, res2.ranges.T, res2.detmap)
 		res2.ranges = res2.ranges[:res2.detmap[-1]]
+		# Sampslicing may have produced touching regions
+		res = res2.copy()
+		icore.cut_union(res2.ranges.T, res2.detmap, res.ranges.T, res.detmap)
+		res.ranges = res.ranges[:res.detmap[-1]]
 		# Total number of samples also changes
-		res2.nsamp = (sampslice[1]-sampslice[0]+sampslice[2]-np.sign(sampslice[2]))/sampslice[2]
-		return res2
+		res.nsamp = (sampslice[1]-sampslice[0]+sampslice[2]-np.sign(sampslice[2]))/sampslice[2]
+		return res
 	def __str__(self): return "Sampcut(ndet:%d,nsamp:%d,ncut:%d,cfrac:%.1f%%)" % (
 			self.ndet, self.nsamp, self.detmap[-1], 100.0*self.sum()/(self.ndet*self.nsamp))
 	def __repr__(self): return "Sampcut(ranges=%s, detmap=%s, nsamp=%d)" % (

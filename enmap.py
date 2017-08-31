@@ -1,4 +1,4 @@
-import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, enlib.powspec, astropy.io.fits, sys
+import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice, enlib.fft, enlib.powspec, astropy.io.fits, sys, time
 
 # Things that could be improved:
 #  1. We assume exactly 2 WCS axes in spherical projection in {dec,ra} order.
@@ -60,7 +60,7 @@ class ndmap(np.ndarray):
 	def pixsize(self): return pixsize(self.shape, self.wcs)
 	def pixshape(self): return pixshape(self.shape, self.wcs)
 	def pixsizemap(self): return pixsizemap(self.shape, self.wcs)
-	def extent(self, method="intermediate"): return extent(self.shape, self.wcs, method=method)
+	def extent(self, method="default"): return extent(self.shape, self.wcs, method=method)
 	@property
 	def preflat(self):
 		"""Returns a view of the map with the non-pixel dimensions flattened."""
@@ -339,21 +339,17 @@ def _arghelper(map, func, unit):
 	if unit == "coord": res = pix2sky(map.shape, map.wcs, res.T).T
 	return res
 
-def rand_map(shape, wcs, cov, scalar=False, seed=None, power2d=False,pixel_units=False):
+def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
-	the provided power spectrum.
-
-        If power2d is True, cov is assumed to be an array of 2D power spectra.
-        If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
-        not in steradians. This flag has no effect if power2D is False.
-        """
+	the provided power spectrum. If cov.ndim is 4, 2D power is assumed else 1D
+	power is assumed. If pixel_units is True, the 2D power spectra is assumed
+	to be in pixel units, not in steradians."""
 	if seed is not None: np.random.seed(seed)
-        kmap = rand_gauss_iso_harm(shape, wcs, cov, power2d, pixel_units)
+	kmap = rand_gauss_iso_harm(shape, wcs, cov, pixel_units)
 	if scalar:
 		return ifft(kmap).real
 	else:
 		return harm2map(kmap)
-
 
         
         
@@ -368,23 +364,21 @@ def rand_gauss_harm(shape, wcs):
 	passed, the result will be an enmap."""
 	return ndmap(np.random.standard_normal(shape)+1j*np.random.standard_normal(shape),wcs)
 
-def rand_gauss_iso_harm(shape, wcs, cov, power2d=False, pixel_units=False):
-	"""Generates an isotropic random map with component covariance
+def rand_gauss_iso_harm(shape, wcs, cov, pixel_units=False):
+	"""Generates a random map with component covariance
 	cov in harmonic space, where cov is a (comp,comp,l) array or a 
-        (comp,comp,Ny,Nx) array if power2d is True.
+	(comp,comp,Ny,Nx) array. Despite the name, the map doesn't need
+	to be isotropic since 2D power spectra are allowed.
 
-        If power2d is True, cov is assumed to be an array of 2D power spectra.
-        If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
-        not in steradians. This flag has no effect if power2D is False.
-        """
-
-        if power2d:
-                if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
-                covsqrt = multi_pow(cov, 0.5)
-        else:
-                covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
-                        
-
+	If cov.ndim is 4, cov is assumed to be an array of 2D power spectra.
+	else cov is assumed to be an array of 1D power spectra.
+	If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
+	not in steradians."""
+	if cov.ndim==4:
+		if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
+		covsqrt = multi_pow(cov, 0.5)
+	else:
+		covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
 	data = map_mul(covsqrt, rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
 
@@ -510,15 +504,13 @@ def modlmap(shape, wcs, oversample=1):
 	slmap = lmap(shape,wcs,oversample=oversample)
         return np.sum(slmap**2,0)**0.5
 
+
 def modrmap(shape, wcs, safe=True, corner=False):
-	"""Return an enmap where each entry is the distance from center 
-        of that entry. Results are returned in radians, and
-	if safe is true (default), then sharp coordinate edges will be
-	avoided."""
+	"""Return an enmap where each entry is the distance from center
+	of that entry. Results are returned in radians, and if safe is true
+	(default), then sharp coordinate edges will be avoided."""
 	slmap = posmap(shape,wcs,safe=safe,corner=corner)
-        return np.sum(slmap**2,0)**0.5
-
-
+	return np.sum(slmap**2,0)**0.5
 
 def laxes(shape, wcs, oversample=1):
 	overample = int(oversample)
@@ -1127,6 +1119,7 @@ def from_flipper(imap, omap=None):
 	iflat = imap.reshape(-1)
 	for im, om in zip(iflat, omap.preflat):
 		om[:] = im.data
+	omap = fix_endian(omap)
 	return omap
 
 ############
@@ -1208,27 +1201,36 @@ def write_fits(fname, emap, extra={}):
 		warnings.filterwarnings('ignore')
 		hdus.writeto(fname, clobber=True)
 
-def read_fits(fname, hdu=None, sel=None):
+def read_fits(fname, hdu=None, sel=None, sel_threshold=10e6):
 	"""Read an enmap from the specified fits file. By default,
 	the map and coordinate system will be read from HDU 0. Use
 	the hdu argument to change this. The map must be stored as
-	a fits image."""
+	a fits image. If sel is specified, it should be a slice
+	that will be applied to the image before reading. This avoids
+	reading more of the image than necessary."""
 	if hdu is None: hdu = 0
 	hdu = astropy.io.fits.open(fname)[hdu]
 	if hdu.header["NAXIS"] < 2:
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
 	with warnings.catch_warnings():
 		wcs = enlib.wcs.WCS(hdu.header).sub(2)
-	data = hdu.data
 	# Slice if requested. Slicing at this point avoids unneccessary
-	# data actually being read
+	# I/O and memory usage.
 	if sel:
-		sel1, sel2 = enlib.slice.split_slice(sel, [data.ndim-2,2])
-		_, wcs = slice_wcs(data.shape, wcs, sel2)
-		data   = data[sel]
-	res = ndmap(data, wcs)
-	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
-		res = res.byteswap().newbyteorder()
+		# First slice the wcs
+		sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-2,2])
+		_, wcs = slice_wcs(hdu.shape, wcs, sel2)
+		# hdu.section is pretty slow. Work around that by not applying it
+		# for small maps, and by not applying it along the last axis for the rest.
+		if hdu.size > sel_threshold:
+			sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-1,1])
+			data = hdu.section[sel1]
+			data = data[(Ellipsis,)+sel2]
+		else:
+			data = hdu.data
+			data = data[sel]
+	else: data = hdu.data
+	res = fix_endian(ndmap(data, wcs))
 	return res
 
 def read_fits_geometry(fname, hdu=None):
@@ -1280,9 +1282,7 @@ def read_hdf(fname, sel=None):
 			sel1, sel2 = enlib.slice.split_slice(sel, [data.ndim-2,2])
 			_, wcs = slice_wcs(data.shape, wcs, sel2)
 			data   = data[sel]
-		res = ndmap(data.value, wcs)
-	if res.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
-		res = res.byteswap().newbyteorder()
+		res = fix_endian(ndmap(data.value, wcs))
 	return res
 
 def read_hdf_geometry(fname):
@@ -1297,6 +1297,7 @@ def read_hdf_geometry(fname):
 		shape = hfile["data"].shape
 	return shape, wcs
 
+<<<<<<< HEAD
 
 def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmin=None,xoffset_degree=0.,yoffset_degree=0.):
     hwidth = width_arcmin/2.
@@ -1336,3 +1337,9 @@ class FourierCalculator(object):
 
 
 
+def fix_endian(map):
+	"""Make endianness of array map match the current machine.
+	Returns the result."""
+	if map.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
+		map = map.byteswap().newbyteorder()
+	return map

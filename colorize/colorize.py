@@ -133,3 +133,17 @@ def colorize_direct_fortran(a, desc):
 	res = np.empty((a.shape[1],4),dtype=np.uint16)
 	fortran.direct(a.T, res.T)
 	return res.astype(np.uint8)
+
+def to_mpl_colormap(name, data=None):
+	import matplotlib.colors
+	if data is None: data = schemes[name]
+	return matplotlib.colors.LinearSegmentedColormap.from_list(name,
+			[(val,"#%02x%02x%02x%02x"%tuple(col)) for val,col in zip(data.vals, data.cols)])
+
+def mpl_register(names=None):
+	import matplotlib.cm
+	if names is None: names = schemes.keys()
+	if isinstance(names, basestring): names = [names]
+	for name in names:
+		cmap = to_mpl_colormap(name, schemes[name])
+		matplotlib.cm.register_cmap(name, cmap)
