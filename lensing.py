@@ -97,6 +97,20 @@ def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64
 	if verbose: print "Generating alms"
 	alm = curvedsky.rand_alm(ps_lensinput, lmax=lmax, seed=seed, dtype=ctype)
 	phi_alm, cmb_alm = alm[0], alm[1:]
+
+	if "k" in output:
+		import sharp
+		ps = ps_lensinput
+		rtype = np.zeros([0],dtype=dtype).real.dtype
+		ainfo = sharp.alm_info(min(lmax,ps.shape[-1]-1) or ps.shape[-1]-1)
+		ells = np.arange(0,lmax if lmax is not None else ps.shape[-1]-1,1.)
+		fl = ((ells*(ells+1.)/2.).astype(rtype)).reshape(1,1,ells.size)
+		kappa_alm = phi_alm.copy().reshape(1,phi_alm.size)
+		ainfo.lmul(kappa_alm, fl, kappa_alm)
+		kappa_map = curvedsky.alm2map(kappa_alm, enmap.zeros(shape[-2:], wcs, dtype=dtype))
+		del kappa_alm
+
+
 	# Truncate alm if we want a smoother map. In taylens, it was necessary to truncate
 	# to a lower lmax for the map than for phi, to avoid aliasing. The appropriate lmax
 	# for the cmb was the one that fits the resolution. FIXME: Can't slice alm this way.
@@ -126,6 +140,7 @@ def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64
 		if c == "l": res.append(cmb_obs)
 		elif c == "u": res.append(cmb_raw)
 		elif c == "p": res.append(phi_map)
+		elif c == "k": res.append(kappa_map)
 		elif c == "a": res.append(grad)
 	return tuple(res)
 
