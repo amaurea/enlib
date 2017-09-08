@@ -1,3 +1,18 @@
+Quick Install
+=============
+
+Very basic but critical functionality can be obtained by following
+these steps:
+
+- `git clone` this repo into your directory of choice `$DIR`
+(Note: this means `enlib` will be in `$DIR/enlib`. For e.g.
+the path to this file will be `$DIR/enlib/README.md`)
+- add `$DIR` to your `$PYTHONPATH`
+
+This should allow you to import and use many `enlib` modules
+assuming that basic dependencies like `numpy` are present on 
+your system.
+
 Dependencies
 ============
 Enlib consists of a collection of relatively independend modules, so
