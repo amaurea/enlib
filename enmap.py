@@ -350,15 +350,11 @@ def _arghelper(map, func, unit):
 
 def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
-	the provided power spectrum.
-
-        If cov.ndim is 4, 2D power is assumed else 1D power is assumed.
-
-        If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
-        not in steradians.
-        """
+	the provided power spectrum. If cov.ndim is 4, 2D power is assumed else 1D
+	power is assumed. If pixel_units is True, the 2D power spectra is assumed
+	to be in pixel units, not in steradians."""
 	if seed is not None: np.random.seed(seed)
-        kmap = rand_gauss_iso_harm(shape, wcs, cov, pixel_units)
+	kmap = rand_gauss_iso_harm(shape, wcs, cov, pixel_units)
 	if scalar:
 		return ifft(kmap).real
 	else:
@@ -376,7 +372,6 @@ def rand_gauss_harm(shape, wcs):
 	domain. Does not enforce the symmetry requried for a real map. If box is
 	passed, the result will be an enmap."""
 	return ndmap(np.random.standard_normal(shape)+1j*np.random.standard_normal(shape),wcs)
-
 
 def rand_gauss_iso_harm(shape, wcs, cov, pixel_units=False):
 	"""Generates a random map with component covariance
@@ -517,14 +512,13 @@ def modlmap(shape, wcs, oversample=1):
 	slmap = lmap(shape,wcs,oversample=oversample)
         return np.sum(slmap**2,0)**0.5
 
-def modrmap(shape, wcs, safe=True, corner=False):
-	"""Return an enmap where each entry is the distance from center 
-        of that entry. Results are returned in radians, and
-	if safe is true (default), then sharp coordinate edges will be
-	avoided."""
-	slmap = posmap(shape,wcs,safe=safe,corner=corner)
-        return np.sum(slmap**2,0)**0.5
 
+def modrmap(shape, wcs, safe=True, corner=False):
+	"""Return an enmap where each entry is the distance from center
+	of that entry. Results are returned in radians, and if safe is true
+	(default), then sharp coordinate edges will be avoided."""
+	slmap = posmap(shape,wcs,safe=safe,corner=corner)
+	return np.sum(slmap**2,0)**0.5
 
 def laxes(shape, wcs, oversample=1):
 	overample = int(oversample)
