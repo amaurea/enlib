@@ -1360,3 +1360,29 @@ def fix_endian(map):
 	if map.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		map = map.byteswap().newbyteorder()
 	return map
+
+
+class MapGen(object):
+
+        def __init__(self,shape,wcs,cov,pixel_units=False):
+                self.shape = shape
+                self.wcs = wcs
+                if cov.ndim==4:
+                        if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
+                        self.covsqrt = multi_pow(cov, 0.5)
+                else:
+                        self.covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
+
+        def get_map(self,seed=None,scalar=False):
+                if seed is not None: np.random.seed(seed)
+	        data = map_mul(self.covsqrt, rand_gauss_harm(self.shape, self.wcs))
+	        kmap = ndmap(data, self.wcs)
+	        if scalar:
+		        return ifft(kmap).real
+	        else:
+		        return harm2map(kmap)
+
+        
+        
+
+        
