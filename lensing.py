@@ -1,5 +1,5 @@
 import numpy as np
-from enlib import enmap, utils, powspec, sharp, curvedsky, interpol
+from enlib import enmap, utils, powspec, interpol
 
 ####### Flat sky lensing #######
 
@@ -90,12 +90,13 @@ def lens_map_flat(cmb_map, phi_map):
 ######## Curved sky lensing ########
 
 def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False):
+	import curvedsky, sharp
 	ctype   = np.result_type(dtype,0j)
 	# First draw a random lensing field, and use it to compute the undeflected positions
 	if verbose: print "Computing observed coordinates"
 	obs_pos = enmap.posmap(shape, wcs)
 	if verbose: print "Generating alms"
-	alm = curvedsky.rand_alm(ps_lensinput, lmax=lmax, seed=seed, dtype=ctype)
+	alm, ainfo = curvedsky.rand_alm(ps_lensinput, lmax=lmax, seed=seed, dtype=ctype)
 	phi_alm, cmb_alm = alm[0], alm[1:]
 	# Truncate alm if we want a smoother map. In taylens, it was necessary to truncate
 	# to a lower lmax for the map than for phi, to avoid aliasing. The appropriate lmax
@@ -105,6 +106,12 @@ def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64
 	if "p" in output:
 		if verbose: print "Computing phi map"
 		phi_map = curvedsky.alm2map(phi_alm, enmap.zeros(shape[-2:], wcs, dtype=dtype))
+	if "k" in output:
+		if verbose: print "Computing kappa map"
+		l = np.arange(ainfo.lmax+1.0)
+		kappa_alm = ainfo.lmul(phi_alm, l*(l+1)/2)
+		kappa_map = curvedsky.alm2map(kappa_alm, enmap.zeros(shape[-2:], wcs, dtype=dtype))
+		del kappa_alm
 	if verbose: print "Computing grad map"
 	grad = curvedsky.alm2map(phi_alm, enmap.zeros((2,)+shape[-2:], wcs, dtype=dtype), deriv=True)
 	if verbose: print "Computing alpha map"
@@ -123,9 +130,10 @@ def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64
 	# Output in same order as specified in output argument
 	res = []
 	for c in output:
-		if c == "l": res.append(cmb_obs)
+		if   c == "l": res.append(cmb_obs)
 		elif c == "u": res.append(cmb_raw)
 		elif c == "p": res.append(phi_map)
+		elif c == "k": res.append(kappa_map)
 		elif c == "a": res.append(grad)
 	return tuple(res)
 
