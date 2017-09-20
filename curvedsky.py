@@ -30,7 +30,7 @@ def rand_alm_healpy(ps, lmax=None, seed=None, dtype=np.complex128):
 	ps = powspec.sym_compress(ps, scheme="diag")
 	return np.asarray(healpy.synalm(ps, lmax=lmax, new=True))
 
-def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128, m_major=True):
+def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128, m_major=True, return_ainfo=False):
 	"""This is a replacement for healpy.synalm. It generates the random
 	numbers in l-major order before transposing to m-major order in order
 	to allow generation of low-res and high-res maps that agree on large
@@ -63,7 +63,8 @@ def rand_alm(ps, ainfo=None, lmax=None, seed=None, dtype=np.complex128, m_major=
 	alm[:,:ainfo.lmax].imag  = 0
 	alm[:,:ainfo.lmax].real *= 2**0.5
 	if ps.ndim == 1: alm = alm[0]
-	return alm
+	if return_ainfo: return alm, ainfo
+	else: return alm
 
 ##########################
 ### Top-level wrappers ###

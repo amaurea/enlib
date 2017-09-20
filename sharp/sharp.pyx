@@ -258,6 +258,7 @@ cdef class alm_info:
 		if out is None: out = alm.copy()
 		if lmat.ndim == 1:
 			lmat = np.eye(alm.shape[0])[:,:,None]*lmat
+		lmat = lmat.astype(alm.real.dtype, copy=False)
 		if alm.dtype == np.complex128:
 			self.lmul_dp(out, lmat)
 		else:
