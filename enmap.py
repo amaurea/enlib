@@ -1323,30 +1323,6 @@ def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmi
     return shape, wcs
 
 
-def power_from_fourier_teb(kmap1,kmap2=None):
-        pass
-
-def power_from_teb(map1,map2=None,mask1=None,mask2=None):
-        pass
-
-
-def power_from_fourier_iqu(map1,map2=None,mask1=None,mask2=None):
-        pass
-
-
-def power_from_iqu(map1,map2=None,mask1=None,mask2=None):
-        if mask1 is None: mask1 = map1*0.+1.
-        if mask2 is None: mask2 = mask1
-        if map2 is None: map2 = map1
-
-class FourierCalculator(object):
-
-        def __init__(self,shape,wcs):
-                self.shape = shape
-                self.wcs = wcs
-                self.rot = queb_rotmat(lmap(shape,wcs))
-
-
 
 def fix_endian(map):
 	"""Make endianness of array map match the current machine.
@@ -1357,7 +1333,11 @@ def fix_endian(map):
 
 
 class MapGen(object):
-
+        """
+        Once you know the shape and wcs of an ndmap and the input power spectra, you can 
+        pre-calculate some things to speed up random map generation.
+        """
+        
         def __init__(self,shape,wcs,cov,pixel_units=False):
                 self.shape = shape
                 self.wcs = wcs
@@ -1379,4 +1359,31 @@ class MapGen(object):
         
         
 
-        
+class FourierCalc(object):
+        """
+        Once you know the shape and wcs of an ndmap, you can pre-calculate some things
+        to speed up fourier transforms and power spectra.
+        """
+
+        def __init__(self,shape,wcs):
+                self.shape = shape
+                self.wcs = wcs
+	        if len(shape) > 2 and shape[-3] > 1:
+		        self.rot = queb_rotmat(lmap(shape,wcs))
+
+        def iqu2teb(self,emap, nthread=0, normalize=True):
+	        """Performs the 2d FFT of the enmap pixels, returning a complex enmap.
+                Similar to harm2map, but uses the pre-calculated self.rot matrix.
+                """
+	        emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
+	        if emap.ndim > 2 and emap.shape[-3] > 1:
+		        emap[...,-2:,:,:] = map_mul(self.rot, emap[...,-2:,:,:])
+	        return emap
+
+
+        def power2d(self,emap, nthread=0, normalize=True,pixel_units=False):
+
+                lteb = self.iqu2teb(emap,nthread,normalize)
+                norm = 1. if pixel_units else area(shape,wcs )/ np.prod(shape[-2:])**2
+                power = np.real(np.conjugate(lteb)*lteb)*norm
+                return power
