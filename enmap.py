@@ -1388,9 +1388,9 @@ class FourierCalc(object):
                 """
 
                 if emap2 is not None: assert emap.shape==emap2.shape
-                lteb1 = self.iqu2teb(emap,nthread,normalize=True)
-                lteb2 = self.iqu2teb(emap2,nthread,normalize=True) if emap2 is not None else lteb1
-                norm = 1. if pixel_units else area(emap.shape,emap.wcs )/ np.prod(emap.shape[-2:]) 
+                lteb1 = self.iqu2teb(emap,nthread,normalize=False)
+                lteb2 = self.iqu2teb(emap2,nthread,normalize=False) if emap2 is not None else lteb1
+                norm = 1. if pixel_units else area(emap.shape,emap.wcs )/ np.prod(emap.shape[-2:])**2.
 
                 powfunc = lambda x,y: np.real(np.conjugate(x)*y)*norm
 
