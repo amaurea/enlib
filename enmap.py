@@ -25,7 +25,7 @@ try:
         Config.read(iniFile)
         iau_convention = Config.getboolean("general","iau_convention")
 except:
-        iau_convention = False
+        iau_convention = True #False
 
 
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
@@ -1373,7 +1373,7 @@ class FourierCalc(object):
 
         def iqu2teb(self,emap, nthread=0, normalize=True):
 	        """Performs the 2d FFT of the enmap pixels, returning a complex enmap.
-                Similar to harm2map, but uses the pre-calculated self.rot matrix.
+                Similar to harm2map, but uses a pre-calculated self.rot matrix.
                 """
 	        emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
 	        if emap.ndim > 2 and emap.shape[-3] > 1:
@@ -1381,9 +1381,31 @@ class FourierCalc(object):
 	        return emap
 
 
-        def power2d(self,emap, nthread=0, normalize=True,pixel_units=False):
+        def power2d(self,emap, emap2=None,nthread=0,pixel_units=False,skip_cross=False):
+                """
+                Calculate the power spectrum of emap crossed with emap2 (=emap if None)
+                Returns in radians^2 by default unles pixel_units specified
+                """
 
-                lteb = self.iqu2teb(emap,nthread,normalize)
-                norm = 1. if pixel_units else area(shape,wcs )/ np.prod(shape[-2:])**2
-                power = np.real(np.conjugate(lteb)*lteb)*norm
-                return power
+                if emap2 is not None: assert emap.shape==emap2.shape
+                lteb1 = self.iqu2teb(emap,nthread,normalize=True)
+                lteb2 = self.iqu2teb(emap2,nthread,normalize=True) if emap2 is not None else lteb1
+                norm = 1. if pixel_units else area(emap.shape,emap.wcs )/ np.prod(emap.shape[-2:]) 
+
+                powfunc = lambda x,y: np.real(np.conjugate(x)*y)*norm
+
+                if emap.ndim > 2 and emap.shape[-3] > 1:
+                        ncomp = emap.shape[-3]
+                        retpow = np.empty((ncomp,ncomp,emap.shape[-2],emap.shape[-1]))
+                        for i in range(ncomp):
+                                retpow[i,i] = powfunc(lteb1[i],lteb2[i])
+                        if not(skip_cross):
+                                for i in range(ncomp):
+                                        for j in range(i+1,ncomp):
+                                                retpow[i,j] = powfunc(lteb1[i],lteb2[j])
+                                                retpow[j,i] = retpow[i,j]
+                        return retpow,lteb1,lteb2
+                else:
+                        if emap.ndim>2: lteb1 = lteb1[0]
+                        if emap2.ndim>2: lteb2 = lteb2[0]
+                        return powfunc(lteb1,lteb2),lteb1,lteb2
