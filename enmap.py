@@ -1368,6 +1368,7 @@ class FourierCalc(object):
         def __init__(self,shape,wcs):
                 self.shape = shape
                 self.wcs = wcs
+                self.normfact = area(self.shape,self.wcs )/ np.prod(self.shape[-2:])**2.               
 	        if len(shape) > 2 and shape[-3] > 1:
 		        self.rot = queb_rotmat(lmap(shape,wcs))
 
@@ -1381,6 +1382,10 @@ class FourierCalc(object):
 	        return emap
 
 
+        def f2power(self,kmap1,kmap2,pixel_units=False):
+                norm = 1. if pixel_units else self.normfact
+                return np.real(np.conjugate(kmap1)*kmap2)*norm
+                
         def power2d(self,emap, emap2=None,nthread=0,pixel_units=False,skip_cross=False):
                 """
                 Calculate the power spectrum of emap crossed with emap2 (=emap if None)
@@ -1390,22 +1395,24 @@ class FourierCalc(object):
                 if emap2 is not None: assert emap.shape==emap2.shape
                 lteb1 = self.iqu2teb(emap,nthread,normalize=False)
                 lteb2 = self.iqu2teb(emap2,nthread,normalize=False) if emap2 is not None else lteb1
-                norm = 1. if pixel_units else area(emap.shape,emap.wcs )/ np.prod(emap.shape[-2:])**2.
 
-                powfunc = lambda x,y: np.real(np.conjugate(x)*y)*norm
+                
 
                 if emap.ndim > 2 and emap.shape[-3] > 1:
                         ncomp = emap.shape[-3]
                         retpow = np.empty((ncomp,ncomp,emap.shape[-2],emap.shape[-1]))
                         for i in range(ncomp):
-                                retpow[i,i] = powfunc(lteb1[i],lteb2[i])
+                                retpow[i,i] = self.f2power(lteb1[i],lteb2[i],pixel_units)
                         if not(skip_cross):
                                 for i in range(ncomp):
                                         for j in range(i+1,ncomp):
-                                                retpow[i,j] = powfunc(lteb1[i],lteb2[j])
+                                                retpow[i,j] = self.f2power(lteb1[i],lteb2[j],pixel_units)
                                                 retpow[j,i] = retpow[i,j]
                         return retpow,lteb1,lteb2
                 else:
-                        if emap.ndim>2: lteb1 = lteb1[0]
-                        if emap2.ndim>2: lteb2 = lteb2[0]
-                        return powfunc(lteb1,lteb2),lteb1,lteb2
+                        if lteb1.ndim>2:
+                                lteb1 = lteb1[0]
+                        if lteb2.ndim>2:
+                                lteb2 = lteb2[0]
+                        p2d = self.f2power(lteb1,lteb2,pixel_units)
+                        return p2d,lteb1,lteb2
