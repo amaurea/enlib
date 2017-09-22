@@ -1344,6 +1344,7 @@ class MapGen(object):
                 if cov.ndim==4:
                         if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
                         self.covsqrt = multi_pow(cov, 0.5)
+                        
                 else:
                         self.covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
 
