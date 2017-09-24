@@ -96,20 +96,8 @@ def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64
 	if verbose: print "Computing observed coordinates"
 	obs_pos = enmap.posmap(shape, wcs)
 	if verbose: print "Generating alms"
-	alm, ainfo = curvedsky.rand_alm(ps_lensinput, lmax=lmax, seed=seed, dtype=ctype)
+	alm, ainfo = curvedsky.rand_alm(ps_lensinput, lmax=lmax, seed=seed, dtype=ctype, return_ainfo="k" in output)
 	phi_alm, cmb_alm = alm[0], alm[1:]
-
-	if "k" in output:
-		import sharp
-		ps = ps_lensinput
-		rtype = np.zeros([0],dtype=dtype).real.dtype
-		ainfo = sharp.alm_info(min(lmax,ps.shape[-1]-1) or ps.shape[-1]-1)
-		ells = np.arange(0,lmax if lmax is not None else ps.shape[-1]-1,1.)
-		fl = ((ells*(ells+1.)/2.).astype(rtype)).reshape(1,1,ells.size)
-		kappa_alm = phi_alm.copy().reshape(1,phi_alm.size)
-		ainfo.lmul(kappa_alm, fl, kappa_alm)
-		kappa_map = curvedsky.alm2map(kappa_alm, enmap.zeros(shape[-2:], wcs, dtype=dtype))
-		del kappa_alm
 
 
 	# Truncate alm if we want a smoother map. In taylens, it was necessary to truncate
