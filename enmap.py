@@ -162,7 +162,7 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 
 def scale_geometry(shape, wcs, scale):
 	scale  = np.zeros(2)+scale
-	oshape = tuple(shape[:-2])+tuple(utils.nint(shape[-2:]*scale))
+	oshape = tuple(shape[:-2])+tuple(enlib.utils.nint(shape[-2:]*scale))
 	owcs   = enlib.wcs.scale(wcs, scale, rowmajor=True)
 	return oshape, owcs
 
