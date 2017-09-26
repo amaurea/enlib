@@ -256,14 +256,15 @@ cdef class alm_info:
 		"""Computes res[a,lm] = lmat[a,b,l]*alm[b,lm], where lm is the position of the
 		element with (l,m) in the alm array, as defined by this class."""
 		if out is None: out = alm.copy()
+		if out.ndim == 1: out = out[None]
 		if lmat.ndim == 1:
-			lmat = np.eye(alm.shape[0])[:,:,None]*lmat
-		lmat = lmat.astype(alm.real.dtype, copy=False)
-		if alm.dtype == np.complex128:
+			lmat = np.eye(out.shape[0])[:,:,None]*lmat
+		lmat = lmat.astype(out.real.dtype, copy=False)
+		if out.dtype == np.complex128:
 			self.lmul_dp(out, lmat)
 		else:
 			self.lmul_sp(out, lmat)
-		return out
+		return out.reshape(alm.shape)
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
 	cdef lmul_dp(self,np.ndarray[np.complex128_t,ndim=2] alm, np.ndarray[np.float64_t,ndim=3] lmat):

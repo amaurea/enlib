@@ -273,7 +273,7 @@ class DGeometry(object):
 			self.tshape, self.dtype, self.comm  = tuple(tshape), dtype, comm
 
 			# 2. Set up workspace descriptions
-			work_geometry = [enmap.slice_wcs(shape, wcs, (slice(b[0,0],b[1,0]),slice(b[0,1],b[1,1])), nowrap=True) for b in bbpix]
+			work_geometry = [enmap.slice_geometry(shape, wcs, (slice(b[0,0],b[1,0]),slice(b[0,1],b[1,1])), nowrap=True) for b in bbpix]
 			# 3. Define global workspace ownership
 			nwork = utils.allgather([len(bbpix)],comm)
 			wown  = np.concatenate([np.full(n,i,dtype=int) for i,n in enumerate(nwork)])
@@ -306,7 +306,7 @@ class DGeometry(object):
 				tlmap[ti] = len(tgmap[id]) # glob 2 loc
 				tgmap[id].append(ti)       # loc  2 glob
 			# 5. Define tiles
-			tile_geometry = [enmap.slice_wcs(shape, wcs, (slice(tb[0,0],tb[1,0]),slice(tb[0,1],tb[1,1]))) for tb in tbox]
+			tile_geometry = [enmap.slice_geometry(shape, wcs, (slice(tb[0,0],tb[1,0]),slice(tb[0,1],tb[1,1]))) for tb in tbox]
 			# 6. Define mapping between work<->wbuf and tiles<->tbuf
 			wbufinfo  = np.zeros([2,comm.size],dtype=int)
 			tbufinfo  = np.zeros([2,comm.size],dtype=int)
