@@ -124,8 +124,9 @@ class ndmap(np.ndarray):
 			Whether to include pixels that are only partially
 			inside the bounding box. Default: False."""
 		ibox = self.subinds(box, inclusive)
-		return self[...,ibox[0,0]:ibox[1,0]:ibox[2,0],ibox[0,1]:ibox[1,1]:ibox[2,1]]
-	def subinds(self, box, inclusive=False, cap=False):
+		islice = enlib.utils.sbox2slice(ibox.T)
+		return self[islice]
+	def subinds(self, box, inclusive=False, cap=True):
 		"""Helper function for submap. Translates the bounding
 		box provided into a pixel units. Assumes rectangular
 		coordinates."""
@@ -142,10 +143,12 @@ class ndmap(np.ndarray):
 			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
 		else:
 			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
+		# Turn into list of slices, so we can handle reverse slices properly
 		# Make sure we stay inside our map bounds
 		if cap:
-			ibox[:,0] = np.maximum(ibox[:,0],0)
-			ibox[:,1] = np.minimum(ibox[:,1],self.shape[-2:])
+			for b, n in zip(ibox.T,self.shape[-2:]):
+				if b[2] > 0: b[:2] = [max(b[0],  0),min(b[1], n)]
+				else:        b[:2] = [min(b[0],n-1),max(b[1],-1)]
 		return ibox
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
