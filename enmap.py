@@ -125,7 +125,7 @@ class ndmap(np.ndarray):
 			inside the bounding box. Default: False."""
 		ibox = self.subinds(box, inclusive)
 		return self[...,ibox[0,0]:ibox[1,0]:ibox[2,0],ibox[0,1]:ibox[1,1]:ibox[2,1]]
-	def subinds(self, box, inclusive=False, cap=True):
+	def subinds(self, box, inclusive=False, cap=False):
 		"""Helper function for submap. Translates the bounding
 		box provided into a pixel units. Assumes rectangular
 		coordinates."""
@@ -718,6 +718,7 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="constant", oversample=1, smooth="a
 	if len(oshape) == 2: oshape = (1,)+oshape
 	ls = np.sum(lmap(oshape, wcs, oversample=oversample)**2,0)**0.5
 	if smooth == "auto":
+
 		# Determine appropriate fourier-scale smoothing based on 2d fourer
 		# space resolution. We wish to smooth by about this width to approximate
 		# averaging over sub-grid modes
@@ -726,7 +727,8 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="constant", oversample=1, smooth="a
 	if smooth > 0:
 		cov = smooth_spectrum(cov, kernel="gauss", weight="mode", width=smooth)
 	# Translate from steradians to pixels
-	cov = cov * np.prod(shape[-2:])/area(shape,wcs) 
+	cov = cov * np.prod(shape[-2:])/area(shape,wcs)
+
 	if exp != 1.0: cov = multi_pow(cov, exp)
 	cov[~np.isfinite(cov)] = 0
 	cov   = cov[:oshape[-3],:oshape[-3]]
@@ -734,6 +736,7 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="constant", oversample=1, smooth="a
 	# values in spectra that must be positive (and it's faster)
 	res = ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape),mode=mode, mask_nan=False, order=1),wcs)
 	res = downgrade(res, oversample)
+
 	return res
 
 def spec2flat_corr(shape, wcs, cov, exp=1.0, mode="constant"):
@@ -791,16 +794,21 @@ def smooth_spectrum(ps, kernel="gauss", weight="mode", width=1.0):
 	else:
 		tmp = np.atleast_2d(weight)
 		assert tmp.shape[-1] == W.shape[-1], "Spectrum weight must have the same length as spectrum"
+
+                
 	pWK = _convolute_sym(pflat*W, K)
 	WK  = _convolute_sym(W, K)
 	res = pWK/WK
 	return res.reshape(ps.shape)
 
 def _convolute_sym(a,b):
+        
 	sa = np.concatenate([a,a[:,-2:0:-1]],-1)
 	sb = np.concatenate([b,b[:,-2:0:-1]],-1)
+	
 	fa = enlib.fft.rfft(sa)
 	fb = enlib.fft.rfft(sb)
+
 	sa = enlib.fft.ifft(fa*fb,sa,normalize=True)
 	return sa[:,:a.shape[-1]]
 
@@ -1344,7 +1352,6 @@ class MapGen(object):
                 if cov.ndim==4:
                         if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
                         self.covsqrt = multi_pow(cov, 0.5)
-                        
                 else:
                         self.covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
 
@@ -1386,7 +1393,12 @@ class FourierCalc(object):
         def f2power(self,kmap1,kmap2,pixel_units=False):
                 norm = 1. if pixel_units else self.normfact
                 return np.real(np.conjugate(kmap1)*kmap2)*norm
-                
+
+        def f1power(self,map1,kmap2,pixel_units=False,nthread=0):
+                kmap1 = self.iqu2teb(map1,nthread,normalize=False)
+                norm = 1. if pixel_units else self.normfact
+                return np.real(np.conjugate(kmap1)*kmap2)*norm,kmap1
+
         def power2d(self,emap, emap2=None,nthread=0,pixel_units=False,skip_cross=False):
                 """
                 Calculate the power spectrum of emap crossed with emap2 (=emap if None)
