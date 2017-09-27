@@ -95,7 +95,7 @@ class ndmap(np.ndarray):
 			return np.asarray(self)[sel]
 		# Otherwise we will return a full ndmap, including a
 		# (possibly) sliced wcs.
-		_, wcs = slice_wcs(self.shape[-2:], self.wcs, sel2)
+		_, wcs = slice_geometry(self.shape[-2:], self.wcs, sel2)
 		return ndmap(np.ndarray.__getitem__(self, sel), wcs)
 	def __getslice__(self, a, b=None, c=None): return self[slice(a,b,c)]
 	def submap(self, box, inclusive=False):
@@ -143,7 +143,7 @@ class ndmap(np.ndarray):
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
 
-def slice_wcs(shape, wcs, sel, nowrap=False):
+def slice_geometry(shape, wcs, sel, nowrap=False):
 	"""Slice a geometry specified by shape and wcs according to the
 	slice sel. Returns a tuple of the output shape and the correponding
 	wcs."""
@@ -163,8 +163,11 @@ def slice_wcs(shape, wcs, sel, nowrap=False):
 		oshape[i] = (oshape[i]+s.step-1)/s.step
 	return tuple(pre)+tuple(oshape), wcs
 
-def scale_wcs(wcs, factor):
-	return enlib.wcs.scale(wcs, factor, rowmajor=True)
+def scale_geometry(shape, wcs, scale):
+	scale  = np.zeros(2)+scale
+	oshape = tuple(shape[:-2])+tuple(enlib.utils.nint(shape[-2:]*scale))
+	owcs   = enlib.wcs.scale(wcs, scale, rowmajor=True)
+	return oshape, owcs
 
 def get_unit(wcs):
 	if enlib.wcs.is_plain(wcs): return 1
@@ -1194,7 +1197,7 @@ def read_fits(fname, hdu=None, sel=None, sel_threshold=10e6):
 	if sel:
 		# First slice the wcs
 		sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-2,2])
-		_, wcs = slice_wcs(hdu.shape, wcs, sel2)
+		_, wcs = slice_geometry(hdu.shape, wcs, sel2)
 		# hdu.section is pretty slow. Work around that by not applying it
 		# for small maps, and by not applying it along the last axis for the rest.
 		if hdu.size > sel_threshold:
@@ -1255,7 +1258,7 @@ def read_hdf(fname, sel=None):
 		# data actually being read
 		if sel:
 			sel1, sel2 = enlib.slice.split_slice(sel, [data.ndim-2,2])
-			_, wcs = slice_wcs(data.shape, wcs, sel2)
+			_, wcs = slice_geometry(data.shape, wcs, sel2)
 			data   = data[sel]
 		res = fix_endian(ndmap(data.value, wcs))
 	return res
