@@ -271,9 +271,9 @@ contains
 		do di = 1, size(detmap)-1
 			do i = detmap(di)+1, detmap(di+1)
 				! cut range
-				r1 = ranges(1,i)+1
-				r2 = ranges(2,i)+1
-				if(r1 == 1 .and. r2 == nsamp) then
+				r1 = max(0,    ranges(1,i))+1 ! first cut index
+				r2 = min(nsamp,ranges(2,i))+1 ! first uncut index
+				if(r1 <= 1 .and. r2 >= nsamp+1) then
 					tod(:,di) = 0
 					cycle
 				end if
@@ -283,7 +283,7 @@ contains
 				! prev cut end
 				if(i == detmap(di)+1) then; r0 = 1; else; r0 = ranges(2,i-1)+1; end if
 				! next cut start
-				if(i == detmap(di+1)) then; r3 = nsamp+1; else; r3 = ranges(1,i+1)+1; end if
+				if(i == detmap(di+1)) then; r3 = nsamp+1; else; r3 = min(nsamp,ranges(1,i+1))+1; end if
 				r0 = max(r0, r1-context)
 				r3 = min(r3, r2+context)
 				! Now calculate the representive value on either side

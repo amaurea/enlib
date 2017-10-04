@@ -469,7 +469,7 @@ class pos2pix:
 
 config.default("pmat_ptsrc_rsigma", 4.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
 config.default("pmat_ptsrc_cell_res", 5, "Cell size in arcmin to use for fast source lookup.")
-class PmatPtsrc2(PointingMatrix):
+class PmatPtsrc(PointingMatrix):
 	def __init__(self, scan, srcs, sys=None, tmul=None, pmul=None):
 		# We support a srcs which is either [nsrc,nparam] or [nsrc,ndir,nparam], where
 		# ndir is either 1 or 2 depending on whether one wants to separate different
@@ -500,7 +500,7 @@ class PmatPtsrc2(PointingMatrix):
 
 		# Build interpolator (dec,ra output ordering)
 		transform  = build_pos_transform(scan, sys=config.get("map_sys", sys))
-		ipol, obox = build_interpol(transform, scan.box, scan.entry.id, posunit=0.1*utils.arcsec)
+		ipol, obox = build_interpol(transform, scan.box, scan.entry.id, posunit=5*utils.arcsec)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, srcs.dtype)
 
 		# Build source hit grid
@@ -509,7 +509,7 @@ class PmatPtsrc2(PointingMatrix):
 		self.ref = np.mean(cbox,0)
 		srcs[:,:,:2] = utils.rewind(srcs[:,:,:2], self.ref)
 
-		# A cell is hit if it overlaps both horizontall any vertically
+		# A cell is hit if it overlaps both horizontally and vertically
 		# with the point source +- rmax
 		ncell = np.zeros((ndir,)+cshape,dtype=np.int32)
 		cells = np.zeros((ndir,)+cshape+(maxcell,),dtype=np.int32)
@@ -522,7 +522,7 @@ class PmatPtsrc2(PointingMatrix):
 				# will be put on one of the edge cells
 				i1 = np.maximum(i1.astype(int), 0)
 				i2 = np.minimum(i2.astype(int), np.array(cshape)-1)
-				print si, sdir, i1, i2, cshape
+				#print si, sdir, i1, i2, cshape
 				if np.any(i1 >= cshape) or np.any(i2 < 0): continue
 				sel= (sdir,slice(i1[0],i2[0]),slice(i1[1],i2[1]))
 				cells[sel][:,:,ncell[sel]] = si
@@ -554,6 +554,8 @@ class PmatPtsrc2(PointingMatrix):
 	def backward(self, tod, srcs, tmul=None, pmul=None):
 		"""tod -> srcs"""
 		self.apply(-1, tod, srcs, tmul=tmul, pmul=pmul)
+# Compatibility
+PmatPtsrc2 = PmatPtsrc
 
 def build_interpol(transform, box, id="none", posunit=1.0, sys=None):
 	sys   = config.get("map_sys",      sys)
