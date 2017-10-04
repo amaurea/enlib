@@ -53,6 +53,8 @@ class ndmap(np.ndarray):
 	def posmap(self, safe=True, corner=False): return posmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
 	def lmap(self, oversample=1): return lmap(self.shape, self.wcs, oversample=oversample)
+	def modlmap(self, oversample=1): return modlmap(self.shape, self.wcs, oversample=oversample)
+	def modrmap(self, safe=True, corner=False): return modrmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def area(self): return area(self.shape, self.wcs)
 	def pixsize(self): return pixsize(self.shape, self.wcs)
 	def pixshape(self): return pixshape(self.shape, self.wcs)
@@ -95,7 +97,7 @@ class ndmap(np.ndarray):
 			return np.asarray(self)[sel]
 		# Otherwise we will return a full ndmap, including a
 		# (possibly) sliced wcs.
-		_, wcs = slice_wcs(self.shape[-2:], self.wcs, sel2)
+		_, wcs = slice_geometry(self.shape[-2:], self.wcs, sel2)
 		return ndmap(np.ndarray.__getitem__(self, sel), wcs)
 	def __getslice__(self, a, b=None, c=None): return self[slice(a,b,c)]
 	def submap(self, box, inclusive=False):
@@ -114,7 +116,8 @@ class ndmap(np.ndarray):
 			Whether to include pixels that are only partially
 			inside the bounding box. Default: False."""
 		ibox = self.subinds(box, inclusive)
-		return self[...,ibox[0,0]:ibox[1,0]:ibox[2,0],ibox[0,1]:ibox[1,1]:ibox[2,1]]
+		islice = enlib.utils.sbox2slice(ibox.T)
+		return self[islice]
 	def subinds(self, box, inclusive=False, cap=True):
 		"""Helper function for submap. Translates the bounding
 		box provided into a pixel units. Assumes rectangular
@@ -132,15 +135,17 @@ class ndmap(np.ndarray):
 			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
 		else:
 			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
+		# Turn into list of slices, so we can handle reverse slices properly
 		# Make sure we stay inside our map bounds
 		if cap:
-			ibox[:,0] = np.maximum(ibox[:,0],0)
-			ibox[:,1] = np.minimum(ibox[:,1],self.shape[-2:])
+			for b, n in zip(ibox.T,self.shape[-2:]):
+				if b[2] > 0: b[:2] = [max(b[0],  0),min(b[1], n)]
+				else:        b[:2] = [min(b[0],n-1),max(b[1],-1)]
 		return ibox
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
 
-def slice_wcs(shape, wcs, sel, nowrap=False):
+def slice_geometry(shape, wcs, sel, nowrap=False):
 	"""Slice a geometry specified by shape and wcs according to the
 	slice sel. Returns a tuple of the output shape and the correponding
 	wcs."""
@@ -160,8 +165,11 @@ def slice_wcs(shape, wcs, sel, nowrap=False):
 		oshape[i] = (oshape[i]+s.step-1)/s.step
 	return tuple(pre)+tuple(oshape), wcs
 
-def scale_wcs(wcs, factor):
-	return enlib.wcs.scale(wcs, factor, rowmajor=True)
+def scale_geometry(shape, wcs, scale):
+	scale  = np.zeros(2)+scale
+	oshape = tuple(shape[:-2])+tuple(enlib.utils.nint(shape[-2:]*scale))
+	owcs   = enlib.wcs.scale(wcs, scale, rowmajor=True)
+	return oshape, owcs
 
 def get_unit(wcs):
 	if enlib.wcs.is_plain(wcs): return 1
@@ -337,14 +345,17 @@ def _arghelper(map, func, unit):
 	if unit == "coord": res = pix2sky(map.shape, map.wcs, res.T).T
 	return res
 
-def rand_map(shape, wcs, cov, scalar=False, seed=None):
+def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
-	the provided power spectrum."""
+	the provided power spectrum. If cov.ndim is 4, 2D power is assumed else 1D
+	power is assumed. If pixel_units is True, the 2D power spectra is assumed
+	to be in pixel units, not in steradians."""
 	if seed is not None: np.random.seed(seed)
+	kmap = rand_gauss_iso_harm(shape, wcs, cov, pixel_units)
 	if scalar:
-		return ifft(rand_gauss_iso_harm(shape, wcs, cov)).real
+		return ifft(kmap).real
 	else:
-		return harm2map(rand_gauss_iso_harm(shape, wcs, cov))
+		return harm2map(kmap)
 
 def rand_gauss(shape, wcs, dtype=None):
 	"""Generate a map with random gaussian noise in pixel space."""
@@ -357,10 +368,22 @@ def rand_gauss_harm(shape, wcs):
 	passed, the result will be an enmap."""
 	return ndmap(np.random.standard_normal(shape)+1j*np.random.standard_normal(shape),wcs)
 
-def rand_gauss_iso_harm(shape, wcs, cov):
-	"""Generates an isotropic random map with component covariance
-	cov in harmonic space, where cov is a (comp,comp,l) array."""
-	data = map_mul(spec2flat(shape, wcs, cov, 0.5, mode="constant"), rand_gauss_harm(shape, wcs))
+def rand_gauss_iso_harm(shape, wcs, cov, pixel_units=False):
+	"""Generates a random map with component covariance
+	cov in harmonic space, where cov is a (comp,comp,l) array or a 
+	(comp,comp,Ny,Nx) array. Despite the name, the map doesn't need
+	to be isotropic since 2D power spectra are allowed.
+
+	If cov.ndim is 4, cov is assumed to be an array of 2D power spectra.
+	else cov is assumed to be an array of 1D power spectra.
+	If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
+	not in steradians."""
+	if cov.ndim==4:
+		if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
+		covsqrt = multi_pow(cov, 0.5)
+	else:
+		covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
+	data = map_mul(covsqrt, rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
 
 def extent(shape, wcs, method="default", nsub=None):
@@ -473,6 +496,19 @@ def lmap(shape, wcs, oversample=1):
 	data[0] = ly[:,None]
 	data[1] = lx[None,:]
 	return ndmap(data, wcs)
+
+def modlmap(shape, wcs, oversample=1):
+	"""Return a map of all the abs wavenumbers in the fourier transform
+	of a map with the given shape and wcs."""
+	slmap = lmap(shape,wcs,oversample=oversample)
+	return np.sum(slmap**2,0)**0.5
+
+def modrmap(shape, wcs, safe=True, corner=False):
+	"""Return an enmap where each entry is the distance from center
+	of that entry. Results are returned in radians, and if safe is true
+	(default), then sharp coordinate edges will be avoided."""
+	slmap = posmap(shape,wcs,safe=safe,corner=corner)
+	return np.sum(slmap**2,0)**0.5
 
 def laxes(shape, wcs, oversample=1):
 	overample = int(oversample)
@@ -1163,7 +1199,7 @@ def read_fits(fname, hdu=None, sel=None, sel_threshold=10e6):
 	if sel:
 		# First slice the wcs
 		sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-2,2])
-		_, wcs = slice_wcs(hdu.shape, wcs, sel2)
+		_, wcs = slice_geometry(hdu.shape, wcs, sel2)
 		# hdu.section is pretty slow. Work around that by not applying it
 		# for small maps, and by not applying it along the last axis for the rest.
 		if hdu.size > sel_threshold:
@@ -1224,7 +1260,7 @@ def read_hdf(fname, sel=None):
 		# data actually being read
 		if sel:
 			sel1, sel2 = enlib.slice.split_slice(sel, [data.ndim-2,2])
-			_, wcs = slice_wcs(data.shape, wcs, sel2)
+			_, wcs = slice_geometry(data.shape, wcs, sel2)
 			data   = data[sel]
 		res = fix_endian(ndmap(data.value, wcs))
 	return res
