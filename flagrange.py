@@ -241,8 +241,9 @@ def read_flagrange(hfile, group=None):
 			return read_flagrange(f)
 	nsamp = 1000000
 	sample_offset = 0
-	if "sample_count"  in hfile: nsamp         = hfile["sample_count"].value
-	if "sample_offset" in hfile: sample_offset = hfile["sample_offset"].value
+	attrs = hfile.attrs
+	if "sample_count"  in attrs: nsamp         = attrs["sample_count"]
+	if "sample_offset" in attrs: sample_offset = attrs["sample_offset"]
 	return Flagrange(
 		nsamp,
 		hfile["index_stack"].value,

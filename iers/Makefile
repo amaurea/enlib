@@ -1,3 +1,4 @@
+include ../compile_opts/$(ENLIB_COMP).mk
 export CPATH := .:$(CPATH)
 export LPATH := .:$(LPATH)
 
@@ -5,16 +6,16 @@ all: iers.py _iers.so libiers.so
 
 iers.py _iers.so: iers.i setup.py iers.c
 	swig -python $<
-	python setup.py build_ext --inplace
+	$(PYTHON) setup.py build_ext --inplace
 
 libiers.so: iers.c
-	gcc -shared -o $@ -fPIC $<
+	$(CC) -shared -o $@ -fPIC $<
 
 iers.c: iers2struct finals.all
 	./iers2struct < finals.all > $@
 
 iers2struct: iers2struct.c
-	gcc -o $@ $<
+	$(CC) -o $@ $<
 
 finals.all:
 	curl -o finals.all "https://datacenter.iers.org/eop/-/somos/5Rgv/latest/9"
