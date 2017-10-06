@@ -17,15 +17,6 @@ import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice
 #     simple to override individual properties.
 
 extent_model = ["subgrid"]
-try:
-        from ConfigParser import SafeConfigParser 
-        iniFile = "config.ini"
-        Config = SafeConfigParser()
-        Config.optionxform=str
-        Config.read(iniFile)
-        iau_convention = Config.getboolean("general","iau_convention")
-except:
-        iau_convention = True #False
 
 
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
@@ -566,21 +557,21 @@ def ifft(emap, omap=None, nthread=0, normalize=True):
 # T,E,B hamonic maps. They are not the most efficient way of doing this.
 # It would be better to precompute the rotation matrix and buffers, and
 # use real transforms.
-def map2harm(emap, nthread=0, normalize=True):
+def map2harm(emap, nthread=0, normalize=True,iau_convention=True):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
 	emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
 	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap())
+		rot = queb_rotmat(emap.lmap(),iau_convention=iau_convention)
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
 	return emap
-def harm2map(emap, nthread=0, normalize=True):
+def harm2map(emap, nthread=0, normalize=True,iau_convention=True):
 	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap(), inverse=True)
+		rot = queb_rotmat(emap.lmap(), inverse=True,iau_convention=iau_convention)
 		emap = emap.copy()
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
 	return samewcs(ifft(emap,nthread=nthread,normalize=normalize), emap).real
 
-def queb_rotmat(lmap, inverse=False):
+def queb_rotmat(lmap, inverse=False, iau_convention=True):
 	# atan2(x,y) instead of (y,x) because Qr points in the
 	# tangential direction, not radial. This matches flipperpol too.
 	# This corresponds to the Healpix convention. To get IAU,
@@ -1115,7 +1106,7 @@ def to_flipper(imap, omap=None, unpack=True):
 	by from_flipper does not give back an exactly identical map to the one
 	on started with.
 	"""
-	import flipper
+	import flipper.liteMap
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
 	header = imap.wcs.to_header(relax=True)
@@ -1380,12 +1371,12 @@ class FourierCalc(object):
         to speed up fourier transforms and power spectra.
         """
 
-        def __init__(self,shape,wcs):
+        def __init__(self,shape,wcs,iau_convention=True):
                 self.shape = shape
                 self.wcs = wcs
                 self.normfact = area(self.shape,self.wcs )/ np.prod(self.shape[-2:])**2.               
 	        if len(shape) > 2 and shape[-3] > 1:
-		        self.rot = queb_rotmat(lmap(shape,wcs))
+		        self.rot = queb_rotmat(lmap(shape,wcs),iau_convention=iau_convention)
 
         def iqu2teb(self,emap, nthread=0, normalize=True):
 	        """Performs the 2d FFT of the enmap pixels, returning a complex enmap.
