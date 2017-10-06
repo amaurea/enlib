@@ -1323,7 +1323,7 @@ def read_hdf_geometry(fname):
 		shape = hfile["data"].shape
 	return shape, wcs
 
-def get_enmap_patch(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmin=None,xoffset_degree=0.,yoffset_degree=0.):
+def rect_geometry(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmin=None,xoffset_degree=0.,yoffset_degree=0.):
     hwidth = width_arcmin/2.
     if height_arcmin is None:
             vwidth = hwidth
