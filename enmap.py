@@ -49,7 +49,7 @@ class ndmap(np.ndarray):
 	def copy(self, order='K'):
 		return ndmap(np.copy(self,order), self.wcs)
 	def sky2pix(self, coords, safe=True, corner=False): return sky2pix(self.shape, self.wcs, coords, safe, corner)
-	def pix2sky(self, pix,    safe=True, corner=False): return pix2sky(self.shape, self.wcs, pix,    safe, corner)
+	def pix2sky(self, pix,	  safe=True, corner=False): return pix2sky(self.shape, self.wcs, pix,	 safe, corner)
 	def box(self): return box(self.shape, self.wcs)
 	def posmap(self, safe=True, corner=False): return posmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
@@ -140,8 +140,8 @@ class ndmap(np.ndarray):
 		# Make sure we stay inside our map bounds
 		if cap:
 			for b, n in zip(ibox.T,self.shape[-2:]):
-				if b[2] > 0: b[:2] = [max(b[0],  0),min(b[1], n)]
-				else:        b[:2] = [min(b[0],n-1),max(b[1],-1)]
+				if b[2] > 0: b[:2] = [max(b[0],	 0),min(b[1], n)]
+				else:	     b[:2] = [min(b[0],n-1),max(b[1],-1)]
 		return ibox
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
@@ -358,8 +358,8 @@ def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
 	else:
 		return harm2map(kmap)
 
-        
-        
+	
+	
 def rand_gauss(shape, wcs, dtype=None):
 	"""Generate a map with random gaussian noise in pixel space."""
 	return ndmap(np.random.standard_normal(shape), wcs).astype(dtype,copy=False)
@@ -374,20 +374,20 @@ def rand_gauss_harm(shape, wcs):
 def rand_gauss_iso_harm(shape, wcs, cov, pixel_units=False):
 	"""Generates a random map with component covariance
 	cov in harmonic space, where cov is a (comp,comp,l) array or a 
-        (comp,comp,Ny,Nx) array. Despite the name, the map doesn't need
-        to be isotropic since 2D power spectra are allowed.
+	(comp,comp,Ny,Nx) array. Despite the name, the map doesn't need
+	to be isotropic since 2D power spectra are allowed.
 
-        If cov.ndim is 4, cov is assumed to be an array of 2D power spectra.
-        else cov is assumed to be an array of 1D power spectra.
-        If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
-        not in steradians. 
-        """
+	If cov.ndim is 4, cov is assumed to be an array of 2D power spectra.
+	else cov is assumed to be an array of 1D power spectra.
+	If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
+	not in steradians. 
+	"""
 
-        if cov.ndim==4:
-                if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
-                covsqrt = multi_pow(cov, 0.5)
-        else:
-                covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
+	if cov.ndim==4:
+		if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
+		covsqrt = multi_pow(cov, 0.5)
+	else:
+		covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
 	data = map_mul(covsqrt, rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
 
@@ -506,9 +506,9 @@ def lmap(shape, wcs, oversample=1):
 def modlmap(shape, wcs, oversample=1):
 	"""Return a map of all the abs wavenumbers in the fourier transform
 	of a map with the given shape and wcs.
-        """
+	"""
 	slmap = lmap(shape,wcs,oversample=oversample)
-        return np.sum(slmap**2,0)**0.5
+	return np.sum(slmap**2,0)**0.5
 
 
 def modrmap(shape, wcs, safe=True, corner=False):
@@ -577,13 +577,12 @@ def queb_rotmat(lmap, inverse=False, iau_convention=True):
 	# This corresponds to the Healpix convention. To get IAU,
 	# flip the sign of a.
 
-        sgn = -1 if iau_convention else 1
-        a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
-        c, s = np.cos(a), np.sin(a)
-        if inverse: s = -s
-        return samewcs(np.array([[c,-s],[s,c]]),lmap)
+	sgn = -1 if iau_convention else 1
+	a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
+	c, s = np.cos(a), np.sin(a)
+	if inverse: s = -s
+	return samewcs(np.array([[c,-s],[s,c]]),lmap)
 
-	
 def rotate_pol(emap, angle, comps=[-2,-1]):
 	c, s = np.cos(2*angle), np.sin(2*angle)
 	res = emap.copy()
@@ -793,14 +792,12 @@ def smooth_spectrum(ps, kernel="gauss", weight="mode", width=1.0):
 		tmp = np.atleast_2d(weight)
 		assert tmp.shape[-1] == W.shape[-1], "Spectrum weight must have the same length as spectrum"
 
-                
 	pWK = _convolute_sym(pflat*W, K)
 	WK  = _convolute_sym(W, K)
 	res = pWK/WK
 	return res.reshape(ps.shape)
 
 def _convolute_sym(a,b):
-        
 	sa = np.concatenate([a,a[:,-2:0:-1]],-1)
 	sb = np.concatenate([b,b[:,-2:0:-1]],-1)
 	
@@ -883,13 +880,13 @@ def find_blank_edges(m, value="auto"):
 		# Don't use any values for cropping, so no cropping is done
 		return np.zeros([2,2],dtype=int)
 	else:
-		value   = np.asarray(value)
+		value	= np.asarray(value)
 		# Find which rows and cols consist entirely of the given value
 		hitmask = np.all(np.isclose(m.T, value.T, equal_nan=True, rtol=1e-6, atol=0).T,axis=tuple(range(m.ndim-2)))
 		hitrows = np.all(hitmask,1)
 		hitcols = np.all(hitmask,0)
 		# Find the first and last row and col which aren't all the value
-		blanks  = np.array([
+		blanks	= np.array([
 			np.where(~hitrows)[0][[0,-1]],
 			np.where(~hitcols)[0][[0,-1]]]
 			).T
@@ -902,8 +899,8 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	length. If there there aren't enough blank areas, the map is padded
 	instead. If value="none" no values are considered blank, so no cropping
 	will happen. This can be used to autopad for fourier-friendliness."""
-	blanks  = find_blank_edges(m, value=value)
-	nblank  = np.sum(blanks,0)
+	blanks	= find_blank_edges(m, value=value)
+	nblank	= np.sum(blanks,0)
 	# Find the first good sizes larger than the unblank lengths
 	minshape  = m.shape[-2:]-nblank+margin
 	if method == "plain":
@@ -913,7 +910,7 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	else:
 		raise ValueError("Unknown autocrop method %s!" % method)
 	# Pad if necessary
-	adiff   = np.maximum(0,goodshape-m.shape[-2:])
+	adiff	= np.maximum(0,goodshape-m.shape[-2:])
 	padding = [[0,0],[0,0]]
 	if any(adiff>0):
 		padding = [adiff,[0,0]]
@@ -926,8 +923,8 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	upper  = tocrop-lower
 	s      = (Ellipsis,slice(lower[0],m.shape[-2]-upper[0]),slice(lower[1],m.shape[-1]-upper[1]))
 	class PadcropInfo:
-		slice   = s
-		pad     = padding
+		slice	= s
+		pad	= padding
 	if return_info:
 		return m[s], PadcropInfo
 	else:
@@ -939,14 +936,14 @@ def padcrop(m, info):
 
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
-        return gradf(fft(m),normalized=True)
+	return gradf(fft(m),normalized=True)
 
 
 def gradf(kmap,normalized=False):
 	"""Returns the gradient of the fourier transformed map kmap as [2,...].
-        If normalized is True, assumes kmap came from fft(...,normalize=True)
-        """
-        if not(normalized): kmap /= np.prod(kmap.shape[-2:])**0.5
+	If normalized is True, assumes kmap came from fft(...,normalize=True)
+	"""
+	if not(normalized): kmap /= np.prod(kmap.shape[-2:])**0.5
 	return ifft(kmap*_widen(kmap.lmap(),kmap.ndim+1)*1j).real
 
 def grad_pix(m):
@@ -959,8 +956,8 @@ def grad_pix(m):
 
 def grad_pixf(kmap,normalized=False):
 	"""The gradient of the fourier transformed map kmap 
-        expressed in units of pixels.
-        If normalized is True, assumes kmap came from fft(...,normalize=True).
+	expressed in units of pixels.
+	If normalized is True, assumes kmap came from fft(...,normalize=True).
 	Not the same as the gradient of m with resepect to pixels.
 	Useful for avoiding sky2pix-calls for e.g. lensing,
 	and removes the complication of axes that increase in
@@ -1110,7 +1107,7 @@ def to_flipper(imap, omap=None, unpack=True):
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
 	header = imap.wcs.to_header(relax=True)
-	header['NAXIS']  = 2
+	header['NAXIS']	 = 2
 	header['NAXIS1'] = imap.shape[-1]
 	header['NAXIS2'] = imap.shape[-2]
 	flipwcs = flipper.liteMap.astLib.astWCS.WCS(header, mode="pyfits")
@@ -1151,8 +1148,8 @@ def write_map(fname, emap, fmt=None, extra={}):
 	be either fits or hdf. This can be overriden by
 	passing fmt with either 'fits' or 'hdf' as argument."""
 	if fmt == None:
-		if   fname.endswith(".hdf"):     fmt = "hdf"
-		elif fname.endswith(".fits"):    fmt = "fits"
+		if   fname.endswith(".hdf"):	 fmt = "hdf"
+		elif fname.endswith(".fits"):	 fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
@@ -1169,8 +1166,8 @@ def read_map(fname, fmt=None, sel=None, hdu=None):
 	toks = fname.split(":")
 	fname = toks[0]
 	if fmt == None:
-		if   fname.endswith(".hdf"):     fmt = "hdf"
-		elif fname.endswith(".fits"):    fmt = "fits"
+		if   fname.endswith(".hdf"):	 fmt = "hdf"
+		elif fname.endswith(".fits"):	 fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
@@ -1190,8 +1187,8 @@ def read_map_geometry(fname, fmt=None, hdu=None):
 	toks = fname.split(":")
 	fname = toks[0]
 	if fmt == None:
-		if   fname.endswith(".hdf"):     fmt = "hdf"
-		elif fname.endswith(".fits"):    fmt = "fits"
+		if   fname.endswith(".hdf"):	 fmt = "hdf"
+		elif fname.endswith(".fits"):	 fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
@@ -1317,16 +1314,16 @@ def read_hdf_geometry(fname):
 	return shape, wcs
 
 def rect_geometry(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmin=None,xoffset_degree=0.,yoffset_degree=0.):
-    hwidth = width_arcmin/2.
-    if height_arcmin is None:
-            vwidth = hwidth
-    else:
-            vwidth = height_arcmin/2.
-    arcmin =  enlib.utils.arcmin
-    degree =  enlib.utils.degree
-    shape, wcs = geometry(pos=[[-hwidth*arcmin+yoffset_degree*degree,-vwidth*arcmin+xoffset_degree*degree],[hwidth*arcmin+yoffset_degree*degree,vwidth*arcmin+xoffset_degree*degree]], res=px_res_arcmin*arcmin, proj=proj)
-    if pol: shape = (3,)+shape
-    return shape, wcs
+	hwidth = width_arcmin/2.
+	if height_arcmin is None:
+		vwidth = hwidth
+	else:
+		vwidth = height_arcmin/2.
+	arcmin =  enlib.utils.arcmin
+	degree =  enlib.utils.degree
+	shape, wcs = geometry(pos=[[-hwidth*arcmin+yoffset_degree*degree,-vwidth*arcmin+xoffset_degree*degree],[hwidth*arcmin+yoffset_degree*degree,vwidth*arcmin+xoffset_degree*degree]], res=px_res_arcmin*arcmin, proj=proj)
+	if pol: shape = (3,)+shape
+	return shape, wcs
 
 
 
@@ -1339,91 +1336,157 @@ def fix_endian(map):
 
 
 class MapGen(object):
-        """
-        Once you know the shape and wcs of an ndmap and the input power spectra, you can 
-        pre-calculate some things to speed up random map generation.
-        """
-        
-        def __init__(self,shape,wcs,cov,pixel_units=False):
-                self.shape = shape
-                self.wcs = wcs
-                if cov.ndim==4:
-                        if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
-                        self.covsqrt = multi_pow(cov, 0.5)
-                else:
-                        self.covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
+	"""
+	Once you know the shape and wcs of an ndmap and the input power spectra, you can 
+	pre-calculate some things to speed up random map generation.
+	"""
+	
+	def __init__(self,shape,wcs,cov,pixel_units=False):
+		self.shape = shape
+		self.wcs = wcs
+		if cov.ndim==4:
+			if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
+			self.covsqrt = multi_pow(cov, 0.5)
+		else:
+			self.covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
 
-        def get_map(self,seed=None,scalar=False):
-                if seed is not None: np.random.seed(seed)
-	        data = map_mul(self.covsqrt, rand_gauss_harm(self.shape, self.wcs))
-	        kmap = ndmap(data, self.wcs)
-	        if scalar:
-		        return ifft(kmap).real
-	        else:
-		        return harm2map(kmap)
+	def get_map(self,seed=None,scalar=False):
+		if seed is not None: np.random.seed(seed)
+		data = map_mul(self.covsqrt, rand_gauss_harm(self.shape, self.wcs))
+		kmap = ndmap(data, self.wcs)
+		if scalar:
+			return ifft(kmap).real
+		else:
+			return harm2map(kmap)
 
-        
-        
+	
+	
 
 class FourierCalc(object):
-        """
-        Once you know the shape and wcs of an ndmap, you can pre-calculate some things
-        to speed up fourier transforms and power spectra.
-        """
+	"""
+	Once you know the shape and wcs of an ndmap, you can pre-calculate some things
+	to speed up fourier transforms and power spectra.
+	"""
 
-        def __init__(self,shape,wcs,iau_convention=True):
-                self.shape = shape
-                self.wcs = wcs
-                self.normfact = area(self.shape,self.wcs )/ np.prod(self.shape[-2:])**2.               
-	        if len(shape) > 2 and shape[-3] > 1:
-		        self.rot = queb_rotmat(lmap(shape,wcs),iau_convention=iau_convention)
+	def __init__(self,shape,wcs,iau_convention=True):
+		self.shape = shape
+		self.wcs = wcs
+		self.normfact = area(self.shape,self.wcs )/ np.prod(self.shape[-2:])**2.	       
+		if len(shape) > 2 and shape[-3] > 1:
+			self.rot = queb_rotmat(lmap(shape,wcs),iau_convention=iau_convention)
 
-        def iqu2teb(self,emap, nthread=0, normalize=True):
-	        """Performs the 2d FFT of the enmap pixels, returning a complex enmap.
-                Similar to harm2map, but uses a pre-calculated self.rot matrix.
-                """
-	        emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
-	        if emap.ndim > 2 and emap.shape[-3] > 1:
-		        emap[...,-2:,:,:] = map_mul(self.rot, emap[...,-2:,:,:])
-	        return emap
+	def iqu2teb(self,emap, nthread=0, normalize=True):
+		"""Performs the 2d FFT of the enmap pixels, returning a complex enmap.
+		Similar to harm2map, but uses a pre-calculated self.rot matrix.
+		"""
+		emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
+		if emap.ndim > 2 and emap.shape[-3] > 1:
+			emap[...,-2:,:,:] = map_mul(self.rot, emap[...,-2:,:,:])
+		return emap
 
 
-        def f2power(self,kmap1,kmap2,pixel_units=False):
-                norm = 1. if pixel_units else self.normfact
-                return np.real(np.conjugate(kmap1)*kmap2)*norm
+	def f2power(self,kmap1,kmap2,pixel_units=False):
+		norm = 1. if pixel_units else self.normfact
+		return np.real(np.conjugate(kmap1)*kmap2)*norm
 
-        def f1power(self,map1,kmap2,pixel_units=False,nthread=0):
-                kmap1 = self.iqu2teb(map1,nthread,normalize=False)
-                norm = 1. if pixel_units else self.normfact
-                return np.real(np.conjugate(kmap1)*kmap2)*norm,kmap1
+	def f1power(self,map1,kmap2,pixel_units=False,nthread=0):
+		kmap1 = self.iqu2teb(map1,nthread,normalize=False)
+		norm = 1. if pixel_units else self.normfact
+		return np.real(np.conjugate(kmap1)*kmap2)*norm,kmap1
 
-        def power2d(self,emap, emap2=None,nthread=0,pixel_units=False,skip_cross=False):
-                """
-                Calculate the power spectrum of emap crossed with emap2 (=emap if None)
-                Returns in radians^2 by default unles pixel_units specified
-                """
+	def power2d(self,emap, emap2=None,nthread=0,pixel_units=False,skip_cross=False):
+		"""
+		Calculate the power spectrum of emap crossed with emap2 (=emap if None)
+		Returns in radians^2 by default unles pixel_units specified
+		"""
 
-                if emap2 is not None: assert emap.shape==emap2.shape
-                lteb1 = self.iqu2teb(emap,nthread,normalize=False)
-                lteb2 = self.iqu2teb(emap2,nthread,normalize=False) if emap2 is not None else lteb1
+		if emap2 is not None: assert emap.shape==emap2.shape
+		lteb1 = self.iqu2teb(emap,nthread,normalize=False)
+		lteb2 = self.iqu2teb(emap2,nthread,normalize=False) if emap2 is not None else lteb1
 
-                
+		if emap.ndim > 2 and emap.shape[-3] > 1:
+			ncomp = emap.shape[-3]
+			retpow = np.empty((ncomp,ncomp,emap.shape[-2],emap.shape[-1]))
+			for i in range(ncomp):
+				retpow[i,i] = self.f2power(lteb1[i],lteb2[i],pixel_units)
+			if not(skip_cross):
+				for i in range(ncomp):
+					for j in range(i+1,ncomp):
+						retpow[i,j] = self.f2power(lteb1[i],lteb2[j],pixel_units)
+						retpow[j,i] = retpow[i,j]
+			return retpow,lteb1,lteb2
+		else:
+			if lteb1.ndim>2:
+				lteb1 = lteb1[0]
+			if lteb2.ndim>2:
+				lteb2 = lteb2[0]
+			p2d = self.f2power(lteb1,lteb2,pixel_units)
+			return p2d,lteb1,lteb2
 
-                if emap.ndim > 2 and emap.shape[-3] > 1:
-                        ncomp = emap.shape[-3]
-                        retpow = np.empty((ncomp,ncomp,emap.shape[-2],emap.shape[-1]))
-                        for i in range(ncomp):
-                                retpow[i,i] = self.f2power(lteb1[i],lteb2[i],pixel_units)
-                        if not(skip_cross):
-                                for i in range(ncomp):
-                                        for j in range(i+1,ncomp):
-                                                retpow[i,j] = self.f2power(lteb1[i],lteb2[j],pixel_units)
-                                                retpow[j,i] = retpow[i,j]
-                        return retpow,lteb1,lteb2
-                else:
-                        if lteb1.ndim>2:
-                                lteb1 = lteb1[0]
-                        if lteb2.ndim>2:
-                                lteb2 = lteb2[0]
-                        p2d = self.f2power(lteb1,lteb2,pixel_units)
-                        return p2d,lteb1,lteb2
+
+
+def from_healpix(shape,wcs,hp_map,hp_coords="galactic",interpolate=True):
+	"""Project a healpix map to an enmap of chosen shape and wcs. The wcs
+	is assumed to be in equatorial (ra/dec) coordinates. If the healpix map
+	is in galactic coordinates, this can be specified by hp_coords, and a
+	slow conversion is done. No coordinate systems other than equatorial
+	or galactic are currently supported. Only intensity maps are supported.
+	If interpolate is True, bilinear interpolation using 4 nearest neighbours
+	is done.
+
+	shape -- 2-tuple (Ny,Nx)
+	wcs -- enmap wcs object in equatorial coordinates
+	hp_map -- array-like healpix map
+	hp_coords -- "galactic" to perform a coordinate transform, "fk5","j2000" or "equatorial" otherwise
+	interpolate -- boolean
+	
+	"""
+	
+	import healpy as hp
+	from astropy.coordinates import SkyCoord
+	import astropy.units as u
+
+
+	eq_coords = ['fk5','j2000','equatorial']
+	gal_coords = ['galactic']
+	
+	imap = zeros(shape,wcs)
+	Ny,Nx = shape
+
+	inds = np.indices([Nx,Ny])
+	x = inds[0].ravel()
+	y = inds[1].ravel()
+
+	# Not as slow as you'd expect
+	posmap = pix2sky(shape,wcs,np.vstack((y,x)))*180./np.pi
+
+	ph = posmap[1,:]
+	th = posmap[0,:]
+
+	if hp_coords.lower() not in eq_coords:
+		# This is still the slowest part. If there are faster coord transform libraries, let me know!
+		assert hp_coords.lower() in gal_coords
+		gc = SkyCoord(ra=ph*u.degree, dec=th*u.degree, frame='fk5')
+		gc = gc.transform_to('galactic')
+		phOut = gc.l.deg
+		thOut = gc.b.deg
+	else:
+		thOut = th
+		phOut = ph
+
+	phOut *= np.pi/180
+	thOut = 90. - thOut #polar angle is 0 at north pole
+	thOut *= np.pi/180
+
+	# Not as slow as you'd expect
+	if interpolate:
+		imap[y,x] = hp.get_interp_val(hp_map, thOut, phOut)
+	else:
+		ind = hp.ang2pix( hp.get_nside(hp_map), thOut, phOut )
+		imap[:] = 0.
+		imap[[y,x]]=hp_map[ind]
+		
+		
+		
+	return ndmap(imap,wcs)
+
