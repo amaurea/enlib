@@ -1283,3 +1283,69 @@ def fix_endian(map):
 	if map.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		map = map.byteswap().newbyteorder()
 	return map
+
+def from_healpix(shape,wcs,hp_map,hp_coords="galactic",interpolate=True):
+	"""Project a healpix map to an enmap of chosen shape and wcs. The wcs
+	is assumed to be in equatorial (ra/dec) coordinates. If the healpix map
+	is in galactic coordinates, this can be specified by hp_coords, and a
+	slow conversion is done. No coordinate systems other than equatorial
+	or galactic are currently supported. Only intensity maps are supported.
+	If interpolate is True, bilinear interpolation using 4 nearest neighbours
+	is done.
+
+	shape -- 2-tuple (Ny,Nx)
+	wcs -- enmap wcs object in equatorial coordinates
+	hp_map -- array-like healpix map
+	hp_coords -- "galactic" to perform a coordinate transform, "fk5","j2000" or "equatorial" otherwise
+	interpolate -- boolean
+	
+	"""
+	
+	import healpy as hp
+	from astropy.coordinates import SkyCoord
+	import astropy.units as u
+
+
+	eq_coords = ['fk5','j2000','equatorial']
+	gal_coords = ['galactic']
+	
+	imap = zeros(shape,wcs)
+	Ny,Nx = shape
+
+	inds = np.indices([Nx,Ny])
+	x = inds[0].ravel()
+	y = inds[1].ravel()
+
+	# Not as slow as you'd expect
+	posmap = pix2sky(shape,wcs,np.vstack((y,x)))*180./np.pi
+
+	ph = posmap[1,:]
+	th = posmap[0,:]
+
+	if hp_coords.lower() not in eq_coords:
+		# This is still the slowest part. If there are faster coord transform libraries, let me know!
+		assert hp_coords.lower() in gal_coords
+		gc = SkyCoord(ra=ph*u.degree, dec=th*u.degree, frame='fk5')
+		gc = gc.transform_to('galactic')
+		phOut = gc.l.deg
+		thOut = gc.b.deg
+	else:
+		thOut = th
+		phOut = ph
+
+	phOut *= np.pi/180
+	thOut = 90. - thOut #polar angle is 0 at north pole
+	thOut *= np.pi/180
+
+	# Not as slow as you'd expect
+	if interpolate:
+		imap[y,x] = hp.get_interp_val(hp_map, thOut, phOut)
+	else:
+		ind = hp.ang2pix( hp.get_nside(hp_map), thOut, phOut )
+		imap[:] = 0.
+		imap[[y,x]]=hp_map[ind]
+		
+		
+		
+	return ndmap(imap,wcs)
+
