@@ -1596,3 +1596,9 @@ def ndigit(num):
 	"""Returns the number of digits in non-negative number num"""
 	with nowarn(): return np.int32(np.floor(np.maximum(0,np.log10(num))))+1
 
+def contains_any(a, bs):
+	"""Returns true if any of the strings in list bs are found
+	in the string a"""
+	for b in bs:
+		if b in a: return True
+	return False

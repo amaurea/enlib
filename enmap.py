@@ -76,6 +76,8 @@ class ndmap(np.ndarray):
 	@property
 	def plain(self): return ndmap(self, enlib.wcs.WCS(naxis=2))
 	def padslice(self, box, default=np.nan): return padslice(self, box, default=default)
+	def downgrade(self, factor): return downgrade(self, factor)
+	def upgrade(self, factor): return upgrade(self, factor)
 	def to_healpix(self, nside=0, order=3, omap=None, chunk=100000, destroy_input=False):
 		return to_healpix(self, nside=nside, order=order, omap=omap, chunk=chunk, destroy_input=destroy_input)
 	def to_flipper(self, omap=None, unpack=True): return to_flipper(self, omap=omap, unpack=unpack)
