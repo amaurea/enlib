@@ -749,6 +749,10 @@ class FilterWindow:
 	def __init__(self, width):
 		self.width = width
 	def __call__(self, scan, tod):
+		# The tod must start and end with 0 to avoid
+		# having windowing introduce artifacts, since the
+		# windowing itself forces the tod to 0
+		tod -= tod[:,0,None]
 		nsamp = int(self.width*scan.srate)
 		nmat.apply_window(tod, nsamp)
 
