@@ -42,6 +42,11 @@ from enlib import config, nmat, bench, gapfill, mpi, sampcut
 from enlib.cg import CG
 L = logging.getLogger(__name__)
 
+#def dump(fname, d):
+#	print "dumping " + fname
+#	with h5py.File(fname, "w") as hfile:
+#		hfile["data"] = d
+
 ######## Signals ########
 
 class Signal:
@@ -749,10 +754,6 @@ class FilterWindow:
 	def __init__(self, width):
 		self.width = width
 	def __call__(self, scan, tod):
-		# The tod must start and end with 0 to avoid
-		# having windowing introduce artifacts, since the
-		# windowing itself forces the tod to 0
-		tod -= tod[:,0,None]
 		nsamp = int(self.width*scan.srate)
 		nmat.apply_window(tod, nsamp)
 
@@ -857,7 +858,7 @@ class Eqsys:
 			if itod is None:
 				with bench.mark("b_read"):
 					tod  = scan.get_samples()
-					tod -= np.mean(tod,1)[:,None]
+					#tod -= np.copy(tod[:,0,None])
 					tod  = tod.astype(self.dtype)
 			else: tod = itod
 			# Apply all filters (pickup filter, src subtraction, etc)

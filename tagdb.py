@@ -3,7 +3,7 @@ with a set of ids, and then select ids based on those tags and values.
 For example query("deep56,night,ar2,in(bounds,Moon)") woult return a
 set of ids with the tags deep56, night and ar2, and where th Moon[2]
 array is in the polygon specified by the bounds [:,2] array."""
-import re, numpy as np, h5py, shlex, copy, warnings, time
+import re, numpy as np, h5py, shlex, copy, warnings, time, os
 from enlib import utils
 
 class Tagdb:
@@ -259,7 +259,7 @@ def parse_tagfile_top(fname):
 	comments (#) and variables (foo = bar), which can be referred to later
 	as {foo}. Returns a list of (fname, tagset) tuples."""
 	res  = []
-	vars = {}
+	vars = {"root": os.path.dirname(fname)}
 	with open(fname,"r") as f:
 		for line in f:
 			line = line.rstrip()
