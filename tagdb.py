@@ -158,20 +158,20 @@ class Tagdb:
 	def write(self, fname, type=None):
 		write(fname, self, type=type)
 	@classmethod
-	def read(cls, fname, type=None):
+	def read(cls, fname, type=None, vars={}):
 		"""Read a Tagdb from in either the hdf or text format. This is
 		chosen automatically based on the file extension."""
 		if type is None:
 			if fname.endswith(".hdf"): type = "hdf"
 			else: type = "txt"
-		if type == "txt":   return cls.read_txt(fname)
+		if type == "txt":   return cls.read_txt(fname, vars=vars)
 		elif type == "hdf": return cls.read_hdf(fname)
 		else: raise ValueError("Unknown Tagdb file type: %s" % fname)
 	@classmethod
-	def read_txt(cls, fname):
+	def read_txt(cls, fname, vars={}):
 		"""Read a Tagdb from text files. Only supports boolean tags."""
 		datas = []
-		for subfile, tags in parse_tagfile_top(fname):
+		for subfile, tags in parse_tagfile_top(fname, vars=vars):
 			ids = parse_tagfile_idlist(subfile)
 			data = {"id":ids}
 			for tag in tags:
@@ -212,8 +212,8 @@ def dslice(data, inds):
 #    (though in practice there may be other stuff on the lines that needs cleaning...)
 # 2: An hdf file
 
-def read(fname, type=None): return Tagdb.read(fname, type=type)
-def read_txt(fname): return Tagdb.read_txt(fname)
+def read(fname, type=None, vars={}): return Tagdb.read(fname, type=type, vars=vars)
+def read_txt(fname, vars={}): return Tagdb.read_txt(fname, vars=vars)
 def read_hdf(fname): return Tagdb.read_hdf(fname)
 
 def write(fname, tagdb, type=None): return tagdb.write(fname, type=type)
@@ -253,13 +253,13 @@ def merge(tagdatas):
 			else: data_tot[key][...,inds[di]] = val
 	return data_tot
 
-def parse_tagfile_top(fname):
+def parse_tagfile_top(fname, vars={}):
 	"""Read and parse the top-level tagfile in the Tagdb text format.
 	Contains lines of the form [filename tag tag tag ...]. Also supports
 	comments (#) and variables (foo = bar), which can be referred to later
 	as {foo}. Returns a list of (fname, tagset) tuples."""
 	res  = []
-	vars = {"root": os.path.dirname(fname)}
+	vars = dict(vars)
 	with open(fname,"r") as f:
 		for line in f:
 			line = line.rstrip()
