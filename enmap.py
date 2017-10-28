@@ -1321,7 +1321,7 @@ def rect_geometry(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmin=
 		vwidth = height_arcmin/2.
 	arcmin =  enlib.utils.arcmin
 	degree =  enlib.utils.degree
-	shape, wcs = geometry(pos=[[-hwidth*arcmin+yoffset_degree*degree,-vwidth*arcmin+xoffset_degree*degree],[hwidth*arcmin+yoffset_degree*degree,vwidth*arcmin+xoffset_degree*degree]], res=px_res_arcmin*arcmin, proj=proj)
+	shape, wcs = geometry(pos=[[-vwidth*arcmin+yoffset_degree*degree,-hwidth*arcmin+xoffset_degree*degree],[vwidth*arcmin+yoffset_degree*degree,hwidth*arcmin+xoffset_degree*degree]], res=px_res_arcmin*arcmin, proj=proj)
 	if pol: shape = (3,)+shape
 	return shape, wcs
 
