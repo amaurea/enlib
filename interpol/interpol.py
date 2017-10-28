@@ -48,6 +48,7 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_ob
 				nnew   = n.copy()
 				nnew[i]= nnew[i]*2+1
 				x      = utils.grid(box, nnew)
+				# These have shape [ndim,dim1,dim2,dim3,...]
 				yinter = ip(x)
 				ytrue  = func(x)
 				if np.any(np.isnan(ytrue)):

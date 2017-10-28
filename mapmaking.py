@@ -42,6 +42,11 @@ from enlib import config, nmat, bench, gapfill, mpi, sampcut
 from enlib.cg import CG
 L = logging.getLogger(__name__)
 
+#def dump(fname, d):
+#	print "dumping " + fname
+#	with h5py.File(fname, "w") as hfile:
+#		hfile["data"] = d
+
 ######## Signals ########
 
 class Signal:
@@ -486,6 +491,17 @@ def calc_div_map(div, signal, signal_cut, scans, weights, noise=True):
 		prec_div_helper(signal, signal_cut, scans, weights, iwork, owork, ijunk, ojunk, noise=noise)
 		signal.finish(div[i], owork)
 
+def calc_crosslink_map(cmap, signal, signal_cut, scans, weights, noise=True):
+	# This is really messy, but it should work. The signal contain a list of
+	# pmats, each of which has a reference to a scan which contains the polarization
+	# phase information. Since it's just a reference, we can change the scans instead
+	# of mucking around inside the pmats. But this is a fragile construction - if
+	# pmat internals change, it will break.
+	saved_comps = [scan.comps.copy() for scan in scans]
+	for scan in scans: scan.comps[:] = np.array([1,1,0])
+	calc_div_map(cmap, signal, signal_cut, scans, weights, noise=noise)
+	for scan, comp in zip(scans, saved_comps): scan.comps = comp
+
 def calc_hits_map(hits, signal, signal_cut, scans):
 	work = signal.prepare(hits)
 	ojunk= signal_cut.prepare(signal_cut.zeros())
@@ -590,19 +606,24 @@ class PriorProjectOut:
 #     messy.
 
 class FilterPickup:
-	def __init__(self, naz=None, nt=None, nhwp=None, niter=None):
-		self.naz, self.nt, self.nhwp, self.niter = naz, nt, nhwp, niter
+	def __init__(self, daz=None, nt=None, nhwp=None, niter=None):
+		self.daz, self.nt, self.nhwp, self.niter = daz, nt, nhwp, niter
 	def __call__(self, scan, tod):
 		#print "Using weights in FilterPickup. This is slow. Should think about best way to do this."
 		#weights = (1-scan.cut_noiseest.to_mask()).astype(tod.dtype)
-		todfilter.filter_poly_jon(tod, scan.boresight[:,1], hwp=scan.hwp, naz=self.naz, nt=self.nt, nhwp=self.nhwp, niter=self.niter, cuts=scan.cut)
+		if self.daz is None: naz = None
+		else:
+			waz = (np.max(scan.boresight[:,1])-np.min(scan.boresight[:,1]))/utils.degree
+			naz = utils.nint(waz/self.daz)
+			print "FilterPickup using daz=%.1f waz=%.1f naz=%d" % (self.daz, waz, naz)
+		todfilter.filter_poly_jon(tod, scan.boresight[:,1], hwp=scan.hwp, naz=naz, nt=self.nt, nhwp=self.nhwp, niter=self.niter, cuts=scan.cut)
 
 class PostPickup:
-	def __init__(self, scans, signal_map, signal_cut, prec_ptp, naz=None, nt=None, weighted=False):
+	def __init__(self, scans, signal_map, signal_cut, prec_ptp, daz=None, nt=None, weighted=False):
 		self.scans = scans
 		self.signal_map = signal_map
 		self.signal_cut = signal_cut
-		self.naz, self.nt = naz, nt
+		self.daz, self.nt = daz, nt
 		self.ptp = prec_ptp
 		self.weighted = weighted
 	def __call__(self, imap):
@@ -630,7 +651,11 @@ class PostPickup:
 			# striping when subtracting polynomials fit to data with very
 			# inhomogeneous noise. Might it be better to apply the filter to
 			# a prewhitened map?
-			todfilter.filter_poly_jon(tod, scan.boresight[:,1], weights=weights, naz=self.naz, nt=self.nt)
+			if self.daz is None: naz = None
+			else:
+				waz = (np.max(scan.boresight[:,1])-np.min(scan.boresight[:,1]))/utils.degree
+				naz = utils.nint(waz/self.daz)
+			todfilter.filter_poly_jon(tod, scan.boresight[:,1], weights=weights, naz=naz, nt=self.nt)
 			for signal, work in zip(signals, owork):
 				signal.backward(scan, tod, work)
 			if self.weighted: del weights, tod
@@ -853,7 +878,7 @@ class Eqsys:
 			if itod is None:
 				with bench.mark("b_read"):
 					tod  = scan.get_samples()
-					tod -= np.mean(tod,1)[:,None]
+					#tod -= np.copy(tod[:,0,None])
 					tod  = tod.astype(self.dtype)
 			else: tod = itod
 			# Apply all filters (pickup filter, src subtraction, etc)

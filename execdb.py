@@ -20,11 +20,13 @@ class ExecDB:
 	then a query with id = "hello" will result in
 	{'moo': 'hello', 'id'='hello', 'a': 4}"""
 	def __init__(self, db_file=None, vars_file=None, db_data=None, vars_data=None,
-			override=None):
+			override=None, root=None):
 		self.db_source   = read_data(db_file,    db_data)
 		if override is not None:
 			self.db_source += "\n" + expand_override(override)
 		self.vars_source = read_data(vars_file, vars_data, "")
+		if root is not None: # Allow relative file names
+			self.vars_source = """root = "%s"\n""" % root + self.vars_source
 		if self.db_source is None: raise ValueError("No database specified in ExecDB")
 		self.db_code    = compile(self.db_source,   "<exec_db,db_source>",   "exec")
 		self.vars_code  = compile(self.vars_source, "<exec_db,vars_source>", "exec")

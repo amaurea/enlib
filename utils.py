@@ -1602,3 +1602,26 @@ def contains_any(a, bs):
 	for b in bs:
 		if b in a: return True
 	return False
+
+def build_legendre(x, nmax):
+	x   = np.asarray(x)
+	vmin, vmax = minmax(x)
+	x   = (x-vmin)*(2.0/(vmax-vmin))-1
+	res = np.zeros((nmax,)+x.shape)
+	if nmax > 0: res[0] = x
+	if nmax > 1: res[1] = 1.5*x**2-0.5
+	for i in range(2, nmax):
+		res[i] = ((2*i+1)*x*res[i-1] - i*res[i-2])/(i+1)
+	return res
+
+def build_cossin(x, nmax):
+	x   = np.asarray(x)
+	res = np.zeros((nmax,)+x.shape, x.dtype)
+	if nmax > 0: res[0] = np.sin(x)
+	if nmax > 1: res[1] = np.cos(x)
+	if nmax > 2: res[2] = 2*res[0]*res[1]
+	if nmax > 3: res[3] = res[1]**2-res[0]**2
+	for i in range(3,nmax):
+		if i % 2 == 0: res[i] = res[i-2]*res[1] + res[i-1]*res[0]
+		if i % 2 == 1: res[i] = res[i-2]*res[1] - res[i-3]*res[0]
+	return res

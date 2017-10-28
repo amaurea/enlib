@@ -6,7 +6,7 @@ config.default("gfilter_jon_naz", 16, "The number of azimuth modes to fit/subtra
 config.default("gfilter_jon_nt",  10, "The number of time modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_nhwp", 0, "The number of hwp modes to fit/subtract in Jon's polynomial ground filter.")
 config.default("gfilter_jon_niter", 3, "The number of time modes to fit/subtract in Jon's polynomial ground filter.")
-config.default("gfilter_jon_phase", True, "Modify Jon's polynomial ground filter to use phase instead of azimuth.")
+config.default("gfilter_jon_phase", False, "Modify Jon's polynomial ground filter to use phase instead of azimuth.")
 
 def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=None, hwp=None, nhwp=None, deslope=True, inplace=True, use_phase=None):
 	"""Fix naz Legendre polynomials in az and nt other polynomials
@@ -28,32 +28,31 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	naz, asign = np.abs(naz), np.sign(naz)
 	nt,  tsign = np.abs(nt),  np.sign(nt)
 	nhwp,hsign = np.abs(nhwp),np.sign(nhwp)
-	d   = tod.reshape(-1,tod.shape[-1])
+	d     = tod.reshape(-1,tod.shape[-1])
+	nsamp = d.shape[-1]
 	if naz == 0 and nt == 0 and nhwp == 0: return tod
-	# Build our set of basis functions. These are shared
-	# across iterations.
-	B = np.zeros([naz+nt+nhwp,d.shape[-1]],dtype=tod.dtype)
+
+	B = []
+	# Set up our time basis
+	if nt  > 0:
+		B.append(np.full((1,nsamp), 1.0, d.dtype))
+	if nt  > 1:
+		t = np.linspace(-1,1,nsamp,endpoint=False)
+		B.append(utils.build_legendre(t, nt-1))
 	if naz > 0:
 		if not use_phase:
-			# Build azimuth basis as polynomials
-			x = utils.rescale(az,[-1,1])
-			B[0] = x
-			for i in range(1,naz): B[i] = B[i-1]*x
+			# Set up our azimuth basis
+			B.append(utils.build_legendre(az, naz))
 		else:
-			x = build_phase(az)*np.pi
-			for i in range(naz):
-				j = i/2+1
-				B[i] = np.cos(j*x) if i%2 == 0 else np.sin(j*x)
-	if nt > 0:
-		x = np.linspace(-1,1,d.shape[-1],endpoint=False)
-		B[naz] = x
-		for i in range(1,nt): B[naz+i] = B[naz+i-1]*x
+			# Set up phase basis. Vectors should be periodic
+			# in phase to avoid discontinuities. cossin is good for this.
+			phase = build_phase(az)*np.pi
+			B.append(utils.build_cossin(phase, naz))
 	if nhwp > 0:
-		# Use sin and cos to avoid discontinuities
-		for i in range(nhwp):
-			j = i/2+1
-			x = np.cos(j*hwp) if i%2 == 0 else np.sin(j*hwp)
-			B[naz+nt+i] = x
+		B.append(utils.build_cossin(hwp, nhwp))
+
+	B = np.concatenate(B,0)
+
 	for it in range(niter):
 		if do_gapfill: gapfill.gapfill(d, cuts, inplace=True)
 		# Solve for the best fit for each detector, [nbasis,ndet]
@@ -73,12 +72,15 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 				except np.linalg.LinAlgError as e:
 					print "LinAlgError in todfilter di %d. Skipping" % di
 					continue
-		# Subtract the best fit
-		if asign > 0: d -= amps[:naz].T.dot(B[:naz])
-		if tsign > 0: d -= amps[naz:naz+nt].T.dot(B[naz:naz+nt])
-		if hsign > 0: d -= amps[naz+nt:naz+nt+nhwp].T.dot(B[naz+nt:naz+nt+nhwp])
-	# Why was this necessary?
+		# Subtract the best fit, but skip some basis functions if requested
+		if tsign < 0: amps[:nt] = 0
+		if asign < 0: amps[nt:nt+naz] = 0
+		if hsign < 0: amps[nt+naz:nt+naz+nhwp] = 0
+		d -= amps.T.dot(B)
 	if do_gapfill: gapfill.gapfill(d, cuts, inplace=True)
+	# This filtering might have casued the tod to become
+	# non-continous, which would mess up future fourier transforms.
+	# So it's safest to deslope here.
 	if deslope: utils.deslope(tod, w=8, inplace=True)
 	res = d.reshape(tod.shape)
 	return res

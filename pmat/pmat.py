@@ -35,7 +35,7 @@ class PmatMap(PointingMatrix):
 	def __init__(self, scan, template, sys=None, order=None):
 		sys        = config.get("map_sys", sys)
 		transform  = pos2pix(scan,template,sys)
-		ipol, obox = build_interpol(transform, scan.box, id=scan.entry.id)
+		ipol, obox, err = build_interpol(transform, scan.box, id=scan.entry.id)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
 		# Use obox to extract a pixel bounding box for this scan.
 		# These are the only pixels pmat needs to concern itself with.
@@ -44,6 +44,7 @@ class PmatMap(PointingMatrix):
 		self.scan,   self.dtype = scan, template.dtype
 		self.core  = get_core(self.dtype)
 		self.order = config.get("pmat_map_order", order)
+		self.err   = err
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""m -> tod"""
 		if times is None: times = np.zeros(5)
@@ -261,7 +262,7 @@ class PmatMapMultibeam(PointingMatrix):
 				np.max(scan.boresight,0)+np.max(beam_offs,(0,1))])
 		# Build our pointing interpolator
 		transform  = pos2pix(scan,template,sys)
-		ipol, obox = build_interpol(transform, ibox, id=scan.entry.id)
+		ipol, obox, err = build_interpol(transform, ibox, id=scan.entry.id)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
 		# And store our data
 		self.beam_offs, self.beam_comps = beam_offs, beam_comps
@@ -269,6 +270,7 @@ class PmatMapMultibeam(PointingMatrix):
 		self.scan,   self.dtype = scan, template.dtype
 		self.func  = get_core(self.dtype).pmat_map
 		self.order = config.get("pmat_map_order", order)
+		self.err   = err
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""m -> tod"""
 		# Loop over each beam, summing its contributions
@@ -500,7 +502,7 @@ class PmatPtsrc(PointingMatrix):
 
 		# Build interpolator (dec,ra output ordering)
 		transform  = build_pos_transform(scan, sys=config.get("map_sys", sys))
-		ipol, obox = build_interpol(transform, scan.box, scan.entry.id, posunit=5*utils.arcsec)
+		ipol, obox, err = build_interpol(transform, scan.box, scan.entry.id, posunit=0.5*utils.arcsec)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, srcs.dtype)
 
 		# Build source hit grid
@@ -532,6 +534,7 @@ class PmatPtsrc(PointingMatrix):
 		self.cbox = cbox
 		self.tmul = 1 if tmul is None else tmul
 		self.pmul = 1 if pmul is None else pmul
+		self.err  = err
 	def apply(self, dir, tod, srcs, tmul=None, pmul=None):
 		if tmul is None: tmul = self.tmul
 		if pmul is None: pmul = self.pmul
@@ -570,7 +573,7 @@ def build_interpol(transform, box, id="none", posunit=1.0, sys=None):
 	errlim = np.array([1e-3*posunit,1e-3*posunit,utils.arcmin,utils.arcmin])*acc
 	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, errlim, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
 	if not ok: print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, id)
-	return ipol, obox
+	return ipol, obox, err
 
 def build_pos_transform(scan, sys):
 	# Set up pointing interpolation
