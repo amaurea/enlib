@@ -509,7 +509,8 @@ def draw_annotations(map, annots, args):
 	font = None
 	font_size_prev = 0
 	def topix(pos_off):
-		pix = map.sky2pix(np.array([float(w) for w in pos_off[:2]])*utils.degree)
+		unit = utils.degree if not enwcs.is_plain(map.wcs) else 1.0
+		pix = map.sky2pix(np.array([float(w) for w in pos_off[:2]])*unit)
 		pix += np.array([float(w) for w in pos_off[2:]])
 		return pix[::-1].astype(int)
 	for annot in annots:
@@ -529,14 +530,13 @@ def draw_annotations(map, annots, args):
 		elif atype in ["l","line"] or atype in ["r","rect"]:
 			x1,y1 = topix(annot[1:5])
 			x2,y2 = topix(annot[5:9])
-			if x2 < x1: x1,x2 = x2,x1
-			if y2 < y1: y1,y2 = y2,y1
-			print x1, y1, x2, y2
 			if len(annot) >  9: width = int(annot[9])
 			if len(annot) > 10: color = annot[10]
 			if atype[0] == "l":
 				draw.line((x1,y1,x2,y2), fill=color, width=width)
 			else:
+				if x2 < x1: x1,x2 = x2,x1
+				if y2 < y1: y1,y2 = y2,y1
 				for i in range(width):
 					draw.rectangle((x1+i,y1+i,x2-i,y2-i), outline=color)
 		elif atype in ["t", "text"]:

@@ -1625,3 +1625,19 @@ def build_cossin(x, nmax):
 		if i % 2 == 0: res[i] = res[i-2]*res[1] + res[i-1]*res[0]
 		if i % 2 == 1: res[i] = res[i-2]*res[1] - res[i-3]*res[0]
 	return res
+
+def load_ascii_table(fname, desc, sep=None, dsep=None):
+	"""Load an ascii table with heterogeneous columns.
+	fname: Path to file
+	desc: whitespace-separated list of name:typechar pairs, or | for columns that are to be ignored.
+	desc must cover every column present in the file"""
+	dtype = []
+	j = 0
+	for i, tok in enumerate(desc.split(dsep)):
+		if ":" not in tok:
+			j += 1
+			dtype.append(("sep%d"%j,"S%d"%len(tok)))
+		else:
+			name, typ = tok.split(":")
+			dtype.append((name,typ))
+	return np.loadtxt(fname, dtype=dtype, delimiter=sep)
