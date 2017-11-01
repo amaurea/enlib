@@ -63,6 +63,8 @@ class Sampcut:
 		icore.mask_to_cut(mask.T, ranges.T, detmap)
 		return Sampcut(ranges, detmap, mask.shape[1])
 	def to_mask(self, omask=None):
+		"""Return an [ndet,nsamp] array with False in uncut regions and true in
+		cut regions."""
 		if omask is None: omask = np.empty([self.ndet, self.nsamp], np.bool)
 		omask = omask.view(np.int8)
 		icore.cut_to_mask(self.ranges.T, self.detmap, omask.T)

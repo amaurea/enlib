@@ -124,3 +124,8 @@ class show:
 		self.mem2   = memory.current()
 		self.memmax = memory.max()
 		print "%5.2f %5.2f %5.2f %s" % (self.time2-self.time1, self.mem2*1e-9, self.memmax*1e-9, self.name)
+
+class dummy:
+	def __init__(self, name): pass
+	def __enter__(self): pass
+	def __exit__(self, type, value, traceback): pass
