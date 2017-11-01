@@ -1,4 +1,5 @@
 """This is a convenience wrapper of pyfftw."""
+from __future__ import division
 import numpy as np, multiprocessing, os, enlib.utils
 engines = {}
 
@@ -112,7 +113,7 @@ def rfft(tod, ft=None, nthread=0, axes=[-1], flags=None):
 	tod = asfcarray(tod)
 	if ft is None:
 		oshape = list(tod.shape)
-		oshape[axes[-1]] = oshape[axes[-1]]/2+1
+		oshape[axes[-1]] = oshape[axes[-1]]//2+1
 		dtype = np.result_type(tod.dtype,0j)
 		ft = empty(oshape, dtype)
 	return fft(tod, ft, nthread, axes, flags=flags)
@@ -172,4 +173,4 @@ def empty(shape, dtype):
 	return engines[engine].n_byte_align_empty(shape, alignment, dtype)
 
 def fftfreq(n, d=1.0): return np.fft.fftfreq(n, d=d)
-def rfftfreq(n, d=1.0): return np.arange(n/2+1)/(1.0*n*d)
+def rfftfreq(n, d=1.0): return np.arange(n//2+1)/(1.0*n*d)
