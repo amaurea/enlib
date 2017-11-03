@@ -18,6 +18,7 @@ import numpy as np, scipy.ndimage, warnings, enlib.utils, enlib.wcs, enlib.slice
 
 extent_model = ["subgrid"]
 
+
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
 # itself uses column-major ordering. So an array which is (ncomp,ny,nx)
 # will be (nx,ny,ncomp) in the file. This means that the axes in the ndmap
@@ -48,7 +49,7 @@ class ndmap(np.ndarray):
 	def copy(self, order='K'):
 		return ndmap(np.copy(self,order), self.wcs)
 	def sky2pix(self, coords, safe=True, corner=False): return sky2pix(self.shape, self.wcs, coords, safe, corner)
-	def pix2sky(self, pix,    safe=True, corner=False): return pix2sky(self.shape, self.wcs, pix,    safe, corner)
+	def pix2sky(self, pix,	  safe=True, corner=False): return pix2sky(self.shape, self.wcs, pix,	 safe, corner)
 	def box(self): return box(self.shape, self.wcs)
 	def posmap(self, safe=True, corner=False): return posmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
@@ -139,8 +140,8 @@ class ndmap(np.ndarray):
 		# Make sure we stay inside our map bounds
 		if cap:
 			for b, n in zip(ibox.T,self.shape[-2:]):
-				if b[2] > 0: b[:2] = [max(b[0],  0),min(b[1], n)]
-				else:        b[:2] = [min(b[0],n-1),max(b[1],-1)]
+				if b[2] > 0: b[:2] = [max(b[0],	 0),min(b[1], n)]
+				else:	     b[:2] = [min(b[0],n-1),max(b[1],-1)]
 		return ibox
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
@@ -282,7 +283,7 @@ def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, pr
 		if enlib.wcs.equal(map.wcs, wcs) and tuple(shape[-2:]) == tuple(shape[-2:]):
 			return map
 		elif enlib.wcs.is_compatible(map.wcs, wcs) and mode == "constant":
-			print "Using extract instead"
+			print("Using extract instead")
 			return extract(map, shape, wcs, cval=cval)
 	pix  = map.sky2pix(posmap(shape, wcs))
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
@@ -357,6 +358,8 @@ def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
 	else:
 		return harm2map(kmap)
 
+	
+	
 def rand_gauss(shape, wcs, dtype=None):
 	"""Generate a map with random gaussian noise in pixel space."""
 	return ndmap(np.random.standard_normal(shape), wcs).astype(dtype,copy=False)
@@ -377,7 +380,9 @@ def rand_gauss_iso_harm(shape, wcs, cov, pixel_units=False):
 	If cov.ndim is 4, cov is assumed to be an array of 2D power spectra.
 	else cov is assumed to be an array of 1D power spectra.
 	If pixel_units is True, the 2D power spectra is assumed to be in pixel units,
-	not in steradians."""
+	not in steradians. 
+	"""
+
 	if cov.ndim==4:
 		if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
 		covsqrt = multi_pow(cov, 0.5)
@@ -385,6 +390,7 @@ def rand_gauss_iso_harm(shape, wcs, cov, pixel_units=False):
 		covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
 	data = map_mul(covsqrt, rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
+
 
 def extent(shape, wcs, method="default", nsub=None):
 	if method == "default": method = extent_model[-1]
@@ -499,9 +505,11 @@ def lmap(shape, wcs, oversample=1):
 
 def modlmap(shape, wcs, oversample=1):
 	"""Return a map of all the abs wavenumbers in the fourier transform
-	of a map with the given shape and wcs."""
+	of a map with the given shape and wcs.
+	"""
 	slmap = lmap(shape,wcs,oversample=oversample)
 	return np.sum(slmap**2,0)**0.5
+
 
 def modrmap(shape, wcs, safe=True, corner=False):
 	"""Return an enmap where each entry is the distance from center
@@ -549,26 +557,28 @@ def ifft(emap, omap=None, nthread=0, normalize=True):
 # T,E,B hamonic maps. They are not the most efficient way of doing this.
 # It would be better to precompute the rotation matrix and buffers, and
 # use real transforms.
-def map2harm(emap, nthread=0, normalize=True):
+def map2harm(emap, nthread=0, normalize=True,iau_convention=True):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
 	emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
 	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap())
+		rot = queb_rotmat(emap.lmap(),iau_convention=iau_convention)
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
 	return emap
-def harm2map(emap, nthread=0, normalize=True):
+def harm2map(emap, nthread=0, normalize=True,iau_convention=True):
 	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap(), inverse=True)
+		rot = queb_rotmat(emap.lmap(), inverse=True,iau_convention=iau_convention)
 		emap = emap.copy()
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
 	return samewcs(ifft(emap,nthread=nthread,normalize=normalize), emap).real
 
-def queb_rotmat(lmap, inverse=False):
+def queb_rotmat(lmap, inverse=False, iau_convention=True):
 	# atan2(x,y) instead of (y,x) because Qr points in the
 	# tangential direction, not radial. This matches flipperpol too.
 	# This corresponds to the Healpix convention. To get IAU,
 	# flip the sign of a.
-	a    = 2*np.arctan2(-lmap[1], lmap[0])
+
+	sgn = -1 if iau_convention else 1
+	a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
 	c, s = np.cos(a), np.sin(a)
 	if inverse: s = -s
 	return samewcs(np.array([[c,-s],[s,c]]),lmap)
@@ -705,6 +715,7 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="constant", oversample=1, smooth="a
 	if len(oshape) == 2: oshape = (1,)+oshape
 	ls = np.sum(lmap(oshape, wcs, oversample=oversample)**2,0)**0.5
 	if smooth == "auto":
+
 		# Determine appropriate fourier-scale smoothing based on 2d fourer
 		# space resolution. We wish to smooth by about this width to approximate
 		# averaging over sub-grid modes
@@ -714,6 +725,7 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="constant", oversample=1, smooth="a
 		cov = smooth_spectrum(cov, kernel="gauss", weight="mode", width=smooth)
 	# Translate from steradians to pixels
 	cov = cov * np.prod(shape[-2:])/area(shape,wcs)
+
 	if exp != 1.0: cov = multi_pow(cov, exp)
 	cov[~np.isfinite(cov)] = 0
 	cov   = cov[:oshape[-3],:oshape[-3]]
@@ -721,6 +733,7 @@ def spec2flat(shape, wcs, cov, exp=1.0, mode="constant", oversample=1, smooth="a
 	# values in spectra that must be positive (and it's faster)
 	res = ndmap(enlib.utils.interpol(cov, np.reshape(ls,(1,)+ls.shape),mode=mode, mask_nan=False, order=1),wcs)
 	res = downgrade(res, oversample)
+
 	return res
 
 def spec2flat_corr(shape, wcs, cov, exp=1.0, mode="constant"):
@@ -756,7 +769,7 @@ def smooth_spectrum(ps, kernel="gauss", weight="mode", width=1.0):
 	# Set up the kernel array
 	K = np.zeros((nspec,nl))
 	l = np.arange(nl)
-	if isinstance(kernel, basestring):
+	if isinstance(kernel, str):
 		if kernel == "gauss":
 			K[:] = np.exp(-0.5*(l/width)**2)
 		elif kernel == "step":
@@ -768,7 +781,7 @@ def smooth_spectrum(ps, kernel="gauss", weight="mode", width=1.0):
 		K[:,:tmp.shape[-1]] = tmp[:,:K.shape[-1]]
 	# Set up the weighting scheme
 	W = np.zeros((nspec,nl))
-	if isinstance(weight, basestring):
+	if isinstance(weight, str):
 		if weight == "mode":
 			W[:] = l[None,:]**2
 		elif weight == "uniform":
@@ -778,6 +791,7 @@ def smooth_spectrum(ps, kernel="gauss", weight="mode", width=1.0):
 	else:
 		tmp = np.atleast_2d(weight)
 		assert tmp.shape[-1] == W.shape[-1], "Spectrum weight must have the same length as spectrum"
+
 	pWK = _convolute_sym(pflat*W, K)
 	WK  = _convolute_sym(W, K)
 	res = pWK/WK
@@ -786,8 +800,10 @@ def smooth_spectrum(ps, kernel="gauss", weight="mode", width=1.0):
 def _convolute_sym(a,b):
 	sa = np.concatenate([a,a[:,-2:0:-1]],-1)
 	sb = np.concatenate([b,b[:,-2:0:-1]],-1)
+	
 	fa = enlib.fft.rfft(sa)
 	fb = enlib.fft.rfft(sb)
+
 	sa = enlib.fft.ifft(fa*fb,sa,normalize=True)
 	return sa[:,:a.shape[-1]]
 
@@ -864,13 +880,13 @@ def find_blank_edges(m, value="auto"):
 		# Don't use any values for cropping, so no cropping is done
 		return np.zeros([2,2],dtype=int)
 	else:
-		value   = np.asarray(value)
+		value	= np.asarray(value)
 		# Find which rows and cols consist entirely of the given value
 		hitmask = np.all(np.isclose(m.T, value.T, equal_nan=True, rtol=1e-6, atol=0).T,axis=tuple(range(m.ndim-2)))
 		hitrows = np.all(hitmask,1)
 		hitcols = np.all(hitmask,0)
 		# Find the first and last row and col which aren't all the value
-		blanks  = np.array([
+		blanks	= np.array([
 			np.where(~hitrows)[0][[0,-1]],
 			np.where(~hitcols)[0][[0,-1]]]
 			).T
@@ -883,8 +899,8 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	length. If there there aren't enough blank areas, the map is padded
 	instead. If value="none" no values are considered blank, so no cropping
 	will happen. This can be used to autopad for fourier-friendliness."""
-	blanks  = find_blank_edges(m, value=value)
-	nblank  = np.sum(blanks,0)
+	blanks	= find_blank_edges(m, value=value)
+	nblank	= np.sum(blanks,0)
 	# Find the first good sizes larger than the unblank lengths
 	minshape  = m.shape[-2:]-nblank+margin
 	if method == "plain":
@@ -894,7 +910,7 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	else:
 		raise ValueError("Unknown autocrop method %s!" % method)
 	# Pad if necessary
-	adiff   = np.maximum(0,goodshape-m.shape[-2:])
+	adiff	= np.maximum(0,goodshape-m.shape[-2:])
 	padding = [[0,0],[0,0]]
 	if any(adiff>0):
 		padding = [adiff,[0,0]]
@@ -907,8 +923,8 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	upper  = tocrop-lower
 	s      = (Ellipsis,slice(lower[0],m.shape[-2]-upper[0]),slice(lower[1],m.shape[-1]-upper[1]))
 	class PadcropInfo:
-		slice   = s
-		pad     = padding
+		slice	= s
+		pad	= padding
 	if return_info:
 		return m[s], PadcropInfo
 	else:
@@ -917,9 +933,18 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 def padcrop(m, info):
 	return pad(m, info.pad)[info.slice]
 
+
 def grad(m):
 	"""Returns the gradient of the map m as [2,...]."""
-	return ifft(fft(m)*_widen(m.lmap(),m.ndim+1)*1j).real
+	return gradf(fft(m),normalized=True)
+
+
+def gradf(kmap,normalized=False):
+	"""Returns the gradient of the fourier transformed map kmap as [2,...].
+	If normalized is True, assumes kmap came from fft(...,normalize=True)
+	"""
+	if not(normalized): kmap /= np.prod(kmap.shape[-2:])**0.5
+	return ifft(kmap*_widen(kmap.lmap(),kmap.ndim+1)*1j).real
 
 def grad_pix(m):
 	"""The gradient of map m expressed in units of pixels.
@@ -929,9 +954,20 @@ def grad_pix(m):
 	nonstandard directions."""
 	return grad(m)*(m.shape[-2:]/m.extent())[(slice(None),)+(None,)*m.ndim]
 
-def div(m):
+def grad_pixf(kmap,normalized=False):
+	"""The gradient of the fourier transformed map kmap 
+	expressed in units of pixels.
+	If normalized is True, assumes kmap came from fft(...,normalize=True).
+	Not the same as the gradient of m with resepect to pixels.
+	Useful for avoiding sky2pix-calls for e.g. lensing,
+	and removes the complication of axes that increase in
+	nonstandard directions."""
+	return gradf(kmap,normalized=normalized)*(kmap.shape[-2:]/kmap.extent())[(slice(None),)+(None,)*kmap.ndim]
+
+
+def div(m,normalize=True):
 	"""Returns the divergence of the map m[2,...] as [...]."""
-	return ifft(np.sum(fft(m)*_widen(m.lmap(),m.ndim)*1j,0)).real
+	return ifft(np.sum(fft(m,normalize=normalize)*_widen(m.lmap(),m.ndim)*1j,0)).real
 
 def _widen(map,n):
 	"""Helper for gard and div. Adds degenerate axes between the first
@@ -1067,11 +1103,11 @@ def to_flipper(imap, omap=None, unpack=True):
 	by from_flipper does not give back an exactly identical map to the one
 	on started with.
 	"""
-	import flipper
+	import flipper.liteMap
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
 	header = imap.wcs.to_header(relax=True)
-	header['NAXIS']  = 2
+	header['NAXIS']	 = 2
 	header['NAXIS1'] = imap.shape[-1]
 	header['NAXIS2'] = imap.shape[-2]
 	flipwcs = flipper.liteMap.astLib.astWCS.WCS(header, mode="pyfits")
@@ -1112,8 +1148,8 @@ def write_map(fname, emap, fmt=None, extra={}):
 	be either fits or hdf. This can be overriden by
 	passing fmt with either 'fits' or 'hdf' as argument."""
 	if fmt == None:
-		if   fname.endswith(".hdf"):     fmt = "hdf"
-		elif fname.endswith(".fits"):    fmt = "fits"
+		if   fname.endswith(".hdf"):	 fmt = "hdf"
+		elif fname.endswith(".fits"):	 fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
@@ -1130,8 +1166,8 @@ def read_map(fname, fmt=None, sel=None, hdu=None):
 	toks = fname.split(":")
 	fname = toks[0]
 	if fmt == None:
-		if   fname.endswith(".hdf"):     fmt = "hdf"
-		elif fname.endswith(".fits"):    fmt = "fits"
+		if   fname.endswith(".hdf"):	 fmt = "hdf"
+		elif fname.endswith(".fits"):	 fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
@@ -1151,8 +1187,8 @@ def read_map_geometry(fname, fmt=None, hdu=None):
 	toks = fname.split(":")
 	fname = toks[0]
 	if fmt == None:
-		if   fname.endswith(".hdf"):     fmt = "hdf"
-		elif fname.endswith(".fits"):    fmt = "fits"
+		if   fname.endswith(".hdf"):	 fmt = "hdf"
+		elif fname.endswith(".fits"):	 fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
@@ -1174,7 +1210,7 @@ def write_fits(fname, emap, extra={}):
 	header['NAXIS'] = emap.ndim
 	for i,n in enumerate(emap.shape[::-1]):
 		header['NAXIS%d'%(i+1)] = n
-	for key, val in extra.items():
+	for key, val in list(extra.items()):
 		header[key] = val
 	hdus   = astropy.io.fits.HDUList([astropy.io.fits.PrimaryHDU(emap, header)])
 	with warnings.catch_warnings():
@@ -1237,7 +1273,7 @@ def write_hdf(fname, emap, extra={}):
 		header = emap.wcs.to_header()
 		for key in header:
 			hfile["wcs/"+key] = header[key]
-		for key, val in extra.items():
+		for key, val in list(extra.items()):
 			hfile[key] = val
 
 def read_hdf(fname, sel=None):
@@ -1277,9 +1313,264 @@ def read_hdf_geometry(fname):
 		shape = hfile["data"].shape
 	return shape, wcs
 
+def rect_geometry(width_arcmin,px_res_arcmin,proj="car",pol=False,height_arcmin=None,xoffset_degree=0.,yoffset_degree=0.):
+	hwidth = width_arcmin/2.
+	if height_arcmin is None:
+		vwidth = hwidth
+	else:
+		vwidth = height_arcmin/2.
+	arcmin =  enlib.utils.arcmin
+	degree =  enlib.utils.degree
+	shape, wcs = geometry(pos=[[-vwidth*arcmin+yoffset_degree*degree,-hwidth*arcmin+xoffset_degree*degree],[vwidth*arcmin+yoffset_degree*degree,hwidth*arcmin+xoffset_degree*degree]], res=px_res_arcmin*arcmin, proj=proj)
+	if pol: shape = (3,)+shape
+	return shape, wcs
+
+
+
 def fix_endian(map):
 	"""Make endianness of array map match the current machine.
 	Returns the result."""
 	if map.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		map = map.byteswap().newbyteorder()
 	return map
+
+
+class MapGen(object):
+	"""
+	Once you know the shape and wcs of an ndmap and the input power spectra, you can 
+	pre-calculate some things to speed up random map generation.
+	"""
+	
+	def __init__(self,shape,wcs,cov,pixel_units=False):
+		self.shape = shape
+		self.wcs = wcs
+		if cov.ndim==4:
+			if not(pixel_units): cov = cov * np.prod(shape[-2:])/area(shape,wcs )
+			self.covsqrt = multi_pow(cov, 0.5)
+		else:
+			self.covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
+
+	def get_map(self,seed=None,scalar=False):
+		if seed is not None: np.random.seed(seed)
+		data = map_mul(self.covsqrt, rand_gauss_harm(self.shape, self.wcs))
+		kmap = ndmap(data, self.wcs)
+		if scalar:
+			return ifft(kmap).real
+		else:
+			return harm2map(kmap)
+
+	
+	
+
+class FourierCalc(object):
+	"""
+	Once you know the shape and wcs of an ndmap, you can pre-calculate some things
+	to speed up fourier transforms and power spectra.
+	"""
+
+	def __init__(self,shape,wcs,iau_convention=True):
+		self.shape = shape
+		self.wcs = wcs
+		self.normfact = area(self.shape,self.wcs )/ np.prod(self.shape[-2:])**2.	       
+		if len(shape) > 2 and shape[-3] > 1:
+			self.rot = queb_rotmat(lmap(shape,wcs),iau_convention=iau_convention)
+
+	def iqu2teb(self,emap, nthread=0, normalize=True):
+		"""Performs the 2d FFT of the enmap pixels, returning a complex enmap.
+		Similar to harm2map, but uses a pre-calculated self.rot matrix.
+		"""
+		emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
+		if emap.ndim > 2 and emap.shape[-3] > 1:
+			emap[...,-2:,:,:] = map_mul(self.rot, emap[...,-2:,:,:])
+		return emap
+
+
+	def f2power(self,kmap1,kmap2,pixel_units=False):
+		norm = 1. if pixel_units else self.normfact
+		return np.real(np.conjugate(kmap1)*kmap2)*norm
+
+	def f1power(self,map1,kmap2,pixel_units=False,nthread=0):
+		kmap1 = self.iqu2teb(map1,nthread,normalize=False)
+		norm = 1. if pixel_units else self.normfact
+		return np.real(np.conjugate(kmap1)*kmap2)*norm,kmap1
+
+	def power2d(self,emap, emap2=None,nthread=0,pixel_units=False,skip_cross=False):
+		"""
+		Calculate the power spectrum of emap crossed with emap2 (=emap if None)
+		Returns in radians^2 by default unles pixel_units specified
+		"""
+
+		if emap2 is not None: assert emap.shape==emap2.shape
+		lteb1 = self.iqu2teb(emap,nthread,normalize=False)
+		lteb2 = self.iqu2teb(emap2,nthread,normalize=False) if emap2 is not None else lteb1
+
+		if emap.ndim > 2 and emap.shape[-3] > 1:
+			ncomp = emap.shape[-3]
+			retpow = np.empty((ncomp,ncomp,emap.shape[-2],emap.shape[-1]))
+			for i in range(ncomp):
+				retpow[i,i] = self.f2power(lteb1[i],lteb2[i],pixel_units)
+			if not(skip_cross):
+				for i in range(ncomp):
+					for j in range(i+1,ncomp):
+						retpow[i,j] = self.f2power(lteb1[i],lteb2[j],pixel_units)
+						retpow[j,i] = retpow[i,j]
+			return retpow,lteb1,lteb2
+		else:
+			if lteb1.ndim>2:
+				lteb1 = lteb1[0]
+			if lteb2.ndim>2:
+				lteb2 = lteb2[0]
+			p2d = self.f2power(lteb1,lteb2,pixel_units)
+			return p2d,lteb1,lteb2
+
+
+
+def from_healpix(shape,wcs,hp_map,hp_coords="galactic",interpolate=True):
+	"""Project a healpix map to an enmap of chosen shape and wcs. The wcs
+	is assumed to be in equatorial (ra/dec) coordinates. If the healpix map
+	is in galactic coordinates, this can be specified by hp_coords, and a
+	slow conversion is done. No coordinate systems other than equatorial
+	or galactic are currently supported. Only intensity maps are supported.
+	If interpolate is True, bilinear interpolation using 4 nearest neighbours
+	is done.
+
+	shape -- 2-tuple (Ny,Nx)
+	wcs -- enmap wcs object in equatorial coordinates
+	hp_map -- array-like healpix map
+	hp_coords -- "galactic" to perform a coordinate transform, "fk5","j2000" or "equatorial" otherwise
+	interpolate -- boolean
+	
+	"""
+	
+	import healpy as hp
+	from astropy.coordinates import SkyCoord
+	import astropy.units as u
+
+
+	eq_coords = ['fk5','j2000','equatorial']
+	gal_coords = ['galactic']
+	
+	imap = zeros(shape,wcs)
+	Ny,Nx = shape
+
+	inds = np.indices([Nx,Ny])
+	x = inds[0].ravel()
+	y = inds[1].ravel()
+
+	# Not as slow as you'd expect
+	posmap = pix2sky(shape,wcs,np.vstack((y,x)))*180./np.pi
+
+	ph = posmap[1,:]
+	th = posmap[0,:]
+
+	if hp_coords.lower() not in eq_coords:
+		# This is still the slowest part. If there are faster coord transform libraries, let me know!
+		assert hp_coords.lower() in gal_coords
+		gc = SkyCoord(ra=ph*u.degree, dec=th*u.degree, frame='fk5')
+		gc = gc.transform_to('galactic')
+		phOut = gc.l.deg
+		thOut = gc.b.deg
+	else:
+		thOut = th
+		phOut = ph
+
+	phOut *= np.pi/180
+	thOut = 90. - thOut #polar angle is 0 at north pole
+	thOut *= np.pi/180
+
+	# Not as slow as you'd expect
+	if interpolate:
+		imap[y,x] = hp.get_interp_val(hp_map, thOut, phOut)
+	else:
+		ind = hp.ang2pix( hp.get_nside(hp_map), thOut, phOut )
+		imap[:] = 0.
+		imap[[y,x]]=hp_map[ind]
+		
+		
+		
+	return ndmap(imap,wcs)
+
+
+def from_healpix_pol(shape,wcs,hp_map_file,ncomp=1,lmax=0,rot="gal,equ",rot_method="alm"):
+	"""Project a healpix map to an enmap of chosen shape and wcs. The wcs
+	is assumed to be in equatorial (ra/dec) coordinates. If the healpix map
+	is in galactic coordinates, this can be specified by hp_coords, and a
+	slow conversion is done. No coordinate systems other than equatorial
+	or galactic are currently supported. Only intensity maps are supported.
+	If interpolate is True, bilinear interpolation using 4 nearest neighbours
+	is done.
+
+	shape -- 2-tuple (Ny,Nx)
+	wcs -- enmap wcs object in equatorial coordinates
+	hp_map -- array-like healpix map
+	hp_coords -- "galactic" to perform a coordinate transform, "fk5","j2000" or "equatorial" otherwise
+	interpolate -- boolean
+	
+	"""
+	
+	import healpy
+        import sharp
+        from enlib import coordinates, curvedsky
+
+        # equatorial to galactic euler zyz angles
+        euler = np.array([57.06793215,  62.87115487, -167.14056929])*enlib.utils.degree
+
+        # If multiple templates are specified, the output file is
+        # interpreted as an output directory.
+
+        print "Loading map..."
+        assert ncomp == 1 or ncomp == 3, "Only 1 or 3 components supported"
+        dtype = np.float64
+        ctype = np.result_type(dtype,0j)
+        # Read the input maps
+        print hp_map_file
+        m = np.atleast_2d(healpy.read_map(hp_map_file, field=tuple(range(0,ncomp)))).astype(dtype)
+
+        # Prepare the transformation
+        print "SHT prep..."
+
+        nside = healpy.npix2nside(m.shape[1])
+        lmax  = lmax or 3*nside
+        minfo = sharp.map_info_healpix(nside)
+        ainfo = sharp.alm_info(lmax)
+        sht   = sharp.sht(minfo, ainfo)
+        alm   = np.zeros((ncomp,ainfo.nelem), dtype=ctype)
+        # Perform the actual transform
+        print "SHT..."
+        sht.map2alm(m[0], alm[0])
+        
+        if ncomp == 3:
+	        sht.map2alm(m[1:3],alm[1:3], spin=2)
+        del m
+
+
+        if rot and rot_method != "alm":
+                print "rotate..."
+                pmap = posmap(shape, wcs)
+                s1,s2 = rot.split(",")
+                opos = coordinates.transform(s2, s1, pmap[::-1], pol=ncomp==3)
+                pmap[...] = opos[1::-1]
+                if len(opos) == 3: psi = -opos[2].copy()
+                del opos
+                res  = curvedsky.alm2map_pos(alm, pmap)
+                if ncomp==3:
+                        res[1:3] = rotate_pol(res[1:3], psi)
+        else:
+                print " alm rotate..."
+                # We will project directly onto target map if possible
+                if rot:
+                        s1,s2 = rot.split(",")
+                        if s1 != s2:
+                                print "rotating alm..."
+                                # Note: rotate_alm does not actually modify alm
+                                # if it is single precision
+                                if s1 == "gal" and (s2 == "equ" or s2 == "cel"):
+                                        healpy.rotate_alm(alm, euler[0], euler[1], euler[2])
+                                elif s2 == "gal" and (s1 == "equ" or s1 == "cel"):
+                                        healpy.rotate_alm(alm,-euler[2],-euler[1],-euler[0])
+                                else:
+                                        raise NotImplementedError
+                        print "done rotating alm..."
+                res = enmap.zeros((len(alm),)+shape[-2:], wcs, dtype)
+                res = curvedsky.alm2map(alm, res)
+        return res

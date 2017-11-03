@@ -7,7 +7,7 @@ class Bunch:
 			self._dict.update(args)
 		self._dict.update(kwargs)
 	def __getattr__(self, name):
-		if name in self.__dict__["_dict"].keys():
+		if name in list(self.__dict__["_dict"].keys()):
 			return self.__dict__["_dict"][name]
 		raise AttributeError
 	def __setattr__(self, name, value):
@@ -27,15 +27,15 @@ class Bunch:
 	def __contains__(self, name):
 		return name in self._dict
 	def __dir__(self):
-		return sorted(self.__dict__.keys() + self._dict.keys())
+		return sorted(list(self.__dict__.keys()) + list(self._dict.keys()))
 	def __iter__(self):
 		for key in self._dict:
 			yield key
 	def __len__(self):
 		return len(self._dict)
-	def keys(self): return self._dict.keys()
-	def items(self): return self._dict.items()
-	def iteritems(self): return self._dict.iteritems()
+	def keys(self): return list(self._dict.keys())
+	def items(self): return list(self._dict.items())
+	def iteritems(self): return iter(list(self._dict.items()))
 	def copy(self): return Bunch(self._dict.copy())
 	def update(self, val): return self._dict.update(val)
 	def __repr__(self):

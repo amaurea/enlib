@@ -1,1 +1,1 @@
-from colorize import *
+from .colorize import *

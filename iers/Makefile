@@ -18,7 +18,6 @@ iers2struct: iers2struct.c
 	$(CC) -o $@ $<
 
 finals.all:
-	#curl -k -o finals.all "https://datacenter.iers.org/eop/-/somos/5Rgv/latest/9"
 	wget --no-check-certificate -O finals.all "https://datacenter.iers.org/eop/-/somos/5Rgv/latest/9"
 
 clean: tidy

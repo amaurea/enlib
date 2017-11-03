@@ -153,7 +153,7 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser.add_argument("-S", "--symmetric", action="store_true", help="Treat the non-pixel axes as being asymmetric matrix, and only plot a non-redundant triangle of this matrix.")
 	parser.add_argument("-z", "--zenith",    action="store_true", help="Plot the zenith angle instead of the declination.")
 	parser.add_argument("-F", "--fix-wcs",   action="store_true", help="Fix the wcs for maps in cylindrical projections where the reference point was placed too far away from the map center.")
-	if isinstance(args, basestring):
+	if isinstance(args, str):
 		args = shlex.split(args)
 	res = parser.parse_args(args)
 	res = bunch.Bunch(**res.__dict__)

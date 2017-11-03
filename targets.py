@@ -2,7 +2,7 @@
 # of several fixed or moving targets it belongs to. The highest priority
 # target which overlaps with the pointing provided will be used.
 import ephem, numpy as np
-import utils
+from . import utils
 
 class FixedPatch:
 	def __init__(self, name, center, size):

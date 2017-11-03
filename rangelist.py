@@ -110,17 +110,17 @@ class Multirange:
 		if isinstance(res, Rangelist): return res[sel2]
 		res = res.copy()
 		rflat = res.reshape(res.size)
-		for i in xrange(rflat.size):
+		for i in range(rflat.size):
 			rflat[i] = rflat[i][sel2]
 		if rflat.size > 0 and not isinstance(rflat[0], Rangelist):
 			return res.astype(bool)
 		return Multirange(res, copy=False)
 	@staticmethod
 	def empty(ndet, nsamp):
-		return Multirange([Rangelist.empty(nsamp) for det in xrange(ndet)])
+		return Multirange([Rangelist.empty(nsamp) for det in range(ndet)])
 	@staticmethod
 	def ones(ndet,nsamp):
-		return Multirange([Rangelist.ones(nsamp) for det in xrange(ndet)])
+		return Multirange([Rangelist.ones(nsamp) for det in range(ndet)])
 	def sum(self, flat=True):
 		getsum = np.vectorize(lambda x: x.sum(), 'i')
 		res = getsum(self.data)

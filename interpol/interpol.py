@@ -1,6 +1,6 @@
 import numpy as np, time
 from enlib import utils
-import fortran_32, fortran_64
+from . import fortran_32, fortran_64
 
 def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_obox=False, return_status=False, verbose=False, nstart=None, *args, **kwargs):
 	"""Given a function func([nin,...]) => [nout,...] and
@@ -54,7 +54,7 @@ def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_ob
 				if np.any(np.isnan(ytrue)):
 					raise ValueError("Function to interpolate returned invalid value")
 				err = np.max(np.abs((ytrue-yinter).reshape(ytrue.shape[0],-1)), 1)
-				if verbose: print x.shape, x.size, err/errlim
+				if verbose: print((x.shape, x.size, err/errlim))
 				if any(err > errlim):
 					# Not good enough, so accept improvement
 					ip = interpolator(box, ytrue, *args, **kwargs)

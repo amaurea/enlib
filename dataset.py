@@ -121,7 +121,7 @@ class DataSet:
 		self.datafields = {d.name: d for d in datafields}
 		self.dets, self.samples = self._calc_detsamps()
 	@property
-	def names(self): return self.datafields.keys()
+	def names(self): return list(self.datafields.keys())
 	@property
 	def ndet(self): return len(self.dets) if self.dets is not None else None
 	@property
@@ -154,7 +154,7 @@ class DataSet:
 		else:
 			self.__dict__[name] = value
 	def __getattr__(self, name):
-		if name in self.__dict__["datafields"].keys():
+		if name in list(self.__dict__["datafields"].keys()):
 			return self.__dict__["datafields"][name].data
 		raise AttributeError
 	def __delattr__(self, name):
@@ -168,7 +168,7 @@ class DataSet:
 		self.__dict__["datafields"][name].data = value
 	def __delitem__(self, name):
 		del self.datafields[name]
-	def __dir__(self): return sorted(self.__dict__.keys() + self.names)
+	def __dir__(self): return sorted(list(self.__dict__.keys()) + self.names)
 	def __repr__(self):
 		descs = ["%s%s" % (name, self.datafields[name].data_desc()) for name in self.datafields]
 		return "DataSet([%s])" % (",".join(descs))
@@ -187,7 +187,7 @@ def merge(datasets, copy=False):
 	of the detectors and samples present in the input data fields."""
 	def get_datafields(d):
 		if isinstance(d, DataField): return [d]
-		else: return d.datafields.values()
+		else: return list(d.datafields.values())
 	return DataSet(datafield_intersection([df for ds in datasets for df in get_datafields(ds)],copy=copy))
 
 def datafield_intersection(datafields, copy=False):

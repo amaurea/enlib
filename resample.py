@@ -6,7 +6,7 @@ def resample(d, factors=[0.5], axes=None, method="fft"):
 	factors = np.atleast_1d(factors)
 	if np.allclose(factors,1): return d
 	if method == "fft":
-		if axes is None: axes = range(-len(factors),0)
+		if axes is None: axes = list(range(-len(factors),0))
 		lens = [int(d.shape[ax]*fact+0.5) for ax, fact in zip(axes, factors)]
 		return resample_fft(d, lens, axes)
 	elif method == "bin":
