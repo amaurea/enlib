@@ -162,7 +162,7 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 		wcs.wcs.cdelt[j] *= s.step
 		wcs.wcs.crpix[j] += 0.5
 		oshape[i] = s.stop-s.start
-		oshape[i] = (oshape[i]+s.step-1)/s.step
+		oshape[i] = (oshape[i]+s.step-1)//s.step
 	return tuple(pre)+tuple(oshape), wcs
 
 def scale_geometry(shape, wcs, scale):
@@ -532,7 +532,7 @@ def laxes(shape, wcs, oversample=1):
 def lrmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
 	of a map with the given shape and wcs."""
-	return lmap(shape, wcs, oversample=oversample)[...,:shape[-1]/2+1]
+	return lmap(shape, wcs, oversample=oversample)[...,:shape[-1]//2+1]
 
 def fft(emap, omap=None, nthread=0, normalize=True):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
@@ -674,7 +674,7 @@ def fullsky_geometry(res=None, shape=None, dims=(), proj="car"):
 	wcs   = enlib.wcs.WCS(naxis=2)
 	wcs.wcs.crval = [0,0]
 	wcs.wcs.cdelt = [-360./nx,180./ny]
-	wcs.wcs.crpix = [nx/2+1,ny/2+1]
+	wcs.wcs.crpix = [nx//2+1,ny//2+1]
 	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
 	return dims+(ny+1,nx+0), wcs
 
@@ -740,11 +740,11 @@ def spec2flat_corr(shape, wcs, cov, exp=1.0, mode="constant"):
 	# (remember to move to the corner because this is
 	# a correlation function)
 	dpos = posmap(shape, wcs)
-	dpos -= dpos[:,None,None,dpos.shape[-2]/2,dpos.shape[-1]/2]
+	dpos -= dpos[:,None,None,dpos.shape[-2]//2,dpos.shape[-1]//2]
 	ipos = np.arccos(np.cos(dpos[0])*np.cos(dpos[1]))*nr/rmax
 	corr2d = enlib.utils.interpol(corrfun, ipos.reshape((-1,)+ipos.shape), mode=mode, mask_nan=False, order=1)
-	corr2d = np.roll(corr2d, -corr2d.shape[-2]/2, -2)
-	corr2d = np.roll(corr2d, -corr2d.shape[-1]/2, -1)
+	corr2d = np.roll(corr2d, -corr2d.shape[-2]//2, -2)
+	corr2d = np.roll(corr2d, -corr2d.shape[-1]//2, -1)
 	corr2d = ndmap(corr2d, wcs)
 	return fft(corr2d).real * np.product(shape[-2:])**0.5
 
@@ -802,8 +802,8 @@ def downgrade(emap, factor):
 	inside pixels."""
 	fact = np.full(2, 1, dtype=int)
 	fact[:] = factor
-	tshape = emap.shape[-2:]/fact*fact
-	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/fact[0],fact[0],tshape[1]/fact[1],fact[1])),(-3,-1))
+	tshape = emap.shape[-2:]//fact*fact
+	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]//fact[0],fact[0],tshape[1]//fact[1],fact[1])),(-3,-1))
 	return ndmap(res, emap[...,::fact[0],::fact[1]].wcs)
 
 def upgrade(emap, factor):
