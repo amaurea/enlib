@@ -104,7 +104,7 @@ def rewind(a, ref=0, period=2*np.pi):
 	specifies the angle furthest away from the cut, i.e. the
 	period cut will be at ref+period/2."""
 	a = np.asanyarray(a)
-	if ref is "auto": ref = np.sort(a.reshape(-1))[a.size/2]
+	if ref is "auto": ref = np.sort(a.reshape(-1))[a.size//2]
 	return ref + (a-ref+period/2.)%period - period/2.
 
 def cumsplit(sizes, capacities):
@@ -142,7 +142,7 @@ def deslope(d, w=1, inplace=False, axis=-1, avg=np.mean):
 	if not inplace: d = np.array(d)
 	with flatview(d, axes=[axis]) as dflat:
 		for di in dflat:
-			di -= np.arange(di.size)*(avg(di[-w:])-avg(di[:w]))/(di.size-1)+avg(di[:w]) # intdiv?
+			di -= np.arange(di.size)*(avg(di[-w:])-avg(di[:w]))/(di.size-1)+avg(di[:w])
 	return d
 
 def ctime2mjd(ctime):
@@ -1038,8 +1038,8 @@ def sbox_intersect_1d(a,b,wrap=0):
 	segs = [(a,b)]
 	if wrap:
 		a, b = np.array(a), np.array(b)
-		a[:2]  -= a[0]/wrap*wrap # intdiv?
-		b[:2]  -= b[0]/wrap*wrap # intdiv?
+		a[:2]  -= a[0]//wrap*wrap
+		b[:2]  -= b[0]//wrap*wrap
 		segs[0] = (a,b)
 		if a[1] > wrap: segs.append((a-[wrap,wrap,0],b))
 		if b[1] > wrap: segs.append((a,b-[wrap,wrap,0]))
@@ -1053,7 +1053,7 @@ def sbox_intersect_1d(a,b,wrap=0):
 		if len(match) == 0: continue
 		start = rel_inds[match[0]]+a[0]
 		# Find the last point in the intersection
-		end   =(min(a[1]-a[2],b[1]-b[2])-start)/step*step+start+step # intdiv?
+		end   =(min(a[1]-a[2],b[1]-b[2])-start)//step*step+start+step
 		if end <= start: continue
 		res.append([start,end,step])
 	return res
@@ -1062,16 +1062,16 @@ def sbox_div(a,b,wrap=0):
 	"""Find c such that arr[a] = arr[b][c]."""
 	a = sbox_fix(a)
 	b = sbox_fix(b)
-	step  = a[...,2]/b[...,2]  # intdiv?
-	num   = (a[...,1]-a[...,0])/a[...,2]  # intdiv?
-	start = (a[...,0]-b[...,0])/b[...,2]  # intdiv?
+	step  = a[...,2]//b[...,2]
+	num   = (a[...,1]-a[...,0])//a[...,2]
+	start = (a[...,0]-b[...,0])//b[...,2]
 	end   = start + step*num
 	res   = np.stack([start,end,step],-1)
 	if wrap:
 		wrap  = np.asarray(wrap,int)[...,None]
 		swrap = wrap.copy()
 		swrap[wrap==0] = 1
-		res[...,:2] -= res[...,0,None]/swrap*wrap  # intdiv?
+		res[...,:2] -= res[...,0,None]//swrap*wrap
 	return res
 
 def sbox_mul(a,b):
@@ -1108,7 +1108,7 @@ def sbox_size(sbox):
 	as with the other sbox functions."""
 	sbox = sbox_fix0(sbox)
 	sbox = sbox*np.sign(sbox[...,2,None])
-	return (((sbox[...,1]-sbox[...,0])-1)/sbox[...,2]).astype(int)+1
+	return (((sbox[...,1]-sbox[...,0])-1)//sbox[...,2]).astype(int)+1
 
 def sbox_fix0(sbox):
 	try: sbox.ndim
@@ -1380,7 +1380,7 @@ def parse_numbers(s, dtype=None):
 def triangle_wave(x, period=1):
 	"""Return a triangle wave with amplitude 1 and the given period."""
 	# This order (rather than x/period%1) gave smaller errors
-	x = x % period / period * 4 # intdiv?
+	x = x % period / period * 4
 	m1 = x < 1
 	m2 = (x < 3) ^ m1
 	m3 = x >= 3
@@ -1430,8 +1430,8 @@ def expbin(n, nbin=None, nmin=8, nmax=0):
 		tmp = [fixed[0]]
 		for v in fixed[1:]:
 			dv = v-tmp[-1]
-			nsplit = (dv+nmax-1)/nmax # intdiv?
-			tmp += [tmp[-1]+dv*(i+1)/nsplit for i in range(nsplit)] # intdiv?
+			nsplit = (dv+nmax-1)//nmax
+			tmp += [tmp[-1]+dv*(i+1)//nsplit for i in range(nsplit)]
 		fixed = tmp
 	tmp = np.array(fixed)
 	tmp[-1] = n
