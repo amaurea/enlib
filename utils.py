@@ -130,7 +130,7 @@ def repeat_filler(d, n):
 	"""Form an array n elements long by repeatedly concatenating
 	d and d[::-1]."""
 	d = np.concatenate([d,d[::-1]])
-	nmul = (n+d.size-1)/d.size
+	nmul = (n+d.size-1)//d.size
 	dtot = np.concatenate([d]*nmul)
 	return dtot[:n]
 
@@ -142,7 +142,7 @@ def deslope(d, w=1, inplace=False, axis=-1, avg=np.mean):
 	if not inplace: d = np.array(d)
 	with flatview(d, axes=[axis]) as dflat:
 		for di in dflat:
-			di -= np.arange(di.size)*(avg(di[-w:])-avg(di[:w]))/(di.size-1)+avg(di[:w])
+			di -= np.arange(di.size)*(avg(di[-w:])-avg(di[:w]))/(di.size-1)+avg(di[:w]) # intdiv?
 	return d
 
 def ctime2mjd(ctime):
@@ -159,7 +159,7 @@ def mjd2ctime(mjd):
 
 def medmean(x, frac=0.5):
 	x = np.sort(x)
-	i = int(x.size*frac)/2
+	i = int(x.size*frac)//2
 	return np.mean(x[i:-i])
 
 def moveaxis(a, o, n):
@@ -413,7 +413,7 @@ def find_period_exact(d, guess):
 	n = d.size
 	# Restrict to at most 10 fiducial periods
 	n = int(min(10,n/float(guess))*guess)
-	off = (d.size-n)/2
+	off = (d.size-n)//2
 	d = d[off:off+n]
 	def chisq(x):
 		w,phase = x
@@ -1038,8 +1038,8 @@ def sbox_intersect_1d(a,b,wrap=0):
 	segs = [(a,b)]
 	if wrap:
 		a, b = np.array(a), np.array(b)
-		a[:2]  -= a[0]/wrap*wrap
-		b[:2]  -= b[0]/wrap*wrap
+		a[:2]  -= a[0]/wrap*wrap # intdiv?
+		b[:2]  -= b[0]/wrap*wrap # intdiv?
 		segs[0] = (a,b)
 		if a[1] > wrap: segs.append((a-[wrap,wrap,0],b))
 		if b[1] > wrap: segs.append((a,b-[wrap,wrap,0]))
@@ -1053,7 +1053,7 @@ def sbox_intersect_1d(a,b,wrap=0):
 		if len(match) == 0: continue
 		start = rel_inds[match[0]]+a[0]
 		# Find the last point in the intersection
-		end   =(min(a[1]-a[2],b[1]-b[2])-start)/step*step+start+step
+		end   =(min(a[1]-a[2],b[1]-b[2])-start)/step*step+start+step # intdiv?
 		if end <= start: continue
 		res.append([start,end,step])
 	return res
@@ -1062,16 +1062,16 @@ def sbox_div(a,b,wrap=0):
 	"""Find c such that arr[a] = arr[b][c]."""
 	a = sbox_fix(a)
 	b = sbox_fix(b)
-	step  = a[...,2]/b[...,2]
-	num   = (a[...,1]-a[...,0])/a[...,2]
-	start = (a[...,0]-b[...,0])/b[...,2]
+	step  = a[...,2]/b[...,2]  # intdiv?
+	num   = (a[...,1]-a[...,0])/a[...,2]  # intdiv?
+	start = (a[...,0]-b[...,0])/b[...,2]  # intdiv?
 	end   = start + step*num
 	res   = np.stack([start,end,step],-1)
 	if wrap:
 		wrap  = np.asarray(wrap,int)[...,None]
 		swrap = wrap.copy()
 		swrap[wrap==0] = 1
-		res[...,:2] -= res[...,0,None]/swrap*wrap
+		res[...,:2] -= res[...,0,None]/swrap*wrap  # intdiv?
 	return res
 
 def sbox_mul(a,b):
@@ -1134,7 +1134,7 @@ def gcd(a, b):
 	return gcd(b, a % b) if b else a
 def lcm(a, b):
 	"""Least common multiple of a and b"""
-	return a*b/gcd(a,b)
+	return a*b//gcd(a,b)
 
 def uncat(a, lens):
 	"""Undo a concatenation operation. If a = np.concatenate(b)
@@ -1223,7 +1223,7 @@ def transpose_inds(inds, nrow, ncol):
 	"""Given a set of flattened indices into an array of shape (nrow,ncol),
 	return the indices of the corresponding elemens in a transposed array."""
 	row_major = inds
-	row, col = row_major/ncol, row_major%ncol
+	row, col = row_major//ncol, row_major%ncol
 	return col*nrow + row
 
 def rescale(a, range=[0,1]):
@@ -1339,7 +1339,7 @@ def block_mean_filter(a, width):
 		a[:] = np.mean(a,-1)[...,None]
 	else:
 		width  = int(width)
-		nblock = (a.shape[-1]+width-1)/width
+		nblock = (a.shape[-1]+width-1)//width
 		apad   = np.concatenate([a,a[...,-2::-1]],-1)
 		work   = apad[...,:width*nblock]
 		work   = work.reshape(work.shape[:-1]+(nblock,width))
@@ -1380,7 +1380,7 @@ def parse_numbers(s, dtype=None):
 def triangle_wave(x, period=1):
 	"""Return a triangle wave with amplitude 1 and the given period."""
 	# This order (rather than x/period%1) gave smaller errors
-	x = x % period / period * 4
+	x = x % period / period * 4 # intdiv?
 	m1 = x < 1
 	m2 = (x < 3) ^ m1
 	m3 = x >= 3
@@ -1408,7 +1408,7 @@ def linbin(n, nbin=None, nmin=None):
 	the minimum number of points per bin, but it is not implemented yet.
 	nbin defaults to the square root of n if not specified."""
 	if not nbin: nbin = int(np.round(n**0.5))
-	tmp  = np.arange(nbin+1)*n/nbin
+	tmp  = np.arange(nbin+1)*n//nbin
 	return np.vstack((tmp[:-1],tmp[1:])).T
 
 def expbin(n, nbin=None, nmin=8, nmax=0):
@@ -1430,8 +1430,8 @@ def expbin(n, nbin=None, nmin=8, nmax=0):
 		tmp = [fixed[0]]
 		for v in fixed[1:]:
 			dv = v-tmp[-1]
-			nsplit = (dv+nmax-1)/nmax
-			tmp += [tmp[-1]+dv*(i+1)/nsplit for i in range(nsplit)]
+			nsplit = (dv+nmax-1)/nmax # intdiv?
+			tmp += [tmp[-1]+dv*(i+1)/nsplit for i in range(nsplit)] # intdiv?
 		fixed = tmp
 	tmp = np.array(fixed)
 	tmp[-1] = n
