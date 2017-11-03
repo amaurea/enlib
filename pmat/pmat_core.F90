@@ -1366,7 +1366,7 @@ contains
 	! beam profile that can be stretched to make it elliptical. Might be
 	! better to just support passing a 2d beam profile instead...
 	!
-	! The model is srcs[{dec,ra,T,Q,U,ibx,iby,ibxy},ndir,nsrc]
+	! The model is srcs[{dec,ra,T,Q,U,ibx,iby,ibxy},ndir,ndet_or_1,nsrc]
 	! The ib parameters control beam stretching. For no stretching,
 	! set ibx=iby=1 and ibxy=0.
 	!
@@ -1376,37 +1376,38 @@ contains
 	! and and rmax, which spcifies how far out to evaluate the beam itself.
 	subroutine pmat_ptsrc( &
 			dir, tmul, pmul,           &! Projection direction, tod multiplier, src multiplier
-			tod, srcs,                 &! Main inputs/outputs. tod(nsamp,ndet), srcs(nparam,ndir,nsrc)
+			tod, srcs,                 &! Main inputs/outputs. tod(nsamp,ndet), srcs(nparam,ndet_or_1,ndir,nsrc)
 			bore, det_pos, det_comps,  &
 			rbox, nbox, yvals,         &! Coordinate transformation
 			beam, rbeam, rmax,         &! Beam profile and max radial offset to consider
-			cell_srcs, cell_nsrc, cbox &! Relevant source lookup. cell_srcs(:,nx,ny,ndir), cell_nsrc(nx,ny,ndir)
+			cell_srcs, cell_nsrc, cbox &! Relevant source lookup. cell_srcs(:,nx,ny,ndet_or_1,ndir), cell_nsrc(nx,ny,ndet_or_1,ndir)
 		)
 		use omp_lib
 		implicit none
 		integer, intent(in)    :: dir
 		real(_), intent(in)    :: tmul, pmul
 		real(_), intent(inout) :: tod(:,:)
-		real(8), intent(inout) :: srcs(:,:,:)
+		real(8), intent(inout) :: srcs(:,:,:,:)
 		real(8), intent(in)    :: bore(:,:), det_pos(:,:), rbox(:,:), yvals(:,:)
 		real(8), intent(in)    :: cbox(:,:), beam(:), rbeam, rmax
 		real(_), intent(in)    :: det_comps(:,:)
-		integer, intent(in)    :: nbox(:), cell_srcs(:,:,:,:), cell_nsrc(:,:,:)
+		integer, intent(in)    :: nbox(:), cell_srcs(:,:,:,:,:), cell_nsrc(:,:,:,:)
 		! Work
-		integer :: nsamp, ndet, nsrc, nproc
+		integer :: nsamp, ndet, nsrc, nproc, nsrcdet
 		! Not the same sdir as in the shift stuff
 		integer :: ic, i, id, di, si, xind(3), ig, ig2, cell(2), cell_ind, cid, sdir, ndir
-		integer :: steps(3), bind
+		integer :: steps(3), bind, sdi
 		real(8) :: x0(3), inv_dx(3), c0(2), inv_dc(2), xrel(3), work(size(yvals,1),4)
 		real(8) :: point(4), phase(3), dec, ra, ddec, dra, bscale(3)
 		real(_) :: inv_bres, bx,by,br,brel,bval, c2p,s2p,c1p,s1p
 		real(_), parameter   :: pi = 3.14159265359d0
-		real(8), allocatable :: amps(:,:,:,:), cosdec(:,:), ys(:,:,:)
+		real(8), allocatable :: amps(:,:,:,:,:), cosdec(:,:,:), ys(:,:,:)
 		integer, allocatable :: scandir(:)
 		nsamp   = size(tod, 1)
 		ndet    = size(tod, 2)
-		ndir    = size(srcs,2)
-		nsrc    = size(srcs,3)
+		nsrcdet = size(srcs,2)
+		ndir    = size(srcs,3)
+		nsrc    = size(srcs,4)
 
 		! Set up scanning direction. Two modes are supported. If ndir is 1, then
 		! the same set of parameters are used for both left and rightgoing scans.
@@ -1427,19 +1428,20 @@ contains
 		inv_bres = (size(beam)-1)/rbeam
 
 		nproc = omp_get_max_threads()
-		allocate(cosdec(ndir,nsrc),amps(3,ndir,nsrc,nproc))
-		cosdec = cos(srcs(1,:,:))
+		allocate(cosdec(nsrcdet,ndir,nsrc),amps(3,nsrcdet,ndir,nsrc,nproc))
+		cosdec = cos(srcs(1,:,:,:))
 		if(dir > 0) then
-			do i = 1, nproc; amps(:,:,:,i) = srcs(3:5,:,:)*pmul; end do
+			do i = 1, nproc; amps(:,:,:,:,i) = srcs(3:5,:,:,:)*pmul; end do
 		else
 			amps = 0
 		end if
-		!$omp parallel private(id,di,si,xrel,xind,ig,work,point,phase,cell,cell_ind,cid,dec,ra,bscale,ddec,dra,sdir,c2p,s2p,c1p,s1p,bx,by,br,brel,bind,bval)
+		!$omp parallel private(id,di,si,sdi,xrel,xind,ig,work,point,phase,cell,cell_ind,cid,dec,ra,bscale,ddec,dra,sdir,c2p,s2p,c1p,s1p,bx,by,br,brel,bind,bval)
 		id = omp_get_thread_num()+1
 		!$omp do
 		do di = 1, ndet
 			do si = 1, nsamp
 				sdir = scandir(si)
+				sdi  = min(di,nsrcdet)
 				! Transform from hor to cel
 				include 'helper_bilin.F90'
 				! Find which point source lookup cell we are in.
@@ -1450,7 +1452,7 @@ contains
 				cell(2) = min(size(cell_nsrc,1),max(1,cell(2)))
 				if(dir > 0) tod(si,di) = tod(si,di)*tmul
 				! Avoid expensive operations if we don't hit any sources
-				if(cell_nsrc(cell(2),cell(1),sdir) == 0) cycle
+				if(cell_nsrc(cell(2),cell(1),sdi,sdir) == 0) cycle
 				! The spin-2 and spin-1 rotations associated with the transformation
 				! We need these to get the polarization rotation and beam orientation
 				! right.
@@ -1460,18 +1462,18 @@ contains
 				phase(2) = c2p*det_comps(2,di) - s2p*det_comps(3,di)
 				phase(3) = s2p*det_comps(2,di) + c2p*det_comps(3,di)
 				! Process each point source in this cell
-				do cell_ind = 1, cell_nsrc(cell(2),cell(1),sdir)
-					cid = cell_srcs(cell_ind,cell(2),cell(1),sdir)+1
-					dec   = srcs(1,sdir,cid)
-					ra    = srcs(2,sdir,cid)
-					bscale= srcs(6:8,sdir,cid)
+				do cell_ind = 1, cell_nsrc(cell(2),cell(1),sdi,sdir)
+					cid = cell_srcs(cell_ind,cell(2),cell(1),sdi,sdir)+1
+					dec   = srcs(1,sdi,sdir,cid)
+					ra    = srcs(2,sdi,sdir,cid)
+					bscale= srcs(6:8,sdi,sdir,cid)
 					! Calc effective distance from this source in terms of the beam distortions.
 					! The beam shape is defined in the same coordinate system the polarization
 					! orientation is defined in. We can either rotate the beam (like we do phase)
 					! or rotate the offset vector the opposite direction. I choose the latter
 					! because it is simpler.
 					ddec = point(1)-dec
-					dra  = (point(2)-ra)*cosdec(sdir,cid) ! Caller should beware angle wrapping!
+					dra  = (point(2)-ra)*cosdec(sdi,sdir,cid) ! Caller should beware angle wrapping!
 					if(abs(ddec)>rmax .or. abs(dra)>rmax) cycle
 					bx   =  c1p*dra + s1p*ddec
 					by   = -s1p*dra + c1p*ddec
@@ -1484,16 +1486,16 @@ contains
 					bval = beam(bind)*(1-brel) + beam(bind+1)*brel
 					! And perform the actual projection
 					if(dir > 0) then
-						tod(si,di) = tod(si,di) + sum(amps(:,sdir,cid,1)*phase)*bval
+						tod(si,di) = tod(si,di) + sum(amps(:,sdi,sdir,cid,1)*phase)*bval
 					else
-						amps(:,sdir,cid,id) = amps(:,sdir,cid,id) + tod(si,di)*bval*phase
+						amps(:,sdi,sdir,cid,id) = amps(:,sdi,sdir,cid,id) + tod(si,di)*bval*phase
 					end if
 				end do
 			end do
 		end do
 		!$omp end parallel
 		if(dir < 0) then
-			srcs(3:5,:,:) = srcs(3:5,:,:)*pmul + sum(amps,4)*tmul
+			srcs(3:5,:,:,:) = srcs(3:5,:,:,:)*pmul + sum(amps,5)*tmul
 		end if
 	end subroutine
 
