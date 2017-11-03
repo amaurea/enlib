@@ -333,7 +333,7 @@ def make_projectable_map_cyl(map, verbose=False):
 	owcs   = map.wcs
 	# Our input map could in theory cover multiple copies of the sky, which
 	# would require us to copy out multiple slices.
-	nslice = (nx+nphi-1)/nphi
+	nslice = (nx+nphi-1)//nphi
 	islice, oslice = [], []
 	def negnone(x): return x if x >= 0 else None
 	for i in range(nslice):
@@ -461,7 +461,7 @@ def match_predefined_minfo(m, rtol=None, atol=None):
 	return minfo_cut
 
 def npix2nside(npix):
-	return utils.nint((healmap.shape[-1]/12)**0.5)
+	return utils.nint((healmap.shape[-1]//12)**0.5)
 
 def prepare_alm(alm=None, ainfo=None, lmax=None, pre=(), dtype=np.float64):
 	"""Set up alm and ainfo based on which ones of them are available."""
