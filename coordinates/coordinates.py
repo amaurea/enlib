@@ -1,7 +1,8 @@
 """This module provides conversions between astronomical coordinate systems.
 When c is more developed, it might completely replace this
 module. For now, it is used as a part of the implementation."""
-import numpy as np, pyfsla
+import numpy as np
+from . import pyfsla
 import astropy.coordinates as c, astropy.units as u
 from enlib import utils
 # Optional dependencies
