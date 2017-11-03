@@ -70,7 +70,7 @@ def classify_scanning_patterns(myscans, tol=0.5*utils.degree, comm=None):
 	pids = utils.label_unique(boxes, axes=(1,2), atol=tol)
 	npattern = np.max(pids)+1
 	# For each scanning pattern, define a bounding box
-	pboxes = np.array([utils.bounding_box(boxes[pids==pid]) for pid in xrange(npattern)])
+	pboxes = np.array([utils.bounding_box(boxes[pids==pid]) for pid in range(npattern)])
 	# Get the ids for the scans that we have
 	if comm is not None:
 		pids = pids[rank==comm.rank]

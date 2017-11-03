@@ -128,7 +128,7 @@ class OldDOF:
 		for a in args:
 			distributed = False
 			if type(a) is dict:
-				k = a.keys()[0]
+				k = list(a.keys())[0]
 				distributed = k in ["dist", "distributed", "d"]
 				a = a[k]
 			if type(a) is tuple:

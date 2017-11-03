@@ -48,7 +48,7 @@ def dstat(a): return np.std(a)
 
 # Test spline filter for symmetry and ndimage equivalence. Should only
 # match ndimage for mirror boundary conditions.
-print "Testing spline filter"
+print("Testing spline filter")
 n = 10
 for border in ["zero", "nearest", "cyclic", "mirror"]:
 	for order in range(6):
@@ -69,10 +69,10 @@ for border in ["zero", "nearest", "cyclic", "mirror"]:
 		#print MfT.T
 		#print "Mf-MfT.T"
 		#print Mf-MfT.T
-		print "%-10s %d %15.7e %15.7e %7.4f %7.4f %7.4f" % (border, order, dstat(Mf-MfT.T), dstat(Mf-Mf2), t[1]-t[0], t[2]-t[1], t[3]-t[2])
+		print(("%-10s %d %15.7e %15.7e %7.4f %7.4f %7.4f" % (border, order, dstat(Mf-MfT.T), dstat(Mf-Mf2), t[1]-t[0], t[2]-t[1], t[3]-t[2])))
 
 # Test coordinate mapping for symmetry and ndimage equivalence.
-print "Testing interpol"
+print("Testing interpol")
 n = 300; m = 100
 for mode in ["conv", "spline", "lanczos"]:
 	for border in ["zero", "nearest", "cyclic", "mirror"]:
@@ -92,4 +92,4 @@ for mode in ["conv", "spline", "lanczos"]:
 			#print MfT.T
 			#print "Mf-MfT.T"
 			#print Mf-MfT.T
-			print "%-10s %-10s %d %15.7e %15.7e %7.4f %7.4f %7.4f" % (mode, border, order, dstat(Mf-MfT.T), dstat(Mf-Mf2), t[1]-t[0], t[2]-t[1], t[3]-t[2])
+			print(("%-10s %-10s %d %15.7e %15.7e %7.4f %7.4f %7.4f" % (mode, border, order, dstat(Mf-MfT.T), dstat(Mf-Mf2), t[1]-t[0], t[2]-t[1], t[3]-t[2])))

@@ -13,7 +13,7 @@ class Tagdb:
 		if data is None:
 			self.data = {"id":np.zeros(0,dtype='S5'),"subids":np.zeros(0,dtype='S5')}
 		else:
-			self.data = {key:np.array(val) for key,val in data.iteritems()}
+			self.data = {key:np.array(val) for key,val in list(data.items())}
 			assert "id" in self.data, "Id field missing"
 			if self.data["id"].size == 0: self.data["id"] = np.zeros(0,dtype='S5')
 		# Insert subids if missing
@@ -21,7 +21,7 @@ class Tagdb:
 			self.data["subids"] = np.zeros(len(self.data["id"]),dtype='S5')
 		# Inser default fields. These will always be present, but will be
 		for field_expr in default_fields:
-			if isinstance(field_expr, basestring): field_expr = (field_expr,)
+			if isinstance(field_expr, str): field_expr = (field_expr,)
 			name  = field_expr[0]
 			value = field_expr[1] if len(field_expr) > 1 else False
 			dtype = field_expr[2] if len(field_expr) > 2 else type(value)
@@ -50,7 +50,7 @@ class Tagdb:
 		return self.query(query)
 	def select(self, ids):
 		"""Return a tagdb which only contains the selected ids."""
-		if isinstance(ids, basestring):
+		if isinstance(ids, str):
 			ids = self.query(ids)
 		# Extract the subids
 		ids, subids = split_ids(ids)
@@ -124,7 +124,7 @@ class Tagdb:
 		for field in fields:
 			scope = np.__dict__.copy()
 			scope.update(data)
-			for name, functor in self.functors.iteritems():
+			for name, functor in list(self.functors.items()):
 				scope[name] = functor(data)
 			with utils.nowarn():
 				hits = eval(field, scope)
@@ -202,7 +202,7 @@ class Tagdb:
 				hfile[key] = self.data[key]
 
 def dslice(data, inds):
-	return {key:val[...,inds] for key, val in data.iteritems()}
+	return {key:val[...,inds] for key, val in list(data.items())}
 
 # We want a way to build a dtype from file. Two main ways will be handy:
 # 1: The tag fileset.
@@ -231,7 +231,7 @@ def merge(tagdatas):
 	nid  = len(tot_ids)
 	data_tot = {}
 	for di, data in enumerate(tagdatas):
-		for key, val in data.iteritems():
+		for key, val in list(data.items()):
 			if key not in data_tot:
 				# Hard to find an appropriate default value for
 				# all types. We use false for bool to let tags

@@ -263,7 +263,7 @@ def decenter(angs, center):
 	return euler_rot([ra0,dec1-dec0,-ra1],  angs, kind="zyz")
 
 def nohor(sys): return sys if sys not in ["altaz","tele"] else "icrs"
-def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,basestring) else sys
+def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,str) else sys
 def get_handedness(sys):
 	"""Return the handedness of the coordinate system sys, as seen from inside
 	the celestial sphere, in the standard IAU convention."""
@@ -290,7 +290,7 @@ def getsys_full(sys, time=None, site=default_site):
 	more flexible to do sys:center_on:sys/center_at:sys. This syntax
 	would be backwards compatible, though it's starting to get a bit clunky.
 	"""
-	if isinstance(sys, basestring): sys = sys.split(":",1)
+	if isinstance(sys, str): sys = sys.split(":",1)
 	else:
 		try: sys = list(sys)
 		except TypeError: sys = [sys]
@@ -300,7 +300,7 @@ def getsys_full(sys, time=None, site=default_site):
 	prevsys = base
 	#refsys = getsys(refsys) if refsys is not None else base
 	if ref is None: return [base, ref]
-	if isinstance(ref, basestring):
+	if isinstance(ref, str):
 		# In general ref is ref:refsys/refto:reftosys. Here
 		# ref and refto are are either an object name or a position in the format
 		# lat_lon. comma would have been preferable, but we reserve that
@@ -352,7 +352,7 @@ def interpol_pos(from_sys, to_sys, name_or_pos, mjd, site=default_site, dt=10):
 	box  = utils.widen_box([np.min(mjd),np.max(mjd)], 1e-2)
 	sub_nsamp = max(3,int((box[1]-box[0])*24.*3600/dt))
 	sub_mjd = np.linspace(box[0], box[1], sub_nsamp, endpoint=True)
-	if isinstance(name_or_pos, basestring):
+	if isinstance(name_or_pos, str):
 		sub_from = ephem_pos(name_or_pos, sub_mjd)
 	else:
 		pos = np.asarray(name_or_pos)

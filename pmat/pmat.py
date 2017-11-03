@@ -174,9 +174,9 @@ def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, n
 	y0, y1 = yrange
 	pad = padstep
 	for i in range(ntry):
-		print "FIXME: This will break near north. Padding of the box earlier"
-		print "may make it impossible to reach the upper y bound"
-		print "Need to implement extrapolation"
+		print("FIXME: This will break near north. Padding of the box earlier")
+		print("may make it impossible to reach the upper y bound")
+		print("Need to implement extrapolation")
 		az0, az1 = utils.widen_box(azrange, pad, relative=False)
 		ipos = np.zeros([3,nsamp])
 		# Forward sweep
@@ -455,7 +455,7 @@ class pos2pix:
 			# ouside the image. We must therefore unwind along each
 			# interpolation axis to avoid discontinuous interpolation
 			nx = int(np.round(np.abs(360/self.template.wcs.wcs.cdelt[0])))
-			opix[1] = utils.unwind(opix[1].reshape(shape), period=nx, axes=range(len(shape))).reshape(-1)
+			opix[1] = utils.unwind(opix[1].reshape(shape), period=nx, axes=list(range(len(shape)))).reshape(-1)
 			# Prefer positive numbers
 			opix[1] -= np.floor(opix[1].reshape(-1)[0]/nx)*nx
 			# but not if they put everything outside our patch
@@ -578,7 +578,7 @@ def build_interpol(transform, box, id="none", posunit=1.0, sys=None):
 	# Build pointing interpolator
 	errlim = np.array([1e-3*posunit,1e-3*posunit,utils.arcmin,utils.arcmin])*acc
 	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, errlim, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
-	if not ok: print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, id)
+	if not ok: print(("Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, id)))
 	return ipol, obox, err
 
 def build_pos_transform(scan, sys):

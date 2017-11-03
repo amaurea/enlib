@@ -282,7 +282,7 @@ def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, pr
 		if enlib.wcs.equal(map.wcs, wcs) and tuple(shape[-2:]) == tuple(shape[-2:]):
 			return map
 		elif enlib.wcs.is_compatible(map.wcs, wcs) and mode == "constant":
-			print "Using extract instead"
+			print("Using extract instead")
 			return extract(map, shape, wcs, cval=cval)
 	pix  = map.sky2pix(posmap(shape, wcs))
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
@@ -756,7 +756,7 @@ def smooth_spectrum(ps, kernel="gauss", weight="mode", width=1.0):
 	# Set up the kernel array
 	K = np.zeros((nspec,nl))
 	l = np.arange(nl)
-	if isinstance(kernel, basestring):
+	if isinstance(kernel, str):
 		if kernel == "gauss":
 			K[:] = np.exp(-0.5*(l/width)**2)
 		elif kernel == "step":
@@ -768,7 +768,7 @@ def smooth_spectrum(ps, kernel="gauss", weight="mode", width=1.0):
 		K[:,:tmp.shape[-1]] = tmp[:,:K.shape[-1]]
 	# Set up the weighting scheme
 	W = np.zeros((nspec,nl))
-	if isinstance(weight, basestring):
+	if isinstance(weight, str):
 		if weight == "mode":
 			W[:] = l[None,:]**2
 		elif weight == "uniform":
@@ -1174,7 +1174,7 @@ def write_fits(fname, emap, extra={}):
 	header['NAXIS'] = emap.ndim
 	for i,n in enumerate(emap.shape[::-1]):
 		header['NAXIS%d'%(i+1)] = n
-	for key, val in extra.items():
+	for key, val in list(extra.items()):
 		header[key] = val
 	hdus   = astropy.io.fits.HDUList([astropy.io.fits.PrimaryHDU(emap, header)])
 	with warnings.catch_warnings():
@@ -1237,7 +1237,7 @@ def write_hdf(fname, emap, extra={}):
 		header = emap.wcs.to_header()
 		for key in header:
 			hfile["wcs/"+key] = header[key]
-		for key, val in extra.items():
+		for key, val in list(extra.items()):
 			hfile[key] = val
 
 def read_hdf(fname, sel=None):
