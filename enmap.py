@@ -802,8 +802,8 @@ def downgrade(emap, factor):
 	inside pixels."""
 	fact = np.full(2, 1, dtype=int)
 	fact[:] = factor
-	tshape = emap.shape[-2:]/fact*fact
-	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/fact[0],fact[0],tshape[1]/fact[1],fact[1])),(-3,-1))
+	tshape = emap.shape[-2:]//fact*fact
+	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]//fact[0],fact[0],tshape[1]//fact[1],fact[1])),(-3,-1))
 	return ndmap(res, emap[...,::fact[0],::fact[1]].wcs)
 
 def upgrade(emap, factor):
