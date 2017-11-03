@@ -142,8 +142,8 @@ def to_mpl_colormap(name, data=None):
 
 def mpl_register(names=None):
 	import matplotlib.cm
-	if names is None: names = schemes.keys()
-	if isinstance(names, basestring): names = [names]
+	if names is None: names = list(schemes.keys())
+	if isinstance(names, str): names = [names]
 	for name in names:
 		cmap = to_mpl_colormap(name, schemes[name])
 		matplotlib.cm.register_cmap(name, cmap)

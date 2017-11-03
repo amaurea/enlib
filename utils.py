@@ -12,7 +12,7 @@ k = 1.3806488e-23
 def lines(file_or_fname):
 	"""Iterates over lines in a file, which can be specified
 	either as a filename or as a file object."""
-	if isinstance(file_or_fname, basestring):
+	if isinstance(file_or_fname, str):
 		with open(file_or_fname,"r") as file:
 			for line in file: yield line
 	else:
@@ -24,7 +24,7 @@ def listsplit(seq, elem):
 	# Sadly, numpy arrays misbehave, and must be treated specially
 	def iseq(e1, e2): return np.all(e1==e2)
 	inds = [i for i,v in enumerate(seq) if iseq(v,elem)]
-	ranges = zip([0]+[i+1 for i in inds],inds+[len(seq)])
+	ranges = list(zip([0]+[i+1 for i in inds],inds+[len(seq)]))
 	return [seq[a:b] for a,b in ranges]
 
 def find(array, vals):
@@ -73,7 +73,7 @@ def dict_apply_listfun(dict, function):
 	dictionary, but the values given by the results of the function
 	acting on the input dictionary's values. I.e.
 	if f(x) = x[::-1], then dict_apply_listfun({"a":1,"b":2},f) = {"a":2,"b":1}."""
-	keys = dict.keys()
+	keys = list(dict.keys())
 	vals = [dict[key] for key in keys]
 	res  = function(vals)
 	return {key: res[i] for i, key in enumerate(keys)}
@@ -201,7 +201,7 @@ def partial_flatten(a, axes=[-1], pos=0):
 	Example: if a.shape is [1,2,3,4],
 	then partial_flatten(a,[-1],0).shape is [6,4]."""
 	# Move the selected axes first
-	a = moveaxes(a, axes, range(len(axes)))
+	a = moveaxes(a, axes, list(range(len(axes))))
 	# Flatten all the other axes
 	a = a.reshape(a.shape[:len(axes)]+(-1,))
 	# Move flattened axis to the target position
@@ -215,7 +215,7 @@ def partial_expand(a, shape, axes=[-1], pos=0):
 	axes = np.array(axes)%len(shape)
 	rest = list(np.delete(shape, axes))
 	a = np.reshape(a, list(a.shape[:len(axes)])+rest)
-	return moveaxes(a, range(len(axes)), axes)
+	return moveaxes(a, list(range(len(axes))), axes)
 
 def addaxes(a, axes):
 	axes = np.array(axes)
@@ -282,7 +282,7 @@ def interpol(a, inds, order=3, mode="nearest", mask_nan=True, cval=0.0, prefilte
 
 	npre = a.ndim - inds.shape[0]
 	res = np.empty(a.shape[:npre]+inds.shape[1:],dtype=a.dtype)
-	fa, fr = partial_flatten(a, range(npre,a.ndim)), partial_flatten(res, range(npre, res.ndim))
+	fa, fr = partial_flatten(a, list(range(npre,a.ndim))), partial_flatten(res, list(range(npre, res.ndim)))
 	if mask_nan:
 		mask = ~np.isfinite(fa)
 		fa[mask] = 0
@@ -302,7 +302,7 @@ def interpol_prefilter(a, npre=None, order=3, inplace=False):
 	a = np.asanyarray(a)
 	if not inplace: a = a.copy()
 	if npre is None: npre = max(0,a.ndim - 2)
-	with flatview(a, range(npre, a.ndim), "rw") as aflat:
+	with flatview(a, list(range(npre, a.ndim)), "rw") as aflat:
 		for i in range(len(aflat)):
 			aflat[i] = scipy.ndimage.spline_filter(aflat[i], order=order)
 	return a
@@ -355,7 +355,7 @@ def nearest_product(n, factors, direction="below"):
 	a = np.zeros(nmax+1,dtype=bool)
 	a[1] = True
 	best = None
-	for i in xrange(n+1):
+	for i in range(n+1):
 		if not a[i]: continue
 		for f in factors:
 			m = i*f
@@ -427,7 +427,7 @@ def equal_split(weights, nbin):
 	weight in each bin is as close to equal as possible.
 	Returns a list of indices for each bin."""
 	inds = np.argsort(weights)[::-1]
-	bins = [[] for b in xrange(nbin)]
+	bins = [[] for b in range(nbin)]
 	bw   = np.zeros([nbin])
 	for i in inds:
 		j = np.argmin(bw)
@@ -531,12 +531,12 @@ def range_union(a, mapping=False):
 	rmap = np.zeros(n,dtype=int)-1
 	b    = []
 	# i will point at the first unprocessed range
-	for i in xrange(n):
+	for i in range(n):
 		if rmap[inds[i]] >= 0: continue
 		rmap[inds[i]] = len(b)
 		start, end = a[inds[i]]
 		# loop through every unprocessed range in range
-		for j in xrange(i+1,n):
+		for j in range(i+1,n):
 			if rmap[inds[j]] >= 0: continue
 			if a[inds[j],0] > end: break
 			# This range overlaps, so register it and merge
@@ -648,19 +648,19 @@ def greedy_split(data, n=2, costfun=max, workfun=lambda w,x: x if w is None else
 	# Sort data based on standalone costs
 	costs = []
 	nowork = workfun(None,None)
-	work = [nowork for i in xrange(n)]
+	work = [nowork for i in range(n)]
 	for d in data:
 		work[0] = workfun(nowork,d)
 		costs.append(costfun(work))
 	order = np.argsort(costs)[::-1]
 	# Build groups using greedy algorithm
-	groups = [[] for i in xrange(n)]
-	work   = [nowork for i in xrange(n)]
+	groups = [[] for i in range(n)]
+	work   = [nowork for i in range(n)]
 	cost   = costfun(work)
 	for di in order:
 		d = data[di]
 		# Try adding to each group
-		for i in xrange(n):
+		for i in range(n):
 			iwork = workfun(work[i],d)
 			icost = costfun(work[:i]+[iwork]+work[i+1:])
 			if i == 0 or icost < best[2]: best = (i,iwork,icost)
@@ -675,7 +675,7 @@ def greedy_split_simple(data, n=2):
 	"""Split array "data" into n lists such that each list has approximately the same
 	sum, using a greedy algorithm."""
 	inds = np.argsort(data)[::-1]
-	rn   = range(n)
+	rn   = list(range(n))
 	sums = [0  for i in rn]
 	res  = [[] for i in rn]
 	for i in inds:
@@ -904,7 +904,7 @@ def resize_array(arr, size, axis=None, val=0):
 	be set to val."""
 	arr    = np.asarray(arr)
 	size   = tuplify(size)
-	axis   = range(len(size)) if axis is None else tuplify(axis)
+	axis   = list(range(len(size))) if axis is None else tuplify(axis)
 	axis   = [a%arr.ndim for a in axis]
 	oshape = np.array(arr.shape)
 	oshape[np.array(axis)] = size
@@ -1141,7 +1141,7 @@ def uncat(a, lens):
 	and lens = [len(x) for x in b], then uncat(a,lens) returns
 	b."""
 	cum = cumsum(lens, endpoint=True)
-	return [a[cum[i]:cum[i+1]] for i in xrange(len(lens))]
+	return [a[cum[i]:cum[i+1]] for i in range(len(lens))]
 
 def ang2rect(angs, zenith=True, axis=0):
 	"""Convert a set of angles [{phi,theta},...] to cartesian
@@ -1285,12 +1285,12 @@ def find_equal_groups(a, tol=0):
 	inds = np.argsort(a[:,0])
 	done = np.full(n, False, dtype=bool)
 	res = []
-	for i in xrange(n):
+	for i in range(n):
 		if done[i]: continue
 		xi = inds[i]
 		res.append([xi])
 		done[i] = True
-		for j in xrange(i+1,n):
+		for j in range(i+1,n):
 			if done[j]: continue
 			xj = inds[j]
 			if calc_diff(a[xj,0], a[xi,0]) > tol:

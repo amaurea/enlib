@@ -79,7 +79,7 @@ class Flagrange:
 	def select(self, flags):
 		"""Return a new flagrange where only the given flags are set.
 		The other flags will still exist, but their bits will be zero."""
-		if isinstance(flags, basestring): flags = [flags]
+		if isinstance(flags, str): flags = [flags]
 		# Build bitfield
 		pos = np.zeros(self.nbyte, np.uint8)
 		neg = pos.copy()
@@ -114,8 +114,8 @@ class Flagrange:
 	def restrict(self, dslice=None, sslice=None):
 		if dslice is None: dslice = slice(None)
 		if sslice is None: sslice = slice(None)
-		if isinstance(dslice,(int,long)): dslice = [dslice]
-		if isinstance(sslice,(int,long)): sslice = [sslice]
+		if isinstance(dslice,int): dslice = [dslice]
+		if isinstance(sslice,int): sslice = [sslice]
 		# Extract sample slice parameters and handle negative slicing
 		start, stop, step = sslice.start, sslice.stop, sslice.step
 		if step is None: step = 1
@@ -235,7 +235,7 @@ class Flagrange:
 #	minoff  = np.min(offsets)
 
 def read_flagrange(hfile, group=None):
-	if isinstance(hfile, basestring):
+	if isinstance(hfile, str):
 		with h5py.File(hfile, "r") as f:
 			if group is not None: f = f[group]
 			return read_flagrange(f)
@@ -257,7 +257,7 @@ def read_flagrange(hfile, group=None):
 	)
 
 def write_flagrange(hfile, frange, group=None):
-	if isinstance(hfile, basestring):
+	if isinstance(hfile, str):
 		with h5py.File(hfile, "w") as f:
 			if group is not None: f = f.create_group(group)
 			write_flagrange(f, frange)

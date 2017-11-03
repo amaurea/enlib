@@ -73,7 +73,7 @@ class FieldSampler:
 			#while solver.err_true > 10:
 				solver.step()
 				if verbose:
-					print "%5d %15.7e %15.7e" % (solver.i, solver.err, solver.err_true)
+					print(("%5d %15.7e %15.7e" % (solver.i, solver.err, solver.err_true)))
 			return dof.unzip(solver.x)[0]
 	def wiener(self, verbose=False):
 		"""Computes and returns a wiener-filtered version of the
