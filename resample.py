@@ -84,7 +84,7 @@ def resample_fft(d, n, axes=None):
 		ax %= d.ndim
 		nold = d.shape[ax]
 		dn   = nnew-nold
-	       if dn > 0:
+		if dn > 0:
 			padvals = np.zeros(fd.shape[:ax]+(dn,)+fd.shape[ax+1:],fd.dtype)
 			spre  = tuple([slice(None)]*ax+[slice(0,nold//2)]+[slice(None)]*(fd.ndim-ax-1))
 			spost = tuple([slice(None)]*ax+[slice(nold//2,None)]+[slice(None)]*(fd.ndim-ax-1))
