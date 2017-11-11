@@ -1,2 +1,2 @@
-from interface import *
-from src_scan import *
+from .interface import *
+from .src_scan import *

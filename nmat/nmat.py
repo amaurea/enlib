@@ -411,7 +411,7 @@ class NmatScaled(NoiseMatrix):
 def read_nmat(fname, group=None):
 	"""Read a noise matrix from file, optionally from the named group
 	in the file."""
-	if isinstance(fname, basestring):
+	if isinstance(fname, str):
 		f = h5py.File(fname, "r")
 	else:
 		f = fname
@@ -425,7 +425,7 @@ def read_nmat(fname, group=None):
 		return NmatBinned(g["icovs"], g["bins"], g["dets"])
 	else:
 		raise IOError("Unrecognized noise matrix format %s" % typ)
-	if isinstance(fname, basestring):
+	if isinstance(fname, str):
 		f.close()
 
 def write_nmat(fname, nmat):
@@ -433,16 +433,16 @@ def write_nmat(fname, nmat):
 	nmat.write(fname)
 
 def write_nmat_helper(fname, fields, prefix=""):
-	if isinstance(fname, basestring):
+	if isinstance(fname, str):
 		f = h5py.File(fname, "w")
 	else:
 		f = fname
-	for k, v in fields.iteritems():
+	for k, v in list(fields.items()):
 		if isinstance(v, dict):
 			write_nmat_helper(f, v, prefix+k+"/")
 		else:
 			f[prefix+k] = v
-	if isinstance(fname, basestring):
+	if isinstance(fname, str):
 		f.close()
 
 def woodbury_invert(D, V, E, ebins=None, vbins=None):

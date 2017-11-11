@@ -294,8 +294,8 @@ class SignalMapBuddies(SignalMap):
 			pmat.backward(tod, work)
 	# Ugly hack
 	def get_nobuddy(self):
-		data = {k:v[0] for k,v in self.data.iteritems()}
-		return SignalMap(self.data.keys(), self.area, self.comm, cuts=self.cuts, output=False, data=data)
+		data = {k:v[0] for k,v in list(self.data.items())}
+		return SignalMap(list(self.data.keys()), self.area, self.comm, cuts=self.cuts, output=False, data=data)
 
 ######## Preconditioners ########
 # Preconditioners have a lot of overlap with Eqsys.A. That's not
@@ -615,7 +615,7 @@ class FilterPickup:
 		else:
 			waz = (np.max(scan.boresight[:,1])-np.min(scan.boresight[:,1]))/utils.degree
 			naz = utils.nint(waz/self.daz)
-			print "FilterPickup using daz=%.1f waz=%.1f naz=%d" % (self.daz, waz, naz)
+			print(("FilterPickup using daz=%.1f waz=%.1f naz=%d" % (self.daz, waz, naz)))
 		todfilter.filter_poly_jon(tod, scan.boresight[:,1], hwp=scan.hwp, naz=naz, nt=self.nt, nhwp=self.nhwp, niter=self.niter, cuts=scan.cut)
 
 class PostPickup:
@@ -883,7 +883,7 @@ class Eqsys:
 			else: tod = itod
 			# Apply all filters (pickup filter, src subtraction, etc)
 			with bench.mark("b_filter"):
-				for filter in self.filters: filter(scan, tod)
+				for filter in self.filters: list(filter(scan, tod))
 			# Apply the noise model (N")
 			with bench.mark("b_weight"):
 				for weight in self.weights: weight(scan, tod)
@@ -892,7 +892,7 @@ class Eqsys:
 				#print "FIXME"
 				#sampcut.gapfill_const(scan.cut, tod, 0.0, True)
 			with bench.mark("b_filter2"):
-				for filter in self.filters2: filter(scan, tod)
+				for filter in self.filters2: list(filter(scan, tod))
 			with bench.mark("b_N"):
 				scan.noise.apply(tod)
 			with bench.mark("b_weight"):
@@ -936,7 +936,7 @@ class Eqsys:
 			ovec = self.A(ivec)
 			res[i] = ovec[inds]
 			if self.dof.comm.rank == 0:
-				print "----", np.sum(ovec), ind
+				print(("----", np.sum(ovec), ind))
 				np.savetxt("/dev/stdout", res[:i+1,:i+1], fmt="%11.4e")
 	def calc_A(self):
 		n = self.dof.n

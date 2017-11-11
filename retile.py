@@ -94,7 +94,7 @@ def combine_tiles(ipathfmt, opathfmt, combine=2, downsample=2,
 		otname = opathfmt % {"y": oy, "x": ox}
 		utils.mkdir(os.path.dirname(otname))
 		enmap.write_map(otname, omap)
-		if verbose: print otname
+		if verbose: print(otname)
 
 def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		otileoff=(0,0), otilenum=(None,None), ocorner=(-np.pi/2,-np.pi),
@@ -154,7 +154,7 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		oname = opathfmt % {"y":otile[0]+otileoff[0],"x":x}
 		utils.mkdir(os.path.dirname(oname))
 		enmap.write_map(oname, omap)
-		if verbose: print oname
+		if verbose: print(oname)
 
 def monolithic(idir, ofile, verbose=True, slice=None):
 	# Find the range of input tiles
@@ -176,7 +176,7 @@ def monolithic(idir, ofile, verbose=True, slice=None):
 		for tx in range(itile1[1],itile2[1]):
 			m = read(ipathfmt % {"y":ty,"x":tx})
 			omap[...,ty*wy:(ty+1)*wy,tx*wx:(tx+1)*wx] = m
-			if verbose: print ipathfmt % {"y":ty,"x":tx}
+			if verbose: print((ipathfmt % {"y":ty,"x":tx}))
 	enmap.write_map(ofile, omap)
 
 def range_overlap(a,b):
@@ -273,7 +273,7 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 			else: imap = cache[1]
 			if cache is not None:
 				cache[0], cache[1] = iname, imap
-			if verbose: print iname
+			if verbose: print(iname)
 			# Edge input tiles may be smaller than the standard
 			# size.
 			ysub = isize[0]-imap.shape[-2]

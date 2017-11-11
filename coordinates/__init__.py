@@ -1,1 +1,1 @@
-from coordinates import *
+from .coordinates import *

@@ -37,7 +37,7 @@ class FormatDB(Basedb):
 	parameter file using string.format. This should allow, compact,
 	readable and flexible parameter files."""
 	def __init__(self, file=None, data=None, funcs={"id":lambda id:id}, override=None):
-		self.funcs = funcs.items()
+		self.funcs = list(funcs.items())
 		self.override = override
 		Basedb.__init__(self, file=file, data=data)
 	def load(self, data, funcs={}):

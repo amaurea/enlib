@@ -1,1 +1,1 @@
-from sharp import *
+from .sharp import *

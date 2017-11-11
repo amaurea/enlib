@@ -63,7 +63,7 @@ def recursive_format(data, formats):
 		data = [recursive_format(val, formats) for val in data]
 	elif isinstance(data, tuple):
 		data = tuple([recursive_format(val, formats) for val in data])
-	elif isinstance(data, basestring):
+	elif isinstance(data, str):
 		return data.format(**formats)
 	return data
 

@@ -82,7 +82,7 @@ def fit_phase_flat(tods, az, daz=1*utils.arcmin, cuts=None, niter=None,
 	# Precompute div
 	pflat.backward(tods*0+weight[:,None], div, -1)
 	div[div==0] = 1
-	print np.mean(div)
+	print((np.mean(div)))
 	for i in range(niter):
 		# Overall logic: gapfill -> bin -> subtract -> loop
 		if cuts is not None:

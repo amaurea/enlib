@@ -1,1 +1,1 @@
-from interpol import *
+from .interpol import *

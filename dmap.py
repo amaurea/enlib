@@ -313,7 +313,7 @@ class DGeometry(object):
 			winfo, tinfo = [], []
 			woff, toff = 0, 0
 			prelen = np.product(shape[:-2])
-			for id in xrange(comm.size):
+			for id in range(comm.size):
 				## Buffer info to send to alltoallv
 				wbufinfo[1,id] = woff
 				tbufinfo[1,id] = toff
@@ -628,7 +628,7 @@ def assign_cols_round_robin(scores):
 	ris, cis = np.arange(nr), np.arange(nc)
 	while True:
 		rmask = np.full(nr, True).astype(bool)
-		for i in xrange(nr):
+		for i in range(nr):
 			free = (np.sum(rmask), np.sum(cmask))
 			if free[1] == 0: break
 			rl, cl = np.unravel_index(np.argmax(scores[rmask][:,cmask]),free)
@@ -670,7 +670,7 @@ def split_boxes_rimwise(boxes, weights, nsplit):
 	# processed via a mask.
 	mask = np.full(n, True, dtype=np.bool)
 	cumweight  = 0
-	for gi in xrange(nsplit):
+	for gi in range(nsplit):
 		# Compute the target weight for this group.
 		# On average this should simply be totweight/nsplit,
 		# but we adjust it on the fly to compensate for any

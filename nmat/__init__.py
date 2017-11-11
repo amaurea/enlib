@@ -1,1 +1,1 @@
-from nmat import *
+from .nmat import *
