@@ -48,7 +48,7 @@ class ndmap(np.ndarray):
 	def copy(self, order='K'):
 		return ndmap(np.copy(self,order), self.wcs)
 	def sky2pix(self, coords, safe=True, corner=False): return sky2pix(self.shape, self.wcs, coords, safe, corner)
-	def pix2sky(self, pix,    safe=True, corner=False): return pix2sky(self.shape, self.wcs, pix,    safe, corner)
+	def pix2sky(self, pix,	  safe=True, corner=False): return pix2sky(self.shape, self.wcs, pix,	 safe, corner)
 	def box(self): return box(self.shape, self.wcs)
 	def posmap(self, safe=True, corner=False): return posmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
@@ -100,6 +100,8 @@ class ndmap(np.ndarray):
 		_, wcs = slice_geometry(self.shape[-2:], self.wcs, sel2)
 		return ndmap(np.ndarray.__getitem__(self, sel), wcs)
 	def __getslice__(self, a, b=None, c=None): return self[slice(a,b,c)]
+	def subinds(self, box, inclusive=False, cap=True): return subinds(self.shape, self.wcs, box, inclusive, cap)
+	def slice_from_box(self, box, inclusive=False): return slice_from_box(self.shape, self.wcs, box, inclusive)
 	def submap(self, box, inclusive=False):
 		"""submap(box, inclusive=False)
 		
@@ -115,36 +117,31 @@ class ndmap(np.ndarray):
 		inclusive : boolean
 			Whether to include pixels that are only partially
 			inside the bounding box. Default: False."""
-		ibox = self.subinds(box, inclusive)
-		islice = enlib.utils.sbox2slice(ibox.T)
-		return self[islice]
-	def subinds(self, box, inclusive=False, cap=True):
-		"""Helper function for submap. Translates the bounding
-		box provided into a pixel units. Assumes rectangular
-		coordinates."""
-		box  = np.asarray(box)
-		# Translate the box to pixels. The 0.5 moves us from
-		# pixel-center coordinates to pixel-edge coordinates,
-		# which we need to distinguish between fully or partially
-		# included pixels
-		bpix = self.sky2pix(box.T).T
-		dir  = 2*(bpix[1]>bpix[0])-1
-		# If we are inclusive, find a bounding box, otherwise,
-		# an internal box
-		if inclusive:
-			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
-		else:
-			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
-		# Turn into list of slices, so we can handle reverse slices properly
-		# Make sure we stay inside our map bounds
-		if cap:
-			for b, n in zip(ibox.T,self.shape[-2:]):
-				if b[2] > 0: b[:2] = [max(b[0],  0),min(b[1], n)]
-				else:        b[:2] = [min(b[0],n-1),max(b[1],-1)]
-		return ibox
+		return self[self.slice_from_box(box, inclusive)]
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
 
+def slice_from_box(shape, wcs, box, inclusive=False):
+	"""slice_from_box(shape, wcs, box, inclusive=False)
+
+	Extract the part of the map inside the given box as a selection
+	without returning the data.
+
+	Parameters
+	----------
+	box : array_like
+		The [[fromy,fromx],[toy,tox]] bounding box to select.
+		The resulting map will have a bounding box as close
+		as possible to this, but will differ slightly due to
+		the finite pixel size.
+	inclusive : boolean
+		Whether to include pixels that are only partially
+		inside the bounding box. Default: False."""
+	ibox = subinds(shape, wcs, box, inclusive)
+	islice = enlib.utils.sbox2slice(ibox.T)
+	return islice
+
+		
 def slice_geometry(shape, wcs, sel, nowrap=False):
 	"""Slice a geometry specified by shape and wcs according to the
 	slice sel. Returns a tuple of the output shape and the correponding
@@ -164,6 +161,33 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 		oshape[i] = s.stop-s.start
 		oshape[i] = (oshape[i]+s.step-1)//s.step
 	return tuple(pre)+tuple(oshape), wcs
+
+
+def subinds(shape, wcs, box, inclusive=False, cap=True):
+	"""Helper function for submap. Translates the bounding
+	box provided into a pixel units. Assumes rectangular
+	coordinates."""
+	box  = np.asarray(box)
+	# Translate the box to pixels. The 0.5 moves us from
+	# pixel-center coordinates to pixel-edge coordinates,
+	# which we need to distinguish between fully or partially
+	# included pixels
+	bpix = sky2pix(shape,wcs,box.T).T
+	dir  = 2*(bpix[1]>bpix[0])-1
+	# If we are inclusive, find a bounding box, otherwise,
+	# an internal box
+	if inclusive:
+		ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
+	else:
+		ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
+	# Turn into list of slices, so we can handle reverse slices properly
+	# Make sure we stay inside our map bounds
+	if cap:
+		for b, n in zip(ibox.T,shape[-2:]):
+			if b[2] > 0: b[:2] = [max(b[0],	 0),min(b[1], n)]
+			else:	     b[:2] = [min(b[0],n-1),max(b[1],-1)]
+	return ibox
+
 
 def scale_geometry(shape, wcs, scale):
 	scale  = np.zeros(2)+scale
@@ -864,13 +888,13 @@ def find_blank_edges(m, value="auto"):
 		# Don't use any values for cropping, so no cropping is done
 		return np.zeros([2,2],dtype=int)
 	else:
-		value   = np.asarray(value)
+		value	= np.asarray(value)
 		# Find which rows and cols consist entirely of the given value
 		hitmask = np.all(np.isclose(m.T, value.T, equal_nan=True, rtol=1e-6, atol=0).T,axis=tuple(range(m.ndim-2)))
 		hitrows = np.all(hitmask,1)
 		hitcols = np.all(hitmask,0)
 		# Find the first and last row and col which aren't all the value
-		blanks  = np.array([
+		blanks	= np.array([
 			np.where(~hitrows)[0][[0,-1]],
 			np.where(~hitcols)[0][[0,-1]]]
 			).T
@@ -883,8 +907,8 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	length. If there there aren't enough blank areas, the map is padded
 	instead. If value="none" no values are considered blank, so no cropping
 	will happen. This can be used to autopad for fourier-friendliness."""
-	blanks  = find_blank_edges(m, value=value)
-	nblank  = np.sum(blanks,0)
+	blanks	= find_blank_edges(m, value=value)
+	nblank	= np.sum(blanks,0)
 	# Find the first good sizes larger than the unblank lengths
 	minshape  = m.shape[-2:]-nblank+margin
 	if method == "plain":
@@ -894,7 +918,7 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	else:
 		raise ValueError("Unknown autocrop method %s!" % method)
 	# Pad if necessary
-	adiff   = np.maximum(0,goodshape-m.shape[-2:])
+	adiff	= np.maximum(0,goodshape-m.shape[-2:])
 	padding = [[0,0],[0,0]]
 	if any(adiff>0):
 		padding = [adiff,[0,0]]
@@ -907,8 +931,8 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	upper  = tocrop-lower
 	s      = (Ellipsis,slice(lower[0],m.shape[-2]-upper[0]),slice(lower[1],m.shape[-1]-upper[1]))
 	class PadcropInfo:
-		slice   = s
-		pad     = padding
+		slice	= s
+		pad	= padding
 	if return_info:
 		return m[s], PadcropInfo
 	else:
@@ -1071,7 +1095,7 @@ def to_flipper(imap, omap=None, unpack=True):
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
 	header = imap.wcs.to_header(relax=True)
-	header['NAXIS']  = 2
+	header['NAXIS']	 = 2
 	header['NAXIS1'] = imap.shape[-1]
 	header['NAXIS2'] = imap.shape[-2]
 	flipwcs = flipper.liteMap.astLib.astWCS.WCS(header, mode="pyfits")
@@ -1112,8 +1136,8 @@ def write_map(fname, emap, fmt=None, extra={}):
 	be either fits or hdf. This can be overriden by
 	passing fmt with either 'fits' or 'hdf' as argument."""
 	if fmt == None:
-		if   fname.endswith(".hdf"):     fmt = "hdf"
-		elif fname.endswith(".fits"):    fmt = "fits"
+		if   fname.endswith(".hdf"):	 fmt = "hdf"
+		elif fname.endswith(".fits"):	 fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
@@ -1130,8 +1154,8 @@ def read_map(fname, fmt=None, sel=None, hdu=None):
 	toks = fname.split(":")
 	fname = toks[0]
 	if fmt == None:
-		if   fname.endswith(".hdf"):     fmt = "hdf"
-		elif fname.endswith(".fits"):    fmt = "fits"
+		if   fname.endswith(".hdf"):	 fmt = "hdf"
+		elif fname.endswith(".fits"):	 fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
@@ -1151,8 +1175,8 @@ def read_map_geometry(fname, fmt=None, hdu=None):
 	toks = fname.split(":")
 	fname = toks[0]
 	if fmt == None:
-		if   fname.endswith(".hdf"):     fmt = "hdf"
-		elif fname.endswith(".fits"):    fmt = "fits"
+		if   fname.endswith(".hdf"):	 fmt = "hdf"
+		elif fname.endswith(".fits"):	 fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
