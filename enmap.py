@@ -1156,12 +1156,15 @@ def read_map_geometry(fname, fmt=None, hdu=None):
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
-		return read_fits_geometry(fname, hdu=hdu)
+		shape, wcs = read_fits_geometry(fname, hdu=hdu)
 	elif fmt == "hdf":
-		return read_hdf_geometry(fname)
+		shape, wcs = read_hdf_geometry(fname)
 	else:
 		raise ValueError
-	return res
+	if len(toks) > 1:
+		sel = eval("enlib.utils.sliceeval"+":".join(toks[1:]))[-2:]
+		shape, wcs = slice_geometry(shape, wcs, sel)
+	return shape, wcs
 
 def write_fits(fname, emap, extra={}):
 	"""Write an enmap to a fits file."""

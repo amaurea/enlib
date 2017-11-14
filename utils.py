@@ -1641,3 +1641,9 @@ def load_ascii_table(fname, desc, sep=None, dsep=None):
 			name, typ = tok.split(":")
 			dtype.append((name,typ))
 	return np.loadtxt(fname, dtype=dtype, delimiter=sep)
+
+class _SliceEval:
+	def __getitem__(self, sel):
+		if isinstance(sel, slice): return (sel,)
+		else: return sel
+sliceeval = _SliceEval()

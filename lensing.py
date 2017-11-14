@@ -89,52 +89,71 @@ def lens_map_flat(cmb_map, phi_map):
 
 ######## Curved sky lensing ########
 
-def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False):
+def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False, delta_theta=None):
 	import curvedsky, sharp
 	ctype   = np.result_type(dtype,0j)
+	# Restrict to target number of components
+	oshape  = shape[-3:]
+	if len(oshape) == 2: shape = (1,)+tuple(shape)
 	# First draw a random lensing field, and use it to compute the undeflected positions
-	if verbose: print "Computing observed coordinates"
-	obs_pos = enmap.posmap(shape, wcs)
 	if verbose: print "Generating alms"
 	alm, ainfo = curvedsky.rand_alm(ps_lensinput, lmax=lmax, seed=seed, dtype=ctype, return_ainfo=True)
-	phi_alm, cmb_alm = alm[0], alm[1:]
+	phi_alm, cmb_alm = alm[0], alm[1:1+shape[-3]]
 	# Truncate alm if we want a smoother map. In taylens, it was necessary to truncate
 	# to a lower lmax for the map than for phi, to avoid aliasing. The appropriate lmax
 	# for the cmb was the one that fits the resolution. FIXME: Can't slice alm this way.
 	#if maplmax: cmb_alm = cmb_alm[:,:maplmax]
 	del alm
-	if "p" in output:
-		if verbose: print "Computing phi map"
-		phi_map = curvedsky.alm2map(phi_alm, enmap.zeros(shape[-2:], wcs, dtype=dtype))
+	if delta_theta is None: bsize = shape[-2]
+	else: bsize = utils.nint(abs(delta_theta/utils.degree/wcs.wcs.cdelt[1]))
+	# Allocate output maps
+	if "p" in output: phi_map   = enmap.empty(shape[-2:], wcs, dtype=dtype)
 	if "k" in output:
-		if verbose: print "Computing kappa map"
+		kappa_map = enmap.empty(shape[-2:], wcs, dtype=dtype)
 		l = np.arange(ainfo.lmax+1.0)
 		kappa_alm = ainfo.lmul(phi_alm, l*(l+1)/2)
-		kappa_map = curvedsky.alm2map(kappa_alm, enmap.zeros(shape[-2:], wcs, dtype=dtype))
+		for i1 in range(0, shape[-2], bsize):
+			curvedsky.alm2map(kappa_alm, kappa_map[...,i1:i1+bize,:])
 		del kappa_alm
-	if verbose: print "Computing grad map"
-	grad = curvedsky.alm2map(phi_alm, enmap.zeros((2,)+shape[-2:], wcs, dtype=dtype), deriv=True)
-	if verbose: print "Computing alpha map"
-	raw_pos = enmap.samewcs(offset_by_grad(obs_pos, grad, pol=True, geodesic=geodesic), obs_pos)
-	del obs_pos, phi_alm
-	if "a" not in output: del grad
-	if "u" in output:
-		if verbose: print "Computing unlensed map"
-		cmb_raw = curvedsky.alm2map(cmb_alm, enmap.zeros(shape, wcs, dtype=dtype), spin=spin)
-	if verbose: print "Computing lensed map"
-	cmb_obs = curvedsky.alm2map_pos(cmb_alm, raw_pos[:2], oversample=oversample, spin=spin)
-	if raw_pos.shape[0] > 2 and np.any(raw_pos[2]):
-		if verbose: print "Rotating polarization"
-		cmb_obs = enmap.rotate_pol(cmb_obs, raw_pos[2])
-	del cmb_alm, raw_pos
+	if "a" in output: grad_map  = enmap.empty((2,)+shape[-2:], wcs, dtype=dtype)
+	if "u" in output: cmb_raw   = enmap.empty(shape, wcs, dtype=dtype)
+	if "l" in output: cmb_obs   = enmap.empty(shape, wcs, dtype=dtype)
+	# Then loop over dec bands
+	for i1 in range(0, shape[-2], bsize):
+		i2 = min(i1+bsize, shape[-2])
+		print i1, i2
+		lshape, lwcs = enmap.slice_geometry(shape, wcs, (slice(i1,i2),slice(None)))
+		if "p" in output:
+			if verbose: print "Computing phi map"
+			curvedsky.alm2map(phi_alm, phi_map[...,i1:i2,:])
+		if verbose: print "Computing grad map"
+		if "a" in output: grad = grad_map[...,i1:i2,:]
+		else: grad = enmap.zeros((2,)+lshape[-2:], lwcs, dtype=dtype)
+		curvedsky.alm2map(phi_alm, grad, deriv=True)
+		if "l" not in output: continue
+		if verbose: print "Computing observed coordinates"
+		obs_pos = enmap.posmap(lshape, lwcs)
+		if verbose: print "Computing alpha map"
+		raw_pos = enmap.samewcs(offset_by_grad(obs_pos, grad, pol=shape[-3]>1, geodesic=geodesic), obs_pos)
+		del obs_pos, grad
+		if "u" in output:
+			if verbose: print "Computing unlensed map"
+			curvedsky.alm2map(cmb_alm, cmb_raw[...,i1:i2,:], spin=spin)
+		if verbose: print "Computing lensed map"
+		cmb_obs[...,i1:i2,:] = curvedsky.alm2map_pos(cmb_alm, raw_pos[:2], oversample=oversample, spin=spin)
+		if raw_pos.shape[0] > 2 and np.any(raw_pos[2]):
+			if verbose: print "Rotating polarization"
+			cmb_obs[...,i1:i2,:] = enmap.rotate_pol(cmb_obs[...,i1:i2,:], raw_pos[2])
+		del raw_pos
+	del cmb_alm, phi_alm
 	# Output in same order as specified in output argument
 	res = []
 	for c in output:
-		if   c == "l": res.append(cmb_obs)
-		elif c == "u": res.append(cmb_raw)
+		if   c == "l": res.append(cmb_obs.reshape(oshape))
+		elif c == "u": res.append(cmb_raw.reshape(oshape))
 		elif c == "p": res.append(phi_map)
 		elif c == "k": res.append(kappa_map)
-		elif c == "a": res.append(grad)
+		elif c == "a": res.append(grad_map)
 	return tuple(res)
 
 def offset_by_grad(ipos, grad, geodesic=True, pol=None):
