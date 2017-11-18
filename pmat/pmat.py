@@ -8,7 +8,7 @@ to incrementally project different parts of the signal.
 """
 import numpy as np, time, sys
 from enlib import enmap, interpol, utils, coordinates, config, errors, array_ops
-from enlib import parallax, bunch
+from enlib import parallax, bunch, pointsrcs
 import pmat_core_32
 import pmat_core_64
 def get_core(dtype):
@@ -506,38 +506,43 @@ class PmatPtsrc(PointingMatrix):
 		ipol, obox, err = build_interpol(transform, scan.box, scan.entry.id, posunit=0.5*utils.arcsec)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, srcs.dtype)
 
-		# Build source hit grid
-		cbox    = obox[:,:2]
-		cshape  = tuple(np.ceil(((cbox[1]-cbox[0])/cres)).astype(int))
-		self.ref = np.mean(cbox,0)
-		srcs[...,:2] = utils.rewind(srcs[...,:2], self.ref)
+		self.cbox = obox[:,:2]
+		self.ref  = np.mean(self.cbox,0)
+		self.ncell, self.cells = pointsrcs.build_src_cells(self.cbox, srcs[...,:2], cres, unwind=True)
 
-		# A cell is hit if it overlaps both horizontally and vertically
-		# with the point source +- rmax
-		# ncell is [ndir,nsrc_det,ncy,ncx]
-		ncell = np.zeros((ndir,src_ndet)+cshape,dtype=np.int32)
-		# cells is [ndir,nsrc_det,ncy,ncx,maxcell]
-		cells = np.zeros((ndir,src_ndet)+cshape+(maxcell,),dtype=np.int32)
-		c0 = cbox[0]; inv_dc = cshape/(cbox[1]-cbox[0])
-		for si in range(nsrc):
-			for sdir in range(ndir):
-				for sdi in range(src_ndet):
-					src = srcs[si,sdir,sdi]
-					i1 = (src[:2]-rmax-c0)*inv_dc
-					i2 = (src[:2]+rmax-c0)*inv_dc+1 # +1 because this is a half-open interval
-					# Truncate to edges - any source outside of our region
-					# will be put on one of the edge cells
-					i1 = np.maximum(i1.astype(int), 0)
-					i2 = np.minimum(i2.astype(int), np.array(cshape)-1)
-					#print si, sdir, i1, i2, cshape
-					if np.any(i1 >= cshape) or np.any(i2 < 0): continue
-					sel= (sdir,sdi,slice(i1[0],i2[0]),slice(i1[1],i2[1]))
-					cells[sel][:,:,ncell[sel]] = si
-					ncell[sel] += 1
+		## Build source hit grid
+		#cbox    = obox[:,:2]
+		#cshape  = tuple(np.ceil(((cbox[1]-cbox[0])/cres)).astype(int))
+		#self.ref = np.mean(cbox,0)
+		#srcs[...,:2] = utils.rewind(srcs[...,:2], self.ref)
 
-		self.cells, self.ncell = cells, ncell
+		## A cell is hit if it overlaps both horizontally and vertically
+		## with the point source +- rmax
+		## ncell is [ndir,nsrc_det,ncy,ncx]
+		#ncell = np.zeros((ndir,src_ndet)+cshape,dtype=np.int32)
+		## cells is [ndir,nsrc_det,ncy,ncx,maxcell]
+		#cells = np.zeros((ndir,src_ndet)+cshape+(maxcell,),dtype=np.int32)
+		#c0 = cbox[0]; inv_dc = cshape/(cbox[1]-cbox[0])
+		#for si in range(nsrc):
+		#	for sdir in range(ndir):
+		#		for sdi in range(src_ndet):
+		#			src = srcs[si,sdir,sdi]
+		#			i1 = (src[:2]-rmax-c0)*inv_dc
+		#			i2 = (src[:2]+rmax-c0)*inv_dc+1 # +1 because this is a half-open interval
+		#			# Truncate to edges - any source outside of our region
+		#			# will be put on one of the edge cells
+		#			i1 = np.maximum(i1.astype(int), 0)
+		#			i2 = np.minimum(i2.astype(int), np.array(cshape)-1)
+		#			#print si, sdir, i1, i2, cshape
+		#			if np.any(i1 >= cshape) or np.any(i2 < 0): continue
+		#			sel= (sdir,sdi,slice(i1[0],i2[0]),slice(i1[1],i2[1]))
+		#			cells[sel][:,:,ncell[sel]] = si
+		#			ncell[sel] += 1
+
+		#self.cells, self.ncell = cells, ncell
+		#print self.cells.shape, self.ncell.shape
+
 		self.rmax = rmax
-		self.cbox = cbox
 		self.tmul = 1 if tmul is None else tmul
 		self.pmul = 1 if pmul is None else pmul
 		self.err  = err
@@ -578,7 +583,7 @@ def build_interpol(transform, box, id="none", posunit=1.0, sys=None):
 	# Build pointing interpolator
 	errlim = np.array([1e-3*posunit,1e-3*posunit,utils.arcmin,utils.arcmin])*acc
 	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, errlim, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
-	if not ok: print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, id)
+	if not ok and np.any(err>errlim): print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, id)
 	return ipol, obox, err
 
 def build_pos_transform(scan, sys):

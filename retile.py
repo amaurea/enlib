@@ -231,7 +231,7 @@ def read_tileset_geometry(ipathfmt, itile1=(None,None), itile2=(None,None)):
 			tshape=m1.shape[-2:])
 
 def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=False,
-		cache=None, slice=None):
+		cache=None, slice=None, wrap=True):
 	"""Given a set of tiles on disk with locations ipathfmt % {"y":...,"x":...},
 	read the data corresponding to the pixel range opix[{from,to],{y,x}] in
 	the full map."""
@@ -244,6 +244,10 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 		geo = read_tileset_geometry(ipathfmt, itile1=itile1, itile2=itile2)
 	else: geo = cache[2]
 	if cache is not None: cache[2] = geo
+	# Determine tile wrapping
+	npix_phi  = 360./geo.wcs.wcs.cdelt[1]
+	ntile_phi = utils.nint(npix_phi/geo.tshape[-1])
+
 	isize = geo.tshape
 	osize = opix[1]-opix[0]
 	omap  = enmap.zeros(geo.shape[:-2]+tuple(osize), geo.wcs, geo.dtype)
@@ -260,6 +264,7 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 		oy1,oy2 = overlap-opix[0,0]
 		iy1,iy2 = overlap-ipy1
 		for itx in range(it1[1],it2[1]):
+			if wrap: itx = itx % ntile_phi
 			if itx < itile1[1] or itx >= itile2[1]: continue
 			ipx1, ipx2 = itx*isize[1], (itx+1)*isize[1]
 			overlap = range_overlap(opix[:,1],[ipx1,ipx2])

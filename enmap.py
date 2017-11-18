@@ -670,11 +670,13 @@ def fullsky_geometry(res=None, shape=None, dims=(), proj="car"):
 	if shape is None:
 		res   = np.zeros(2)+res
 		shape = ([1*np.pi,2*np.pi]/res+0.5).astype(int)
+		shape[0] += 1
 	ny,nx = shape
+	ny   -= 1
 	wcs   = enlib.wcs.WCS(naxis=2)
 	wcs.wcs.crval = [0,0]
 	wcs.wcs.cdelt = [-360./nx,180./ny]
-	wcs.wcs.crpix = [nx/2+1,ny/2+1]
+	wcs.wcs.crpix = [nx/2.+1,ny/2.+1]
 	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
 	return dims+(ny+1,nx+0), wcs
 
@@ -822,7 +824,7 @@ def upgrade(emap, factor):
 		res.wcs.wcs.crpix[j] += 0.5
 	return res
 
-def pad(emap, pix, return_slice=False,wrap=False):
+def pad(emap, pix, return_slice=False, wrap=False):
 	"""Pad enmap "emap", creating a larger map with zeros filled in on the sides.
 	How much to pad is controlled via pix. If pix is a scalar, it specifies the number
 	of pixels to add on all sides. If it is 1d, it specifies the number of pixels to add

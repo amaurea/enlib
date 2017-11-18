@@ -244,14 +244,14 @@ def map2alm_cyl(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False,
 	minfo = match_predefined_minfo(tmap, rtol=rtol, atol=atol)
 	return map2alm_raw(tmap, alm, minfo, ainfo, spin=spin)
 
-def map2alm_healpix(healmap, alm=None, ainfo=None, lmax=None, spin=2, deriv=False, copy=False):
+def map2alm_healpix(healmap, alm=None, ainfo=None, lmax=None, spin=2, copy=False):
 	"""Projects the given alm[...,ncomp,nalm] onto the given healpix map
 	healmap[...,ncomp,npix]."""
 	alm, ainfo = prepare_alm(alm, ainfo, lmax, healmap.shape[:-1], healmap.dtype)
 	nside = npix2nside(healmap.shape[-1])
 	minfo = sharp.map_info_healpix(nside)
 	return map2alm_raw(healmap[...,None], alm, minfo=minfo, ainfo=ainfo,
-			spin=spin, deriv=deriv, copy=copy)
+			spin=spin, copy=copy)
 
 ######################
 ### Raw transforms ###
@@ -461,7 +461,7 @@ def match_predefined_minfo(m, rtol=None, atol=None):
 	return minfo_cut
 
 def npix2nside(npix):
-	return utils.nint((healmap.shape[-1]/12)**0.5)
+	return utils.nint((npix/12)**0.5)
 
 def prepare_alm(alm=None, ainfo=None, lmax=None, pre=(), dtype=np.float64):
 	"""Set up alm and ainfo based on which ones of them are available."""

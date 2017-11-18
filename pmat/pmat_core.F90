@@ -1500,8 +1500,6 @@ contains
 	end subroutine
 
 
-
-
 	! Fast point source projection for a single source. Can't do OMP over
 	! sources in this case. Current scheme can't easily OMP over dets,
 	! as each (source,det,range) maps to a different set of samples, which
