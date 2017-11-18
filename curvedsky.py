@@ -333,7 +333,7 @@ def make_projectable_map_cyl(map, verbose=False):
 	owcs   = map.wcs
 	# Our input map could in theory cover multiple copies of the sky, which
 	# would require us to copy out multiple slices.
-	nslice = (nx+nphi-1)/nphi
+	nslice = (nx+nphi-1)//nphi
 	islice, oslice = [], []
 	def negnone(x): return x if x >= 0 else None
 	for i in range(nslice):

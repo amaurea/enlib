@@ -9,7 +9,7 @@ def sym_compress(mat, which=None, n=None, scheme=None, axes=[0,1]):
 	compressed_order. The optional argument 'n' indicates the
 	number of elements to keep (the default is to keep all unique
 	elements). The 'axes' argument indicates which axes to operate on."""
-	if n is None: n = mat.shape[axes[0]]*(mat.shape[axes[0]]+1)/2
+	if n is None: n = mat.shape[axes[0]]*(mat.shape[axes[0]]+1)//2
 	if which==None: which = compressed_order(n, scheme)
 	m = np.rollaxis(np.rollaxis(mat, axes[1]), axes[0])
 	res = np.array([m[w[0],w[1]] for w in which])

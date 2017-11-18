@@ -86,12 +86,12 @@ def resample_fft(d, n, axes=None):
 		dn   = nnew-nold
 		if dn > 0:
 			padvals = np.zeros(fd.shape[:ax]+(dn,)+fd.shape[ax+1:],fd.dtype)
-			spre  = tuple([slice(None)]*ax+[slice(0,nold/2)]+[slice(None)]*(fd.ndim-ax-1))
-			spost = tuple([slice(None)]*ax+[slice(nold/2,None)]+[slice(None)]*(fd.ndim-ax-1))
+			spre  = tuple([slice(None)]*ax+[slice(0,nold//2)]+[slice(None)]*(fd.ndim-ax-1))
+			spost = tuple([slice(None)]*ax+[slice(nold//2,None)]+[slice(None)]*(fd.ndim-ax-1))
 			fd = np.concatenate([fd[spre],padvals,fd[spost]],axis=ax)
 		elif dn < 0:
-			spre  = tuple([slice(None)]*ax+[slice(0,nnew/2)]+[slice(None)]*(fd.ndim-ax-1))
-			spost = tuple([slice(None)]*ax+[slice(nnew/2-dn,None)]+[slice(None)]*(fd.ndim-ax-1))
+			spre  = tuple([slice(None)]*ax+[slice(0,nnew//2)]+[slice(None)]*(fd.ndim-ax-1))
+			spost = tuple([slice(None)]*ax+[slice(nnew//2-dn,None)]+[slice(None)]*(fd.ndim-ax-1))
 			fd = np.concatenate([fd[spre],fd[spost]],axis=ax)
 		norm *= float(nnew)/nold
 	# And transform back

@@ -34,7 +34,7 @@ class Colorscheme:
 			val, code = tok.split(":")
 			vals[i] = float(val)
 			color = np.array((0,0,0,0xff),dtype=np.uint8)
-			m = len(code)/2
+			m = len(code)//2
 			for j in range(m):
 				color[j] = int(code[2*j:2*(j+1)],16)
 			cols[i,:] = color

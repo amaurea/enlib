@@ -179,7 +179,7 @@ cdef class alm_info:
 				if lmax is None: lmax = nalm2lmax(nalm)
 				if mmax is None: mmax = lmax
 				m = np.arange(mmax+1)
-				mstart = stride*(m*(2*lmax+1-m)/2)
+				mstart = stride*(m*(2*lmax+1-m)//2)
 			elif layout == "rectangular" or layout == "rect":
 				if lmax is None: lmax = int(nalm**0.5)-1
 				if mmax is None: mmax = lmax

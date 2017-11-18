@@ -68,7 +68,7 @@ class ndmap(np.ndarray):
 	def npix(self): return np.product(self.shape[-2:])
 	@property
 	def geometry(self): return self.shape, self.wcs
-	def project(self, shape, wcs, order=3, mode="nearest", cval=0, prefilter=True, mask_nan=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
+	def project(self, shape, wcs, order=3, mode="nearest", cval=0, prefilter=True, mask_nan=True, safe=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width, profile="cos", fill="zero"): return apod(self, width, profile=profile, fill=fill)
@@ -162,7 +162,7 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 		wcs.wcs.cdelt[j] *= s.step
 		wcs.wcs.crpix[j] += 0.5
 		oshape[i] = s.stop-s.start
-		oshape[i] = (oshape[i]+s.step-1)/s.step
+		oshape[i] = (oshape[i]+s.step-1)//s.step
 	return tuple(pre)+tuple(oshape), wcs
 
 def scale_geometry(shape, wcs, scale):
@@ -270,7 +270,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 			wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
 	return wpix[::-1].reshape(coords.shape)
 
-def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, prefilter=True, mask_nan=True):
+def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, prefilter=True, mask_nan=True, safe=True):
 	"""Project the map into a new map given by the specified
 	shape and wcs, interpolating as necessary. Handles nan
 	regions in the map by masking them before interpolating.
@@ -284,7 +284,7 @@ def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, pr
 		elif enlib.wcs.is_compatible(map.wcs, wcs) and mode == "constant":
 			print "Using extract instead"
 			return extract(map, shape, wcs, cval=cval)
-	pix  = map.sky2pix(posmap(shape, wcs))
+	pix  = map.sky2pix(posmap(shape, wcs), safe=safe)
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	return ndmap(pmap, wcs)
 
@@ -416,7 +416,7 @@ def extent_intermediate(shape, wcs):
 # To construct the coarser system, slicing won't do, as it
 # shaves off some of our area. Instead, we must modify
 # cdelt to match our new pixels: cdelt /= nnew/nold
-def extent_subgrid(shape, wcs, nsub=None):
+def extent_subgrid(shape, wcs, nsub=None, safe=True):
 	"""Returns an estimate of the "physical" extent of the
 	patch given by shape and wcs as [height,width] in
 	radians. That is, if the patch were on a sphere with
@@ -433,7 +433,7 @@ def extent_subgrid(shape, wcs, nsub=None):
 	wcs.wcs.crpix /= step
 	wcs.wcs.crpix += 0.5
 	# Get position of all the corners, including the far ones
-	pos = posmap([nsub+1,nsub+1], wcs, corner=True)
+	pos = posmap([nsub+1,nsub+1], wcs, corner=True, safe=safe)
 	# Apply az scaling
 	scale = np.zeros([2,nsub,nsub])
 	scale[1] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
@@ -486,7 +486,7 @@ def pixsizemap(shape, wcs):
 	for a in area:
 		bad  = ~np.isfinite(a)
 		a[bad] = np.mean(a[~bad])
-	return area
+	return ndmap(area, wcs)
 
 def lmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
@@ -532,7 +532,7 @@ def laxes(shape, wcs, oversample=1):
 def lrmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
 	of a map with the given shape and wcs."""
-	return lmap(shape, wcs, oversample=oversample)[...,:shape[-1]/2+1]
+	return lmap(shape, wcs, oversample=oversample)[...,:shape[-1]//2+1]
 
 def fft(emap, omap=None, nthread=0, normalize=True):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
@@ -742,11 +742,11 @@ def spec2flat_corr(shape, wcs, cov, exp=1.0, mode="constant"):
 	# (remember to move to the corner because this is
 	# a correlation function)
 	dpos = posmap(shape, wcs)
-	dpos -= dpos[:,None,None,dpos.shape[-2]/2,dpos.shape[-1]/2]
+	dpos -= dpos[:,None,None,dpos.shape[-2]//2,dpos.shape[-1]//2]
 	ipos = np.arccos(np.cos(dpos[0])*np.cos(dpos[1]))*nr/rmax
 	corr2d = enlib.utils.interpol(corrfun, ipos.reshape((-1,)+ipos.shape), mode=mode, mask_nan=False, order=1)
-	corr2d = np.roll(corr2d, -corr2d.shape[-2]/2, -2)
-	corr2d = np.roll(corr2d, -corr2d.shape[-1]/2, -1)
+	corr2d = np.roll(corr2d, -corr2d.shape[-2]//2, -2)
+	corr2d = np.roll(corr2d, -corr2d.shape[-1]//2, -1)
 	corr2d = ndmap(corr2d, wcs)
 	return fft(corr2d).real * np.product(shape[-2:])**0.5
 
@@ -804,8 +804,8 @@ def downgrade(emap, factor):
 	inside pixels."""
 	fact = np.full(2, 1, dtype=int)
 	fact[:] = factor
-	tshape = emap.shape[-2:]/fact*fact
-	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/fact[0],fact[0],tshape[1]/fact[1],fact[1])),(-3,-1))
+	tshape = emap.shape[-2:]//fact*fact
+	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]//fact[0],fact[0],tshape[1]//fact[1],fact[1])),(-3,-1))
 	return ndmap(res, emap[...,::fact[0],::fact[1]].wcs)
 
 def upgrade(emap, factor):
@@ -1158,12 +1158,15 @@ def read_map_geometry(fname, fmt=None, hdu=None):
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
-		return read_fits_geometry(fname, hdu=hdu)
+		shape, wcs = read_fits_geometry(fname, hdu=hdu)
 	elif fmt == "hdf":
-		return read_hdf_geometry(fname)
+		shape, wcs = read_hdf_geometry(fname)
 	else:
 		raise ValueError
-	return res
+	if len(toks) > 1:
+		sel = eval("enlib.utils.sliceeval"+":".join(toks[1:]))[-2:]
+		shape, wcs = slice_geometry(shape, wcs, sel)
+	return shape, wcs
 
 def write_fits(fname, emap, extra={}):
 	"""Write an enmap to a fits file."""
