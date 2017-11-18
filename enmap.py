@@ -68,7 +68,7 @@ class ndmap(np.ndarray):
 	def npix(self): return np.product(self.shape[-2:])
 	@property
 	def geometry(self): return self.shape, self.wcs
-	def project(self, shape, wcs, order=3, mode="nearest", cval=0, prefilter=True, mask_nan=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
+	def project(self, shape, wcs, order=3, mode="nearest", cval=0, prefilter=True, mask_nan=True, safe=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width, profile="cos", fill="zero"): return apod(self, width, profile=profile, fill=fill)
@@ -270,7 +270,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 			wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
 	return wpix[::-1].reshape(coords.shape)
 
-def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, prefilter=True, mask_nan=True):
+def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, prefilter=True, mask_nan=True, safe=True):
 	"""Project the map into a new map given by the specified
 	shape and wcs, interpolating as necessary. Handles nan
 	regions in the map by masking them before interpolating.
@@ -284,7 +284,7 @@ def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, pr
 		elif enlib.wcs.is_compatible(map.wcs, wcs) and mode == "constant":
 			print "Using extract instead"
 			return extract(map, shape, wcs, cval=cval)
-	pix  = map.sky2pix(posmap(shape, wcs))
+	pix  = map.sky2pix(posmap(shape, wcs), safe=safe)
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	return ndmap(pmap, wcs)
 
@@ -416,7 +416,7 @@ def extent_intermediate(shape, wcs):
 # To construct the coarser system, slicing won't do, as it
 # shaves off some of our area. Instead, we must modify
 # cdelt to match our new pixels: cdelt /= nnew/nold
-def extent_subgrid(shape, wcs, nsub=None):
+def extent_subgrid(shape, wcs, nsub=None, safe=True):
 	"""Returns an estimate of the "physical" extent of the
 	patch given by shape and wcs as [height,width] in
 	radians. That is, if the patch were on a sphere with
@@ -433,7 +433,7 @@ def extent_subgrid(shape, wcs, nsub=None):
 	wcs.wcs.crpix /= step
 	wcs.wcs.crpix += 0.5
 	# Get position of all the corners, including the far ones
-	pos = posmap([nsub+1,nsub+1], wcs, corner=True)
+	pos = posmap([nsub+1,nsub+1], wcs, corner=True, safe=safe)
 	# Apply az scaling
 	scale = np.zeros([2,nsub,nsub])
 	scale[1] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
@@ -486,7 +486,7 @@ def pixsizemap(shape, wcs):
 	for a in area:
 		bad  = ~np.isfinite(a)
 		a[bad] = np.mean(a[~bad])
-	return area
+	return ndmap(area, wcs)
 
 def lmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
