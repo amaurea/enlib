@@ -1,6 +1,8 @@
 import numpy as np, glob, re, sys, os
 from enlib import utils, enmap, bunch
 
+default_pathformat = "tile%(y)03d_%(x)03d.fits"
+
 def leaftile(idir, odir, tsize=675, comm=None, verbose=False, lrange=[0,-6],
 		monolithic=False, slice=None):
 	"""Given a input directory containing a tiled dmap in standard
@@ -175,7 +177,9 @@ def monolithic(idir, ofile, verbose=True, slice=None):
 	for ty in range(itile1[0],itile2[0]):
 		for tx in range(itile1[1],itile2[1]):
 			m = read(ipathfmt % {"y":ty,"x":tx})
-			omap[...,ty*wy:(ty+1)*wy,tx*wx:(tx+1)*wx] = m
+			oy = ty - itile1[0]
+			ox = tx - itile1[1]
+			omap[...,oy*wy:(oy+1)*wy,ox*wx:(ox+1)*wx] = m
 			if verbose: print ipathfmt % {"y":ty,"x":tx}
 	enmap.write_map(ofile, omap)
 
@@ -245,7 +249,7 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 	else: geo = cache[2]
 	if cache is not None: cache[2] = geo
 	# Determine tile wrapping
-	npix_phi  = 360./geo.wcs.wcs.cdelt[1]
+	npix_phi  = np.abs(360./geo.wcs.wcs.cdelt[0])
 	ntile_phi = utils.nint(npix_phi/geo.tshape[-1])
 
 	isize = geo.tshape
@@ -264,14 +268,14 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 		oy1,oy2 = overlap-opix[0,0]
 		iy1,iy2 = overlap-ipy1
 		for itx in range(it1[1],it2[1]):
-			if wrap: itx = itx % ntile_phi
-			if itx < itile1[1] or itx >= itile2[1]: continue
+			if wrap: itx_wrap = itx % ntile_phi
+			if itx_wrap < itile1[1] or itx_wrap >= itile2[1]: continue
 			ipx1, ipx2 = itx*isize[1], (itx+1)*isize[1]
 			overlap = range_overlap(opix[:,1],[ipx1,ipx2])
 			ox1,ox2 = overlap-opix[0,1]
 			ix1,ix2 = overlap-ipx1
 			# Read the input tile and copy over
-			iname = ipathfmt % {"y":ity,"x":itx}
+			iname = ipathfmt % {"y":ity,"x":itx_wrap}
 			if cache is None or cache[0] != iname:
 				imap  = enmap.read_map(iname)
 				if slice: imap = eval("imap"+slice)
