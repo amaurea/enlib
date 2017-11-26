@@ -158,7 +158,7 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		enmap.write_map(oname, omap)
 		if verbose: print oname
 
-def monolithic(idir, ofile, verbose=True, slice=None):
+def monolithic(idir, ofile, verbose=True, slice=None, dtype=None):
 	# Find the range of input tiles
 	ipathfmt = idir + "/tile%(y)03d_%(x)03d.fits"
 	itile1, itile2 = find_tile_range(ipathfmt)
@@ -171,7 +171,8 @@ def monolithic(idir, ofile, verbose=True, slice=None):
 	m2 = read(ipathfmt % {"y":itile2[0]-1,"x":itile2[1]-1})
 	wy,wx  = m1.shape[-2:]
 	oshape = tuple(np.array(m1.shape[-2:])*(itile2-itile1-1) + np.array(m2.shape[-2:]))
-	omap  = enmap.zeros(m1.shape[:-2] + oshape, m1.wcs, m1.dtype)
+	if dtype is None: dtype = m1.dtype
+	omap  = enmap.zeros(m1.shape[:-2] + oshape, m1.wcs, dtype)
 	del m1, m2
 	# Now loop through all tiles and copy them in to the correct position
 	for ty in range(itile1[0],itile2[0]):
