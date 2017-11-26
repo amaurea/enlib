@@ -42,10 +42,10 @@ from enlib import config, nmat, bench, gapfill, mpi, sampcut
 from enlib.cg import CG
 L = logging.getLogger(__name__)
 
-#def dump(fname, d):
-#	print "dumping " + fname
-#	with h5py.File(fname, "w") as hfile:
-#		hfile["data"] = d
+def dump(fname, d):
+	print "dumping " + fname
+	with h5py.File(fname, "w") as hfile:
+		hfile["data"] = d
 
 ######## Signals ########
 
@@ -615,7 +615,6 @@ class FilterPickup:
 		else:
 			waz = (np.max(scan.boresight[:,1])-np.min(scan.boresight[:,1]))/utils.degree
 			naz = utils.nint(waz/self.daz)
-			print "FilterPickup using daz=%.1f waz=%.1f naz=%d" % (self.daz, waz, naz)
 		todfilter.filter_poly_jon(tod, scan.boresight[:,1], hwp=scan.hwp, naz=naz, nt=self.nt, nhwp=self.nhwp, niter=self.niter, cuts=scan.cut)
 
 class PostPickup:
@@ -763,8 +762,7 @@ class FilterAddSrcs:
 		self.params = params
 		self.data = {}
 		for scan in scans:
-			self.data[scan] = pmat.PmatPtsrc2(scan, params, sys=sys, pmul=mul)
-			#self.data[scan] = pmat.PmatPtsrc(scan, params, sys=sys, pmul=mul)
+			self.data[scan] = pmat.PmatPtsrc(scan, params, sys=sys, pmul=mul)
 	def __call__(self, scan, tod):
 		pmat = self.data[scan]
 		pmat.forward(tod, self.params)

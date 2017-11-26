@@ -9,6 +9,13 @@ c = 299792458.0
 h = 6.62606957e-34
 k = 1.3806488e-23
 
+# These are like degree, arcmin and arcsec, but turn any lists
+# they touch into arrays.
+a    = np.array(1.0)
+adeg = np.array(degree)
+amin = np.array(arcmin)
+asec = np.array(arcsec)
+
 def lines(file_or_fname):
 	"""Iterates over lines in a file, which can be specified
 	either as a filename or as a file object."""
@@ -1641,6 +1648,30 @@ def load_ascii_table(fname, desc, sep=None, dsep=None):
 			name, typ = tok.split(":")
 			dtype.append((name,typ))
 	return np.loadtxt(fname, dtype=dtype, delimiter=sep)
+
+def count_variable_basis(bases):
+	"""Counts from 0 and up through a variable-basis number,
+	where each digit has a different basis. For example,
+	count_variable_basis([2,3]) would yield [0,0], [0,1], [0,2],
+	[1,0], [1,1], [1,2]."""
+	N = bases
+	n = len(bases)
+	I = [0 for i in range(n)]
+	yield I
+	while True:
+		for i in range(n-1,-1,-1):
+			I[i] += 1
+			if I[i] < N[i]: break
+			else:
+				for j in range(i,n): I[j] = 0
+		else: break
+		yield I
+
+def list_combination_iter(ilist):
+	"""Given a list of lists of values, yields every combination of
+	one value from each list."""
+	for I in count_variable_basis([len(v) for v in ilist]):
+		yield [v[i] for v,i in zip(ilist,I)]
 
 class _SliceEval:
 	def __getitem__(self, sel):
