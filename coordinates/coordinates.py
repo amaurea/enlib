@@ -1,14 +1,11 @@
 """This module provides conversions between astronomical coordinate systems.
 When c is more developed, it might completely replace this
 module. For now, it is used as a part of the implementation."""
-import numpy as np, pyfsla
+import numpy as np
 import astropy.coordinates as c, astropy.units as u
 from enlib import utils
-# Optional dependencies
-try: from enlib import iers
-except ImportError: pass
-try: import ephem
-except ImportError: pass
+# Optional dependencies are imported in the functions that
+# use them. These include ephem, iers and pyfsla
 
 class default_site:
 	lat  = -22.9585
@@ -187,6 +184,7 @@ def transform_astropy(from_sys, to_sys, coords):
 		getattr(getattr(coords, names[1]),unit.name)])
 
 def hor2cel(coord, time, site, copy=True):
+	import pyfsla, iers
 	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]
 	info   = iers.lookup(trepr)
@@ -199,6 +197,7 @@ def hor2cel(coord, time, site, copy=True):
 	return coord
 
 def cel2hor(coord, time, site, copy=True):
+	import pyfsla, iers
 	# This is very slow for objects near the horizon!
 	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]
@@ -329,6 +328,7 @@ def ephem_pos(name, mjd):
 	"""Given the name of an ephemeris object from pyephem and a
 	time in modified julian date, return its position in ra, dec
 	in radians in equatorial coordinates."""
+	import ephem
 	mjd = np.asarray(mjd)
 	djd = mjd + 2400000.5 - 2415020
 	obj = getattr(ephem, name)()
