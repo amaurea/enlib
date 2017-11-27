@@ -345,7 +345,7 @@ def _arghelper(map, func, unit):
 	if unit == "coord": res = pix2sky(map.shape, map.wcs, res.T).T
 	return res
 
-def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
+def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False,iau=False):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
 	the provided power spectrum. If cov.ndim is 4, 2D power is assumed else 1D
 	power is assumed. If pixel_units is True, the 2D power spectra is assumed
@@ -355,7 +355,7 @@ def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
 	if scalar:
 		return ifft(kmap).real
 	else:
-		return harm2map(kmap)
+		return harm2map(kmap,iau=iau)
 
 def rand_gauss(shape, wcs, dtype=None):
 	"""Generate a map with random gaussian noise in pixel space."""
@@ -549,26 +549,27 @@ def ifft(emap, omap=None, nthread=0, normalize=True):
 # T,E,B hamonic maps. They are not the most efficient way of doing this.
 # It would be better to precompute the rotation matrix and buffers, and
 # use real transforms.
-def map2harm(emap, nthread=0, normalize=True):
+def map2harm(emap, nthread=0, normalize=True,iau=False):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
 	emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
 	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap())
+		rot = queb_rotmat(emap.lmap(),iau=iau)
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
 	return emap
-def harm2map(emap, nthread=0, normalize=True):
+def harm2map(emap, nthread=0, normalize=True,iau=False):
 	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap(), inverse=True)
+		rot = queb_rotmat(emap.lmap(), inverse=True,iau=iau)
 		emap = emap.copy()
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
 	return samewcs(ifft(emap,nthread=nthread,normalize=normalize), emap).real
 
-def queb_rotmat(lmap, inverse=False):
+def queb_rotmat(lmap, inverse=False, iau=False):
 	# atan2(x,y) instead of (y,x) because Qr points in the
 	# tangential direction, not radial. This matches flipperpol too.
 	# This corresponds to the Healpix convention. To get IAU,
 	# flip the sign of a.
-	a    = 2*np.arctan2(-lmap[1], lmap[0])
+	sgn = -1 if iau else 1
+	a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
 	c, s = np.cos(a), np.sin(a)
 	if inverse: s = -s
 	return samewcs(np.array([[c,-s],[s,c]]),lmap)
