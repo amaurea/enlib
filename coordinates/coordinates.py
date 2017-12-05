@@ -184,7 +184,8 @@ def transform_astropy(from_sys, to_sys, coords):
 		getattr(getattr(coords, names[1]),unit.name)])
 
 def hor2cel(coord, time, site, copy=True):
-	import pyfsla, iers
+	from . import pyfsla
+	from enlib import iers
 	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]
 	info   = iers.lookup(trepr)
@@ -197,7 +198,8 @@ def hor2cel(coord, time, site, copy=True):
 	return coord
 
 def cel2hor(coord, time, site, copy=True):
-	import pyfsla, iers
+	from . import pyfsla
+	from enlib import iers
 	# This is very slow for objects near the horizon!
 	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]

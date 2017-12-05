@@ -4,6 +4,8 @@ from enlib import enmap, retile, utils, bunch, cg, fft
 
 def read_config(fname):
 	config = imp.load_source("config", fname)
+	config.path = fname
+	return config
 
 def get_datasets(config, sel=None):
 	# Set up boolean arrays for querys
@@ -12,13 +14,13 @@ def get_datasets(config, sel=None):
 		all_tags |= dataset.tags
 	flags = {flag: np.array([flag in dataset.tags for dataset in config.datasets],bool) for flag in all_tags}
 	# Extract the relevant datasets
-	datsets = config.datasets
+	datasets = config.datasets
 	if sel is not None:
 		sel     = "&".join(["(" + w + ")" for w in utils.split_outside(sel, ",")])
 		selinds = np.where(eval(sel, flags))[0]
-		datsets = [datasets[i] for i in selinds]
+		datasets = [datasets[i] for i in selinds]
 	# Make all paths relative to us instead of the config file
-	cdir = os.path.dirname(fname)
+	cdir = os.path.dirname(config.path)
 	# In tiled input format, all input maps have the same geometry
 	for dataset in datasets:
 		for split in dataset.splits:
@@ -182,7 +184,7 @@ class JointMapset:
 				try:
 					map = read_map(split.map, pbox, name=os.path.basename(split.map), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
 					div = read_map(split.div, pbox, name=os.path.basename(split.div), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache).preflat[0]
-				except IOError: continue
+				except IOError as e: continue
 				map *= dataset.gain
 				div *= dataset.gain**-2
 				div[~np.isfinite(div)] = 0
@@ -314,6 +316,7 @@ class JointMapset:
 			if mode != "filter": iN *= filter
 			dataset.iN     = iN
 			dataset.filter = filter
+			self.mode = mode
 
 	def set_slice(self, slice=None):
 		self.slice = slice
@@ -329,20 +332,19 @@ class JointMapset:
 
 class AutoCoadder(JointMapset):
 	def __init__(self, *args, **kwargs):
-		super(self, *args, **kwargs)
-		self.build_precon()
-	def build_precon(self):
+		JointMapset.__init__(self, *args, **kwargs)
+	def calc_precon(self):
 		datasets = self.datasets
 		# Build the preconditioner
 		self.tot_div = enmap.ndmap(np.sum([split.data.div for dataset in datasets for split in dataset.splits],0), self.wcs)
 		self.tot_idiv = self.tot_div.copy()
 		self.tot_idiv[self.tot_idiv>0] **=-1
-		self.mode = mode
 		# Find the part of the sky hit by high-res data
 		self.highres_mask = enmap.zeros(self.shape[-2:], self.wcs, np.bool)
 		for dataset in datasets:
 			if dataset.lowres: continue
 			for split in dataset.splits:
+				if split.data.empty or not split.active: continue
 				self.highres_mask |= split.data.div > 0
 	def calc_rhs(self):
 		# Build the right-hand side. The right-hand side is sum(HNHm)
