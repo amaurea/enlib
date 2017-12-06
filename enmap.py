@@ -48,7 +48,7 @@ class ndmap(np.ndarray):
 	def copy(self, order='K'):
 		return ndmap(np.copy(self,order), self.wcs)
 	def sky2pix(self, coords, safe=True, corner=False): return sky2pix(self.shape, self.wcs, coords, safe, corner)
-	def pix2sky(self, pix,	  safe=True, corner=False): return pix2sky(self.shape, self.wcs, pix,	 safe, corner)
+	def pix2sky(self, pix,    safe=True, corner=False): return pix2sky(self.shape, self.wcs, pix,    safe, corner)
 	def box(self): return box(self.shape, self.wcs)
 	def posmap(self, safe=True, corner=False): return posmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
@@ -888,13 +888,13 @@ def find_blank_edges(m, value="auto"):
 		# Don't use any values for cropping, so no cropping is done
 		return np.zeros([2,2],dtype=int)
 	else:
-		value	= np.asarray(value)
+		value   = np.asarray(value)
 		# Find which rows and cols consist entirely of the given value
 		hitmask = np.all(np.isclose(m.T, value.T, equal_nan=True, rtol=1e-6, atol=0).T,axis=tuple(range(m.ndim-2)))
 		hitrows = np.all(hitmask,1)
 		hitcols = np.all(hitmask,0)
 		# Find the first and last row and col which aren't all the value
-		blanks	= np.array([
+		blanks  = np.array([
 			np.where(~hitrows)[0][[0,-1]],
 			np.where(~hitcols)[0][[0,-1]]]
 			).T
@@ -907,8 +907,8 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	length. If there there aren't enough blank areas, the map is padded
 	instead. If value="none" no values are considered blank, so no cropping
 	will happen. This can be used to autopad for fourier-friendliness."""
-	blanks	= find_blank_edges(m, value=value)
-	nblank	= np.sum(blanks,0)
+	blanks  = find_blank_edges(m, value=value)
+	nblank  = np.sum(blanks,0)
 	# Find the first good sizes larger than the unblank lengths
 	minshape  = m.shape[-2:]-nblank+margin
 	if method == "plain":
@@ -918,7 +918,7 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	else:
 		raise ValueError("Unknown autocrop method %s!" % method)
 	# Pad if necessary
-	adiff	= np.maximum(0,goodshape-m.shape[-2:])
+	adiff   = np.maximum(0,goodshape-m.shape[-2:])
 	padding = [[0,0],[0,0]]
 	if any(adiff>0):
 		padding = [adiff,[0,0]]
@@ -931,8 +931,8 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	upper  = tocrop-lower
 	s      = (Ellipsis,slice(lower[0],m.shape[-2]-upper[0]),slice(lower[1],m.shape[-1]-upper[1]))
 	class PadcropInfo:
-		slice	= s
-		pad	= padding
+		slice   = s
+		pad     = padding
 	if return_info:
 		return m[s], PadcropInfo
 	else:
@@ -1095,7 +1095,7 @@ def to_flipper(imap, omap=None, unpack=True):
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
 	header = imap.wcs.to_header(relax=True)
-	header['NAXIS']	 = 2
+	header['NAXIS']  = 2
 	header['NAXIS1'] = imap.shape[-1]
 	header['NAXIS2'] = imap.shape[-2]
 	flipwcs = flipper.liteMap.astLib.astWCS.WCS(header, mode="pyfits")
@@ -1136,8 +1136,8 @@ def write_map(fname, emap, fmt=None, extra={}):
 	be either fits or hdf. This can be overriden by
 	passing fmt with either 'fits' or 'hdf' as argument."""
 	if fmt == None:
-		if   fname.endswith(".hdf"):	 fmt = "hdf"
-		elif fname.endswith(".fits"):	 fmt = "fits"
+		if   fname.endswith(".hdf"):     fmt = "hdf"
+		elif fname.endswith(".fits"):    fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
@@ -1154,8 +1154,8 @@ def read_map(fname, fmt=None, sel=None, hdu=None):
 	toks = fname.split(":")
 	fname = toks[0]
 	if fmt == None:
-		if   fname.endswith(".hdf"):	 fmt = "hdf"
-		elif fname.endswith(".fits"):	 fmt = "fits"
+		if   fname.endswith(".hdf"):     fmt = "hdf"
+		elif fname.endswith(".fits"):    fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
@@ -1175,8 +1175,8 @@ def read_map_geometry(fname, fmt=None, hdu=None):
 	toks = fname.split(":")
 	fname = toks[0]
 	if fmt == None:
-		if   fname.endswith(".hdf"):	 fmt = "hdf"
-		elif fname.endswith(".fits"):	 fmt = "fits"
+		if   fname.endswith(".hdf"):     fmt = "hdf"
+		elif fname.endswith(".fits"):    fmt = "fits"
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
