@@ -100,6 +100,8 @@ class ndmap(np.ndarray):
 		_, wcs = slice_geometry(self.shape[-2:], self.wcs, sel2)
 		return ndmap(np.ndarray.__getitem__(self, sel), wcs)
 	def __getslice__(self, a, b=None, c=None): return self[slice(a,b,c)]
+	def subinds(self, box, inclusive=False, cap=True): return subinds(self.shape, self.wcs, box, inclusive, cap)
+	def slice_from_box(self, box, inclusive=False): return slice_from_box(self.shape, self.wcs, box, inclusive)
 	def submap(self, box, inclusive=False):
 		"""submap(box, inclusive=False)
 		
@@ -115,36 +117,31 @@ class ndmap(np.ndarray):
 		inclusive : boolean
 			Whether to include pixels that are only partially
 			inside the bounding box. Default: False."""
-		ibox = self.subinds(box, inclusive)
-		islice = enlib.utils.sbox2slice(ibox.T)
-		return self[islice]
-	def subinds(self, box, inclusive=False, cap=True):
-		"""Helper function for submap. Translates the bounding
-		box provided into a pixel units. Assumes rectangular
-		coordinates."""
-		box  = np.asarray(box)
-		# Translate the box to pixels. The 0.5 moves us from
-		# pixel-center coordinates to pixel-edge coordinates,
-		# which we need to distinguish between fully or partially
-		# included pixels
-		bpix = self.sky2pix(box.T).T
-		dir  = 2*(bpix[1]>bpix[0])-1
-		# If we are inclusive, find a bounding box, otherwise,
-		# an internal box
-		if inclusive:
-			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
-		else:
-			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
-		# Turn into list of slices, so we can handle reverse slices properly
-		# Make sure we stay inside our map bounds
-		if cap:
-			for b, n in zip(ibox.T,self.shape[-2:]):
-				if b[2] > 0: b[:2] = [max(b[0],  0),min(b[1], n)]
-				else:        b[:2] = [min(b[0],n-1),max(b[1],-1)]
-		return ibox
+		return self[self.slice_from_box(box, inclusive)]
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
 
+def slice_from_box(shape, wcs, box, inclusive=False):
+	"""slice_from_box(shape, wcs, box, inclusive=False)
+
+	Extract the part of the map inside the given box as a selection
+	without returning the data.
+
+	Parameters
+	----------
+	box : array_like
+		The [[fromy,fromx],[toy,tox]] bounding box to select.
+		The resulting map will have a bounding box as close
+		as possible to this, but will differ slightly due to
+		the finite pixel size.
+	inclusive : boolean
+		Whether to include pixels that are only partially
+		inside the bounding box. Default: False."""
+	ibox = subinds(shape, wcs, box, inclusive)
+	islice = enlib.utils.sbox2slice(ibox.T)
+	return islice
+
+		
 def slice_geometry(shape, wcs, sel, nowrap=False):
 	"""Slice a geometry specified by shape and wcs according to the
 	slice sel. Returns a tuple of the output shape and the correponding
@@ -164,6 +161,33 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 		oshape[i] = s.stop-s.start
 		oshape[i] = (oshape[i]+s.step-1)//s.step
 	return tuple(pre)+tuple(oshape), wcs
+
+
+def subinds(shape, wcs, box, inclusive=False, cap=True):
+	"""Helper function for submap. Translates the bounding
+	box provided into a pixel units. Assumes rectangular
+	coordinates."""
+	box  = np.asarray(box)
+	# Translate the box to pixels. The 0.5 moves us from
+	# pixel-center coordinates to pixel-edge coordinates,
+	# which we need to distinguish between fully or partially
+	# included pixels
+	bpix = sky2pix(shape,wcs,box.T).T
+	dir  = 2*(bpix[1]>bpix[0])-1
+	# If we are inclusive, find a bounding box, otherwise,
+	# an internal box
+	if inclusive:
+		ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
+	else:
+		ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
+	# Turn into list of slices, so we can handle reverse slices properly
+	# Make sure we stay inside our map bounds
+	if cap:
+		for b, n in zip(ibox.T,shape[-2:]):
+			if b[2] > 0: b[:2] = [max(b[0],	 0),min(b[1], n)]
+			else:	     b[:2] = [min(b[0],n-1),max(b[1],-1)]
+	return ibox
+
 
 def scale_geometry(shape, wcs, scale):
 	scale  = np.zeros(2)+scale
