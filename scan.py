@@ -56,7 +56,7 @@ class Scan:
 		self.boresight = np.asfarray(boresight) # [nsamp,coords]
 		self.offsets   = np.asfarray(offsets)   # [ndet,coords]
 		self.comps     = np.asfarray(comps)     # [ndet,comps]
-		self.cut       = cut.copy()             # Sampcut
+		self.cut       = cut.copy() if cut is not None else None # Sampcut
 		self.noise     = noise
 		self.id        = id # Identifier of this scan, for printing purposes
 		# These are needed in order to interpret the coordinates

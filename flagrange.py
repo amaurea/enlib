@@ -1,5 +1,5 @@
 import numpy as np, h5py
-from enlib import rangelist, sampcut
+from enlib import rangelist, sampcut, utils
 
 # Flagranges implement the new cuts format,
 # where samples are tagged with flags instead
@@ -51,14 +51,13 @@ class Flagrange:
 		"""Construct a Flagrange.
 		nsamp int is the total number of samples in the dataset the flagrange applies to.
 		stack_bounds int[ndet+1] is the index of the boundaries between each det's ranges
-		index_stack int[:,2] are the """
-
+		index_stack"""
 		self.nsamp        = int(nsamp)
 		self.sample_offset= int(sample_offset)
 		self.index_stack  = np.array(index_stack, np.uint32)
 		self.flag_stack   = np.array(flag_stack,  np.uint8)
 		self.stack_bounds = np.array(stack_bounds,np.uint32)
-		self.dets         = np.arange(self.stack_bounds.size, dtype=np.uint32)
+		self.dets         = np.arange(self.stack_bounds.size-1, dtype=np.uint32)
 		if dets is not None: self.dets = np.array(dets, np.uint32)
 		self.flag_names   = ["flag%d" % i for i in range(self.nbyte*8)]
 		if flag_names is not None: self.flag_names = list(flag_names)
@@ -229,6 +228,30 @@ class Flagrange:
 		# int he internal representation
 		ranges = self.to_ranges()
 		return sampcut.from_list(ranges, self.nsamp)
+	@staticmethod
+	def from_sampcut(scut, dets=None, name="cut", sample_offset=0):
+		from_sampcut(scut, dets=dets, name=name, sample_offset=sample_offset)
+	def write(self, hfile, group=None):
+		write_flagrange(hfile, self, group=group)
+
+def from_sampcut(scut, dets=None, name="cut", sample_offset=0):
+	# To zeroeth order, flags simply become 1 when we enter a cut range and 0 when we exit
+	flag_stack  = scut.ranges.copy()
+	flag_stack[:] = [1,0]
+	flag_stack  = flag_stack.reshape(-1)
+	index_stack = scut.ranges.reshape(-1)
+	# However, each detector starts out uncut by default, so we must insert an uncut
+	# at all the beginnings
+	stack_bounds= utils.cumsum(2*scut.nranges, True)
+	flag_stack  = np.insert(flag_stack, stack_bounds[:-1], 0)
+	index_stack = np.insert(index_stack,stack_bounds[:-1], 0)
+	stack_bounds= utils.cumsum(2*scut.nranges+1, True)
+	# At this point we may have some empty ranges. I think that's acceptable
+	# Expand flag_stack to full dimensionality
+	flag_stack = flag_stack[:,None]
+	return Flagrange(scut.nsamp, index_stack, flag_stack,
+			stack_bounds, dets=dets, flag_names=[name], derived_names=["cuts"],
+			derived_masks=[[[1],[0]]], sample_offset=sample_offset)
 
 #def combine_flagranges(franges):
 #	offsets = [frange.sample_offset for frange in franges]
@@ -259,17 +282,20 @@ def read_flagrange(hfile, group=None):
 def write_flagrange(hfile, frange, group=None):
 	if isinstance(hfile, basestring):
 		with h5py.File(hfile, "w") as f:
-			if group is not None: f = f.create_group(group)
-			write_flagrange(f, frange)
-	hfile["det_uid"]      = frange.dets
-	hfile["flag_names"]   = frange.flag_names
-	hfile["stack_bounds"] = frange.stack_bounds
-	hfile["flag_stack"]   = frange.flag_stack
-	hfile["index_stack"]  = frange.index_stack
-	hfile["derived_names"]= frange.derived_names
-	hfile["derived_masks"]= frange.derived_masks
-	hfile["sample_offset"]= frange.sample_offset
-	hfile["sample_count"] = frange.sample_count
+			write_flagrange(f, frange, group=group)
+	elif group is not None:
+		g = hfile.create_group(group)
+		write_flagrange(g, frange)
+	else:
+		hfile["det_uid"]      = frange.dets
+		hfile["flag_names"]   = frange.flag_names
+		hfile["stack_bounds"] = frange.stack_bounds
+		hfile["flag_stack"]   = frange.flag_stack
+		hfile["index_stack"]  = frange.index_stack
+		hfile["derived_names"]= frange.derived_names
+		hfile["derived_masks"]= frange.derived_masks
+		hfile.attrs["sample_offset"]= frange.sample_offset
+		hfile.attrs["sample_count"] = frange.nsamp
 
 # While I don't like rangelist and multirange, I'll use them
 # for now instead of building a new boolean range type.
