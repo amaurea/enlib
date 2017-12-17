@@ -44,7 +44,10 @@ class Sampcut:
 				if len(dlist) > 0:
 					ranges.append(dlist)
 					detmap[di+1] = detmap[di] + len(dlist)
-			ranges = np.concatenate(ranges,0).astype(np.int32)
+			if len(ranges) == 0:
+				ranges = np.zeros([0,2],np.int32)
+			else:
+				ranges = np.concatenate(ranges,0).astype(np.int32)
 			if ranges.ndim != 2:
 				raise ValueError("Can only construct Sampcut from list of format [det][cuts][2]")
 		return Sampcut(ranges, detmap, nsamp)
@@ -53,7 +56,7 @@ class Sampcut:
 		return [self.ranges[self.detmap[i]:self.detmap[i+1]] for i in range(self.ndet)]
 	@staticmethod
 	def from_mask(mask):
-		mask = np.asarray(mask)
+		mask = np.asarray(mask, dtype=bool)
 		if mask.ndim == 1: mask = mask[None]
 		assert mask.ndim == 2, "Sampcut.from_mask requires a 1 or 2 dimensional array, but got %d" % mask.ndim
 		mask = mask.view(np.int8)
