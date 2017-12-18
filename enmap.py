@@ -493,7 +493,7 @@ def extent_subgrid(shape, wcs, nsub=None, safe=True, signed=False):
 	Ly = np.sum(np.sum(ly,0)*Ay)/np.sum(Ay)
 	Lx = np.sum(np.sum(lx,1)*Ax)/np.sum(Ax)
 	res= np.array([Ly,Lx])
-	if signed: res *= wcs.wcs.cdelt[::-1]
+	if signed: res *= np.sign(wcs.wcs.cdelt[::-1])
 	return res
 
 def area(shape, wcs, nsub=0x10):
