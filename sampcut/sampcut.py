@@ -228,17 +228,19 @@ def insert_samples(cut, tod, samples):
 def gapfill_const(cut, tod, value, inplace=False):
 	"""Fill cut values in tod by the given value. Returns the result."""
 	if not inplace: tod = tod.copy()
+	ishape = tod.shape
 	if tod.ndim == 1: tod = tod.reshape(-1,tod.shape[-1])
 	if cut.ndet == 1 and tod.shape[0] > 1: cut = cut.repeat(tod.shape[0])
 	get_core(tod.dtype).gapfill_const(cut.ranges.T, cut.detmap, tod.T, value)
-	return tod
+	return tod.reshape(ishape)
 def gapfill_linear(cut, tod, context=1, inplace=False):
 	"""Fill cut ranges in tod with straight lines. context determines
 	how many samples at each edge of the cut to use for determining the
 	start and end value for each straight line. Defaults to 1 sample.
 	Returns the result."""
 	if not inplace: tod = tod.copy()
+	ishape = tod.shape
 	if tod.ndim == 1: tod = tod.reshape(-1,tod.shape[-1])
 	if cut.ndet == 1 and tod.shape[0] > 1: cut = cut.repeat(tod.shape[0])
 	get_core(tod.dtype).gapfill_linear(cut.ranges.T, cut.detmap, tod.T, context)
-	return tod
+	return tod.reshape(ishape)

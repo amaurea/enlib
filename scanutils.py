@@ -76,7 +76,7 @@ def classify_scanning_patterns(myscans, tol=0.5*utils.degree, comm=None):
 		pids = pids[rank==comm.rank]
 	return pboxes, pids
 
-def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1):
+def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1, hwp_resample=False):
 	"""Given a set of ids/files and a set of indices into that list. Try
 	to read each of these scans. Returns a list of successfully read scans
 	and a list of their indices."""
@@ -103,16 +103,25 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 				d = d[det_inds]
 			else:
 				d = eval("d[%s]" % dets)
+		hwp_active = np.any(d.hwp_phase[0] != 0)
+		print "hwp_resample", hwp_resample, "hwp_active", hwp_active
+		if hwp_resample and hwp_active:
+			mapping = enscan.build_hwp_sample_mapping(d.hwp)
+			d = d.resample(mapping)
+			print "AAA"
+			print d.operations
 		d = d[:,::downsample]
+		print "AAB"
+		print d.operations
 		if not quiet: L.debug("Read %s" % str(filelist[ind]))
 		yield ind, d
 
-def read_scans(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1):
+def read_scans(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1, hwp_resample=False):
 	"""Given a set of ids/files and a set of indices into that list. Try
 	to read each of these scans. Returns a list of successfully read scans
 	and a list of their indices."""
 	myinds, myscans  = [], []
-	for ind, scan in scan_iterator(filelist, inds, reader, db=db, dets=dets, quiet=quiet, downsample=downsample):
+	for ind, scan in scan_iterator(filelist, inds, reader, db=db, dets=dets, quiet=quiet, downsample=downsample, hwp_resample=hwp_resample):
 		myinds.append(ind)
 		myscans.append(scan)
 	return myinds, myscans
