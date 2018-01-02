@@ -13,7 +13,7 @@ def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=
 	# Ensure everything has the right dimensions and restrict to relevant dimensions
 	ps = utils.atleast_3d(ps)
 	if not ps.shape[0] == ps.shape[1]: raise ShapeError("ps must be [ncomp,ncomp,nl] or [nl]")
-	if not len(shape) == 2 or len(shape) == 3: raise ShapeError("shape must be (ncomp,ny,nx) or (ny,nx)")
+	if not (len(shape) == 2 or len(shape) == 3): raise ShapeError("shape must be (ncomp,ny,nx) or (ny,nx)")
 	ncomp = 1 if len(shape) == 2 else shape[-3]
 	ps = ps[:ncomp,:ncomp]
 
