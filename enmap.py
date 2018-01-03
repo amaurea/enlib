@@ -1116,13 +1116,21 @@ def to_flipper(imap, omap=None, unpack=True):
 	on started with.
 	"""
 	import flipper
+	import pyfits
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
 	header = imap.wcs.to_header(relax=True)
 	header['NAXIS']  = 2
 	header['NAXIS1'] = imap.shape[-1]
 	header['NAXIS2'] = imap.shape[-2]
-	flipwcs = flipper.liteMap.astLib.astWCS.WCS(header, mode="pyfits")
+	
+	cardList = pyfits.Header()
+	keys = ['NAXIS','NAXIS1','NAXIS2','CTYPE1','CTYPE2','CRVAL1','CRVAL2','CRPIX1','CRPIX2','CDELT1','CDELT2','CUNIT1','CUNIT2']
+	for key in keys:
+		cardList.append(pyfits.Card(key, header[key]))
+	hh = pyfits.Header(cards=cardList)
+	
+	flipwcs = flipper.liteMap.astLib.astWCS.WCS(hh, mode="pyfits")
 	iflat = imap.preflat
 	if omap is None:
 		omap = np.empty(iflat.shape[:-2],dtype=object)
