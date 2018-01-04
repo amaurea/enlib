@@ -1243,7 +1243,7 @@ def write_fits(fname, emap, extra={}):
 		warnings.filterwarnings('ignore')
 		hdus.writeto(fname, clobber=True)
 
-def read_fits(fname, hdu=None, sel=None, box=None, inclusive=False, sel_threshold=10e6):
+def read_fits(fname, hdu=None, sel=None, box=None, inclusive=False, sel_threshold=10e6, wcs_override=None):
 	"""Read an enmap from the specified fits file. By default,
 	the map and coordinate system will be read from HDU 0. Use
 	the hdu argument to change this. The map must be stored as
@@ -1255,8 +1255,11 @@ def read_fits(fname, hdu=None, sel=None, box=None, inclusive=False, sel_threshol
 	hdu = astropy.io.fits.open(fname)[hdu]
 	if hdu.header["NAXIS"] < 2:
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
-	with warnings.catch_warnings():
-		wcs = enlib.wcs.WCS(hdu.header).sub(2)
+        if wcs_override is None:
+                with warnings.catch_warnings():
+                        wcs = enlib.wcs.WCS(hdu.header).sub(2)
+        else:
+                wcs = wcs_override
 	# Slice if requested. Slicing at this point avoids unneccessary
 	# I/O and memory usage.
 	if sel is not None:
