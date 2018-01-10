@@ -45,7 +45,7 @@ of skipping samples here.
 # system, especially considering the large overlap with Dataset.
 
 import numpy as np, enlib.slice, copy as cpy, h5py, os
-from enlib import sampcut, nmat, config, resample, utils, bunch
+from enlib import sampcut, nmat, config, resample, utils, bunch, fft
 
 class Scan:
 	"""This defines the minimal interface for a Scan. It will usually be
@@ -83,6 +83,8 @@ class Scan:
 	def srate(self):
 		step = self.boresight.shape[0]/100
 		return float(step)/utils.medmean(self.boresight[::step,0][1:]-self.boresight[::step,0][:-1])
+	@property
+	def hwp_active(self): return self.hwp is not None and np.any(self.hwp_phase[0] != 0)
 	def copy(self): return cpy.deepcopy(self)
 	def getitem_helper(self, sel):
 		if type(sel) != tuple: sel = (sel,)
@@ -114,6 +116,19 @@ class Scan:
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
 		res._tod = np.ascontiguousarray(enlib.slice.slice_downgrade(res._tod[detslice], sampslice, axis=-1))
+		return res
+	def resample(self, mapping):
+		res = cpy.deepcopy(self)
+		res.boresight = np.ascontiguousarray(utils.interpol(res.boresight.T, mapping.oimap[None], order=1).T)
+		res.hwp       = utils.interpol(utils.unwind(res.hwp), mapping.oimap[None], order=1)
+		res.hwp_phase = np.ascontiguousarray(utils.interpol(res.hwp_phase.T, mapping.oimap[None], order=1).T)
+		try:
+			res.dark_tod = utils.interpol(res.dark_tod, mapping.oimap[None])
+			res.dark_cut = resample_cut(res.dark_cut, mapping)
+		except AttributeError as e: pass
+		res.cut          = resample_cut(res.cut,          mapping)
+		res.cut_noiseest = resample_cut(res.cut_noiseest, mapping)
+		res.noise        = resample_noise(res.noise,      mapping)
 		return res
 
 config.default("downsample_method", "fft", "Method to use when downsampling the TOD")
@@ -174,3 +189,59 @@ def read_scan(fname):
 	return H5Scan(fname)
 
 default_site = bunch.Bunch(lat=0,lon=0,alt=0,T=273,P=550,hum=0.2,freq=100)
+
+# In the current (ugly) architecture, this is the least painful place to put
+# HWP resampling.
+
+def build_hwp_sample_mapping(hwp, quantile=0.1):
+	"""Given a HWP angle, return an array with shape [nout] containing
+	the original sample index (float) corresponding to each sample in the
+	remapped array, along with the resulting hwp sample rate.
+	The remapping also truncates the end to ensure that
+	there is an integer number of HWP rotations in the data."""
+	# Make sure there are no angle wraps in the hwp
+	hwp = utils.unwind(hwp)
+	# interp requires hwp to be monotonically increasing. In practice
+	# it could be monotonically decreasing too, but our final result
+	# does not depend on the direction of rotation, so we simply flip it here
+	# if necessary
+	hwp = np.abs(hwp)
+	# Find the target hwp speed
+	speed = np.percentile(hwp[1:]-hwp[:-1], 100*quantile)
+	# We want a whole number of samples per revolution, and
+	# a whole number of revolutions in the whole tod
+	a    = hwp - hwp[0]
+	nrev = int(np.floor(a[-1]/(2*np.pi)))
+	nper = utils.nint(2*np.pi/speed)
+	# Make each of these numbers fourier-friendly
+	nrev = fft.fft_len(nrev, "below")
+	nper = fft.fft_len(nper, "above")
+	# Set up our output samples
+	speed = 2*np.pi/nper
+	nout  = nrev*nper
+	ohwp  = hwp[0] + np.arange(nout)*speed
+	# Find the input sample for each output sample
+	res = bunch.Bunch()
+	res.oimap = np.interp(ohwp, hwp, np.arange(len(hwp)))
+	# Find the output sampe for each input sample too. Because of
+	# cropping, the last of these will be invalid
+	res.iomap = np.interp(np.arange(len(hwp)), res.oimap, np.arange(len(res.oimap)))
+	# Find the average sampling rate change fsamp_rel = fsamp_out/fsamp_in
+	res.fsamp_rel = 1/np.mean(res.oimap[1:]-res.oimap[:-1])
+	res.insamp = len(hwp)
+	res.onsamp = nout
+	return res
+
+def resample_cut(cut, mapping):
+	"""Nearest neibhbor remapping of cut indices"""
+	ocut = cut.copy()
+	end = ocut.ranges>= mapping.insamp
+	ocut.ranges[end] = mapping.onsamp
+	ocut.ranges[~end] = mapping.iomap[cut.ranges[~end]].astype(int)
+	ocut.nsamp  = mapping.onsamp
+	# Widen cut because we had to round the cut indices
+	ocut = ocut.widen(1)
+	return ocut
+
+def resample_noise(nmat, mapping):
+	return nmat.resample(mapping.fsamp_rel)

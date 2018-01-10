@@ -38,7 +38,7 @@
 # signals = [signal_cut, signal_map, signal_phase]
 import numpy as np, h5py, zipper, logging, gc
 from enlib import enmap, dmap, array_ops, pmat, utils, todfilter
-from enlib import config, nmat, bench, gapfill, mpi, sampcut
+from enlib import config, nmat, bench, gapfill, mpi, sampcut, fft
 from enlib.cg import CG
 L = logging.getLogger(__name__)
 
@@ -617,6 +617,25 @@ class FilterPickup:
 			naz = utils.nint(waz/self.daz)
 		todfilter.filter_poly_jon(tod, scan.boresight[:,1], hwp=scan.hwp, naz=naz, nt=self.nt, nhwp=self.nhwp, niter=self.niter, cuts=scan.cut)
 
+class FilterHWPNotch:
+	def __init__(self, nmode=1):
+		self.nmode     = nmode
+		self.harmonics = None
+	def __call__(self, scan, tod):
+		if not scan.hwp_active: return
+		if self.harmonics is None:
+			# Determine the HWP rotation frequency
+			hwp       = utils.unwind(scan.hwp)
+			hwp_freq  = np.abs(hwp[-1]-hwp[0])/(scan.nsamp-1)/(2*np.pi)
+			tod_freqs = fft.rfftfreq(scan.nsamp)
+			self.harmonics = utils.nint((np.arange(hwp_freq, tod_freqs[-1], hwp_freq)/tod_freqs[1]))
+		# Prepare the filter
+		ft  = fft.rfft(tod)
+		off = self.nmode//2
+		for h in self.harmonics:
+			ft[...,h-off:h-off+self.nmode] = 0
+		return fft.ifft(ft, tod, normalize=True)
+
 class PostPickup:
 	def __init__(self, scans, signal_map, signal_cut, prec_ptp, daz=None, nt=None, weighted=False):
 		self.scans = scans
@@ -879,12 +898,16 @@ class Eqsys:
 					#tod -= np.copy(tod[:,0,None])
 					tod  = tod.astype(self.dtype)
 			else: tod = itod
+			#dump("dump_prefilter.hdf", tod[:4])
 			# Apply all filters (pickup filter, src subtraction, etc)
 			with bench.mark("b_filter"):
 				for filter in self.filters: filter(scan, tod)
+			#dump("dump_postfilter.hdf", tod[:4])
+			#1/0
 			# Apply the noise model (N")
 			with bench.mark("b_weight"):
 				for weight in self.weights: weight(scan, tod)
+			#dump("dump_prenoise.hdf", tod[:32])
 			with bench.mark("b_N_build"):
 				scan.noise = scan.noise.update(tod, scan.srate)
 				#print "FIXME"

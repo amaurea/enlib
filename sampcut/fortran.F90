@@ -284,8 +284,8 @@ contains
 				if(i == detmap(di)+1) then; r0 = 1; else; r0 = ranges(2,i-1)+1; end if
 				! next cut start
 				if(i == detmap(di+1)) then; r3 = nsamp+1; else; r3 = min(nsamp,ranges(1,i+1))+1; end if
-				r0 = max(r0, r1-context)
-				r3 = min(r3, r2+context)
+				r0 = max(r0, r1-context) ! first sample of left context
+				r3 = min(r3, r2+context) ! one past last sample of right context
 				! Now calculate the representive value on either side
 				v1 = sum(tod(r0:r1-1,di))/(r1-r0)
 				v2 = sum(tod(r2:r3-1,di))/(r3-r2)

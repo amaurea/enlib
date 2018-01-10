@@ -1332,5 +1332,5 @@ def fix_endian(map):
 	"""Make endianness of array map match the current machine.
 	Returns the result."""
 	if map.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
-		map = map.byteswap().newbyteorder()
+		map = map.byteswap(True).newbyteorder()
 	return map
