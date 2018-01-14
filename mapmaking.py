@@ -894,14 +894,18 @@ class Eqsys:
 			# Get the actual TOD samples (d)
 			if itod is None:
 				with bench.mark("b_read"):
-					tod  = scan.get_samples()
+					tod  = scan.get_samples(verbose=False)
 					#tod -= np.copy(tod[:,0,None])
 					tod  = tod.astype(self.dtype)
 			else: tod = itod
+			#dump("dump_prefilter_mean.hdf", np.mean(tod,0))
 			#dump("dump_prefilter.hdf", tod[:4])
+			#dump("hwp.hdf", scan.hwp)
+			#1/0
 			# Apply all filters (pickup filter, src subtraction, etc)
 			with bench.mark("b_filter"):
 				for filter in self.filters: filter(scan, tod)
+			#dump("dump_postfilter_mean.hdf", np.mean(tod,0))
 			#dump("dump_postfilter.hdf", tod[:4])
 			#1/0
 			# Apply the noise model (N")

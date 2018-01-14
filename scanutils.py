@@ -104,15 +104,10 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 			else:
 				d = eval("d[%s]" % dets)
 		hwp_active = np.any(d.hwp_phase[0] != 0)
-		print "hwp_resample", hwp_resample, "hwp_active", hwp_active
 		if hwp_resample and hwp_active:
 			mapping = enscan.build_hwp_sample_mapping(d.hwp)
 			d = d.resample(mapping)
-			print "AAA"
-			print d.operations
 		d = d[:,::downsample]
-		print "AAB"
-		print d.operations
 		if not quiet: L.debug("Read %s" % str(filelist[ind]))
 		yield ind, d
 

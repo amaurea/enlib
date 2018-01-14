@@ -230,6 +230,8 @@ def build_hwp_sample_mapping(hwp, quantile=0.1):
 	res.fsamp_rel = 1/np.mean(res.oimap[1:]-res.oimap[:-1])
 	res.insamp = len(hwp)
 	res.onsamp = nout
+	res.nrev   = nrev
+	res.nper   = nper
 	return res
 
 def resample_cut(cut, mapping):
