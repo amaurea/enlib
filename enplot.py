@@ -128,6 +128,7 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser.add_argument("--nolabels", action="store_true", help="Disable the generation of coordinate labels outside the map when using the grid.")
 	parser.add_argument("--nstep", type=int, default=200, help="The number of steps to use when drawing grid lines. Higher numbers result in smoother curves.")
 	parser.add_argument("--subticks", type=float, default=0, help="Subtick spacing. Only supported by matplotlib driver.")
+	parser.add_argument("-b", "--colorbar", default=0, action="count", help="Whether to draw the color bar or not")
 	parser.add_argument("--font", type=str, default="arial.ttf", help="The font to use for text.")
 	parser.add_argument("--font-size", type=int, default=20, help="Font size to use for text.")
 	parser.add_argument("--font-color", type=str, default="000000", help="Font color to use for text.")
@@ -279,6 +280,7 @@ def draw_map_field(map, args, crange=None, return_layers=False, return_info=Fals
 	tag    = (tuple(map.shape), map.wcs.to_header_string(), repr(args))
 	layers = []
 	names  = []
+	yoff   = map.shape[-2]
 	# Image layer
 	with printer.time("to image", 3):
 		img = PIL.Image.fromarray(utils.moveaxis(color,0,2)).convert('RGBA')
@@ -309,11 +311,19 @@ def draw_map_field(map, args, crange=None, return_layers=False, return_info=Fals
 			names.append("grid")
 		if not args.nolabels:
 			with printer.time("draw labels", 3):
-				labels = get_cache(cache, ("labels",tag), lambda: draw_grid_labels(ginfo, args))
-				layers.append(labels)
+				labels, bounds = get_cache(cache, ("labels",tag), lambda: draw_grid_labels(ginfo, args))
+				yoff = bounds[1][1]
+				layers.append((labels,bounds))
 				names.append("tics")
-	# Possibly other stuff too, like point source circles
-	# or contours
+	if args.colorbar % 2:
+		with printer.time("draw colorbar", 3):
+			bimg, bounds = draw_colorbar(crange, map.shape[-1], args)
+			bounds[:,1] += yoff
+			yoff = bounds[1,1]
+			layers.append((bimg,bounds))
+			names.append("colorbar")
+	 # Possibly other stuff too, like point source circles
+	 # or contours
 	with printer.time("stack layers", 3):
 		layers, bounds = standardize_images(layers)
 		if not return_layers: layers = merge_images(layers)
@@ -324,6 +334,31 @@ def draw_map_field(map, args, crange=None, return_layers=False, return_info=Fals
 	info = Info(bounds, names)
 	if return_info: return layers, info
 	else: return layers
+
+def draw_colorbar(crange, width, args):
+	col  = tuple([int(args.font_color[i:i+2],16) for i in range(0,len(args.font_color),2)])
+	font = cgrid.get_font(args.font_size)
+	fmt  = "%g"
+	labels, boxes = [], []
+	for val in crange:
+		labels.append(fmt % val)
+		boxes.append(font.getsize(labels[-1]))
+	boxes = np.array(boxes,int)
+	lw, lh = np.max(boxes,0)
+	img    = PIL.Image.new("RGBA", (width, lh))
+	draw   = PIL.ImageDraw.Draw(img)
+	# Draw the labels on the image
+	draw.text((lw-boxes[0,0], 0), labels[0], col, font=font)
+	draw.text((width-lw, 0),      labels[1], col, font=font)
+	# Draw the color bar itself
+	bar_data    = np.zeros((lh,width-2*lw))
+	bar_data[:] = np.linspace(0,1,bar_data.shape[-1])
+	bar_col     = map_to_color(bar_data[None], [0,1], args)
+	bar_img     = PIL.Image.fromarray(utils.moveaxis(bar_col,0,2)).convert('RGBA')
+	# Overlay it on the output image
+	img.paste(bar_img, (lw,0))
+	bounds = np.array([[0,0],[width,lh]])
+	return img, bounds
 
 def draw_map_field_mpl(map, args, crange=None, printer=noprint):
 	"""Render a map field using matplotlib. Less tested and
