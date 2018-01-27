@@ -502,6 +502,71 @@ def calc_crosslink_map(cmap, signal, signal_cut, scans, weights, noise=True):
 	calc_div_map(cmap, signal, signal_cut, scans, weights, noise=noise)
 	for scan, comp in zip(scans, saved_comps): scan.comps = comp
 
+def calc_crosslink_map2(signal, signal_cut, scans, weights, noise=True):
+	saved_comps = [scan.comps.copy() for scan in scans]
+	for scan in scans: scan.comps[:] = np.array([1,1,0])
+	cmap    = signal.zeros()
+	ojunk   = signal_cut.prepare(signal_cut.zeros())
+	owork   = signal.prepare(cmap)
+	for scan in scans:
+		with bench.mark("cmap_Pr_" + signal.name): signal.precompute(scan)
+		with bench.mark("cmap_tod"):
+			tod = np.full((scan.ndet, scan.nsamp), 1.0, signal.dtype)
+		with bench.mark("cmap_white"):
+			for weight in weights: weight(scan, tod)
+			if noise: scan.noise.white(tod)
+			for weight in weights: weight(scan, tod)
+		with bench.mark("cmap_PT_" + signal.name):
+			signal_cut.backward(scan, tod, ojunk)
+			signal.backward(scan, tod, owork)
+		with bench.mark("cmap_Fr_" + signal.name): signal.free()
+		times = [bench.stats[s]["time"].last for s in ["cmap_white", "cmap_PT_" + signal.name]]
+		L.debug("div %s %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
+	signal.finish(cmap, owork)
+	# Restore saved components
+	for scan, comp in zip(scans, saved_comps): scan.comps = comp
+	return cmap
+
+def calc_icov_map(signal, scans, pos, weights, signal_cut=None):
+	"""Compute a map containing the inverse covariance structure around the set
+	of positions pos[:,{y,x}] in pixels. This will be computed in one
+	operation, so if the points are too close to each other their covariance
+	information will interfere with each other."""
+	icov   = signal.zeros()
+	# Set the chosen positions to one. This is very inelegant. Should have
+	# global pixel setting methods in dmap
+	pos    = np.zeros([1,2],int)+pos # broadcast to correct shape
+	if isinstance(icov, enmap.ndmap):
+		icov[0,pos[:,0],pos[:,1]] = 1
+	elif isinstance(icov, dmap.Dmap):
+		for tile, ind in zip(icov.tiles, icov.loc_inds):
+			pbox = icov.geometry.tile_boxes[ind]
+			for pix in pos:
+				y,x = pix - pbox[0]
+				if y >= 0 and x >= 0 and y < tile.shape[-2] and x < tile.shape[-1]:
+					tile[0,y,x] = 1
+	# The rest proceeds similarly to the crosslinking map
+	owork   = signal.prepare(icov)
+	if signal_cut is not None: ojunk = signal_cut.prepare(signal_cut.zeros())
+	for scan in scans:
+		with bench.mark("icov_Pr_" + signal.name): signal.precompute(scan)
+		with bench.mark("icov_P_" + signal.name):
+			tod = np.full((scan.ndet, scan.nsamp), 1.0, signal.dtype)
+			signal.forward(scan, tod, owork)
+			if signal_cut is not None: signal_cut.forward(scan, tod, ojunk)
+		with bench.mark("icov_nmat"):
+			for weight in weights: weight(scan, tod)
+			scan.noise.apply(tod)
+			for weight in weights: weight(scan, tod)
+		with bench.mark("icov_PT_" + signal.name):
+			if signal_cut is not None: signal_cut.backward(scan, tod, ojunk)
+			signal.backward(scan, tod, owork)
+		with bench.mark("icov_Fr_" + signal.name): signal.free()
+		times = [bench.stats[s]["time"].last for s in ["icov_P_" + signal.name, "icov_nmat", "icov_PT_" + signal.name]]
+		L.debug("div %s %6.3f %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
+	signal.finish(icov, owork)
+	return icov[0]
+
 def calc_hits_map(hits, signal, signal_cut, scans):
 	work = signal.prepare(hits)
 	ojunk= signal_cut.prepare(signal_cut.zeros())
