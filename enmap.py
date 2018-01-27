@@ -115,6 +115,7 @@ class ndmap(np.ndarray):
 		inclusive : boolean
 			Whether to include pixels that are only partially
 			inside the bounding box. Default: False."""
+
 		ibox   = self.subinds(box, inclusive, cap=False)
 		#islice = enlib.utils.sbox2slice(ibox.T)
 		#return self[islice]
@@ -129,32 +130,36 @@ class ndmap(np.ndarray):
 		if yflip: omap = omap[...,::-1,:]
 		if xflip: omap = omap[...,:,::-1]
 		return omap
-	def subinds(self, box, inclusive=False, cap=True):
-		"""Helper function for submap. Translates the bounding
-		box provided into a pixel units. Assumes rectangular
-		coordinates."""
-		box  = np.asarray(box)
-		# Translate the box to pixels. The 0.5 moves us from
-		# pixel-center coordinates to pixel-edge coordinates,
-		# which we need to distinguish between fully or partially
-		# included pixels
-		#bpix = self.sky2pix(box.T).T
-		bpix = skybox2pixbox(self.shape, self.wcs, box, include_direction=True)
-		# If we are inclusive, find a bounding box, otherwise,
-		# an internal box
-		if inclusive:
-			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),bpix[2]],dtype=int)
-		else:
-			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),bpix[2]],dtype=int)
-		# Turn into list of slices, so we can handle reverse slices properly
-		# Make sure we stay inside our map bounds
-		if cap:
-			for b, n in zip(ibox.T,self.shape[-2:]):
-				if b[2] > 0: b[:2] = [max(b[0],  0),min(b[1], n)]
-				else:        b[:2] = [min(b[0],n-1),max(b[1],-1)]
-		return ibox
+	def subinds(self, box, inclusive=False, cap=True): return subinds(self.shape, self.wcs, box=box, inclusive=inclusive, cap=cap)
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
+
+
+
+def subinds(shape, wcs, box, inclusive=False, cap=True):
+	"""Helper function for submap. Translates the bounding
+	box provided into a pixel units. Assumes rectangular
+	coordinates."""
+	box  = np.asarray(box)
+	# Translate the box to pixels. The 0.5 moves us from
+	# pixel-center coordinates to pixel-edge coordinates,
+	# which we need to distinguish between fully or partially
+	# included pixels
+	#bpix = self.sky2pix(box.T).T
+	bpix = skybox2pixbox(shape, wcs, box, include_direction=True)
+	# If we are inclusive, find a bounding box, otherwise,
+	# an internal box
+	if inclusive:
+		ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),bpix[2]],dtype=int)
+	else:
+		ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),bpix[2]],dtype=int)
+	# Turn into list of slices, so we can handle reverse slices properly
+	# Make sure we stay inside our map bounds
+	if cap:
+		for b, n in zip(ibox.T,shape[-2:]):
+			if b[2] > 0: b[:2] = [max(b[0],	 0),min(b[1], n)]
+			else:	     b[:2] = [min(b[0],n-1),max(b[1],-1)]
+	return ibox
 
 def slice_geometry(shape, wcs, sel, nowrap=False):
 	"""Slice a geometry specified by shape and wcs according to the
@@ -336,20 +341,26 @@ def extract(map, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b,
 	co-adding by specifying an output map and a combining operation.
 	The deafult operation overwrites the output. Use np.ndarray.__iadd__
 	to get a copy-less += operation."""
+	return extract_generic(map,map.shape,map.wcs,shape,wcs,omap,wrap,op,cval)
+	
+def extract_generic(map, ishape, iwcs, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b,
+	    cval=0):
+	"""Like extract, but accepts maps that might not be ndmaps as long as shape
+	and wcs are specified separately."""
 	# First check that our wcs is compatible
-	assert enlib.wcs.is_compatible(map.wcs, wcs), "Incompatible wcs in enmap.extract: %s vs. %s" % (str(map.wcs), str(wcs))
+	assert enlib.wcs.is_compatible(iwcs, wcs), "Incompatible wcs in enmap.extract: %s vs. %s" % (str(iwcs), str(wcs))
 	# Find the bounding box of the output in terms of input pixels.
 	# This is simple because our wcses are compatible, so they
 	# can only differ by a simple pixel offset. Here pixoff is
 	# pos_input - pos_output
 	if omap is None:
-		omap = full(map.shape[:-2]+tuple(shape[-2:]), wcs, cval, map.dtype)
-	nphi   = enlib.utils.nint(360/np.abs(map.wcs.wcs.cdelt[0]))
-	pixoff = enlib.utils.nint((wcs.wcs.crpix-map.wcs.wcs.crpix) - (wcs.wcs.crval-map.wcs.wcs.crval)/map.wcs.wcs.cdelt)[::-1]
+		omap = full(ishape[:-2]+tuple(shape[-2:]), wcs, cval, map.dtype)
+	nphi   = enlib.utils.nint(360/np.abs(iwcs.wcs.cdelt[0]))
+	pixoff = enlib.utils.nint((wcs.wcs.crpix-iwcs.wcs.crpix) - (wcs.wcs.crval-iwcs.wcs.crval)/iwcs.wcs.cdelt)[::-1]
 	if wrap: pixoff[1] %= nphi
 	# Get bounding boxes in output map coordinates
 	obox = np.array([[0,0],[shape[-2],shape[-1]]])
-	ibox = np.array([pixoff,pixoff+np.array(map.shape[-2:])])
+	ibox = np.array([pixoff,pixoff+np.array(ishape[-2:])])
 	# This function copies the intersection of ibox and obox over
 	# from imap to omap
 	def icopy(imap, omap, ibox, obox, ioff, op):
@@ -1232,22 +1243,27 @@ def write_fits(fname, emap, extra={}):
 		warnings.filterwarnings('ignore')
 		hdus.writeto(fname, clobber=True)
 
-def read_fits(fname, hdu=None, sel=None, sel_threshold=10e6):
+def read_fits(fname, hdu=None, sel=None, box=None, inclusive=False, sel_threshold=10e6, wcs_override=None):
 	"""Read an enmap from the specified fits file. By default,
 	the map and coordinate system will be read from HDU 0. Use
 	the hdu argument to change this. The map must be stored as
 	a fits image. If sel is specified, it should be a slice
 	that will be applied to the image before reading. This avoids
-	reading more of the image than necessary."""
+	reading more of the image than necessary. Instead of sel,
+	a coordinate box [[yfrom,xfrom],[yto,xto]] can be specified."""
 	if hdu is None: hdu = 0
 	hdu = astropy.io.fits.open(fname)[hdu]
 	if hdu.header["NAXIS"] < 2:
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
-	with warnings.catch_warnings():
-		wcs = enlib.wcs.WCS(hdu.header).sub(2)
+        if wcs_override is None:
+                with warnings.catch_warnings():
+                        wcs = enlib.wcs.WCS(hdu.header).sub(2)
+        else:
+                wcs = wcs_override
 	# Slice if requested. Slicing at this point avoids unneccessary
 	# I/O and memory usage.
-	if sel:
+	if sel is not None:
+		assert box is None
 		# First slice the wcs
 		sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-2,2])
 		_, wcs = slice_geometry(hdu.shape, wcs, sel2)
@@ -1260,6 +1276,20 @@ def read_fits(fname, hdu=None, sel=None, sel_threshold=10e6):
 		else:
 			data = hdu.data
 			data = data[sel]
+	elif box is not None:
+		ibox   = subinds(hdu.shape, wcs, box, inclusive, cap=False)
+		def helper(b):
+			if b[2] >= 0: return False, slice(b[0],b[1],b[2])
+			else: return True, slice(b[1]-b[2],b[0]-b[2],-b[2])
+		yflip, yslice = helper(ibox[:,0])
+		xflip, xslice = helper(ibox[:,1])
+		oshape, owcs = slice_geometry(hdu.shape, wcs, (yslice, xslice), nowrap=True)
+		data = extract_generic(hdu.data, hdu.shape,wcs,oshape, owcs)
+		# Unflip if neccessary
+		if yflip: data = data[...,::-1,:]
+		if xflip: data = data[...,:,::-1]
+		wcs = data.wcs
+
 	else: data = hdu.data
 	res = fix_endian(ndmap(data, wcs))
 	return res
