@@ -1,6 +1,6 @@
 import numpy as np, os, time, imp
-from scipy import ndimage
-from enlib import enmap, retile, utils, bunch, cg, fft
+from scipy import ndimage, optimize
+from enlib import enmap, retile, utils, bunch, cg, fft, powspec
 
 def read_config(fname):
 	config = imp.load_source("config", fname)
@@ -32,7 +32,9 @@ def get_datasets(config, sel=None):
 		shape, wcs = read_geometry(dataset.splits[0].map)
 		dataset.shape = shape
 		dataset.wcs   = wcs
-		dataset.beam  = setup_beam(dataset.beam_params)
+		dataset.beam  = setup_beam(dataset.beam_params, workdir=cdir)
+		dataset.box   = enmap.box(shape, wcs, corner=False)
+		dataset.config= config # pretty backwards...
 	return datasets
 
 def read_geometry(fname):
@@ -42,14 +44,15 @@ def read_geometry(fname):
 	else:
 		return enmap.read_map_geometry(fname)
 
-def setup_beam(params, nl=50000):
+def setup_beam(params, nl=50000, workdir="."):
 	l = np.arange(nl).astype(float)
 	if params[0] == "fwhm":
 		sigma = params[1]*utils.fwhm*utils.arcmin
 		return -0.5*l**2*sigma**2
 	elif params[0] == "transfun":
 		res   = np.zeros(nl)
-		bdata = np.loadtxt(params[1])[:,1]
+		fname = os.path.join(workdir, params[1])
+		bdata = np.loadtxt(fname)[:,1]
 		ndata = len(bdata)
 		res[:ndata] = np.log(bdata)
 		# Fit gaussian that would reach res[ndata-1] by that point. We do this
@@ -85,6 +88,39 @@ def smooth_pix(map, pixrad):
 	fmap *= np.exp(-0.5*kr2*pixrad**2)
 	map   = enmap.ifft(fmap).real
 	return map
+
+def smooth_ps_pix_log(ps, pixrad):
+	"""Smooth ps with 2 dof per pixel by the given pixel radius
+	in lograthmic scale, while applying a correction factor to approximate
+	the effect of plain smoothing when the background is flat."""
+	return smooth_pix(ps, pixrad)*1.783
+
+log_smooth_corrections = [ 1.0, # dummy for 0 dof
+ 3.559160, 1.780533, 1.445805, 1.310360, 1.237424, 1.192256, 1.161176, 1.139016,
+ 1.121901, 1.109064, 1.098257, 1.089441, 1.082163, 1.075951, 1.070413, 1.065836,
+ 1.061805, 1.058152, 1.055077, 1.052162, 1.049591, 1.047138, 1.045077, 1.043166,
+ 1.041382, 1.039643, 1.038231, 1.036866, 1.035605, 1.034236, 1.033090, 1.032054,
+ 1.031080, 1.030153, 1.029221, 1.028458, 1.027655, 1.026869, 1.026136, 1.025518,
+ 1.024864, 1.024259, 1.023663, 1.023195, 1.022640, 1.022130, 1.021648, 1.021144,
+ 1.020772]
+
+def smooth_ps(ps, res, alpha=4, log=True, ndof=2):
+	"""Smooth a 2d power spectrum to the target resolution in l"""
+	# First get our pixel size in l
+	lx, ly = enmap.laxes(ps.shape, ps.wcs)
+	ires   = np.array([lx[1],ly[1]])
+	smooth = np.abs(res/ires)
+	# We now know how many pixels to somoth by in each direction,
+	# so perform the actual smoothing
+	if log: ps = np.log(ps)
+	fmap  = enmap.fft(ps)
+	ky    = np.fft.fftfreq(ps.shape[-2])
+	kx    = np.fft.fftfreq(ps.shape[-1])
+	fmap /= 1 + np.abs(2*ky[:,None]*smooth[0])**alpha
+	fmap /= 1 + np.abs(2*kx[None,:]*smooth[1])**alpha
+	ps    = enmap.ifft(fmap).real
+	if log: ps = np.exp(ps)*log_smooth_corrections[ndof]
+	return ps
 
 def read_map(fname, pbox, name=None, cache_dir=None, dtype=None, read_cache=False):
 	if os.path.isdir(fname):
@@ -156,6 +192,7 @@ def filter_div(div):
 	"""Downweight very thin stripes in the div - they tend to be problematic single detectors"""
 	return enmap.samewcs(ndimage.minimum_filter(div, size=2), div)
 
+dog = None
 class JointMapset:
 	def __init__(self, datasets, ffpad=0, ncomp=None):
 		self.datasets = datasets
@@ -200,7 +237,7 @@ class JointMapset:
 		return cls(odatasets, ffpad, ncomp=ncomp, *args, **kwargs)
 
 	def analyze(self, ref_beam=None, mode="weight", map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, apod_edge=120,
-			beam_tol=1e-4, ps_spec_tol=0.5, ps_smoothing=10, filter_kxrad=20, filter_highpass=200, filter_kx_ymax_scale=1):
+			beam_tol=1e-4, ps_spec_tol=0.5, ps_smoothing=20, ps_res=400, filter_kxrad=20, filter_highpass=200, filter_kx_ymax_scale=1, dewindow=False):
 		# Find the typical noise levels. We will use this to decide where
 		# divs and beams etc. can be truncated to improve convergence.
 		datasets = self.datasets
@@ -214,6 +251,8 @@ class JointMapset:
 				split.data.map = np.maximum(-map_max, np.minimum(map_max, split.data.map))
 				# Expand map to ncomp components
 				split.data.map = add_missing_comps(split.data.map, ncomp)
+				if dewindow:
+					split.data.map = enmap.apply_window(split.data.map, -1)
 				# Build apodization
 				apod = np.minimum(split.data.div/(split.ref_div*apod_val), 1.0)**apod_alpha
 				apod = apod.apod(apod_edge)
@@ -225,30 +264,34 @@ class JointMapset:
 		ly, lx   = enmap.laxes(self.shape, self.wcs)
 		lr       = (ly[:,None]**2 + lx[None,:]**2)**0.5
 		bmin = np.min([beam_size(dataset.beam) for dataset in datasets])
+		# If no target beam was specified, set it to be the best of the input beams
+		if ref_beam is None:
+			ref_beam = datasets[0].beam
+			for dataset in datasets[1:]:
+				ref_beam = np.maximum(ref_beam, dataset.beam)
 		# Deconvolve all the relative beams. These should ideally include pixel windows.
 		# This could matter for planck
-		if ref_beam is not None:
-			for dataset in datasets:
-				rel_beam  = beam_ratio(dataset.beam, ref_beam)
-				# Avoid division by zero
-				bspec     = np.maximum(eval_beam(rel_beam, lr), 1e-10)
-				# We don't want to divide by tiny numbers, so we will cap the relative
-				# beam. The goal is just to make sure that the deconvolved noise ends up
-				# sufficiently high that anything beyond that is negligible. This will depend
-				# on the div ratios between the different datasets. We can stop deconvolving
-				# when beam*my_div << (tot_div-my_div). But deconvolving even by a factor
-				# 1000 leads to strange numberical errors
-				bspec = np.maximum(bspec, beam_tol*(tot_ref_div/dataset.ref_div-1))
-				bspec_dec = np.maximum(bspec, 0.1)
-				for split in dataset.splits:
-					split.data.map = map_ifft(map_fft(split.data.map)/bspec_dec)
-				# In theory we don't need to worry about the beam any more by this point.
-				# But the pixel window might be unknown or missing. So we save the beam so
-				# we can make sure the noise model makes sense
-				dataset.bspec = bspec
-				# We classify this as a low-resolution dataset if we did an appreciable amount of
-				# deconvolution
-				dataset.lowres = np.min(bspec) < 0.5
+		for dataset in datasets:
+			rel_beam  = beam_ratio(dataset.beam, ref_beam)
+			# Avoid division by zero
+			bspec     = np.maximum(eval_beam(rel_beam, lr), 1e-10)
+			# We don't want to divide by tiny numbers, so we will cap the relative
+			# beam. The goal is just to make sure that the deconvolved noise ends up
+			# sufficiently high that anything beyond that is negligible. This will depend
+			# on the div ratios between the different datasets. We can stop deconvolving
+			# when beam*my_div << (tot_div-my_div). But deconvolving even by a factor
+			# 1000 leads to strange numberical errors
+			bspec = np.maximum(bspec, beam_tol*(tot_ref_div/dataset.ref_div-1))
+			bspec_dec = np.maximum(bspec, 0.01)
+			for split in dataset.splits:
+				split.data.map = map_ifft(map_fft(split.data.map)/bspec_dec)
+			# In theory we don't need to worry about the beam any more by this point.
+			# But the pixel window might be unknown or missing. So we save the beam so
+			# we can make sure the noise model makes sense
+			dataset.bspec = bspec
+			# We classify this as a low-resolution dataset if we did an appreciable amount of
+			# deconvolution
+			dataset.lowres = np.min(bspec) < 0.5
 
 		# Can now build the noise model and rhs for each dataset.
 		# The noise model is N = HCH, where H = div**0.5 and C is the mean 2d noise spectrum
@@ -280,7 +323,7 @@ class JointMapset:
 				goodfrac = np.sum(wvar > 1e-3)/float(wvar.size)
 				if goodfrac < 0.1: goodfrac = 0
 				ps    = np.abs(map_fft(wdiff))**2
-				# correct for unhit areas, which can't be whitened
+				# correct for unhit areas, which can't be whitend
 				with utils.nowarn(): ps   /= goodfrac
 				if dset_ps is None:
 					dset_ps = enmap.zeros(ps.shape, ps.wcs, ps.dtype)
@@ -290,7 +333,14 @@ class JointMapset:
 			# With n splits, mean map has var 1/n, so diff has var (1-1/n) + (n-1)/n = 2*(n-1)/n
 			# Hence tot-ps has var 2*(n-1)
 			dset_ps /= 2*(nsplit-1)
-			dset_ps  = smooth_pix(dset_ps, ps_smoothing)
+			# Logarithmic smoothing is a sort of compromisbe between smoothing
+			# N, which leaks the huge low-l noise peak into the surrounding area,
+			# and smoothing iN, which fills in that noise hole. It works best if
+			# the noise has an exponential profile, which it doesn't have - it's
+			# a power law. But it's a 
+			#dset_ps  = smooth_ps_pix_log(dset_ps, ps_smoothing)
+			#dset_ps  = np.exp(smooth_pix(np.log(dset_ps), ps_smoothing))
+			dset_ps  = smooth_ps(dset_ps, ps_res, ndof=2*(nsplit-1))
 			# Use the beam we saved from earlier to make sure we don't have a remaining
 			# pixel window giving our high-l parts too high weight. If everything has
 			# been correctly deconvolved, we expect high-l dset_ps to go as
@@ -405,3 +455,110 @@ class AutoCoadder(JointMapset):
 		tot_div = tot_div[...,:ny-self.ffpad[0],:nx-self.ffpad[1]]
 		return bunch.Bunch(map=tot_map, div=tot_div)
 
+class AutoFilter(JointMapset):
+	def __init__(self, *args, **kwargs):
+		JointMapset.__init__(self, *args, **kwargs)
+	def analyze(self, inv_signal, cl_bg, dewindow=True, **kwargs):
+		JointMapset.analyze(self, ref_beam=inv_signal, dewindow=dewindow, **kwargs)
+		# The inverse signal profile in l-space
+		self.inv_signal = np.array(inv_signal)
+		# Deconvolve signal profile from background spectrum
+		lmax_bg = min(len(cl_bg),len(inv_signal))
+		self.cl_bg = cl_bg.copy()
+		self.cl_bg[lmax_bg:] = 0
+		self.cl_bg[:lmax_bg] *= inv_signal[:lmax_bg]**2
+		# Evaluate 2d background spectrum
+		self.S = enmap.spec2flat(self.shape, self.wcs, self.cl_bg[None,None])[0,0]
+	def calc_precon(self):
+		datasets = self.datasets
+		# Build the preconditioner
+		self.tot_div = enmap.ndmap(np.sum([split.data.div for dataset in datasets for split in dataset.splits],0), self.wcs)
+		self.precon  = 1 # /(1+self.tot_div)
+	def calc_rhs(self):
+		# Build the right-hand side. The right-hand side is sum(HNHm)
+		rhs = enmap.zeros(self.shape, self.wcs, self.dtype)
+		for dataset in self.datasets:
+			#print "moo", dataset.name, "iN" in dataset, id(dataset)
+			for split in dataset.splits:
+				if split.data.empty or not split.active: continue
+				w   = split.data.H*split.data.map
+				fw  = map_fft(w)
+				fw *= dataset.iN
+				if self.mode == "filter": fw *= dataset.filter
+				w   = map_ifft(fw)*split.data.H
+				rhs += w
+		self.rhs = rhs
+	def A(self, x):
+		m   = enmap.enmap(x.reshape(self.shape), self.wcs, copy=False)
+		Sm  = map_ifft(self.S*map_fft(m))
+		res = m*0
+		for dataset in self.datasets:
+			for split in dataset.splits:
+				if split.data.empty or not split.active: continue
+				w   = split.data.H*Sm
+				w   = map_ifft(map_fft(w)*dataset.iN)
+				w  *= split.data.H
+				res += w
+		res += m
+		return res.reshape(-1)
+	def M(self, x):
+		return x.copy()
+		#m   = enmap.enmap(x.reshape(self.shape), self.wcs, copy=False)
+		#res = m * self.precon
+		#return res.reshape(-1)
+	def solve(self, maxiter=100, cg_tol=1e-7, verbose=False, dump_dir=None):
+		solver = cg.CG(self.A, self.rhs.reshape(-1), M=self.M)
+		for i in range(maxiter):
+			t1 = time.time()
+			solver.step()
+			t2 = time.time()
+			if verbose:
+				print "%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1)
+			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + range(100,10000,100):
+				m = enmap.ndmap(solver.x.reshape(self.shape), self.wcs)
+				print calc_div_noise_normalization(m, self.tot_div)
+				enmap.write_map(dump_dir + "/step%04d.fits" % solver.i, m)
+			if solver.err < cg_tol:
+				if dump_dir is not None:
+					m = enmap.ndmap(solver.x.reshape(self.shape), self.wcs)
+					enmap.write_map(dump_dir + "/step_final.fits", m)
+				break
+		tot_map = solver.x.reshape(self.shape)
+		# Get rid of the fourier padding
+		ny,nx = tot_map.shape[-2:]
+		tot_map = tot_map[...,:ny-self.ffpad[0],:nx-self.ffpad[1]]
+		return bunch.Bunch(map=tot_map)
+
+def calc_div_noise_normalization(map, div, bsize=45, nsigma=4):
+	"""Fit a model var = alpha*div + beta to the first component of map"""
+	nby = map.shape[-2]//bsize
+	nbx = map.shape[-1]//bsize
+	def blockify(m):
+		res = np.array(m.preflat[0,:nby*bsize,:nbx*bsize].reshape(nby,bsize,nbx,bsize))
+		return np.transpose(res, (0, 2, 1, 3)).reshape(nby*nbx,-1)
+	map = blockify(map)
+	div = blockify(div)
+	# Cap outliers in each bock
+	for b in map:
+		ulim= np.percentile(b,75)*3
+		llim= np.percentile(b,25)*3
+		b[b>ulim] = ulim
+		b[b<llim] = llim
+	y   = np.mean(map**2,1)
+	x   = np.mean(div,1)
+	def calc_model(coeff): return np.exp(coeff[0])*x/(1+x*np.exp(coeff[1]))**2
+	def calc_chisq(coeff): return np.sum((y-calc_model(coeff))**2)
+	coeff0 = np.log(np.array([1e-3,100**2]))
+	coeffs = optimize.fmin_powell(calc_chisq, coeff0, disp=False)
+	model  = calc_model(coeffs)
+	enmap.write_map("y.fits", y.reshape(nby,nbx))
+	enmap.write_map("model.fits", model.reshape(nby,nbx))
+	enmap.write_map("ratio.fits", (y/model).reshape(nby,nbx))
+	enmap.write_map("diff.fits", (y-model).reshape(nby,nbx))
+	return np.exp(coeffs)
+
+
+# va cov is (1+N"S)"N"(1+N"S)'. Assume pixel diag approximation of S is S| and pixel
+# diag approximation of N" is div. Then this cov's diag is approximately
+# div/(1+div*S|)**2. When div is big, this goes as 1/div, but when it is small it
+# goes as div. Requires nonlinear fit
