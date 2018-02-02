@@ -16,9 +16,10 @@ void read_channels_into_omp(int nchannel, int nthread, char typechar, int nbyte,
 {
 	int nsamp;
 	void * row;
-	#pragma omp parallel for num_threads(nthread)
+	#pragma omp parallel for num_threads(nthread) private(row)
 	for(int i = 0; i < nchannel; i++) {
 		row = ACTpolDirfile_read_channel(typechar, dirfile, channelnames[i], &nsamp);
 		memcpy(data[i], row, nbyte);
+		free(row);
 	}
 }

@@ -91,6 +91,7 @@ cdef class dirfile:
 		be written to. nthread controls the number of omp threads.
 		The default, 0, lets OMP decide."""
 		if not self.is_open(): raise IOError("Dfile is not open")
+		if len(field_list) == 0: return None
 		for field in field_list:
 			if not field in self.fieldinfo:
 				raise IOError("Field %s does not exist" % field)
@@ -116,6 +117,7 @@ cdef class dirfile:
 		# We are now ready to read the data
 		cactgetdata.read_channels_into_omp(nfield, nthread, ctype, nbyte, self.dfile, cnames, rows)
 		# And return
+		free(rows)
 		free(cnames)
 		return arr.view(dtype)
 	def __enter__(self):
