@@ -1,7 +1,7 @@
 import numpy as np, os, time, imp, copy, functools
 from scipy import ndimage, optimize, interpolate
 from enlib import enmap, retile, utils, bunch, cg, fft, powspec
-from matplotlib import pyplot
+#from matplotlib import pyplot
 
 def read_config(fname):
 	config = imp.load_source("config", fname)
@@ -214,7 +214,7 @@ def calc_pbox(shape, wcs, box, n=10):
 	pbox = utils.nint(pbox)
 	return pbox
 
-def make_dummy_tile(shape, wcs, box, pad=0):
+def make_dummy_tile(shape, wcs, box, pad=0, dtype=np.float64):
 	pbox = calc_pbox(shape, wcs, box)
 	if pad:
 		pbox[0] -= pad
@@ -709,7 +709,7 @@ class Mapset:
 			res.datasets = [dataset for dataset in res.datasets if dataset.ngood >= 2]
 			for dataset in res.datasets:
 				dataset.splits = [split for split in dataset.splits if split.data is not None]
-		if len(res.datasets) is None: return None
+		if len(res.datasets) == 0: return None
 		# Extra information about what we read
 		res.ffpad    = ffpad
 		res.shape, res.wcs = common_geometry([split.data.map.geometry for dataset in res.datasets for split in dataset.splits if split.data is not None], ncomp=ncomp)
@@ -790,6 +790,11 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		dset_ps /= nsplit
 		# Smooth ps to reduce sample variance
 		dset_ps  = smooth_ps(dset_ps, ps_res, ndof=2*(nsplit-1))
+		# For planck, the upscaling to act resolution results in no signal nor noise
+		# at high l. This is creating numerical problems. I should get to the bottom
+		# of this. For now, this mostly avoids them, and should be safe, as typical
+		# values of dset_ps are 1, and so 1e-3 should not occur normally.
+		dset_ps  = np.maximum(dset_ps, 1e-3)
 		# If we have invalid values, then this whole dataset should be skipped
 		if not np.all(np.isfinite(dset_ps)): continue
 		dataset.iN  = 1/dset_ps
@@ -844,6 +849,8 @@ def setup_beams(mapset):
 				beam_2d *= wx[None,:]
 			elif d.window_params[0] == "none":
 				pass
+			elif d.window_params[0] == "lmax":
+				beam_2d[mapset.l>d.window_params[1]] = 0
 			else: raise ValueError("Unrecognized pixel window type '%s'" % (d.window_params[0]))
 			cache[param] = beam_2d
 		d.beam_2d = cache[param]
@@ -902,7 +909,13 @@ class SignalFilter:
 			for i in range(self.nmap):
 				ofmaps[i] += self.hN[i]*map_fft(self.H[i]*map_ifft(self.B[i]*SBHCh))
 			return zip(ofmaps)
-		solver = cg.CG(A, zip(rhs))
+		Hmean = [np.mean(H) for H in self.H]
+		precs = [1/(1+self.iN[i]*Hmean[i]**2*self.B[i]**2*self.mapset.S) for i in range(self.nmap)]
+		def M(x):
+			fmaps = unzip(x)
+			omaps = [precs[i]*fmaps[i] for i in range(self.nmap)]
+			return zip(omaps)
+		solver = cg.CG(A, zip(rhs), M=M)
 		for i in range(maxiter):
 			t1 = time.time()
 			solver.step()
@@ -952,6 +965,9 @@ class SignalFilter:
 		# with an unknown overall scale that we fit from the alpha map itself
 		avars = enmap.downgrade(alpha**2, bsize)
 		dvals = enmap.downgrade(self.tot_div, bsize)
+		mask  = np.isfinite(avars)&np.isfinite(dvals)
+		avars, dvals = avars[mask], dvals[mask]
+		avars, dvals = avars[dvals>0], dvals[dvals>0]
 		ratios= avars/dvals
 		mask  = (ratios > np.median(ratios)/2)&(ratios < np.median(ratios)*2)
 		avars, dvals = avars[mask], dvals[mask]
