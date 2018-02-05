@@ -2,8 +2,8 @@
 providing both a mask-like (numpy bool array) and list of from:to interface.
 It also provides a convenience class for handling multiple of these range lists."""
 import numpy as np
-from enlib.slice import expand_slice, split_slice
-from enlib.utils import mask2range, cumsum, range_union, range_normalize
+from .slice import expand_slice, split_slice
+from .utils import mask2range, cumsum, range_union, range_normalize
 
 class Rangelist:
 	def __init__(self, ranges, n=None, copy=True):

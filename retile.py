@@ -1,5 +1,5 @@
 import numpy as np, glob, re, sys, os
-from enlib import utils, enmap, bunch
+from . import utils, enmap, bunch
 
 default_pathformat = "tile%(y)03d_%(x)03d.fits"
 

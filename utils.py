@@ -165,7 +165,7 @@ def mjd2ctime(mjd):
 	return (np.asarray(mjd)-40587.0)*86400
 
 def medmean(x, frac=0.5):
-	x = np.sort(x)
+	x = np.sort(x.reshape(-1))
 	i = int(x.size*frac)//2
 	return np.mean(x[i:-i])
 

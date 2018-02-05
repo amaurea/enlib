@@ -37,9 +37,9 @@
 # signal_phase = SignalPhase(..., cut=signal_cut)
 # signals = [signal_cut, signal_map, signal_phase]
 import numpy as np, h5py, zipper, logging, gc
-from enlib import enmap, dmap, array_ops, pmat, utils, todfilter
-from enlib import config, nmat, bench, gapfill, mpi, sampcut, fft
-from enlib.cg import CG
+from . import enmap, dmap, array_ops, pmat, utils, todfilter
+from . import config, nmat, bench, gapfill, mpi, sampcut, fft
+from .cg import CG
 L = logging.getLogger(__name__)
 
 def dump(fname, d):

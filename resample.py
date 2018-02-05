@@ -1,6 +1,6 @@
 """This module handles resampling of time-series and similar arrays."""
 import numpy as np
-from enlib import utils, fft
+from . import utils, fft
 
 def resample(d, factors=[0.5], axes=None, method="fft"):
 	factors = np.atleast_1d(factors)
