@@ -218,13 +218,15 @@ def enmap(arr, wcs=None, dtype=None, copy=True):
 		Default: Same as arr.
 	copy : boolean
 		If true, arr is copied. Otherwise, a referance is kept."""
-	if copy:
-		arr = np.asanyarray(arr, dtype=dtype).copy()
 	if wcs is None:
 		if isinstance(arr, ndmap):
 			wcs = arr.wcs
+		elif isinstance(arr, list) and len(arr) > 0 and isinstance(arr[0], ndmap):
+			wcs = arr[0].wcs
 		else:
 			wcs = enlib.wcs.WCS(naxis=2)
+	if copy:
+		arr = np.asanyarray(arr, dtype=dtype).copy()
 	return ndmap(arr, wcs)
 
 def empty(shape, wcs=None, dtype=None):
@@ -863,7 +865,8 @@ def downgrade(emap, factor):
 	fact[:] = factor
 	tshape = emap.shape[-2:]//fact*fact
 	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]//fact[0],fact[0],tshape[1]//fact[1],fact[1])),(-3,-1))
-	return ndmap(res, emap[...,::fact[0],::fact[1]].wcs)
+	try: return ndmap(res, emap[...,::fact[0],::fact[1]].wcs)
+	except AttributeError: return res
 
 def upgrade(emap, factor):
 	"""Upgrade emap to a larger size using nearest neighbor interpolation,
