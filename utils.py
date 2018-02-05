@@ -855,7 +855,7 @@ def allgather(a, comm):
 	rather than needing an output argument."""
 	a   = np.asarray(a)
 	res = np.zeros((comm.size,)+a.shape,dtype=a.dtype)
-	if np.issubdtype(a.dtype, str):
+	if np.issubdtype(a.dtype, np.string_):
 		comm.Allgather(a.view(dtype=np.uint8), res.view(dtype=np.uint8))
 	else:
 		comm.Allgather(a, res)
@@ -871,7 +871,7 @@ def allgatherv(a, comm, axis=0):
 	fa = moveaxis(a, axis, 0)
 	# mpi4py doesn't handle all types. But why not just do this
 	# for everything?
-	must_fix = np.issubdtype(a.dtype, str) or a.dtype == bool
+	must_fix = np.issubdtype(a.dtype, np.string_) or a.dtype == bool
 	if must_fix:
 		fa = fa.view(dtype=np.uint8)
 	ra = fa.reshape(fa.shape[0],-1) if fa.size > 0 else fa.reshape(0,np.product(fa.shape[1:],dtype=int))

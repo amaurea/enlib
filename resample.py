@@ -56,7 +56,7 @@ def upsample_bin(d, steps=[2], axes=None):
 def resample_fft(d, n, axes=None):
 	"""Resample numpy array d via fourier-reshaping. Requires periodic data.
 	n indicates the desired output lengths of the axes that are to be
-	resampled. By the fault the last len(n) axes are resampled, but this
+	resampled. By default the last len(n) axes are resampled, but this
 	can be controlled via the axes argument."""
 	d = np.asanyarray(d)
 	# Compute output lengths from factors if necessary

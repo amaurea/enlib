@@ -8,7 +8,7 @@ setup(
 	ext_modules = [
 		Extension(
 			name="pyactgetdata",
-			sources=["pyactgetdata.pyx"],
+			sources=["pyactgetdata.pyx","read_parallel.c"],
 			libraries=["actgetdata","slim","zzip"],
 			include_dirs=["."],
 			)

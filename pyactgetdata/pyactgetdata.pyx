@@ -83,6 +83,41 @@ cdef class dirfile:
 		for i in range(size): res[i] = data[i]
 		free(data)
 		return res.view(typemap[ctype])
+	@cython.boundscheck(False)
+	def getdata_multi(self, field_list, field_type=None, nthread=0):
+		"""Parallel version of getdata. field_list is a list of field names, all of
+		which must have the same length and type as the output_array's last dimension.
+		output_array is a 2d array [len(field_list),nsamp] that the data read will
+		be written to. nthread controls the number of omp threads.
+		The default, 0, lets OMP decide."""
+		if not self.is_open(): raise IOError("Dfile is not open")
+		for field in field_list:
+			if not field in self.fieldinfo:
+				raise IOError("Field %s does not exist" % field)
+
+		# Collect information needed to build the output array. The type is simple
+		if field_type is None: field_type = self.native_type(field)
+		dtype = typemap[field_type]()
+		cdef char * tmp = field_type
+		cdef char ctype = tmp[0]
+		# Read the first field to get the length
+		first_row = self.getdata(field_list[0], field_type)
+		cdef int nsamp = first_row.size
+		cdef int nbyte = nsamp*dtype.nbytes
+		cdef int nfield= len(field_list)
+		# We can now construct the output array
+		cdef np.ndarray[np.uint8_t,ndim=2,mode="c"] arr  = np.empty((nfield,nbyte),dtype=np.uint8)
+		# Construct pointers to each row
+		cdef void ** rows = <void**> malloc(nfield*sizeof(void*));
+		for i in range(nfield): rows[i] = <void*>&arr[i,0]
+		# And a C list of field names
+		cdef char ** cnames = <char**> malloc(nfield*sizeof(char*))
+		for i in range(nfield): cnames[i] = field_list[i]
+		# We are now ready to read the data
+		cactgetdata.read_channels_into_omp(nfield, nthread, ctype, nbyte, self.dfile, cnames, rows)
+		# And return
+		free(cnames)
+		return arr.view(dtype)
 	def __enter__(self):
 		return self
 	def __exit__(self, type, value, traceback):

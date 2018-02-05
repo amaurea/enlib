@@ -1,5 +1,6 @@
 import numpy as np, logging, h5py, sys
 from enlib import scan as enscan, errors, utils, coordinates, dmap
+from enact import actdata, filedb
 L = logging.getLogger(__name__)
 
 def calc_sky_bbox_scan(scan, osys, nsamp=100):
@@ -84,6 +85,7 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 		try:
 			if isinstance(filelist[ind],list): raise IOError
 			d = enscan.read_scan(filelist[ind])
+			actdata.read(filedb.data[filelist[ind]])
 		except IOError:
 			try:
 				if isinstance(filelist[ind],list):
@@ -104,15 +106,10 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 			else:
 				d = eval("d[%s]" % dets)
 		hwp_active = np.any(d.hwp_phase[0] != 0)
-		print "hwp_resample", hwp_resample, "hwp_active", hwp_active
 		if hwp_resample and hwp_active:
 			mapping = enscan.build_hwp_sample_mapping(d.hwp)
 			d = d.resample(mapping)
-			print "AAA"
-			print d.operations
 		d = d[:,::downsample]
-		print "AAB"
-		print d.operations
 		if not quiet: L.debug("Read %s" % str(filelist[ind]))
 		yield ind, d
 
