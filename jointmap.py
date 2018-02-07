@@ -1,6 +1,6 @@
 import numpy as np, os, time, imp, copy, functools
 from scipy import ndimage, optimize, interpolate
-from enlib import enmap, retile, utils, bunch, cg, fft, powspec
+from enlib import enmap, retile, utils, bunch, cg, fft, powspec, array_ops
 #from matplotlib import pyplot
 
 def read_config(fname):
@@ -58,11 +58,13 @@ def read_beam(params, nl=50000, workdir="."):
 		bdata = np.loadtxt(fname)[:,1]
 		ndata = len(bdata)
 		res[:ndata] = np.log(bdata)
-		# Fit gaussian that would reach res[ndata-1] by that point. We do this
-		# because we want well-defined values for every l, to allow us to divide later
-		# -0.5*(ndata-1)**2*sigma**2 = res[ndata-1] => sigma**2 = -2*res[ndata-1]/(ndata-1)**2
-		sigma2 = -2*res[ndata-1]/(ndata-1)**2
-		res[ndata:] = -0.5*l[ndata:]**2*sigma2
+		# Fit power law to extend the beam beyond its end. That way we will have
+		# a well-defined value everywhere.
+		i1, i2 = ndata*18/20, ndata*19/20
+		x1, x2 = np.log(l[i1]), np.log(l[i2])
+		y1, y2 = res[i1], res[i2]
+		alpha = (y2-y1)/(x2-x1)
+		res[i2:] = res[i2] + alpha*np.log(l[i2:]/l[i2-1])
 		return res
 	else: raise ValueError("beam type '%s' not implemented" % type)
 
@@ -81,33 +83,36 @@ def eval_beam(beam, l, raw=False):
 def calc_profile_ptsrc(freq, nl=50000):
 	return np.full(nl, 1.0)
 
-def calc_profile_sz(freq, scale=1.0, nl=50000, dl=250):
-	# This gives the y to signal response in fourier space
-	amp = sz_freq_core(freq*1e9)
-	# f(k) = fft(f(x)). Fourier interval is related to l
-	# via dl = 2*pi/(dx*n), and lmax is pi/dx. So dx must be
-	# pi/nl.
-	dl = dl/float(scale)
-	dr = np.pi/nl
-	nr = utils.nint(2*np.pi/(dr*dl))
-	r  = np.arange(nr)*dr # radians
-	# We want scale=1 to correspond to a FWHM of the sz profile at
-	# 1 arcmin. In dimensionless units the FWHM is 0.34208
-	x  = r/utils.arcmin*0.34208/scale
-	y  = sz_rad_projected(x)
-	fy = fft.rfft(y).real
-	l  = np.arange(len(fy),dtype=float)*dl
-	# Expand to full array
-	spline   = interpolate.splrep(l, np.log(fy))
-	profile  = np.exp(interpolate.splev(np.arange(nl), spline))
-	# This is a good approximation for avoiding aliasing. In the real world,
-	# the beam smoothes away high-l modes before they can be aliased, but since
-	# we don't have an easy way to compute the beam-convoluted real-space signal,
-	# we must avoid the aliasing another way
-	profile -= profile[-1]
-	# Normalize to 1 response in center, so the mean is not changed
-	profile /= profile[0]
-	return amp*profile
+# This approach does not work as it is - it suffers from aliasing.
+# It could probably be made to work with a fiducial beam, a variable
+# step size, and more interpolation, but for now I have bypassed it
+# to work directly in fourier space
+#def calc_profile_sz(freq, scale=1.0, nl=50000, dl=250):
+#	# This gives the y to signal response in fourier space
+#	amp = sz_freq_core(freq*1e9)
+#	# f(k) = fft(f(x)). Fourier interval is related to l
+#	# via dl = 2*pi/(dx*n), and lmax is pi/dx. So dx must be
+#	# pi/nl.
+#	dl = dl/float(scale)
+#	dr = np.pi/nl
+#	nr = utils.nint(2*np.pi/(dr*dl))
+#	r  = np.arange(nr)*dr # radians
+#	# We want scale=1 to correspond to a FWHM of the sz profile at
+#	# 1 arcmin. In dimensionless units the FWHM is 0.34208
+#	y  = sz_rad_projected(r/utils.arcmin, scale)
+#	fy = fft.rfft(y).real
+#	l  = np.arange(len(fy),dtype=float)*dl
+#	# Expand to full array
+#	spline   = interpolate.splrep(l, np.log(fy))
+#	profile  = np.exp(interpolate.splev(np.arange(nl), spline))
+#	# This is a good approximation for avoiding aliasing. In the real world,
+#	# the beam smoothes away high-l modes before they can be aliased, but since
+#	# we don't have an easy way to compute the beam-convoluted real-space signal,
+#	# we must avoid the aliasing another way
+#	profile -= profile[-1]
+#	# Normalize to 1 response in center, so the mean is not changed
+#	profile /= profile[0]
+#	return amp*profile
 
 h_P = 6.62607004e-34
 k_B =1.38064852e-23
@@ -127,12 +132,27 @@ def sz_rad_core(x):
 	p  = 1/(cx**gamma * (1+cx**alpha)**((beta-gamma)/alpha))
 	return p
 
-def sz_rad_projected(x_ort, xmax=5, dx=1e-3):
-	x_ort = np.asarray(x_ort)
+def sz_rad_projected(r_ort, fwhm=1.0, xmax=5, dx=1e-3):
+	"""Compute the projected sz radial profile on the sky, as a function of
+	the angular distance r_ort from the center, in arcminutes. The cluster profile full-width
+	half-max is given by fwhm."""
+	x_ort = np.asarray(r_ort)*0.34208/fwhm
 	x_par = np.arange(0,xmax,dx)+dx/2
 	res   = np.array([np.sum(sz_rad_core((x_par**2 + xo**2)**0.5)) for xo in x_ort.reshape(-1)])
 	norm  = np.sum(sz_rad_core(x_par))
 	return res.reshape(x_ort.shape)/norm
+
+def sz_rad_projected_map(shape, wcs, fwhm=1.0, xmax=5, dx=1e-3):
+	pos = enmap.posmap(shape, wcs)
+	iy,ix = np.array(shape[-2:])//2+1
+	r   = np.sum((pos-pos[:,iy,ix][:,None,None])**2,0)**0.5
+	r   = np.roll(np.roll(r,-ix,-1),-iy,-2)
+	# Next build a 1d spline of the sz cluster profile covering all our radii
+	r1d = np.arange(0, np.max(r)*1.1, min(r[0,1],r[1,0])*0.5)
+	y1d = sz_rad_projected(r1d/utils.arcmin, fwhm)
+	spline = interpolate.splrep(r1d, np.log(y1d))
+	y2d = enmap.ndmap(np.exp(interpolate.splev(r, spline)), wcs)
+	return y2d
 
 def butter(f, f0, alpha):
 	if f0 <= 0: return f*0+1
@@ -824,7 +844,18 @@ def setup_filter(mapset, mode="weight", filter_kxrad=20, filter_highpass=200, fi
 def setup_profiles_ptsrc(mapset):
 	setup_profiles_helper(mapset, lambda freq: calc_profile_ptsrc(freq, nl=mapset.nl))
 def setup_profiles_sz(mapset, scale):
-	setup_profiles_helper(mapset, lambda freq: calc_profile_sz(freq, scale=scale, nl=mapset.nl))
+	# sz must be evaluated in real space to avoid aliasing. First get the
+	# distance from the corner, including wrapping. We do this by getting the
+	# distance from the center, and then moving the center to the corner afterwards
+	y2d = sz_rad_projected_map(mapset.shape, mapset.wcs, fwhm=scale)
+	y2d_harm  = np.abs(map_fft(y2d))
+	y2d_harm /= y2d_harm[0,0]
+	# We can now scale it as appropriately for each dataset
+	cache = {}
+	for d in mapset.datasets:
+		if d.freq not in cache:
+			cache[d.freq] = y2d_harm * sz_freq_core(d.freq*1e9)
+		d.signal_profile_2d = cache[d.freq]
 
 def setup_profiles_helper(mapset, fun):
 	cache = {}
@@ -870,6 +901,8 @@ class SignalFilter:
 		self.hN = [dataset.iN.preflat[0]**0.5 for dataset in mapset.datasets for split in dataset.splits]
 		self.Q  = [dataset.signal_profile_2d  for dataset in mapset.datasets for split in dataset.splits]
 		self.B  = [dataset.beam_2d            for dataset in mapset.datasets for split in dataset.splits]
+		#print "FIXME"
+		#self.m, self.H, self.iN, self.hN, self.Q, self.B = [w[:1] for w in [self.m, self.H, self.iN, self.hN, self.Q, self.B]]
 		self.shape, self.wcs = self.m[0].geometry
 		self.dtype= mapset.dtype
 		self.ctype= np.result_type(self.dtype,0j)
@@ -882,7 +915,7 @@ class SignalFilter:
 		# rhs is returend in fourier space
 		rhs = [self.hN[i]*map_fft(self.H[i]*self.m[i]) for i in range(self.nmap)]
 		return rhs
-	def calc_mu(self, rhs, maxiter=500, cg_tol=1e-4, verbose=False, dump_dir=None):
+	def calc_mu(self, rhs, maxiter=250, cg_tol=1e-7, verbose=False, dump_dir=None):
 		# m = Pa + Bs + n = Pa + ntot, Ntot = BSB' + N
 		# a = (P'Ntot"P)"P'Ntot"m <=>
 		# P'Ntot"P a = P'Ntot"m, where A = cov(a) = (P'Ntot"P)"
@@ -893,27 +926,33 @@ class SignalFilter:
 		# (Ch H BSB' H Ch + 1) mu = rhs, with mu = Ch"H" im <=> im = H Ch mu; and rhs = Ch H m
 		# mu is returned in fourier space
 		def zip(maps): return np.concatenate([m.reshape(-1) for m in maps]).view(self.dtype)
-		def unzip(x): return [enmap.ndmap(y.reshape(self.shape), self.wcs) for y in x.view(self.ctype).reshape(-1,self.npix)]
+		def unzip(x): return enmap.ndmap(x.view(self.ctype).reshape((-1,)+self.shape),self.wcs)
 		def A(x):
 			fmaps  = unzip(x)
 			ofmaps = [f.copy() for f in fmaps]
 			# Compute SB'HCh
-			SBHCh = None
+			SBHCh = enmap.zeros(self.shape, self.wcs, self.ctype)
 			for i in range(self.nmap):
-				tmp  = self.H[i]*map_ifft(self.hN[i]*fmaps[i])
-				tmp  = self.B[i]*map_fft(tmp)
-				if SBHCh is None: SBHCh = tmp*0
-				SBHCh += tmp
+				SBHCh += self.B[i]*map_fft(self.H[i]*map_ifft(self.hN[i]*fmaps[i]))
 			SBHCh *= self.mapset.S
 			# Complete ChHBSB'HCh and add it to omaps
 			for i in range(self.nmap):
 				ofmaps[i] += self.hN[i]*map_fft(self.H[i]*map_ifft(self.B[i]*SBHCh))
 			return zip(ofmaps)
-		Hmean = [np.mean(H) for H in self.H]
-		precs = [1/(1+self.iN[i]*Hmean[i]**2*self.B[i]**2*self.mapset.S) for i in range(self.nmap)]
+		# How can we build an efficient preconditioner for CMB dominated cases?
+		# Assume harmonic only first. Then each fourier bin becomes a small nmap x nmap equation
+		# system.
+		Hmean  = [np.mean(H) for H in self.H]
+		V = enmap.zeros((self.nmap,)+self.shape, self.wcs, self.dtype)
+		for i in range(self.nmap):
+			V[i] = self.mapset.S**0.5*self.B[i]*Hmean[i]*self.hN[i]
+		iprec  = np.eye(self.nmap)[:,:,None,None] + V[:,None]*V[None,:]
+		prec   = array_ops.eigpow(iprec, -1, (0,1), lim=1e-8)
+		#prec_diag = [1/(1+self.iN[i]*Hmean[i]**2*self.B[i]**2*self.mapset.S) for i in range(self.nmap)]
 		def M(x):
 			fmaps = unzip(x)
-			omaps = [precs[i]*fmaps[i] for i in range(self.nmap)]
+			omaps = enmap.map_mul(prec, fmaps)
+			#omaps  = fmaps*prec_diag
 			return zip(omaps)
 		solver = cg.CG(A, zip(rhs), M=M)
 		for i in range(maxiter):
@@ -932,11 +971,17 @@ class SignalFilter:
 				enmap.write_map(dump_dir + "/step_final_mu%04d.fits" % j, map_ifft(m))
 		return tot_mu
 	def calc_alpha(self, mu):
-		# Compute alpha = P'H Ch mu. The result will be in real space
+		# Compute alpha = P'H Ch mu = A"a = P'N"m. The result will be in real space.
 		alpha = enmap.zeros(self.shape, self.wcs, self.dtype)
 		for i in range(self.nmap):
 			alpha += map_ifft(self.Q[i]*self.B[i]*map_fft(self.H[i]*map_ifft(self.hN[i]*mu[i])))
 		return alpha
+	def calc_alpha_simple(self):
+		# Plain matched filter for a single map
+		Hmean = np.median(self.H[0])
+		Ntot  = self.mapset.S*self.B[0]**2 + 1/np.maximum(Hmean**2*self.iN[0],1e-25)
+		filter= self.Q[0]*self.B[0]/Ntot
+		return map_ifft(filter*map_fft(self.m[0])), Ntot
 	def calc_dalpha_analytical(self):
 		# Estimate the rms of the alpha map. There's something weird about
 		# the estimates I'm getting from this method currently - they
@@ -974,6 +1019,64 @@ class SignalFilter:
 		scale = np.sum(avars*dvals)/np.sum(dvals**2)
 		alpha_rms = (self.tot_div * scale)**0.5
 		return alpha_rms
+	def calc_alpha_cov_harmonic(self):
+		# The harmonic-only approximation to alpha's covariance A" = P'N"P is
+		# given by A" = P'N"P = (P'[BSB'+ H"C"H"]"P) sim (P'HCh[ChHBSB'HCh+1]"ChHP)
+		# V = ChHBSh => P'HCh[VV'+1]"ChHP,
+		# P'HCHP - P'HChV(1+V'V)"V'ChHP
+		# P'HCHP - P'HCHBSh(1+ShB'HCHBSh)"Sh'BHCHP
+		# Everything is diagonal in fourier space here. The result will be the
+		# fourier-space representation of the covariance, but it will be real
+		# because it's a 2d power spectrum
+		Hmean = [np.mean(H) for H in self.H]
+		PHCHP = enmap.zeros(self.shape, self.wcs, self.dtype)
+		PHCHB = enmap.zeros(self.shape, self.wcs, self.dtype)
+		core  = enmap.zeros(self.shape, self.wcs, self.dtype)
+		for i in range(self.nmap):
+			PHCHP += self.Q[i]**2*self.B[i]**2*Hmean[i]**2*self.iN[i]
+			PHCHB += self.Q[i]*self.B[i]**2*Hmean[i]**2*self.iN[i]
+			core  += Hmean[i]**2*self.iN[i]*self.B[i]**2
+		enmap.write_map("test_phchp.fits", np.fft.fftshift(PHCHP))
+		core  = 1+self.mapset.S*core
+		term2 = PHCHB**2*self.mapset.S/core
+		iA = PHCHP - term2
+		enmap.write_map("test_iA.fits", np.fft.fftshift(iA))
+		return iA
+	def calc_filter_harmonic(self):
+		# The harmonic-only representation of the total filter
+		# F such that alpha = Fm, e.g. F = P'N" = P'(BSB'+H"C"H")"
+		# sim P'HCH - P'HCHBSh(1+ShB'HCHBSh)"Sh'BHCH
+		# So this is the cov harmonic but with one less beam and without
+		# the inversion at the end.
+		Hmean = [np.mean(H) for H in self.H]
+		sumPHCH = enmap.zeros(self.shape, self.wcs, self.dtype)
+		PHCHB   = enmap.zeros(self.shape, self.wcs, self.dtype)
+		sumHCHB = enmap.zeros(self.shape, self.wcs, self.dtype)
+		core  = enmap.zeros(self.shape, self.wcs, self.dtype)
+		for i in range(self.nmap):
+			sumPHCH += self.Q[i]*self.B[i]*Hmean[i]**2*self.iN[i]
+			PHCHB   += self.Q[i]*self.B[i]**2*Hmean[i]**2*self.iN[i]
+			sumHCHB += self.B[i]*Hmean[i]**2*self.iN[i]
+			core  += Hmean[i]**2*self.iN[i]*self.B[i]**2
+		core  = 1+self.mapset.S*core
+		term2 = PHCHB*sumHCHB*self.mapset.S/core
+		res = sumPHCH - term2
+		return res
+	def sim(self):
+		# Debug: make noise and signal simulations for each of our maps
+		s = map_ifft(self.mapset.S**0.5*map_fft(enmap.rand_gauss(self.shape, self.wcs))).astype(self.dtype)
+		n = enmap.samewcs([self.H[i]**-1*map_ifft(self.hN[i]**-1*map_fft(enmap.rand_gauss(self.shape, self.wcs))).astype(self.dtype) for i in range(self.nmap)],s)
+		n += s
+		return n
+	def sim2(self):
+		# Debug: test fourier space units by building a pure fourier-space sim. This ignores cmb correlations
+		res = []
+		for i in range(self.nmap):
+			Hmean= np.mean(self.H[i])
+			Ntot = self.mapset.S + 1/(np.maximum(self.iN[0],1e-10)*Hmean**2)
+			n    = map_ifft(Ntot**0.5*map_fft(enmap.rand_gauss(self.shape, self.wcs).astype(self.dtype)))
+			res.append(n)
+		return res
 
 def spec2var(spec_2d):
 	return np.mean(spec_2d)**0.5
