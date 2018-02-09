@@ -776,11 +776,14 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			split.data.H  = split.data.div**0.5
 		# Form the mean map for this dataset
 		dset_map[:,dset_div>0] /= dset_div[dset_div>0]
+		enmap.write_map("test_totmap.fits", dset_map)
 		# Then use it to build the diff maps and noise spectra
 		dset_ps = None
-		for split in dataset.splits:
+		for i, split in enumerate(dataset.splits):
 			if split.data is None: continue
+			enmap.write_map("test_map_%d.fits" % i, split.data.map)
 			diff  = split.data.map - dset_map
+			enmap.write_map("test_diff_%d.fits" % i, diff)
 			# We can't whiten diff with just H.
 			# diff = m_i - sum(div)"sum(div_j m_j), and so has
 			# var  = div_i" + sum(div)"**2 * sum(div) - 2*sum(div)"div_i/div_i
@@ -790,6 +793,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 				diff_H   = (1/split.data.div - 1/dset_div)**-0.5
 			diff_H[~np.isfinite(diff_H)] = 0
 			wdiff = diff * diff_H
+			enmap.write_map("test_wdiff_%d.fits" % i, wdiff)
 			# What is the healthy area of wdiff? Wdiff should have variance
 			# 1 or above. This tells us how to upweight the power spectrum
 			# to take into account missing regions of the diff map.
@@ -800,6 +804,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			goodfrac = min(goodfrac_var, goodfrac_apod)
 			if goodfrac < 0.1: goodfrac = 0
 			ps    = np.abs(map_fft(wdiff))**2
+			enmap.write_map("test_ps_raw_%d.fits" % i, ps)
 			# correct for unhit areas, which can't be whitend
 			with utils.nowarn(): ps   /= goodfrac
 			if dset_ps is None:
@@ -808,8 +813,10 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			nsplit += 1
 		if nsplit < 2: continue
 		dset_ps /= nsplit
+		enmap.write_map("test_ps_raw.fits", dset_ps)
 		# Smooth ps to reduce sample variance
 		dset_ps  = smooth_ps(dset_ps, ps_res, ndof=2*(nsplit-1))
+		enmap.write_map("test_ps_smooth.fits", dset_ps)
 		# For planck, the upscaling to act resolution results in no signal nor noise
 		# at high l. This is creating numerical problems. I should get to the bottom
 		# of this. For now, this mostly avoids them, and should be safe, as typical
