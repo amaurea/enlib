@@ -1097,3 +1097,56 @@ def spec2var(spec_2d):
 def blockvar(m, bsize=10):
 	return enmap.downgrade(m**2, bsize)
 
+class Coadder:
+	def __init__(self, mapset):
+		self.mapset = mapset
+		# Extract and flatten all our input maps
+		self.m  = [split.data.map             for dataset in mapset.datasets for split in dataset.splits]
+		self.H  = [split.data.H               for dataset in mapset.datasets for split in dataset.splits]
+		self.iN = [dataset.iN                 for dataset in mapset.datasets for split in dataset.splits]
+		self.Q  = [dataset.signal_profile_2d  for dataset in mapset.datasets for split in dataset.splits]
+		self.B  = [dataset.beam_2d            for dataset in mapset.datasets for split in dataset.splits]
+		self.shape, self.wcs = self.m[0].geometry
+		self.dtype= mapset.dtype
+		self.ctype= np.result_type(self.dtype,0j)
+		self.npix = self.shape[-2]*self.shape[-1]
+		self.nmap = len(self.m)
+		self.tot_div = enmap.zeros(self.shape[-2:], self.wcs, self.dtype)
+		for H in self.H: self.tot_div += H**2
+	def calc_rhs(self):
+		# Calc rhs = B'HCH m
+		rhs = enmap.zeros(self.shape, self.wcs, self.dtype)
+		for i in range(self.nmap):
+			rhs += map_ifft(self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*self.m[i]))))
+		return rhs
+	def calc_coadd(self, rhs, maxiter=250, cg_tol=1e-5, verbose=False, dump_dir=None):
+		# solve (B'HCHB)x = rhs. For preconditioner, we will use the full-fourier approximation,
+		# so M = (B'Hmean C Hmean B)". The solution itself is done in fourier space, to save
+		# some ffts.
+		def zip(map): return map.reshape(-1).view(self.dtype)
+		def unzip(x): return enmap.ndmap(x.view(self.ctype).reshape(self.shape), self.wcs)
+		def A(x):
+			fmap = unzip(x)
+			fres = enmap.zeros(self.shape, self.wcs, self.ctype)
+			for i in range(self.nmap):
+				fres += self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*map_ifft(self.B[i]*fmap))))
+			return zip(fres)
+		prec = enmap.zeros(self.shape, self.wcs, self.ctype)
+		for i in range(self.nmap):
+			Hmean = np.mean(self.H[i])
+			prec += Hmean**2*self.B[i]**2*self.iN[i]
+		prec = 1/(prec + np.max(prec)*1e-8)
+		def M(x): return zip(prec*unzip(x))
+		solver = cg.CG(A, zip(map_fft(rhs)), M=M)
+		for i in range(maxiter):
+			t1 = time.time()
+			solver.step()
+			t2 = time.time()
+			if verbose:
+				print "%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1)
+			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + range(100,10000,100):
+				enmap.write_map(dump_dir + "/map_step%04d.fits" % solver.i, map_ifft(unzip(solver.x)))
+			if solver.err < cg_tol: break
+		if dump_dir is not None:
+			enmap.write_map(dump_dir + "/map_final.fits", map_ifft(unzip(solver.x)))
+		return map_ifft(unzip(solver.x))
