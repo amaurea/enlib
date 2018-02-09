@@ -922,7 +922,7 @@ class SignalFilter:
 		# rhs is returend in fourier space
 		rhs = [self.hN[i]*map_fft(self.H[i]*self.m[i]) for i in range(self.nmap)]
 		return rhs
-	def calc_mu(self, rhs, maxiter=250, cg_tol=1e-7, verbose=False, dump_dir=None):
+	def calc_mu(self, rhs, maxiter=250, cg_tol=1e-4, verbose=False, dump_dir=None):
 		# m = Pa + Bs + n = Pa + ntot, Ntot = BSB' + N
 		# a = (P'Ntot"P)"P'Ntot"m <=>
 		# P'Ntot"P a = P'Ntot"m, where A = cov(a) = (P'Ntot"P)"
@@ -948,17 +948,23 @@ class SignalFilter:
 			return zip(ofmaps)
 		# How can we build an efficient preconditioner for CMB dominated cases?
 		# Assume harmonic only first. Then each fourier bin becomes a small nmap x nmap equation
-		# system.
+		# system. But nmap x nmap can actually be pretty big. Can we do better?
+		# We want (1+VV')" = 1 - V(1+V'V)"V' using woodbury. This is not that hard to
+		# compute
+		print "nmap", self.nmap
 		Hmean  = [np.mean(H) for H in self.H]
 		V = enmap.zeros((self.nmap,)+self.shape, self.wcs, self.dtype)
 		for i in range(self.nmap):
 			V[i] = self.mapset.S**0.5*self.B[i]*Hmean[i]*self.hN[i]
-		iprec  = np.eye(self.nmap)[:,:,None,None] + V[:,None]*V[None,:]
-		prec   = array_ops.eigpow(iprec, -1, (0,1), lim=1e-8)
+		prec_core = 1/(1+np.sum(V**2,0))
+		#iprec  = np.eye(self.nmap)[:,:,None,None] + V[:,None]*V[None,:]
+		#prec   = array_ops.eigpow(iprec, -1, (0,1), lim=1e-8)
 		#prec_diag = [1/(1+self.iN[i]*Hmean[i]**2*self.B[i]**2*self.mapset.S) for i in range(self.nmap)]
 		def M(x):
 			fmaps = unzip(x)
-			omaps = enmap.map_mul(prec, fmaps)
+			omaps = fmaps - V*prec_core*np.sum(V*fmaps,0)
+			return zip(omaps)
+			#omaps = enmap.map_mul(prec, fmaps)
 			#omaps  = fmaps*prec_diag
 			return zip(omaps)
 		solver = cg.CG(A, zip(rhs), M=M)
