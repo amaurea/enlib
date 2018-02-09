@@ -915,7 +915,7 @@ class SignalFilter:
 		# rhs is returend in fourier space
 		rhs = [self.hN[i]*map_fft(self.H[i]*self.m[i]) for i in range(self.nmap)]
 		return rhs
-	def calc_mu(self, rhs, maxiter=250, cg_tol=1e-4, verbose=False, dump_dir=None):
+	def calc_mu(self, rhs, maxiter=250, cg_tol=1e-5, verbose=False, dump_dir=None):
 		# m = Pa + Bs + n = Pa + ntot, Ntot = BSB' + N
 		# a = (P'Ntot"P)"P'Ntot"m <=>
 		# P'Ntot"P a = P'Ntot"m, where A = cov(a) = (P'Ntot"P)"
