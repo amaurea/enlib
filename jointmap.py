@@ -898,6 +898,15 @@ def setup_background_cmb(mapset, cl):
 	cl_TT = cl.reshape(-1,cl.shape[-1])[0]
 	mapset.S = enmap.spec2flat(mapset.shape, mapset.wcs, cl_TT[None,None])[0,0]
 
+def setup_target_beam(mapset, beam=None):
+	"""Set up the target beam for map coadding. If no beam (which should be 2d)
+	is passed in, then it is computed as the best of all input beams"""
+	if beam is None:
+		beam = mapset.datasets[0].beam_2d.copy()
+		for dataset in mapset.datasets[1:]:
+			beam = np.maximum(beam, dataset.beam_2d)
+	mapset.target_beam = beam
+
 class SignalFilter:
 	def __init__(self, mapset):
 		self.mapset = mapset
@@ -1104,8 +1113,7 @@ class Coadder:
 		self.m  = [split.data.map             for dataset in mapset.datasets for split in dataset.splits]
 		self.H  = [split.data.H               for dataset in mapset.datasets for split in dataset.splits]
 		self.iN = [dataset.iN                 for dataset in mapset.datasets for split in dataset.splits]
-		self.Q  = [dataset.signal_profile_2d  for dataset in mapset.datasets for split in dataset.splits]
-		self.B  = [dataset.beam_2d            for dataset in mapset.datasets for split in dataset.splits]
+		self.B  = [dataset.beam_2d/mapset.target_beam for dataset in mapset.datasets for split in dataset.splits]
 		self.shape, self.wcs = self.m[0].geometry
 		self.dtype= mapset.dtype
 		self.ctype= np.result_type(self.dtype,0j)
@@ -1119,7 +1127,7 @@ class Coadder:
 		for i in range(self.nmap):
 			rhs += map_ifft(self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*self.m[i]))))
 		return rhs
-	def calc_coadd(self, rhs, maxiter=250, cg_tol=1e-5, verbose=False, dump_dir=None):
+	def calc_coadd(self, rhs, maxiter=250, cg_tol=1e-4, verbose=False, dump_dir=None):
 		# solve (B'HCHB)x = rhs. For preconditioner, we will use the full-fourier approximation,
 		# so M = (B'Hmean C Hmean B)". The solution itself is done in fourier space, to save
 		# some ffts.
