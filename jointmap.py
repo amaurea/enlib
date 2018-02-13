@@ -334,7 +334,7 @@ class JointMapset:
 					split.data.map = enmap.apply_window(split.data.map, -1)
 				# Build apodization
 				apod = np.minimum(split.data.div/(split.ref_div*apod_val), 1.0)**apod_alpha
-				apod*= apod.apod(apod_edge)
+				apod.apod(apod_edge)
 				split.data.div *= apod
 				split.data.H   = split.data.div**0.5
 			dataset.ref_div = np.sum([split.ref_div for split in dataset.splits])
@@ -758,6 +758,7 @@ def sanitize_maps(mapset, map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, a
 			split.data.div *= split.data.apod
 		dataset.ref_div = np.sum([split.ref_div for split in dataset.splits if split.data is not None])
 	mapset.ref_div = np.sum([dataset.ref_div for dataset in mapset.datasets])
+	mapset.apod_edge = apod_edge
 
 def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, filter_kx_ymax_scale=1):
 	"""This assumes that the mapset has been pruned, and may further prune the result"""
@@ -825,11 +826,12 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			lref = lmax*3/4
 			refval = np.mean(dset_ps[:,(mapset.l>=lref)&(mapset.l<lmax)],1)
 			dset_ps[:,mapset.l>=lmax] = refval[:,None]
-			print dset_ps[0,0,::5]
 		else: raise ValueError("Noise window type '%s' not supported" % noisewin)
 		#enmap.write_map("test_ps_smooth.fits", dset_ps)
 		# If we have invalid values, then this whole dataset should be skipped
 		if not np.all(np.isfinite(dset_ps)): continue
+		#print "Sqrt"
+		#dset_ps **= 0.5
 		dataset.iN  = 1/dset_ps
 	# Prune away bad datasets and splits
 	for dataset in mapset.datasets:
@@ -916,15 +918,12 @@ def setup_target_beam(mapset, beam=None):
 class SignalFilter:
 	def __init__(self, mapset):
 		self.mapset = mapset
-		# Extract and flatten all our input maps
+		# Extract and flatten all our input maps.
 		self.m  = [split.data.map.preflat[0]  for dataset in mapset.datasets for split in dataset.splits]
 		self.H  = [split.data.H               for dataset in mapset.datasets for split in dataset.splits]
 		self.iN = [dataset.iN.preflat[0]      for dataset in mapset.datasets for split in dataset.splits]
 		self.hN = [dataset.iN.preflat[0]**0.5 for dataset in mapset.datasets for split in dataset.splits]
-		self.Q  = [dataset.signal_profile_2d  for dataset in mapset.datasets for split in dataset.splits]
 		self.B  = [dataset.beam_2d            for dataset in mapset.datasets for split in dataset.splits]
-		#print "FIXME"
-		#self.m, self.H, self.iN, self.hN, self.Q, self.B = [w[:1] for w in [self.m, self.H, self.iN, self.hN, self.Q, self.B]]
 		self.shape, self.wcs = self.m[0].geometry
 		self.dtype= mapset.dtype
 		self.ctype= np.result_type(self.dtype,0j)
@@ -932,12 +931,16 @@ class SignalFilter:
 		self.nmap = len(self.m)
 		self.tot_div = enmap.zeros(self.shape, self.wcs, self.dtype)
 		for H in self.H: self.tot_div += H**2
+	# Q is only needed for alpha, so defer initialization of it to make it easy to
+	# compute alpha for many different profiles for the same mus.
+	@property
+	def Q(self): return [d.signal_profile_2d  for d in self.mapset.datasets for s in d.splits]
 	def calc_rhs(self):
 		# Calc rhs = Ch H m. This is effectively a set of fully whitened maps.
 		# rhs is returend in fourier space
 		rhs = [self.hN[i]*map_fft(self.H[i]*self.m[i]) for i in range(self.nmap)]
 		return rhs
-	def calc_mu(self, rhs, maxiter=250, cg_tol=1e-5, verbose=False, dump_dir=None):
+	def calc_mu(self, rhs, maxiter=250, cg_tol=1e-4, verbose=False, dump_dir=None):
 		# m = Pa + Bs + n = Pa + ntot, Ntot = BSB' + N
 		# a = (P'Ntot"P)"P'Ntot"m <=>
 		# P'Ntot"P a = P'Ntot"m, where A = cov(a) = (P'Ntot"P)"
@@ -1000,9 +1003,10 @@ class SignalFilter:
 		return tot_mu
 	def calc_alpha(self, mu):
 		# Compute alpha = P'H Ch mu = A"a = P'N"m. The result will be in real space.
-		alpha = enmap.zeros(self.shape, self.wcs, self.dtype)
+		alpha = enmap.zeros(self.shape, self.wcs, self.ctype)
 		for i in range(self.nmap):
-			alpha += map_ifft(self.Q[i]*self.B[i]*map_fft(self.H[i]*map_ifft(self.hN[i]*mu[i])))
+			alpha += self.Q[i]*self.B[i]*map_fft(self.H[i]*map_ifft(self.hN[i]*mu[i]))
+		alpha = map_ifft(alpha)
 		return alpha
 	def calc_alpha_simple(self):
 		# Plain matched filter for a single map
@@ -1032,11 +1036,36 @@ class SignalFilter:
 			alpha_var += self.H[i]**2 * spec2var(harm1-harm2)
 		alpha_rms = alpha_var**0.5
 		return alpha_rms
-	def calc_dalpha_empirical(self, alpha, bsize=50):
+	def calc_dalpha_empirical(self, alpha, bsize=60, lim=10, mask_pad=6):
 		# Estimate the rms of the alpha map based on its actual variance.
 		# We assume that the per pixel variance will be proprotional to tot_div,
 		# with an unknown overall scale that we fit from the alpha map itself
-		avars = enmap.downgrade(alpha**2, bsize)
+		# 1. Find bad areas, and mask them.
+		ref   = np.median(alpha**2)**0.5
+		mask  = np.abs(alpha) > lim*ref
+		mask |= (alpha*0+1).apod(self.mapset.apod_edge) < 0.8
+		# 2. Grow the mask to get rid of ringing
+		mask  = ndimage.distance_transform_edt(1-mask) > mask_pad
+		# 3. Measure the unmasked variance per tile
+		tpix  = alpha.pixmap()/float(bsize)
+		nt    = np.max(tpix.astype(int),(1,2))+1
+		ipix  = np.ravel_multi_index(tpix.astype(int), nt)
+		def bin(arr): return np.bincount(ipix.reshape(-1), (arr*mask).reshape(-1), minlength=nt[0]*nt[1])
+		tile_hits = bin(1)
+		tile_vars = bin(alpha**2)/tile_hits - (bin(alpha)/tile_hits)**2
+		tile_vars = tile_vars.reshape(nt)
+		# 4. Interpolate to full resolution
+		full_vars = ndimage.map_coordinates(tile_vars, tpix-0.5+0.5/bsize, mode="nearest", order=1)
+		alpha_rms = full_vars**0.5
+		# 5. Undo the apodization to first order. The apodized region won't be used anyway,
+		# so this can be skipped.
+		alpha_rms *= enmap.apod(alpha_rms*0+1, self.mapset.apod_edge)
+		return alpha_rms
+	def calc_dalpha_empirical_div_based(self, alpha, bsize=50):
+		# Estimate the rms of the alpha map based on its actual variance.
+		# We assume that the per pixel variance will be proprotional to tot_div,
+		# with an unknown overall scale that we fit from the alpha map itself
+		avars = enmap.downgrade(alpha**2, bsize) - enmap.downgrade(alpha, bsize)**2
 		dvals = enmap.downgrade(self.tot_div, bsize)
 		mask  = np.isfinite(avars)&np.isfinite(dvals)
 		avars, dvals = avars[mask], dvals[mask]
@@ -1072,22 +1101,50 @@ class SignalFilter:
 		return iA
 	def calc_filter_harmonic(self):
 		# The harmonic-only representation of the total filter
-		# F such that alpha = Fm, e.g. F = P'N" = P'(BSB'+H"C"H")"
-		# sim P'HCH - P'HCHBSh(1+ShB'HCHBSh)"Sh'BHCH
-		# So this is the cov harmonic but with one less beam and without
-		# the inversion at the end.
+		# F such that alpha = Fm, e.g. F = P'Ntot" = P'(BSB'+H"C"H")"
+		# sim P'HCH - P'HCHBSh(1+ShB'HCHBSh)"ShB'HCH
+		# Since there are multiple ms the result is one filter profile for
+		# each. But these can be averaged to get a single overall profile.
+		#
+		# What do I get for 2 freq, harm-only case?
+		#
+		# [P1' P2'] [ S+N1  S  ]" [m1] = 1/((S+N1)*(S+N2)-S**2) * [P1' P2'] [S+N2 -S  ] [m1]
+		#           [ S   S+N2 ]  [m2]                                      [ -S  S+N1] [m2]
+		#
+		# = (N1 N2 + S*(N1+N2))" [P1' P2'] [(S+N2)*m1 - S*m2]
+		#                                  [(S+N1)*m2 - S*m1]
+		#
+		# = (N1*N2 + S*(N1+N2))"*(P1*[(S+N2)*m1-S*m2] + P2*[(S+N1)*m2-S*m1])
+		# = -- * [(P1-P2)*S*(m1-m2) + P1*N2*m1 + P2*N1*m2]
+		# = (1+S*(N1"+N2"))" * [(P1-P2)*S*N1"*N2"*(m1-m2) + P1*N1"*m1 + P2*N2"*m2]
+		# Case 1: S-dominated
+		#  (N1+N2)"(P1-P2)*(m1-m2)
+		# Case 2: N-dominated
+		#  P1*N1"*m1 + P2*N2"*m2
+		# Case 3: Intermediate
+		#  [P1*N1"*m1+P2*N2"*m2]/(S*(N1"+N2"))
+		# The only term that benefits from multifreq is Case 1.
+
+		# P'C(1-SC(1 + S sum(C))")
 		Hmean = [np.mean(H) for H in self.H]
 		sumPHCH = enmap.zeros(self.shape, self.wcs, self.dtype)
 		PHCHB   = enmap.zeros(self.shape, self.wcs, self.dtype)
 		sumHCHB = enmap.zeros(self.shape, self.wcs, self.dtype)
 		core  = enmap.zeros(self.shape, self.wcs, self.dtype)
 		for i in range(self.nmap):
-			sumPHCH += self.Q[i]*self.B[i]*Hmean[i]**2*self.iN[i]
 			PHCHB   += self.Q[i]*self.B[i]**2*Hmean[i]**2*self.iN[i]
-			sumHCHB += self.B[i]*Hmean[i]**2*self.iN[i]
+			# These two represent adding together the filters that
+			# will be applied to each map. But this assumes that the
+			# maps all see the same signal. So this basically just
+			# shows the CMB-relevant signal. To see what would happen
+			# to a, the signal we actually care about, we should use
+			# P instead
+			print i, self.Q[i][0,0]
+			sumPHCH += self.Q[i]*self.B[i]*Hmean[i]**2*self.iN[i]*self.Q[i][0,0]
+			sumHCHB += self.B[i]*Hmean[i]**2*self.iN[i]*self.Q[i][0,0]
 			core  += Hmean[i]**2*self.iN[i]*self.B[i]**2
-		core  = 1+self.mapset.S*core
-		term2 = PHCHB*sumHCHB*self.mapset.S/core
+		core  = self.mapset.S/(1+self.mapset.S*core)
+		term2 = PHCHB*sumHCHB*core
 		res = sumPHCH - term2
 		return res
 	def sim(self):
