@@ -1,5 +1,5 @@
-import numpy as np, os, time, imp, copy, functools
-from scipy import ndimage, optimize, interpolate
+import numpy as np, os, time, imp, copy, functools, sys
+from scipy import ndimage, optimize, interpolate, integrate
 from enlib import enmap, retile, utils, bunch, cg, fft, powspec, array_ops
 #from matplotlib import pyplot
 
@@ -119,7 +119,7 @@ k_B =1.38064852e-23
 def sz_freq_core(f, T=2.725):
 	x  = h_P*f/(k_B*T)
 	ex = np.exp(x)
-	return x*ex/(ex-1)*(x*(ex+1)/(ex-1)-4)
+	return x*(ex+1)/(ex-1)-4
 
 def sz_rad_core(x):
 	"""Dimensionless radial sz profile as a function of r/R500.
@@ -132,27 +132,122 @@ def sz_rad_core(x):
 	p  = 1/(cx**gamma * (1+cx**alpha)**((beta-gamma)/alpha))
 	return p
 
-def sz_rad_projected(r_ort, fwhm=1.0, xmax=5, dx=1e-3):
-	"""Compute the projected sz radial profile on the sky, as a function of
-	the angular distance r_ort from the center, in arcminutes. The cluster profile full-width
-	half-max is given by fwhm."""
-	x_ort = np.asarray(r_ort)*0.34208/fwhm
-	x_par = np.arange(0,xmax,dx)+dx/2
-	res   = np.array([np.sum(sz_rad_core((x_par**2 + xo**2)**0.5)) for xo in x_ort.reshape(-1)])
-	norm  = np.sum(sz_rad_core(x_par))
-	return res.reshape(x_ort.shape)/norm
+def sz_rad_projected_core(r_ort, zmax=1000):
+	"""Dimensionaless angular sz profile with FWHM of 1 and an integral of 1. Takes about
+	0.35 ms to evaluate on laptop."""
+	return integrate.quad(lambda z: sz_rad_core((z**2+r_ort**2)**0.5*0.34208), 0, zmax)[0]*(2/3.6616198499715846)
 
-def sz_rad_projected_map(shape, wcs, fwhm=1.0, xmax=5, dx=1e-3):
-	pos = enmap.posmap(shape, wcs)
-	iy,ix = np.array(shape[-2:])//2+1
-	r   = np.sum((pos-pos[:,iy,ix][:,None,None])**2,0)**0.5
-	r   = np.roll(np.roll(r,-ix,-1),-iy,-2)
-	# Next build a 1d spline of the sz cluster profile covering all our radii
-	r1d = np.arange(0, np.max(r)*1.1, min(r[0,1],r[1,0])*0.5)
-	y1d = sz_rad_projected(r1d/utils.arcmin, fwhm)
-	spline = interpolate.splrep(r1d, np.log(y1d))
-	y2d = enmap.ndmap(np.exp(interpolate.splev(r, spline)), wcs)
-	return y2d
+class SZInterpolator:
+	"""This class provides a fast spline-based interpolator for sz_rad_projected_core,
+	which importantly makes it parallelizable. Only a single instance should be needed, which
+	which is instantiated globally. When called it will set up its internal state the first
+	time. The fwhm argument scales it radially while keeping the central amplitude constant.
+	This means that the total integral will change. If this is not what you want, divide the
+	result by fwhm**2. It takes 7 us to evaluate for 1 number, 77 us for an array of length
+	1000 and 66 ms for an array of length 1e6.
+	"""
+	def __init__(self, rmax=1000, npoint=1001, sqrt=True, log=True):
+		self.rmax, self.npoint, self.sqrt, self.log = rmax, npoint, sqrt, log
+		self.spline = None
+	def setup(self):
+		if self.sqrt: self.r = np.linspace(0, self.rmax**0.5, self.npoint)**2
+		else:         self.r = np.linspace(0, self.rmax, self.npoint)
+		self.v = np.array([sz_rad_projected_core(r) for r in self.r])
+		if self.log: self.spline = interpolate.splrep(self.r, np.log(self.v))
+		else:        self.spline = interpolate.splrep(self.r, self.v)
+	def __call__(self, r, fwhm=1.0):
+		if self.spline is None: self.setup()
+		res = interpolate.splev(r/fwhm, self.spline)
+		if self.log: res = np.exp(res)
+		#res /= fwhm**2
+		return res
+sz_rad_projected_fast = SZInterpolator()
+
+def sz_2d_profile(shape, pixshape, pos=[0,0], fwhm=1.0, oversample=5, core=10, pad=100, periodic=False, nofft=False):
+	"""Return a 2d sz profile with shape [ny,nx] where each pixel has the physical
+	shape pixshape [wy,wx] in arcminutes. This means that any cos(dec) factors must
+	be included in pixshape. The profile will be offset by pos [oy,ox]
+	from the fiducial location shape//2 in the center of the map. The sz profile
+	will have the given fwhm in arcminutes. The profile will be evaluated at
+	high resolution given by oversample in order to handle the sz profile's bandlimitlessness.
+	This introduces a pixel window, which we deconvolve. Fractional offsets are supported
+	and are handled with fourier shifting, which preserves the overall signal amplitude.
+	With the default parameters, this function has an accuracy of 5e-6 relative to the peak
+	for fwhm=1, and takes 14 ms to evaluate for a (33,33) map, about half of which is the
+	fourier stuff.
+	"""
+	n   = np.array(shape[-2:])
+	pos = np.array(pos)
+	ipos = utils.nint(pos)
+	fpos = pos-ipos
+	bpos = n//2
+	if periodic: pad = 0
+	def over_helper(shape, pixshape, fwhm, offset, oversample):
+		#print "over_hepler", shape, pixshape, fwhm, oversample
+		oversample = oversample//2*2+1
+		n = np.array(shape[-2:])
+		N = n*oversample
+		i = offset*oversample + oversample//2
+		big_pos = (np.mgrid[:N[0],:N[1]] - i[:,None,None])*(np.array(pixshape)/oversample)[:,None,None]
+		big_rad = np.sum(big_pos**2,0)**0.5
+		big_map = sz_rad_projected_fast(big_rad, fwhm)
+		# Then downgrade. This is done to get the pixel window. We can just use
+		# fourier method to get the pixel window here, as the signal is not band-limited
+		map   = enmap.downgrade(big_map, oversample)
+		return map
+	# First evaluate the locations at medium resolution
+	map  = over_helper(shape, pixshape, fwhm, bpos+ipos, oversample)
+	if nofft: return map
+	# Then get the central region as high resolution
+	while core >= 1:
+		oversample *= 2
+		cw   = core//2*2+1
+		ci   = n//2-cw//2
+		map[ci[0]:ci[0]+cw,ci[1]:ci[1]+cw] = over_helper((cw,cw), pixshape, fwhm, bpos+ipos-ci, oversample)
+		core = core//2
+	# We will now fourier shift to the target offset from the center, and also
+	# deconvolve the band-limited part of the pixel window.
+	pad_map = np.pad(map, pad, "constant")+0j
+	fmap = fft.fft(pad_map, axes=[0,1])
+	wy, wx = enmap.calc_window(fmap.shape)
+	fmap *= wy[:,None]
+	fmap *= wx[None,:]
+	fmap  = fft.shift(fmap, fpos, axes=[0,1], nofft=True)
+	fft.ifft(fmap, pad_map, axes=[0,1], normalize=True)
+	map[:] = pad_map[(slice(pad,-pad),)*pad_map.ndim].real if pad > 0 else pad_map.real
+	return map
+
+#def sz_rad_projected(r_ort, fwhm=1.0, xmax=5, dx=1e-3):
+#	"""Compute the projected sz radial profile on the sky, as a function of
+#	the angular distance r_ort from the center, in arcminutes. The cluster profile full-width
+#	half-max is given by fwhm."""
+#	x_ort = np.asarray(r_ort)*0.34208/fwhm
+#	x_par = np.arange(0,xmax,dx)+dx/2
+#	res   = np.array([np.sum(sz_rad_core((x_par**2 + xo**2)**0.5)) for xo in x_ort.reshape(-1)])
+#	norm  = np.sum(sz_rad_core(x_par))
+#	return res.reshape(x_ort.shape)/norm
+#
+#def sz_rad_projected_map(shape, wcs, fwhm=1.0, xmax=5, dx=1e-3):
+#	pos = enmap.posmap(shape, wcs)
+#	iy,ix = np.array(shape[-2:])//2+1
+#	r   = np.sum((pos-pos[:,iy,ix][:,None,None])**2,0)**0.5
+#	r   = np.roll(np.roll(r,-ix,-1),-iy,-2)
+#	# Next build a 1d spline of the sz cluster profile covering all our radii
+#	r1d = np.arange(0, np.max(r)*1.1, min(r[0,1],r[1,0])*0.5)
+#	y1d = sz_rad_projected(r1d/utils.arcmin, fwhm, xmax, dx)
+#	spline = interpolate.splrep(r1d, np.log(y1d))
+#	y2d = enmap.ndmap(np.exp(interpolate.splev(r, spline)), wcs)
+#	return y2d
+
+def sz_map_profile(shape, wcs, fwhm=1.0):
+	"""Evaluate the 2d sz profile for the enmap with the given shape
+	and profile."""
+	pixshape = enmap.pixshape(shape, wcs)/utils.arcmin
+	pixshape[1] *= np.cos(enmap.pix2sky(shape, wcs, [shape[-2]/2,shape[-1]/2])[0])
+	res = sz_2d_profile(shape, pixshape, fwhm=fwhm, oversample=1, core=50, periodic=True)
+	# Shift center to top left corner
+	res = np.roll(np.roll(res, -(shape[-2]//2), -2), -(shape[-1]//2), -1)
+	return enmap.ndmap(res, wcs)
 
 def butter(f, f0, alpha):
 	if f0 <= 0: return f*0+1
@@ -862,7 +957,7 @@ def setup_profiles_sz(mapset, scale):
 	# sz must be evaluated in real space to avoid aliasing. First get the
 	# distance from the corner, including wrapping. We do this by getting the
 	# distance from the center, and then moving the center to the corner afterwards
-	y2d = sz_rad_projected_map(mapset.shape, mapset.wcs, fwhm=scale)
+	y2d = sz_map_profile(mapset.shape, mapset.wcs, fwhm=scale)
 	y2d_harm  = np.abs(map_fft(y2d))
 	y2d_harm /= y2d_harm[0,0]
 	# We can now scale it as appropriately for each dataset
@@ -941,6 +1036,8 @@ class SignalFilter:
 		rhs = [self.hN[i]*map_fft(self.H[i]*self.m[i]) for i in range(self.nmap)]
 		return rhs
 	def calc_mu(self, rhs, maxiter=250, cg_tol=1e-4, verbose=False, dump_dir=None):
+		# Note: In the stuff below, the B in P is block-diagonal while the B before s is broadcasting.
+		# Should have used a different notation for this.
 		# m = Pa + Bs + n = Pa + ntot, Ntot = BSB' + N
 		# a = (P'Ntot"P)"P'Ntot"m <=>
 		# P'Ntot"P a = P'Ntot"m, where A = cov(a) = (P'Ntot"P)"
@@ -969,21 +1066,14 @@ class SignalFilter:
 		# system. But nmap x nmap can actually be pretty big. Can we do better?
 		# We want (1+VV')" = 1 - V(1+V'V)"V' using woodbury. This is not that hard to
 		# compute
-		print "nmap", self.nmap
 		Hmean  = [np.mean(H) for H in self.H]
 		V = enmap.zeros((self.nmap,)+self.shape, self.wcs, self.dtype)
 		for i in range(self.nmap):
 			V[i] = self.mapset.S**0.5*self.B[i]*Hmean[i]*self.hN[i]
 		prec_core = 1/(1+np.sum(V**2,0))
-		#iprec  = np.eye(self.nmap)[:,:,None,None] + V[:,None]*V[None,:]
-		#prec   = array_ops.eigpow(iprec, -1, (0,1), lim=1e-8)
-		#prec_diag = [1/(1+self.iN[i]*Hmean[i]**2*self.B[i]**2*self.mapset.S) for i in range(self.nmap)]
 		def M(x):
 			fmaps = unzip(x)
 			omaps = fmaps - V*prec_core*np.sum(V*fmaps,0)
-			return zip(omaps)
-			#omaps = enmap.map_mul(prec, fmaps)
-			#omaps  = fmaps*prec_diag
 			return zip(omaps)
 		solver = cg.CG(A, zip(rhs), M=M)
 		for i in range(maxiter):
@@ -1014,28 +1104,6 @@ class SignalFilter:
 		Ntot  = self.mapset.S*self.B[0]**2 + 1/np.maximum(Hmean**2*self.iN[0],1e-25)
 		filter= self.Q[0]*self.B[0]/Ntot
 		return map_ifft(filter*map_fft(self.m[0])), Ntot
-	def calc_dalpha_analytical(self):
-		# Estimate the rms of the alpha map. There's something weird about
-		# the estimates I'm getting from this method currently - they
-		# have a variance about 7 times too high.
-		# The covariance is given by A = P'(BSB'+N)"P, which is hard to evaluate.
-		# We expand it as A = P'N"P - P'N"B(S"+B'N"B)"B'N"P, and then use
-		# a harmonic-only approximation for most of the second term.
-		Hmean = [np.mean(H) for H in self.H]
-		# 1. Compute the woodbury core. This is common for all maps
-		BiNB = self.iN[0]*0
-		for i in range(self.nmap):
-			BiNB += self.B[i]**2*Hmean[i]**2*self.iN[i]
-		with utils.nowarn():
-			wood = 1/(1/self.mapset.S + BiNB)
-		# 2. Loop through maps, computing their contribution to the variance
-		alpha_var = 0
-		for i in range(self.nmap):
-			harm2 = self.Q[i]**2*self.B[i]**2*self.iN[i]**2*Hmean[i]**2*self.B[i]**2*wood
-			harm1 = self.Q[i]**2*self.B[i]**2*self.iN[i]
-			alpha_var += self.H[i]**2 * spec2var(harm1-harm2)
-		alpha_rms = alpha_var**0.5
-		return alpha_rms
 	def calc_dalpha_empirical(self, alpha, bsize=60, lim=10, mask_pad=6):
 		# Estimate the rms of the alpha map based on its actual variance.
 		# We assume that the per pixel variance will be proprotional to tot_div,
@@ -1061,44 +1129,6 @@ class SignalFilter:
 		# so this can be skipped.
 		alpha_rms *= enmap.apod(alpha_rms*0+1, self.mapset.apod_edge)
 		return alpha_rms
-	def calc_dalpha_empirical_div_based(self, alpha, bsize=50):
-		# Estimate the rms of the alpha map based on its actual variance.
-		# We assume that the per pixel variance will be proprotional to tot_div,
-		# with an unknown overall scale that we fit from the alpha map itself
-		avars = enmap.downgrade(alpha**2, bsize) - enmap.downgrade(alpha, bsize)**2
-		dvals = enmap.downgrade(self.tot_div, bsize)
-		mask  = np.isfinite(avars)&np.isfinite(dvals)
-		avars, dvals = avars[mask], dvals[mask]
-		avars, dvals = avars[dvals>0], dvals[dvals>0]
-		ratios= avars/dvals
-		mask  = (ratios > np.median(ratios)/2)&(ratios < np.median(ratios)*2)
-		avars, dvals = avars[mask], dvals[mask]
-		scale = np.sum(avars*dvals)/np.sum(dvals**2)
-		alpha_rms = (self.tot_div * scale)**0.5
-		return alpha_rms
-	def calc_alpha_cov_harmonic(self):
-		# The harmonic-only approximation to alpha's covariance A" = P'N"P is
-		# given by A" = P'N"P = (P'[BSB'+ H"C"H"]"P) sim (P'HCh[ChHBSB'HCh+1]"ChHP)
-		# V = ChHBSh => P'HCh[VV'+1]"ChHP,
-		# P'HCHP - P'HChV(1+V'V)"V'ChHP
-		# P'HCHP - P'HCHBSh(1+ShB'HCHBSh)"Sh'BHCHP
-		# Everything is diagonal in fourier space here. The result will be the
-		# fourier-space representation of the covariance, but it will be real
-		# because it's a 2d power spectrum
-		Hmean = [np.mean(H) for H in self.H]
-		PHCHP = enmap.zeros(self.shape, self.wcs, self.dtype)
-		PHCHB = enmap.zeros(self.shape, self.wcs, self.dtype)
-		core  = enmap.zeros(self.shape, self.wcs, self.dtype)
-		for i in range(self.nmap):
-			PHCHP += self.Q[i]**2*self.B[i]**2*Hmean[i]**2*self.iN[i]
-			PHCHB += self.Q[i]*self.B[i]**2*Hmean[i]**2*self.iN[i]
-			core  += Hmean[i]**2*self.iN[i]*self.B[i]**2
-		enmap.write_map("test_phchp.fits", np.fft.fftshift(PHCHP))
-		core  = 1+self.mapset.S*core
-		term2 = PHCHB**2*self.mapset.S/core
-		iA = PHCHP - term2
-		enmap.write_map("test_iA.fits", np.fft.fftshift(iA))
-		return iA
 	def calc_filter_harmonic(self):
 		# The harmonic-only representation of the total filter
 		# F such that alpha = Fm, e.g. F = P'Ntot" = P'(BSB'+H"C"H")"
@@ -1153,15 +1183,6 @@ class SignalFilter:
 		n = enmap.samewcs([self.H[i]**-1*map_ifft(self.hN[i]**-1*map_fft(enmap.rand_gauss(self.shape, self.wcs))).astype(self.dtype) for i in range(self.nmap)],s)
 		n += s
 		return n
-	def sim2(self):
-		# Debug: test fourier space units by building a pure fourier-space sim. This ignores cmb correlations
-		res = []
-		for i in range(self.nmap):
-			Hmean= np.mean(self.H[i])
-			Ntot = self.mapset.S + 1/(np.maximum(self.iN[0],1e-10)*Hmean**2)
-			n    = map_ifft(Ntot**0.5*map_fft(enmap.rand_gauss(self.shape, self.wcs).astype(self.dtype)))
-			res.append(n)
-		return res
 
 def spec2var(spec_2d):
 	return np.mean(spec_2d)**0.5
@@ -1221,3 +1242,495 @@ class Coadder:
 		if dump_dir is not None:
 			enmap.write_map(dump_dir + "/map_final.fits", map_ifft(unzip(solver.x)))
 		return map_ifft(unzip(solver.x))
+
+class SourceSZFinder:
+	"""Identify point sources and tSZ clusters in the map set given by mapset.
+	Fits a position and amplitude per frequency for point sources, and
+	a position and scale for clusters. Works by first applying a matched
+	filter and looking for strong candidates. These are then fit and subtracted
+	from the maps, after which a new pass is performed with a lower threshold.
+	
+	We model the data as m = Pa + ntot = BQa + ntot. This looks similar to the
+	model in the filter, but differs in that a is now no longer a map that's
+	in common between all the data maps, but instead a [namp] lenght vector of
+	the number of free amplitudes. This would be namp = 1 for sz, namp = nfreq
+	for normal point sources and namp = ndataset for variable point sources.
+
+	P is therefore [npix*nmap,namp], and can be factorized as P = BQ,
+	with B = block_diag(B1,B2,...), and Q = [npix*nmap,namp], being simply
+	the signal template for each degree of freedom that each map sees.
+
+	We model all the splits inside a dataset as being equivalent, so we can
+	reduce everything to one map and noise matrix etc. per dataset to begin with.
+	I'll assume that has been done in the following.
+
+	chiqs = (m-BQa)'Ntot"(M-BQa) = a'Q'B'Ntot"BQa - 2a'Q'B'Ntot"m + m'Ntot"m
+	Can precompute U=B'Ntot"B (block-diagonal) and v=B'Ntot"m (map stack).
+	To do this we need Ntot = (N + BbS'b'B), where b' = [I I I ...] is a
+	bradcasting matrix.
+	B Ntot" B = BN"B - BN"Bb(S" + b'BN"Bb)"b'BN"B
+	B Ntot" B is huge due to the outer products in the last term. But we don't
+	need the explicit matrix. We can precompute BN"B and (S" + b'BN"B')" = core,
+	and use them directly in the likelihood:
+
+	chisq = c1 + c2 + c3
+	c1 = a'Q'BN"BQa - (a'QBN"Bb) core (a'QBN"Bb)', which does not involve large matrices
+	c2 = -2a'Q'BN"m + 2(a'QBN"Bb) core (m'N"Bb)',  likewise
+	c3 = m'N"m - (m'N"Bb) core (m'N"Bb)',          likewise, and also constant
+
+	When sampling a, we get a <- N(ahat, A), where
+	A" = Q'B Ntot" BQ = Q'BN"BQ - (Q'BN"Bb) core (Q'BN"Bb)' (tiny, [namp,namp])
+	ahat = A Q'B Ntot" m = A[Q'BN"m - (Q'BN"Bb) core (Q'BN"m)'
+
+	Can write Q = pos * profile, where profile encodes only the shape (identity matrix
+	for point source), and pos only encodes the position. pos would be a kronecker delta
+	for pixel-center positions. For off-center positions, it would be fourier-shifted.
+	"""
+	def __init__(self, mapset, sz_scales=[0.1,0.5,2.0,4.0], npass=2, spix=33, ignore_mean=True):
+		print "Finder init A"
+		t1 = time.time()
+		self.mapset = mapset
+		self.filter = SignalFilter(mapset)
+		self.scales = sz_scales
+		self.npass  = npass
+		self.spix   = spix
+		self.npix  = spix*spix
+		t2 = time.time()
+		print "Finder init B", t2-t1
+		# Precompute the matrix building blocks. These are common for all the sources
+		self.C  = [np.linalg.inv(ps2d_to_mat(1/d.iN.preflat[0],spix).reshape(self.npix,self.npix)) for d in mapset.datasets]
+		self.B  = [ps2d_to_mat(d.beam_2d,spix).reshape(self.npix,self.npix)             for d in mapset.datasets]
+		# Do not renormalize B. It while it's true that this means that a
+		# B*monopole would be smaller towards the end, what matters is what
+		# it does to our model, and we don't want our model to have its amplitude
+		# increase just because we're close to the edge
+		#self.B  = [B / np.sum(B,1)[:,None] for B in self.B]
+		self.S  = ps2d_to_mat(mapset.S,spix).reshape(self.npix, self.npix)
+		# Eigenvalues have too large span for standard inverse. Should be safe for C though.
+		self.iS = utils.eigpow(self.S, -1)
+		# Build SZ profile interpolator sz_fun. It will take r and scale in arcmin and give a dimensionless
+		# sz response.
+		t3 = time.time()
+		print "Finder init C", t3-t2
+		self.freqs  = [d.freq for d in mapset.datasets]
+		self.ignore_mean = ignore_mean
+		# Set up our local geometry
+		print "Finder init D", time.time()-t3
+	def get_likelihood(self, pix, type, scale=0.5):
+		"""Return an object that can be used to evaluate the likelihood for a source
+		near the given position, of the given type (ptsrc or sz). scale is
+		an initial guess at the sz length scale."""
+		ipix = utils.nint(pix)
+		# Geometry of this slice
+		cy, cx = ipix - self.spix//2
+		shape, wcs = enmap.slice_geometry(self.mapset.shape[-2:], self.mapset.wcs,
+				(slice(cy,cy+self.spix),slice(cx,cx+self.spix)))
+		print "Get lik A"
+		# 1. Build thumbs for each dataset
+		rhs, iN = [], []
+		for di, d in enumerate(self.mapset.datasets):
+			dset_rhs  = np.zeros(self.npix)
+			dset_iN   = np.zeros([self.npix, self.npix])
+			for si, s in enumerate(d.splits):
+				split_m  = np.asarray(extract_thumb(s.data.map.preflat[0], ipix, self.spix).reshape(-1))
+				split_H  = np.asarray(extract_thumb(s.data.H, ipix, self.spix).reshape(-1))
+				split_iN = np.asarray(split_H[:,None]*self.C[di]*split_H[None,:])
+				if self.ignore_mean:
+					# Make ourselves insensitive to the mean
+					mvec = np.full(self.npix, 1.0/self.npix, split_iN.dtype)
+					split_iN = project_out(split_iN, mvec)
+				dset_rhs += split_iN.dot(split_m)
+				dset_iN  += split_iN
+			rhs.append(dset_rhs)
+			iN.append(dset_iN)
+		print "Get lik B"
+		# 2. We need to know which
+		if   type == "ptsrc":
+			return PtsrcLikelihood(rhs, iN, self.B, self.iS, shape, wcs)
+		elif type == "sz":
+			return SZLikelihood(rhs, iN, self.B, self.iS, shape, wcs, self.freqs)
+	def find_candidates(self, lim=5.0):
+		"""Find matched filter point source and sz candidates with S/N of at least lim.
+		Returns a [candidates_ptsrc, candidates_sz]. The sz candidates are based on the
+		max s/n per pixel across all the sz scales."""
+		cands = []
+		rhs   = self.filter.calc_rhs()
+		mu    = self.filter.calc_mu(rhs)
+		for name in ["ptsrc", "sz"]:
+			if name == "ptsrc":
+				setup_profiles_ptsrc(self.mapset)
+				alpha  = self.filter.calc_alpha(mu)
+				dalpha = self.filter.calc_dalpha_empirical(alpha)
+				snmap  = div_nonan(alpha, dalpha)
+			elif name == "sz":
+				snmaps = None
+				for scale in self.scales:
+					setup_profiles_sz(self.mapset, scale)
+					alpha  = self.filter.calc_alpha(mu)
+					dalpha = self.filter.calc_dalpha_empirical(alpha)
+					snmap  = div_nonan(alpha, dalpha)
+					if snmaps is None: snmaps = snmap
+					else: snmaps = np.maximum(snmaps, snmap)
+			else: raise ValueError("Unknown signal type '%s'" % name)
+			cand = find_candidates(snmap, lim, edge=self.mapset.apod_edge)
+			cand.name = name
+			cands.append(cand)
+		return cands
+
+# What do I want to be able to do with the Likelihood object?
+# I want to be able to find the ML, statistics and model.
+# But the number of nonlinear parameters (parameters that need to
+# be sampled over) varies, as does their meaning. It will also
+# vary which amplitudes are considered to be free. If the sampling
+# and maximization is done by an external object, then I must present
+# common interface for the nonlinear and linear degrees of freedom.
+#
+# What about n_nonlin, n_lin, n_map, eval(nonlin) -> {posterior, lik, prior, nonlin, lin, amps, model}?
+# Here nonlin = [y,x,...], lin is the amplitude for the independent groups in the fit, and
+# amps is what the amplitudes would have been if they were not grouped.
+
+class PtsrcLikelihood:
+	def __init__(self, rhs, iN, B, iS, shape, wcs, groups=None, rmax=None):
+		self.nmap  = len(rhs)
+		self.npix  = len(rhs[0])
+		self.shape, self.wcs = shape, wcs
+		self.dtype = rhs[0].dtype
+		self.rhs = rhs
+		self.iN, self.B, self.iS = iN, B, iS
+		# Compute core = S" + B'N"B and b'B'N"m
+		self.core  = iS.copy()
+		self.bBiNm = np.zeros(self.npix, self.dtype)
+		self.chisq = 0
+		for i in range(self.nmap):
+			self.core  += B[i].T.dot(iN[i]).dot(B[i])
+			self.bBiNm += B[i].T.dot(rhs[i])
+			self.chisq += rhs[i].dot(np.linalg.solve(iN[i],rhs[i]))
+		self.chisq -= self.bBiNm.T.dot(np.linalg.solve(self.core, self.bBiNm))
+		# Set up our position vector
+		self.pos_base = np.zeros(shape)
+		self.pos_base[tuple([n//2 for n in shape])] = 1
+		# Set up the groups of linear parameters that vary together.
+		# These take the form of an array mapping nmap -> ngroup
+		self.groups = groups if groups is not None else np.arange(self.nmap)
+		# The interface we expose for samplers
+		self.nlin = len(self.groups)
+		self.namp = self.nmap
+		self.nx   = 2
+		self.x0   = np.zeros(2)
+		# Our position prior, in pixels
+		self.rmax = rmax if rmax is not None else min(*shape)/2
+		self.xscale = np.array([self.rmax,self.rmax])
+	def __call__(self, x):
+		t1 = time.time()
+		Q = self.calc_Q(x)
+		iA_full, arhs_full = self.calc_amp_eqsys(Q)
+		# Find the ML amplitudes for all the amplitudes
+		A_full    = utils.eigpow(iA_full, -1)
+		ahat_full = A_full.dot(arhs_full)
+		# Do the same for our groups
+		iA   = binmat(iA_full,   self.groups)
+		arhs = binvec(arhs_full, self.groups)
+		A    = utils.eigpow(iA, -1)
+		ahat = A.dot(arhs)
+		# Get the amp-marginalized -2log-likelihood (including Jeffrey's prior, excluding constants)
+		# This is negative due to how the marginalization works out
+		lik   = self.chisq-ahat.dot(arhs)
+		prior = self.calc_prior(x)
+		post  = lik + prior
+		# Get our model. Computing this every step is not necessary, but it
+		# only accounts for 0.3% of the time this function takes
+		def get_model(a):
+			model = np.array([self.B[i].dot(Q[i]*a[i]) for i in range(self.nmap)])
+			return enmap.ndmap(model.reshape((-1,)+self.shape), self.wcs)
+		model_full = get_model(ahat_full)
+		model      = get_model(ahat[self.groups])
+		t2 = time.time()
+		return bunch.Bunch(
+			posterior  = post,
+			likelihood = lik,
+			prior      = prior,
+			x          = x,
+			amps       = bunch.Bunch(val = ahat,      cov = A),
+			amps_full  = bunch.Bunch(val = ahat_full, cov = A_full),
+			model      = model,
+			model_full = model_full,
+			t          = t2-t1,
+		)
+	def calc_prior(self, x):
+		r = np.sum(x[:2]**2)**0.5
+		return 0 if r < self.rmax else np.inf
+	def calc_Q(self, x):
+		pos_mat = shift_nonperiodic(self.pos_base, x[:2]).reshape(self.npix)
+		return [pos_mat]*self.nmap
+	def calc_amp_eqsys(self, Q):
+		"""Compute the the left and right hand side of the fit amplitude
+		iA and arhs such that iA*ahat = arhs, where ahat is the ML estimator
+		for the amplitudes and iA is their inverse covariance. This is
+		done for the case where the point source is located at the given
+		position pos = [dy,dx] in (non-integer) pixels as measured from the
+		center of the region. returns (iA, arhs, P). These are all that is
+		needed both to
+		1. compute the ML amplitudes
+		2. sample from the amplitude distribution
+		3. compute the fit log-posterior, assuming a Jeffrey's prior
+		4. reduce to a smaller number of amplitude degrees of freedom
+		5. compute the model
+		"""
+		t1 = time.time()
+		# A"   = Q'B' Ntot" BQ = Q'B'N"BQ - (Q'B'N"Bb) core" (Q'B'N"Bb)'
+		# ahat = A Q'B' Ntot" m = A[Q'BN"m - (Q'B'N"Bb) core" b'B'N"m
+		# So we need Q'B'N"Bb, Q'B'N"BQ, Q'B'N"m and b'B'N"m
+		# How does b work in this case? b broadcasts from a single
+		# map to all maps: it is b' = [I I I I].
+		QBNBQ = np.zeros([self.nmap, self.nmap])
+		QBNBb = np.zeros([self.nmap, self.npix], self.dtype)
+		QBNm  = np.zeros(self.nmap, self.dtype)
+		# Everything is block-diagonal, except core, which we have already handled
+		for i in range(self.nmap):
+			QB = Q[i].dot(self.B[i].T)
+			QBNBQ[i,i] = QB.dot(self.iN[i]).dot(QB.T)
+			QBNBb[i]   = QB.dot(self.iN[i]).dot(self.B[i])
+			# At least for planck, the mean value of rhs (and presumably of m)
+			# is given a large weight here, even though the CMB should suppress
+			# those scales. Should investigate why.
+			QBNm[i]    = QB.dot(self.rhs[i])
+			# This is the (untransposed) pointing/profile matrix. Useful for evaluating the model
+		iA    = QBNBQ - QBNBb.dot(np.linalg.solve(self.core, QBNBb.T))
+		arhs  = QBNm  - QBNBb.dot(np.linalg.solve(self.core, self.bBiNm))
+		return iA, arhs
+	def maximize(self, verbose=False):
+		self.i = 0
+		def f(x):
+			res = self(x)
+			if verbose:
+				print "%3d %s" % (self.i, self.format_sample(res))
+			self.i += 1
+			return res.posterior
+		x = optimize.fmin_powell(f, self.x0, disp=False)
+		return self(x)
+	def explore(self, x0=None, nsamp=50, fburn=0.5, fwalker=1.0, stepscale=2.0, verbose=False):
+		# Sample the likelihood using metropolis, and gather statistics.
+		# For the position this is simple, but for the amplitudes each
+		# sample is a distribution. To get the mean and cov of this,
+		# we can imagine sampling a bunch of amps for each step.
+		# <a> = mean_{bunch,samp} a_{bunch,samp} = mean_bunch mean_samp a_{bunch,samp} = mean(a_ml)
+		# cov(a) = <aa'> = mean_bunch mean_samp (a_ml_bunch + da_bunch - mean_ml)*(...)'
+		# cov(a_ml) + mean(A)
+		# To keep thing simple, we will not measure the pos-amp cross terms
+		# We will sample using emcee, to avoid having to worry about rescaling the step size
+		if x0 is None: x0 = self.x0
+		nburn   = utils.nint(nsamp*fburn)
+		# Set up the initial walkers
+		nwalker = utils.nint((self.nx+1)*fwalker)
+		init_dx = self.xscale*0.01
+		points, vals = [], []
+		for i in range(10000):
+			x = x0 + np.random.standard_normal(self.nx)*init_dx
+			v = self(x)
+			if np.isfinite(v.posterior):
+				points.append(x)
+				vals.append(v)
+			if len(points) >= nwalker:
+				break
+		points = np.array(points)
+
+		#points  = np.array([x0 + np.random.standard_normal(self.nx)*init_dx for i in range(nwalker)])
+		#vals    = [self(x) for x in points]
+
+		# Set up our output statistics
+		# Nonlinear parameters
+		mean_x  = np.zeros(self.nx)
+		mean_xx = np.zeros([self.nx,self.nx])
+		# Main amplitudes
+		mean_a  = np.zeros(self.nlin)
+		mean_aa = np.zeros([self.nlin, self.nlin])
+		mean_A  = np.zeros([self.nlin, self.nlin])
+		# Full amplitudes
+		mean_a_full  = np.zeros(self.namp)
+		mean_aa_full = np.zeros([self.namp, self.namp])
+		mean_A_full  = np.zeros([self.namp, self.namp])
+		# Models
+		mean_model = vals[0].model*0
+		mean_model_full = vals[0].model_full*0
+		# Time spent
+		mean_t = 0
+		nsum = 0
+
+		# Loop over samples
+		for si in range(-nburn, nsamp):
+			next_points = points.copy()
+			next_vals   = list(vals)
+			# Try making a step with each walker
+			for wi in range(nwalker):
+				oi = np.random.randint(nwalker-1)
+				if oi == wi: oi += 1
+				stretch  = draw_emcee_stretch(stepscale)
+				cand_pos = points[oi] + stretch*(points[wi]-points[oi])
+				cand_val = self(cand_pos)
+				p_accept = stepscale**(self.nx-1)*np.exp(0.5*(vals[wi].posterior - cand_val.posterior))
+				r = np.random.uniform(0,1)
+				if r < p_accept:
+					next_points[wi] = cand_pos
+					next_vals[wi]   = cand_val
+				x, v = next_points[wi], next_vals[wi]
+				if verbose:
+					print "%3d %d %s" % (si, wi, self.format_sample(v))
+				# Accumulate statistics if we're done with burnin
+				if si >= 0:
+					mean_x  += x
+					mean_xx += x[:,None]*x[None,:]
+					mean_a  += v.amps.val
+					mean_aa += v.amps.val[:,None]*v.amps.val[None,:]
+					mean_A  += v.amps.cov
+					mean_a_full  += v.amps_full.val
+					mean_aa_full += v.amps_full.val[:,None]*v.amps_full.val[None,:]
+					mean_A_full  += v.amps_full.cov
+					mean_model      += v.model
+					mean_model_full += v.model_full
+					mean_t += v.t
+					nsum += 1
+			# Done with all walkers. Update current state
+			points = next_points
+			vals   = next_vals
+	
+		arrs = [mean_x, mean_xx, mean_a, mean_aa, mean_A, mean_a_full, mean_aa_full, mean_A_full, mean_model, mean_model_full]
+		for arr in arrs: arr /= nsum
+		mean_t /= nsum
+
+		res = bunch.Bunch(
+				x      = mean_x,
+				x_cov  = mean_xx - mean_x[:,None]*mean_x[None,:],
+				amps   = bunch.Bunch(
+					val = mean_a, cov = mean_aa - mean_a[:,None]*mean_a[None,:] + mean_A),
+				amps_full = bunch.Bunch(
+					val = mean_a_full, cov = mean_aa_full - mean_a_full[:,None]*mean_a_full[None,:] + mean_A_full),
+				model = mean_model,
+				model_full = mean_model_full,
+				t = mean_t,
+				# these don't really make sense, but include them to make this a fully valid sample
+				prior = 0,
+				likelihood = 0,
+				posterior = 0,
+			)
+		return res
+	@staticmethod
+	def format_sample(sample):
+		nx  = len(sample.x)
+		dx  = np.diag(sample.x_cov)**0.5 if "x_cov" in sample else sample.x*0
+		res = ""
+		for i in range(nx):
+			res += " %6.3f %6.3f " % (sample.x[i], dx[i])
+		res += " t %6.3f L %8.2f amp" % (sample.t, sample.posterior)
+		for i, a in enumerate(sample.amps_full.val):
+			da = sample.amps_full.cov[i,i]**0.5
+			res += "  %6.3f %6.3f" % (a/1e3, da/1e3)
+		return res
+
+class SZLikelihood(PtsrcLikelihood):
+	def __init__(self, rhs, iN, B, iS, shape, wcs, freqs, groups=None, rmax=None, smax=None, smin=None):
+		PtsrcLikelihood.__init__(self, rhs, iN, B, iS, shape, wcs, groups=groups, rmax=rmax)
+		self.smax = smax if smax is not None else 10
+		self.smin = smin if smin is not None else 0.2
+		self.x0   = [0,0,0.5]
+		self.xscale = np.array([self.rmax,self.rmax,self.smax])
+		self.nx   = 3
+		self.freqs= freqs
+		# Needed for sz P evaluation
+		self.pixshape = enmap.pixshape(shape, wcs)/utils.arcmin
+		self.pixshape[1] *= np.cos(enmap.pix2sky(shape, wcs, [shape[-2]/2,shape[-1]/2])[0])
+	def calc_prior(self, x):
+		r = np.sum(x[:2]**2)**0.5
+		if   r > self.rmax:    return np.inf
+		elif x[2] <= 0:        return np.inf
+		elif x[2] < self.smin: return np.exp((self.smin/x[2]-1)*10)-1
+		elif x[2] > self.smax: return np.exp((x[2]/self.smax-1)*10)-1
+		else:                  return 0
+	def calc_Q(self, x):
+		pos, scale = x[:2], max(x[2],1e-2)
+		sz_prof  = sz_2d_profile(self.shape, self.pixshape, pos=pos, fwhm=scale).reshape(-1)
+		## Get the distance from our chosen pixel position to all the other pixels
+		#dists    = np.sum(((pos[:,None,None] - self.pixmap)*self.pixshape[:,None,None])**2,0)**0.5/utils.arcmin
+		#sz_prof  = self.sz_fun(dists, scale)/scale*1e-2
+		#sz_prof  = enmap.downgrade(sz_prof, self.nsub).reshape(-1)
+		cache = {}
+		Q = []
+		for freq in self.freqs:
+			if freq not in cache:
+				cache[freq] = sz_prof * sz_freq_core(freq*1e9)
+			Q.append(cache[freq])
+		#print "Q"
+		#sys.stdout.flush()
+		#np.savetxt("/dev/stdout", Q[0].reshape(self.shape)[::3,::3]*100, fmt="%7.2f")
+		#sys.stdout.flush()
+		return Q
+
+def find_candidates(snmap, lim=5.0, edge=0):
+	ny,nx= snmap.shape
+	mask = enmap.zeros(snmap.shape, snmap.wcs, np.bool)
+	mask[edge:ny-edge,edge:nx-edge] = (snmap > lim)[edge:ny-edge,edge:nx-edge]
+	labels, nlabel = ndimage.label(mask)
+	if nlabel == 0:
+		return bunch.Bunch(pix=np.zeros([0,2]), pos=np.zeros([0,2]), sn=np.zeros(0), npix=np.zeros(0,int), n=0)
+	pix  = np.array(ndimage.center_of_mass(snmap**2, labels, np.arange(1,nlabel+1))).T
+	pos  = snmap.pix2sky(pix)
+	sn   = ndimage.maximum(snmap, labels, np.arange(1,nlabel+1))
+	npix = ndimage.sum(snmap*0+1, labels, np.arange(1,nlabel+1))
+	inds = np.argsort(sn)[::-1]
+	return bunch.Bunch(pix=pix.T[inds], pos=pos.T[inds], sn=sn[inds], npix=npix[inds], n=len(inds))
+
+def div_nonan(a,b,fill=0):
+	with utils.nowarn(): res = a/b
+	res[~np.isfinite(res)] = fill
+	return res
+
+def ps2d_to_mat(ps2d, n):
+	corrfun = map_ifft(ps2d+0j)/(ps2d.shape[-2]*ps2d.shape[-1])**0.5
+	thumb   = corrfun_thumb(corrfun, n)
+	mat     = corr_to_mat(thumb, n)
+	return mat
+
+def extract_thumb(map, pix, n):
+	return np.roll(np.roll(map, n//2-pix[1], -1)[...,:n], n//2-pix[0], -2)[...,:n,:]
+
+def corrfun_thumb(corr, n):
+	tmp = np.roll(np.roll(corr, n, -1)[...,:2*n], n, -2)[...,:2*n,:]
+	return np.roll(np.roll(tmp, -n, -1), -n, -2)
+
+def corr_to_mat(corr, n):
+	res = enmap.zeros([n,n,n,n],dtype=corr.dtype)
+	for i in range(n):
+		tmp = np.roll(corr, i, 0)[:n,:]
+		for j in range(n):
+			res[i,j] = np.roll(tmp, j, 1)[:,:n]
+	return res
+
+def shift_nonperiodic(a, shift, axes=None, pad=100):
+	apad = np.pad(a, pad, "constant")
+	opad = fft.shift(apad, shift, axes=axes)
+	return opad[(slice(pad,-pad),)*apad.ndim]
+
+def project_out(imat, modes):
+	imat  = np.asarray(imat)
+	modes = np.asarray(modes)
+	if modes.ndim == 1: modes = modes[:,None]
+	core = modes.T.dot(imat).dot(modes)
+	return imat - imat.dot(modes).dot(np.linalg.solve(core, modes.T.dot(imat)))
+
+def binvec(vec, inds):
+	return np.bincount(inds, vec)
+def binmat(mat, inds):
+	inds = np.asarray(inds)
+	nin  = mat.shape[0]
+	nout = np.max(inds)+1
+	inds_2d = inds[np.mgrid[:nin,:nin]].reshape(2,-1)
+	bins = np.ravel_multi_index(inds_2d, (nout, nout))
+	omat = np.bincount(bins, mat.reshape(-1)).reshape(nout,nout)
+	return omat
+
+def draw_emcee_stretch(scale):
+	# scale pdf: 1/sqrt(z) between 1/a and a. so cdf is:
+	# int_(1/a)^x z**-0.5 da = 2[z**0.5]_(1/a)^x = 2*(x**0.5 - a**-0.5)
+	# normalize: (a**0.5-a**-0.5)**-1 * (x**0.5-a**-0.5)
+	# inverse: ((a**0.5-a**-0.5)*p+a**-0.5)**2
+	a = scale
+	return (np.random.uniform(0,1)*(a**0.5-a**-0.5)+a**-0.5)**2

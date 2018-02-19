@@ -147,3 +147,8 @@ def mpl_register(names=None):
 	for name in names:
 		cmap = to_mpl_colormap(name, schemes[name])
 		matplotlib.cm.register_cmap(name, cmap)
+
+def mpl_setdefault(name):
+	import matplotlib.pyplot
+	mpl_register(name)
+	matplotlib.pyplot.rcParams['image.cmap'] = name

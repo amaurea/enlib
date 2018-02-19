@@ -1508,6 +1508,7 @@ def eigpow(A, e, axes=[-2,-1], rlim=None, alim=None):
 		fa = partial_flatten(A, axes)
 		fa = eigpow(fa, e, rlim=rlim, alim=alim)
 		return partial_expand(fa, A.shape, axes)
+	elif A.ndim == 2: return eigpow(A[None], e, rlim=rlim, alim=alim)[0]
 	else:
 		E, V = np.linalg.eigh(A)
 		if rlim is None: rlim = np.finfo(E.dtype).resolution*100
