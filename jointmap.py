@@ -1,5 +1,5 @@
 import numpy as np, os, time, imp, copy, functools, sys
-from scipy import ndimage, optimize, interpolate, integrate
+from scipy import ndimage, optimize, interpolate, integrate, stats
 from enlib import enmap, retile, utils, bunch, cg, fft, powspec, array_ops
 #from matplotlib import pyplot
 
@@ -155,15 +155,24 @@ class SZInterpolator:
 		self.v = np.array([sz_rad_projected_core(r) for r in self.r])
 		if self.log: self.spline = interpolate.splrep(self.r, np.log(self.v))
 		else:        self.spline = interpolate.splrep(self.r, self.v)
-	def __call__(self, r, fwhm=1.0):
+	def __call__(self, r, fwhm=1.0, fwhm_deriv=False):
+		"""If fwhm_deriv is True, then computes the derivative of the
+		spline profile with respect to fwhm."""
 		if self.spline is None: self.setup()
-		res = interpolate.splev(r/fwhm, self.spline)
-		if self.log: res = np.exp(res)
-		#res /= fwhm**2
+		x = r/fwhm
+		if self.log:
+			res = np.exp(interpolate.splev(x, self.spline))
+			if fwhm_deriv:
+				res *= -r/fwhm**2*interpolate.splev(x, self.spline, der=1)
+		else:
+			res = interpolate.splev(x, self.spline, der=fwhm_deriv)
+			if fwhm_deriv:
+				res *= -r/fwhm**2
 		return res
 sz_rad_projected_fast = SZInterpolator()
 
-def sz_2d_profile(shape, pixshape, pos=[0,0], fwhm=1.0, oversample=5, core=10, pad=100, periodic=False, nofft=False):
+def sz_2d_profile(shape, pixshape, pos=[0,0], fwhm=1.0, oversample=5, core=10, pad=100,
+		periodic=False, nofft=False, pos_deriv=None, scale_deriv=False):
 	"""Return a 2d sz profile with shape [ny,nx] where each pixel has the physical
 	shape pixshape [wy,wx] in arcminutes. This means that any cos(dec) factors must
 	be included in pixshape. The profile will be offset by pos [oy,ox]
@@ -190,7 +199,7 @@ def sz_2d_profile(shape, pixshape, pos=[0,0], fwhm=1.0, oversample=5, core=10, p
 		i = offset*oversample + oversample//2
 		big_pos = (np.mgrid[:N[0],:N[1]] - i[:,None,None])*(np.array(pixshape)/oversample)[:,None,None]
 		big_rad = np.sum(big_pos**2,0)**0.5
-		big_map = sz_rad_projected_fast(big_rad, fwhm)
+		big_map = sz_rad_projected_fast(big_rad, fwhm, fwhm_deriv=scale_deriv)
 		# Then downgrade. This is done to get the pixel window. We can just use
 		# fourier method to get the pixel window here, as the signal is not band-limited
 		map   = enmap.downgrade(big_map, oversample)
@@ -212,7 +221,7 @@ def sz_2d_profile(shape, pixshape, pos=[0,0], fwhm=1.0, oversample=5, core=10, p
 	wy, wx = enmap.calc_window(fmap.shape)
 	fmap *= wy[:,None]
 	fmap *= wx[None,:]
-	fmap  = fft.shift(fmap, fpos, axes=[0,1], nofft=True)
+	fmap  = fft.shift(fmap, fpos, axes=[0,1], nofft=True, deriv=pos_deriv)
 	fft.ifft(fmap, pad_map, axes=[0,1], normalize=True)
 	map[:] = pad_map[(slice(pad,-pad),)*pad_map.ndim].real if pad > 0 else pad_map.real
 	return map
@@ -1285,38 +1294,125 @@ class SourceSZFinder:
 	Can write Q = pos * profile, where profile encodes only the shape (identity matrix
 	for point source), and pos only encodes the position. pos would be a kronecker delta
 	for pixel-center positions. For off-center positions, it would be fourier-shifted.
+
+	What should the final output from this class be? Aside from position and shape for
+	each source/cluster, we also want amplitudes. But for point sources amplitudes
+	can change form map to map, and those are useful numbers to measure. So how about
+	outputting an overall amp, a per-freq amp and a per-map amplitude? The problem with
+	this is that different tiles will have different maps going into them, so when
+	combining the catalogues we will have incompatible amplitude vectors. Could handle
+	this by adding a map-id to the output. But really, tile issues are not the responsibility
+	of this class, so we can worry about elsewhere.
 	"""
-	def __init__(self, mapset, sz_scales=[0.1,0.5,2.0,4.0], npass=2, spix=33, ignore_mean=True):
-		print "Finder init A"
-		t1 = time.time()
+	def __init__(self, mapset, sz_scales=[0.1,0.5,2.0,4.0], snmin=4, npass=2, spix=33, mode="auto", ignore_mean=True):
 		self.mapset = mapset
-		self.filter = SignalFilter(mapset)
 		self.scales = sz_scales
+		self.snmin  = snmin
 		self.npass  = npass
 		self.spix   = spix
 		self.npix  = spix*spix
-		t2 = time.time()
-		print "Finder init B", t2-t1
 		# Precompute the matrix building blocks. These are common for all the sources
-		self.C  = [np.linalg.inv(ps2d_to_mat(1/d.iN.preflat[0],spix).reshape(self.npix,self.npix)) for d in mapset.datasets]
-		self.B  = [ps2d_to_mat(d.beam_2d,spix).reshape(self.npix,self.npix)             for d in mapset.datasets]
-		# Do not renormalize B. It while it's true that this means that a
-		# B*monopole would be smaller towards the end, what matters is what
-		# it does to our model, and we don't want our model to have its amplitude
-		# increase just because we're close to the edge
-		#self.B  = [B / np.sum(B,1)[:,None] for B in self.B]
-		self.S  = ps2d_to_mat(mapset.S,spix).reshape(self.npix, self.npix)
+		self.C = [np.linalg.inv(ps2d_to_mat(1/d.iN.preflat[0],spix).reshape(self.npix,self.npix)) for d in mapset.datasets]
+		self.B = [ps2d_to_mat(d.beam_2d,spix).reshape(self.npix,self.npix)             for d in mapset.datasets]
+		self.S = ps2d_to_mat(mapset.S,spix).reshape(self.npix, self.npix)
 		# Eigenvalues have too large span for standard inverse. Should be safe for C though.
 		self.iS = utils.eigpow(self.S, -1)
-		# Build SZ profile interpolator sz_fun. It will take r and scale in arcmin and give a dimensionless
-		# sz response.
-		t3 = time.time()
-		print "Finder init C", t3-t2
 		self.freqs  = [d.freq for d in mapset.datasets]
+		self.nfreq  = len(self.freqs)
+		self.nmap   = len(mapset.datasets)
+		self.mode   = mode
 		self.ignore_mean = ignore_mean
-		# Set up our local geometry
-		print "Finder init D", time.time()-t3
-	def get_likelihood(self, pix, type, scale=0.5):
+		# This is used for the model subtraction
+		self.pixshape = enmap.pixshape(mapset.shape, mapset.wcs)/utils.arcmin
+		self.pixshape[1] *= np.cos(enmap.pix2sky(mapset.shape, mapset.wcs, [mapset.shape[-2]/2,mapset.shape[-1]/2])[0])
+	def analyze(self, npass=None, verbosity=0):
+		"""Iterator that repeatedly look for sources and clusters, subtract the mean model from the maps,
+		and look again. This is be able to find objects close to other, strong objects. Yields a
+		bunch(catalogue, snmaps, model) each time."""
+		if npass is None: npass = self.npass
+		for it in range(npass):
+			info = self.single_pass(verbosity=verbosity)
+			self.subtract_model(info.model_full)
+			info.i = it
+			yield info
+	def subtract_model(self, model):
+		"""Subtract a model (a map per dataset) from our mapset. This modifies the
+		mapset that was used to build this object. The same model is used across the
+		maps in a split."""
+		for i, d in enumerate(self.mapset.datasets):
+			for split in d.splits:
+				split.data.map.preflat[0] -= model[i]
+	def single_pass(self, snmin=None, verbosity=0):
+		"""Performs a single pass of the full search. Returns a catalogue of statistics
+		in the form of a numpy structured array with the fields
+		"""
+		if snmin is None: snmin = self.snmin
+		cands, snmaps = self.find_candidates(snmin, maps=True)
+		cands = prune_candidates(cands)
+		model = enmap.zeros((self.nmap,)+self.mapset.shape[-2:], self.mapset.wcs, self.mapset.dtype)
+		model_full = model*0
+		# Set up the output source info array
+		Nf = "%df" % self.nmap
+		cattype = [
+				("type","S10"),("pos","2f"),("dpos","2f"),("pos0","2f"),("fwhm","f"), ("dfwhm","f"), # spatial parameters
+				("sn","f"),("sn0","f"),("amp","f"),("damp","f"),                      # overall strength
+				("amps",Nf),("damps",Nf),                                             # individual amplitudes
+				("npix","i"),                                                         # misc
+			]
+		cat = np.recarray(len(cands), cattype)
+		# Evaluate each candidate
+		for ci, cand in enumerate(cands):
+			ipix  = utils.nint(cand.pix)
+			lik   = self.get_likelihood(ipix, cand.type)
+			ml    = lik.maximize(verbose = verbosity>=2)
+			stats = lik.explore(ml.x, verbose = verbosity>=2, nsamp=50)
+			# I used to just expand the mean models from the stats here, but
+			# those only cover a thumbnail, and the sz wings can be wider than that.
+			# So instead build a full-map model.
+			#model      += expand_thumb(stats.model,      ipix, model.shape)
+			#model_full += expand_thumb(stats.model_full, ipix, model.shape)
+			if    cand.type == "sz":
+				profile_shape = sz_map_profile(self.mapset.shape[-2:], self.mapset.wcs, fwhm=ml.x[2])
+				profile_amps  = [sz_freq_core(freq*1e9) for freq in self.freqs]
+			elif  cand.type == "ptsrc":
+				profile_shape = model[0]*0
+				profile_shape[0,0] = 1
+				profile_amps  = [1 for freq in self.freqs]
+			else: raise ValueError("Unknown object type '%s'" % cand.type)
+			profile_shape = fft.shift(profile_shape, cand.pix)
+			for di, d in enumerate(self.mapset.datasets):
+				profile = map_ifft(d.beam_2d*map_fft(profile_shape))*profile_amps[di]
+				model_full[di] += ml.amps_full.val[di]*profile
+				model[di]      += ml.amps.val[lik.groups[di]]*profile
+			# Populate catalogue
+			c = cat[ci]
+			# Spatial parameters
+			c.type = cand.type
+			c.pos  = enmap.pix2sky(self.mapset.shape, self.mapset.wcs, ipix+stats.x[:2])[::-1]/utils.degree # radec
+			c.dpos = (np.diag(stats.x_cov)[:2]**0.5*enmap.pixshape(self.mapset.shape, self.mapset.wcs))[::-1]/utils.degree
+			c.pos0 = cand.pos[::-1]/utils.degree
+			if cand.type == "sz":
+				c.fwhm  = stats.x[2]
+				c.dfwhm = stats.x_cov[2,2]**0.5
+			else: c.fwhm, c.dfwhm = 0, 0
+			# Overall strength
+			iA_ml  = utils.eigpow(ml.amps.cov, -1)
+			c.sn   = (ml.amps.val.dot(iA_ml).dot(ml.amps.val))**0.5 # Conditional on ML position
+			c.sn0  = cand.sn
+			iA     = utils.eigpow(stats.amps.cov, -1)
+			c.amp  = np.sum(iA.dot(stats.amps.val))/np.sum(iA)
+			c.damp = np.sum(iA)**-0.5
+			c.amps = stats.amps_full.val
+			c.damps= np.diag(stats.amps_full.cov)**0.5
+			# misc
+			c.npix = cand.npix
+			if verbosity >= 1:
+				print "%3d %s" % (ci+1, format_catalogue(c)),
+				sys.stdout.flush()
+		# And return lots of useful stuff
+		res = bunch.Bunch(catalogue = cat, snmaps = snmaps, model = model, model_full= model_full)
+		return res
+	def get_likelihood(self, pix, type, scale=0.5, mode=None):
 		"""Return an object that can be used to evaluate the likelihood for a source
 		near the given position, of the given type (ptsrc or sz). scale is
 		an initial guess at the sz length scale."""
@@ -1325,7 +1421,6 @@ class SourceSZFinder:
 		cy, cx = ipix - self.spix//2
 		shape, wcs = enmap.slice_geometry(self.mapset.shape[-2:], self.mapset.wcs,
 				(slice(cy,cy+self.spix),slice(cx,cx+self.spix)))
-		print "Get lik A"
 		# 1. Build thumbs for each dataset
 		rhs, iN = [], []
 		for di, d in enumerate(self.mapset.datasets):
@@ -1343,39 +1438,59 @@ class SourceSZFinder:
 				dset_iN  += split_iN
 			rhs.append(dset_rhs)
 			iN.append(dset_iN)
-		print "Get lik B"
+		nmap = len(rhs)
+		# Set up degree of freedom grouping
+		if   mode is None:     mode = self.mode
+		if   mode == "auto":   mode = "single" if type == "sz" else "perfreq"
+		if   mode == "single":  groups = np.full(nmap, 0, int)
+		elif mode == "perfreq": groups = np.unique(self.freqs, return_inverse=True)[1]
+		elif mode == "permap":  groups = np.arange(nmap)
+		else: raise ValueError("Unknown DOF mode '%s'" % mode)
 		# 2. We need to know which
 		if   type == "ptsrc":
-			return PtsrcLikelihood(rhs, iN, self.B, self.iS, shape, wcs)
+			return PtsrcLikelihood(rhs, iN, self.B, self.iS, shape, wcs, groups=groups)
 		elif type == "sz":
-			return SZLikelihood(rhs, iN, self.B, self.iS, shape, wcs, self.freqs)
-	def find_candidates(self, lim=5.0):
+			return SZLikelihood(rhs, iN, self.B, self.iS, shape, wcs, self.freqs, groups=groups)
+		else:
+			raise ValueError("Unknown signal type '%s'" % type)
+	def find_candidates(self, lim=5.0, maps=False):
 		"""Find matched filter point source and sz candidates with S/N of at least lim.
-		Returns a [candidates_ptsrc, candidates_sz]. The sz candidates are based on the
-		max s/n per pixel across all the sz scales."""
-		cands = []
-		rhs   = self.filter.calc_rhs()
-		mu    = self.filter.calc_mu(rhs)
+		Returns a single list containing both ptsrc and sz candidates, sorted by S/N. They
+		are returned as a recarray with the fields [sn, type, pos[2], pix[2], npix[2]].
+		If maps=True, then the S/N maps that were used in the search will returned as a
+		second argument [(type,map),(type,map),...]"""
+		dtype  = [("sn","f"),("type","S10"),("pos","2f"),("pix","2f"),("npix","i")]
+		cands  = []
+		snmaps = []
+		filter = SignalFilter(self.mapset)
+		rhs    = filter.calc_rhs()
+		mu     = filter.calc_mu(rhs)
 		for name in ["ptsrc", "sz"]:
+			submaps = []
 			if name == "ptsrc":
 				setup_profiles_ptsrc(self.mapset)
-				alpha  = self.filter.calc_alpha(mu)
-				dalpha = self.filter.calc_dalpha_empirical(alpha)
+				alpha  = filter.calc_alpha(mu)
+				dalpha = filter.calc_dalpha_empirical(alpha)
 				snmap  = div_nonan(alpha, dalpha)
 			elif name == "sz":
-				snmaps = None
+				snmap = None
 				for scale in self.scales:
 					setup_profiles_sz(self.mapset, scale)
-					alpha  = self.filter.calc_alpha(mu)
-					dalpha = self.filter.calc_dalpha_empirical(alpha)
-					snmap  = div_nonan(alpha, dalpha)
-					if snmaps is None: snmaps = snmap
-					else: snmaps = np.maximum(snmaps, snmap)
+					alpha  = filter.calc_alpha(mu)
+					dalpha = filter.calc_dalpha_empirical(alpha)
+					snmap_1scale = div_nonan(alpha, dalpha)
+					if snmap is None: snmap = snmap_1scale
+					else: snmap = np.maximum(snmap, snmap_1scale)
+					submaps.append(bunch.Bunch(name="%03.1f"%scale, snmap=snmap_1scale))
 			else: raise ValueError("Unknown signal type '%s'" % name)
 			cand = find_candidates(snmap, lim, edge=self.mapset.apod_edge)
-			cand.name = name
+			cand.type  = name
 			cands.append(cand)
-		return cands
+			snmaps.append((name,snmap))
+		cands = np.rec.array(np.concatenate(cands))
+		cands = cands[np.argsort(cands.sn)[::-1]]
+		if maps: return cands, snmaps
+		else:    return cands
 
 # What do I want to be able to do with the Likelihood object?
 # I want to be able to find the ML, statistics and model.
@@ -1398,6 +1513,14 @@ class PtsrcLikelihood:
 		self.rhs = rhs
 		self.iN, self.B, self.iS = iN, B, iS
 		# Compute core = S" + B'N"B and b'B'N"m
+
+		#for i, r in enumerate(rhs):
+		#	r = enmap.ndmap(rhs[i].reshape(shape),wcs)
+		#	m = enmap.ndmap(np.linalg.solve(self.iN[i], rhs[i]).reshape(shape), wcs)
+		#	enmap.write_map("test_map_%02d.fits" % i, m)
+		#	enmap.write_map("test_rhs_%02d.fits" % i, r)
+		#	E, V = np.linalg.eigh(self.iN[i])
+
 		self.core  = iS.copy()
 		self.bBiNm = np.zeros(self.npix, self.dtype)
 		self.chisq = 0
@@ -1405,7 +1528,9 @@ class PtsrcLikelihood:
 			self.core  += B[i].T.dot(iN[i]).dot(B[i])
 			self.bBiNm += B[i].T.dot(rhs[i])
 			self.chisq += rhs[i].dot(np.linalg.solve(iN[i],rhs[i]))
-		self.chisq -= self.bBiNm.T.dot(np.linalg.solve(self.core, self.bBiNm))
+		self.icore = utils.eigpow(self.core, -1)
+		#self.chisq -= self.bBiNm.T.dot(np.linalg.solve(self.core, self.bBiNm))
+		self.chisq -= self.bBiNm.T.dot(self.icore).dot(self.bBiNm)
 		# Set up our position vector
 		self.pos_base = np.zeros(shape)
 		self.pos_base[tuple([n//2 for n in shape])] = 1
@@ -1413,7 +1538,7 @@ class PtsrcLikelihood:
 		# These take the form of an array mapping nmap -> ngroup
 		self.groups = groups if groups is not None else np.arange(self.nmap)
 		# The interface we expose for samplers
-		self.nlin = len(self.groups)
+		self.nlin = np.max(self.groups)+1
 		self.namp = self.nmap
 		self.nx   = 2
 		self.x0   = np.zeros(2)
@@ -1435,7 +1560,7 @@ class PtsrcLikelihood:
 		# Get the amp-marginalized -2log-likelihood (including Jeffrey's prior, excluding constants)
 		# This is negative due to how the marginalization works out
 		lik   = self.chisq-ahat.dot(arhs)
-		prior = self.calc_prior(x)
+		prior = self.calc_prior(x, ahat, A)
 		post  = lik + prior
 		# Get our model. Computing this every step is not necessary, but it
 		# only accounts for 0.3% of the time this function takes
@@ -1456,9 +1581,11 @@ class PtsrcLikelihood:
 			model_full = model_full,
 			t          = t2-t1,
 		)
-	def calc_prior(self, x):
+	def calc_prior(self, x, a, A):
 		r = np.sum(x[:2]**2)**0.5
-		return 0 if r < self.rmax else np.inf
+		if r > self.rmax: return np.inf
+		res = -2*np.log(prob_gauss_positive(a,A))
+		return res
 	def calc_Q(self, x):
 		pos_mat = shift_nonperiodic(self.pos_base, x[:2]).reshape(self.npix)
 		return [pos_mat]*self.nmap
@@ -1495,8 +1622,10 @@ class PtsrcLikelihood:
 			# those scales. Should investigate why.
 			QBNm[i]    = QB.dot(self.rhs[i])
 			# This is the (untransposed) pointing/profile matrix. Useful for evaluating the model
-		iA    = QBNBQ - QBNBb.dot(np.linalg.solve(self.core, QBNBb.T))
-		arhs  = QBNm  - QBNBb.dot(np.linalg.solve(self.core, self.bBiNm))
+		iA    = QBNBQ - QBNBb.dot(self.icore).dot(QBNBb.T)
+		arhs  = QBNm  - QBNBb.dot(self.icore).dot(self.bBiNm)
+		#iA    = QBNBQ - QBNBb.dot(np.linalg.solve(self.core, QBNBb.T))
+		#arhs  = QBNm  - QBNBb.dot(np.linalg.solve(self.core, self.bBiNm))
 		return iA, arhs
 	def maximize(self, verbose=False):
 		self.i = 0
@@ -1504,6 +1633,7 @@ class PtsrcLikelihood:
 			res = self(x)
 			if verbose:
 				print "%3d %s" % (self.i, self.format_sample(res))
+				sys.stdout.flush()
 			self.i += 1
 			return res.posterior
 		x = optimize.fmin_powell(f, self.x0, disp=False)
@@ -1575,6 +1705,7 @@ class PtsrcLikelihood:
 				x, v = next_points[wi], next_vals[wi]
 				if verbose:
 					print "%3d %d %s" % (si, wi, self.format_sample(v))
+					sys.stdout.flush()
 				# Accumulate statistics if we're done with burnin
 				if si >= 0:
 					mean_x  += x
@@ -1638,13 +1769,14 @@ class SZLikelihood(PtsrcLikelihood):
 		# Needed for sz P evaluation
 		self.pixshape = enmap.pixshape(shape, wcs)/utils.arcmin
 		self.pixshape[1] *= np.cos(enmap.pix2sky(shape, wcs, [shape[-2]/2,shape[-1]/2])[0])
-	def calc_prior(self, x):
-		r = np.sum(x[:2]**2)**0.5
+	def calc_prior(self, x, a, A):
+		r  = np.sum(x[:2]**2)**0.5
 		if   r > self.rmax:    return np.inf
 		elif x[2] <= 0:        return np.inf
-		elif x[2] < self.smin: return np.exp((self.smin/x[2]-1)*10)-1
-		elif x[2] > self.smax: return np.exp((x[2]/self.smax-1)*10)-1
-		else:                  return 0
+		res = -2*np.log(prob_gauss_positive(a,A))
+		if   x[2] < self.smin: res += np.exp((self.smin/x[2]-1)*10)-1
+		elif x[2] > self.smax: res += np.exp((x[2]/self.smax-1)*10)-1
+		return res
 	def calc_Q(self, x):
 		pos, scale = x[:2], max(x[2],1e-2)
 		sz_prof  = sz_2d_profile(self.shape, self.pixshape, pos=pos, fwhm=scale).reshape(-1)
@@ -1664,19 +1796,565 @@ class SZLikelihood(PtsrcLikelihood):
 		#sys.stdout.flush()
 		return Q
 
+
+class SourceSZFinder2:
+	def __init__(self, mapset, sz_scales=[0.1,0.5,2.0,4.0], snmin=4, npass=2, spix=33, mode="auto", ignore_mean=True):
+		self.mapset = mapset
+		self.scales = sz_scales
+		self.snmin  = snmin
+		self.npass  = npass
+		self.spix   = spix
+		self.npix  = spix*spix
+		# Precompute the matrix building blocks. These are common for all the sources
+		self.C = [np.linalg.inv(ps2d_to_mat(1/d.iN.preflat[0],spix).reshape(self.npix,self.npix)) for d in mapset.datasets]
+		self.B = [ps2d_to_mat(d.beam_2d,spix).reshape(self.npix,self.npix)             for d in mapset.datasets]
+		self.S = ps2d_to_mat(mapset.S,spix).reshape(self.npix, self.npix)
+		# Eigenvalues have too large span for standard inverse. Should be safe for C though.
+		self.iS = utils.eigpow(self.S, -1)
+		self.freqs  = [d.freq for d in mapset.datasets]
+		self.nfreq  = len(self.freqs)
+		self.nmap   = len(mapset.datasets)
+		self.mode   = mode
+		self.ignore_mean = ignore_mean
+		# This is used for the model subtraction
+		self.pixshape = enmap.pixshape(mapset.shape, mapset.wcs)/utils.arcmin
+		self.pixshape[1] *= np.cos(enmap.pix2sky(mapset.shape, mapset.wcs, [mapset.shape[-2]/2,mapset.shape[-1]/2])[0])
+	def analyze(self, npass=None, verbosity=0):
+		"""Loop through all analysis passes, returning a final bunch(catalogue, snmaps, model).
+		The catalogue will be the union of all the individual stage catalogues, and the model
+		will be the sums. The snmap returned will be the initial SNmap. If more fine grained
+		information is needed, use the multi_pass iterator."""
+		cats, snmapss, models = [], [], []
+		for info in self.multi_pass(npass=npass, verbosity=verbosity):
+			cats.append(info.catalogue)
+			snmapss.append(info.snmaps)
+			models.append(info.model)
+		catalogue = np.concatenate(cats)
+		catalogue = np.rec.array(catalogue[np.argsort(catalogue["sn"])[::-1]])
+		snmaps    = snmapss[0]
+		model     = enmap.samewcs(np.sum(models,0),models[0])
+		# Perform a final matched filter to let us see how clean the result is.
+		# This is a bit costly.
+		_, residual = self.find_candidates(self.snmin, maps=True)
+		return bunch.Bunch(catalogue=catalogue, snmaps=snmaps, snresid=residual, model=model)
+	def multi_pass(self, npass=None, verbosity=0):
+		"""Iterator that repeatedly look for sources and clusters, subtract the mean model from the maps,
+		and look again. This is be able to find objects close to other, strong objects. Yields a
+		bunch(catalogue, snmaps, model) each time."""
+		if npass is None: npass = self.npass
+		for it in range(npass):
+			info = self.single_pass(verbosity=verbosity)
+			self.subtract_model(info.model)
+			info.i = it
+			yield info
+	def subtract_model(self, model):
+		"""Subtract a model (a map per dataset) from our mapset. This modifies the
+		mapset that was used to build this object. The same model is used across the
+		maps in a split."""
+		for i, d in enumerate(self.mapset.datasets):
+			for split in d.splits:
+				split.data.map.preflat[0] -= model[i]
+	def single_pass(self, snmin=None, verbosity=0):
+		"""Performs a single pass of the full search. Returns a catalogue of statistics
+		in the form of a numpy structured array with the fields
+		"""
+		if snmin is None: snmin = self.snmin
+		t1 = time.time()
+		cands, snmaps = self.find_candidates(snmin, maps=True)
+		t2 = time.time()
+		print "find candidates", t2-t1
+		cands = prune_candidates(cands)
+		model = enmap.zeros((self.nmap,)+self.mapset.shape[-2:], self.mapset.wcs, self.mapset.dtype)
+		# Set up the output source info array
+		Nf = "%df" % self.nmap
+		cattype = [
+				("type","S10"),("pos","2f"),("dpos","2f"),("pos0","2f"),("fwhm","f"), ("dfwhm","f"), # spatial parameters
+				("sn","f"),("sn0","f"),("amp","f"),("damp","f"),                      # overall strength
+				("amps",Nf),("damps",Nf),                                             # individual amplitudes
+				("npix","i"),                                                         # misc
+			]
+		cat = np.recarray(len(cands), cattype)
+		# Evaluate each candidate
+		for ci, cand in enumerate(cands):
+			ipix  = utils.nint(cand.pix)
+			t1    = time.time()
+			lik   = self.get_likelihood(ipix, cand.type)
+			t2    = time.time()
+			ml    = lik.maximize(verbose = verbosity>=2)
+			t3    = time.time()
+			if    cand.type == "sz":
+				profile_shape = sz_map_profile(self.mapset.shape[-2:], self.mapset.wcs, fwhm=ml.x[2])
+				profile_amps  = [sz_freq_core(freq*1e9) for freq in self.freqs]
+			elif  cand.type == "ptsrc":
+				profile_shape = model[0]*0
+				profile_shape[0,0] = 1
+				profile_amps  = [1 for freq in self.freqs]
+			else: raise ValueError("Unknown object type '%s'" % cand.type)
+			aoff = 3 if cand.type == "sz" else 2
+			profile_shape = fft.shift(profile_shape, cand.pix)
+			for di, d in enumerate(self.mapset.datasets):
+				profile    = map_ifft(d.beam_2d*map_fft(profile_shape))*profile_amps[di]
+				model[di] += ml.x[aoff:][lik.groups[di]]*profile
+			# Populate catalogue
+			c = cat[ci]
+			# Spatial parameters
+			c.type = cand.type
+			c.pos  = enmap.pix2sky(self.mapset.shape, self.mapset.wcs, ipix+ml.x[:2])[::-1]/utils.degree # radec
+			c.dpos = (np.diag(ml.x_cov)[:2]**0.5*enmap.pixshape(self.mapset.shape, self.mapset.wcs))[::-1]/utils.degree
+			c.pos0 = cand.pos[::-1]/utils.degree
+			if cand.type == "sz":
+				c.fwhm  = ml.x[2]
+				c.dfwhm = ml.x_cov[2,2]**0.5
+			else: c.fwhm, c.dfwhm = 0, 0
+			# Overall strength
+			c.sn   = ml.sn
+			c.sn0  = cand.sn
+			iA     = utils.eigpow(ml.x_cov[aoff:,aoff:],-1)
+			iAtot  = np.sum(iA)
+			c.amp  = np.sum(iA.dot(ml.x[aoff:]))/iAtot
+			c.damp = iAtot**-0.5
+			c.amps = ml.afull
+			c.damps= np.diag(ml.afull_cov)**0.5
+			# misc
+			c.npix = cand.npix
+			t4 = time.time()
+			if verbosity >= 1:
+				print "%3d %4.1f %4.1f %s" % (ci+1, t2-t1, t3-t2, format_catalogue(c)),
+				sys.stdout.flush()
+		# And return lots of useful stuff
+		res = bunch.Bunch(catalogue = cat, snmaps = snmaps, model = model)
+		return res
+	def get_likelihood(self, pix, type, scale=0.5, mode=None):
+		"""Return an object that can be used to evaluate the likelihood for a source
+		near the given position, of the given type (ptsrc or sz). scale is
+		an initial guess at the sz length scale."""
+		ipix = utils.nint(pix)
+		# Geometry of this slice
+		cy, cx = ipix - self.spix//2
+		shape, wcs = enmap.slice_geometry(self.mapset.shape[-2:], self.mapset.wcs,
+				(slice(cy,cy+self.spix),slice(cx,cx+self.spix)))
+		# 1. Build thumbs for each dataset
+		rhs, iN = [], []
+		for di, d in enumerate(self.mapset.datasets):
+			dset_rhs  = np.zeros(self.npix)
+			dset_iN   = np.zeros([self.npix, self.npix])
+			for si, s in enumerate(d.splits):
+				split_m  = np.asarray(extract_thumb(s.data.map.preflat[0], ipix, self.spix).reshape(-1))
+				split_H  = np.asarray(extract_thumb(s.data.H, ipix, self.spix).reshape(-1))
+				split_iN = np.asarray(split_H[:,None]*self.C[di]*split_H[None,:])
+				if self.ignore_mean:
+					# Make ourselves (almost) insensitive to the mean. We don't fully remove it
+					# to avoid zero eigenvalues
+					mvec = np.full(self.npix, 1.0/self.npix, split_iN.dtype)
+					split_iN = project_out(split_iN, mvec, frac=1-1e-5)
+				dset_rhs += split_iN.dot(split_m)
+				dset_iN  += split_iN
+			rhs.append(dset_rhs)
+			iN.append(dset_iN)
+		m = [np.linalg.solve(iN[i], rhs[i]) for i in range(len(rhs))]
+		nmap = len(rhs)
+		# Set up degree of freedom grouping
+		if   mode is None:     mode = self.mode
+		if   mode == "auto":   mode = "single" if type == "sz" else "perfreq"
+		if   mode == "single":  groups = np.full(nmap, 0, int)
+		elif mode == "perfreq": groups = np.unique(self.freqs, return_inverse=True)[1]
+		elif mode == "permap":  groups = np.arange(nmap)
+		else: raise ValueError("Unknown DOF mode '%s'" % mode)
+		# 2. We need to know which
+		if   type == "ptsrc":
+			return PtsrcLikelihood2(m, iN, self.B, self.iS, shape, wcs, groups=groups)
+		elif type == "sz":
+			return SZLikelihood2(m, iN, self.B, self.iS, shape, wcs, self.freqs, groups=groups)
+		else:
+			raise ValueError("Unknown signal type '%s'" % type)
+	def find_candidates(self, lim=5.0, maps=False):
+		"""Find matched filter point source and sz candidates with S/N of at least lim.
+		Returns a single list containing both ptsrc and sz candidates, sorted by S/N. They
+		are returned as a recarray with the fields [sn, type, pos[2], pix[2], npix[2]].
+		If maps=True, then the S/N maps that were used in the search will returned as a
+		second argument [(type,map),(type,map),...]"""
+		dtype  = [("sn","f"),("type","S10"),("pos","2f"),("pix","2f"),("npix","i")]
+		cands  = []
+		snmaps = []
+		filter = SignalFilter(self.mapset)
+		rhs    = filter.calc_rhs()
+		mu     = filter.calc_mu(rhs)
+		for name in ["ptsrc", "sz"]:
+			submaps = []
+			if name == "ptsrc":
+				setup_profiles_ptsrc(self.mapset)
+				alpha  = filter.calc_alpha(mu)
+				dalpha = filter.calc_dalpha_empirical(alpha)
+				snmap  = div_nonan(alpha, dalpha)
+			elif name == "sz":
+				snmap = None
+				for scale in self.scales:
+					setup_profiles_sz(self.mapset, scale)
+					alpha  = filter.calc_alpha(mu)
+					dalpha = filter.calc_dalpha_empirical(alpha)
+					snmap_1scale = div_nonan(alpha, dalpha)
+					if snmap is None: snmap = snmap_1scale
+					else: snmap = np.maximum(snmap, snmap_1scale)
+					submaps.append(bunch.Bunch(name="%03.1f"%scale, snmap=snmap_1scale))
+			else: raise ValueError("Unknown signal type '%s'" % name)
+			cand = find_candidates(snmap, lim, edge=self.mapset.apod_edge)
+			cand.type  = name
+			cands.append(cand)
+			snmaps.append((name,snmap))
+		cands = np.rec.array(np.concatenate(cands))
+		cands = cands[np.argsort(cands.sn)[::-1]]
+		if maps: return cands, snmaps
+		else:    return cands
+
+class PtsrcLikelihood2:
+	def __init__(self, m, iN, B, iS, shape, wcs, groups=None, rmax=None):
+		self.nmap  = len(m)
+		self.npix  = len(m[0])
+		self.shape, self.wcs = shape, wcs
+		self.dtype = m[0].dtype
+		self.m, self.iN, self.B, self.iS = np.asarray(m), iN, B, iS
+		# Compute core = S" + B'N"B and b'B'N"m
+		self.core   = iS.copy()
+		for i in range(self.nmap):
+			self.core  += B[i].T.dot(iN[i].dot(B[i]))
+		self.icore  = utils.eigpow(self.core, -1)
+		self.iNtotm = self.mul_iNtot(self.m)
+		# Set up our position vector
+		self.pos_base = np.zeros(shape)
+		self.pos_base[tuple([n//2 for n in shape])] = 1
+		# Set up the groups of linear parameters that vary together.
+		# These take the form of an array mapping nmap -> ngroup
+		self.groups = groups if groups is not None else np.arange(self.nmap)
+		self.aoff   = 2
+		self.nparam = self.aoff+np.max(self.groups)+1
+		# Our position prior, in pixels
+		self.rmax = rmax if rmax is not None else min(*shape)/2
+		# Optimization
+		self.cache = {}
+	# These explore the full nonlinear + linear posterior. They take an x that is [nnon+nlin]
+	def calc_log_posterior(self, x):
+		"""Compute the minus log-posterior distribution. The log-likelihood part of this is,
+		ignoring constant terms mlogL = 0.5*(d-m)'Ntot"(d-m)
+		"""
+		r     = self.m - self.calc_model(x)
+		iNr   = self.get_cache("iNr", x, lambda: self.mul_iNtot(r))
+		logL  = 0.5*np.sum(r*iNr)
+		logL += self.calc_log_prior(x)
+		return logL
+	def calc_dlog_posterior(self, x):
+		"""Compute the derivate of the minus log-posterior, d mlogL  = -dm'Ntot"(d-m)"""
+		iNr   = self.get_cache("iNr", x, lambda: self.mul_iNtot(self.m - self.calc_model(x)))
+		# We now need the derivative of the model with respect to each parameter.
+		# This includes dm/dpos, dm/dscale, dm/damp. The simplest is dm/damp,
+		# since the model is just proportional to to the amplitude
+		dm  = self.calc_dmodel(x)
+		dlogL = np.zeros(self.nparam, self.dtype)
+		for i in range(self.nparam):
+			dlogL[i] = -np.sum(dm[i]*iNr)
+		dlogL += self.calc_dlog_prior(x)
+		return dlogL
+	def calc_dlog_posterior_num(self, x, delta=1e-4):
+		res = np.zeros(len(x))
+		for i in range(len(x)):
+			x1 = x.copy(); x1[i] -= delta
+			y1 = self.calc_log_posterior(x1)
+			x2 = x.copy(); x2[i] += delta
+			y2 = self.calc_log_posterior(x2)
+			res[i] = (y2-y1)/(2*delta)
+		return res
+	def calc_ddlog_posterior_num(self, x, delta=1e-4):
+		res = np.zeros([len(x),len(x)])
+		for i in range(len(x)):
+			x1 = x.copy(); x1[i] -= delta
+			y1 = self.calc_dlog_posterior(x1)
+			x2 = x.copy(); x2[i] += delta
+			y2 = self.calc_dlog_posterior(x2)
+			res[i] = (y2-y1)/(2*delta)
+		return 0.5*(res+res.T) # symmetrize
+		return res
+	def calc_log_prior(self, x):
+		r     = (1e-10+np.sum(x[:2]**2))**0.5
+		logp  = soft_prior(r, self.rmax)
+		logp += np.sum(soft_prior(-x[2:], 0))
+		return logp
+	def calc_dlog_prior(self, x):
+		r     = (1e-10+np.sum(x[:2]**2))**0.5
+		dlogp = np.zeros(len(x))
+		dlogp[:2] = x[:2]/r*soft_prior(r, self.rmax, deriv=True)
+		dlogp[2:] = -soft_prior(-x[2:], 0, deriv=True)
+		return dlogp
+	def calc_initial_value(self):
+		x0 = np.zeros(self.nparam)
+		iA, arhs = self.calc_amp_eqsys(x0)
+		iA   = binmat(iA,   self.groups)
+		arhs = binvec(arhs, self.groups)
+		# Our prior requires positive amplitudes
+		x0[2:] = np.abs(np.linalg.solve(iA, arhs))
+		return x0
+	def calc_amp_eqsys(self, x):
+		"""Compute the left and right hand side of the conditional amplitude
+		distribution, returning iA, arhs. The P that is passed represents the
+		*non-zero blocks* of the response matrix. This means that we can't just
+		multiply P by matrices as if it were a full matrix.
+		
+		iA   = P'N"P, ahat = iA"P'N"P
+		"""
+		P    = self.calc_P(x)
+		iNP  = self.get_cache("iNP", x, lambda: np.array([self.iN[i].dot(P[i]) for i in range(self.nmap)]))
+		PNP  = np.zeros([self.nmap, self.nmap], self.dtype)
+		PNB  = np.zeros([self.nmap, self.npix], self.dtype)
+		# Everything is block-diagonal, except core, which we have already handled
+		for i in range(self.nmap):
+			PNP[i,i] = P[i].dot(iNP[i])
+			PNB[i]   = self.B[i].dot(iNP[i]) # B and iN are symmetric
+		iA    = PNP - PNB.dot(self.icore.dot(PNB.T))
+		arhs  = np.sum(P*self.iNtotm,1)
+		return iA, arhs
+	#def calc_damp_eqsys(self, x):
+	#	P    = self.calc_P(x)
+	#	iNP  = self.get_cache("iNP", x, lambda: np.array([self.iN[i].dot(P[i]) for i in range(self.nmap)]))
+	#	diA  = np.zeros([2, self.nmap, self.nmap], self.dtype)
+	#	darhs= np.zeros([2, self.nmap], self.dtype)
+	#	for c in range(2):
+	#		dP   = self.calc_P(x, pos_deriv=c)
+	#		dPNd = np.zeros([self.nmap, self.npix], self.dtype)
+	#		dPNP = np.zeros([self.nmap, self.nmap], self.dtype)
+	#		dPNB = np.zeros([self.nmap, self.npix], self.dtype)
+	#		PNB  = np.zeros([self.nmap, self.npix], self.dtype)
+	#		for i in range(self.nmap):
+	#			dPNP[i,i]  = dP[i].dot(iNP[i])
+	#			PNB[i]     = self.B[i].dot(iNP[i])
+	#			dPNB[i]    = self.B[i].dot(self.iN[i].dot(dP[i]))
+	#		diA[c]  = dPNP - dPNB.dot(self.icore.dot(PNB.T))
+	#		diA[c] += diA[c].T
+	#		dPNd    = dP.dot(self.iNtotm)
+	#		darhs   = 
+	def calc_model(self, x):
+		amps = x[self.aoff:][self.groups]
+		P    = self.calc_P(x)
+		model= np.zeros([self.nmap, self.npix], self.dtype)
+		for i in range(self.nmap):
+			model[i] = amps[i]*P[i]
+		return model
+	def calc_dmodel_num(self, x, delta=1e-3):
+		res = np.zeros([len(x),self.nmap,self.npix],self.dtype)
+		for i in range(len(x)):
+			x1 = x.copy(); x1[i] -= delta
+			y1 = self.calc_model(x1)
+			x2 = x.copy(); x2[i] += delta
+			y2 = self.calc_model(x2)
+			res[i] = (y2-y1)/(2*delta)
+		return res
+	def calc_dmodel(self, x):
+		"""Calculate the derivative of the model with respect to all the parameters.
+		This will result in nmap*nparam maps, but the maps are tiny, so this should be fine."""
+		pos, amp = x[:2], x[2:]
+		dmodel = np.zeros([self.nparam, self.nmap, self.npix], self.dtype)
+		# First get the derivative by position
+		for i in range(2):
+			dP = self.calc_P(x, pos_deriv=i)
+			for gi, g in enumerate(self.groups):
+				dmodel[i,gi] = amp[g]*dP[gi]
+		# Then get the derivative by amplitude
+		x_noamp     = x.copy()
+		x_noamp[2:] = 1.0
+		unit_model  = self.calc_model(x_noamp)
+		for gi, g in enumerate(self.groups):
+			dmodel[2+g,gi] = unit_model[gi]
+		return dmodel
+	def calc_Q(self, x, pos_deriv=None):
+		# Use periodic shifting to avoid pixel-border derivative problems
+		pos_mat = fft.shift(self.pos_base, x[:2], deriv=pos_deriv).reshape(self.npix)
+		return [pos_mat]*self.nmap
+	def calc_P(self, x, pos_deriv=None):
+		"""Returns the matrix P that takes us from our full amplitudes
+		to the full model. While P is logically [nmap*npix,nmap], the amplitudes do not
+		mix, so it is enough to return the [nmap,npix] non-zero entries.
+		P_full[map1*pix,map2] = P_small[map2,pix]*delta(map1,map2).
+		"""
+		return self.get_cache("P",
+				np.concatenate([x[:self.aoff],[-1 if pos_deriv is None else pos_deriv]]),
+				lambda: np.array([self.B[i].dot(Q) for i,Q in enumerate(
+					self.calc_Q(x, pos_deriv=pos_deriv))]))
+	def mul_iNtot(self, m):
+		"""Ntot" = N" - N"Bb(S" + b'B'N"Bb)"b'B'N" = N" - N"Bb icore b'BN"""
+		iNm   = np.zeros([self.nmap, self.npix], self.dtype)
+		cbBiN = np.zeros(self.npix, self.dtype)
+		for i in range(self.nmap):
+			iNm[i] = self.iN[i].dot(m[i])
+			cbBiN  += self.B[i].dot(iNm[i])
+		cbBiN = self.icore.dot(cbBiN)
+		for i in range(self.nmap):
+			iNm[i] -= self.iN[i].dot(self.B[i].dot(cbBiN))
+		return iNm
+	def get_cache(self, key, x, f):
+		if key not in self.cache or not np.allclose(x, self.cache[key][0], rtol=1e-14, atol=0):
+			self.cache[key] = [np.array(x), np.array(f())]
+		return self.cache[key][1].copy()
+	def format_sample(self, x):
+		return "%8.3f %8.3f" % tuple(x[:2]) + " %8.3f"*(len(x)-2)%tuple(x[2:]/1e3)
+	def maximize(self, x0=None, verbose=False):
+		"""Find the maximum likelihood point, along with a fisher error estimate."""
+		if x0 is None:
+			x0 = self.calc_initial_value()
+		self.n  = 0
+		def f(x):
+			self.n += 1
+			t1 = time.time()
+			p = self.calc_log_posterior(x)
+			t2 = time.time()
+			if verbose:
+				print "%3d %5.2f %9.3f %s" % (self.n, t2-t1, p, self.format_sample(x))
+				sys.stdout.flush()
+			return p
+		x, logP, dlogP, ihess, nf, ng, w = optimize.fmin_bfgs(f, x0, self.calc_dlog_posterior, disp=False, full_output=True)
+		# The returned inverse hessian is not very reliable. Use
+		# numerical derivative instead
+		ddlogP = self.calc_ddlog_posterior_num(x)
+		x_cov  = np.linalg.inv(ddlogP)
+
+		# Get the full amps too
+		iA, arhs = self.calc_amp_eqsys(x)
+		A = utils.eigpow(iA, -1)
+		a = A.dot(arhs)
+		# Estimate the equivalent S/N
+		xtmp = x.copy(); xtmp[self.aoff:] = 0
+		logP_null = self.calc_log_posterior(xtmp)
+		sn = max(2*(logP_null-logP)-self.nparam,0)**0.5
+		# Get the gaussian errors
+		return bunch.Bunch(x=x, x_cov=x_cov, sn=sn, logP=logP, logP_null=logP, afull=a, afull_cov=A)
+
+class SZLikelihood2(PtsrcLikelihood2):
+	def __init__(self, m, iN, B, iS, shape, wcs, freqs, groups=None, rmax=None, smax=None, smin=None):
+		PtsrcLikelihood2.__init__(self, m, iN, B, iS, shape, wcs, groups=groups, rmax=rmax)
+		self.smax   = smax if smax is not None else 10
+		self.smin   = smin if smin is not None else 0.2
+		self.aoff   = 3
+		self.nparam = self.aoff+np.max(self.groups)+1
+		self.freqs  = freqs
+		# Needed for sz P evaluation
+		self.pixshape = enmap.pixshape(shape, wcs)/utils.arcmin
+		self.pixshape[1] *= np.cos(enmap.pix2sky(shape, wcs, [shape[-2]/2,shape[-1]/2])[0])
+	def calc_initial_value(self):
+		x0 = np.zeros(self.nparam)
+		x0[2] = 1.0
+		iA, arhs = self.calc_amp_eqsys(x0)
+		iA       = binmat(iA,   self.groups)
+		arhs     = binvec(arhs, self.groups)
+		# We require positive amplitudes
+		x0[3:]   = np.abs(np.linalg.solve(iA, arhs))
+		return x0
+	def calc_log_prior(self, x):
+		r     = (1e-10+np.sum(x[:2]**2))**0.5
+		logp  = soft_prior(r, self.rmax)
+		logp += soft_prior(-x[2], -self.smin) + soft_prior(x[2], self.smax)
+		logp += np.sum(soft_prior(-x[3:], 0))
+		return logp
+	def calc_dlog_prior(self, x):
+		r     = (1e-10+np.sum(x[:2]**2))**0.5
+		dlogp = np.zeros(len(x))
+		dlogp[:2] = x[:2]/r*soft_prior(r, self.rmax, deriv=True)
+		dlogp[2]  = -soft_prior(-x[2], -self.smin, deriv=True) + soft_prior(x[2], self.smax, deriv=True)
+		dlogp[3:] = -soft_prior(-x[3:], 0, deriv=True)
+		return dlogp
+	def calc_Q(self, x, pos_deriv=None, scale_deriv=False):
+		pos, scale = x[:2], max(x[2],1e-2)
+		# Use periodic shifting to avoid pixel-border derivative problems
+		sz_prof  = sz_2d_profile(self.shape, self.pixshape, pos=pos, fwhm=scale,
+				pos_deriv=pos_deriv, scale_deriv=scale_deriv, periodic=True).reshape(-1)
+		cache = {}
+		Q = []
+		for freq in self.freqs:
+			if freq not in cache:
+				cache[freq] = sz_prof * sz_freq_core(freq*1e9)
+			Q.append(cache[freq])
+		return Q
+	def calc_P(self, x, pos_deriv=None, scale_deriv=False):
+		return self.get_cache("P",
+				np.concatenate([x[:self.aoff],[-1 if pos_deriv is None else pos_deriv, scale_deriv]]),
+				lambda: np.array([self.B[i].dot(Q) for i,Q in enumerate(
+					self.calc_Q(x, pos_deriv=pos_deriv, scale_deriv=scale_deriv))]))
+	def calc_dmodel(self, x):
+		"""Calculate the derivative of the model with respect to all the parameters.
+		This will result in nmap*nparam maps, but the maps are tiny, so this should be fine."""
+		pos, scale, amp = x[:2], x[2], x[3:]
+		dmodel = np.zeros([self.nparam, self.nmap, self.npix], self.dtype)
+		# First get the derivative by position
+		for i in range(2):
+			dP = self.calc_P(x, pos_deriv=i)
+			for gi, g in enumerate(self.groups):
+				dmodel[i,gi] = amp[g]*dP[gi]
+		# Then the derivative by scale
+		dP = self.calc_P(x, scale_deriv=True)
+		for gi, g in enumerate(self.groups):
+			dmodel[2,gi] = amp[g]*dP[gi]
+		# Then get the derivative by amplitude
+		x_noamp     = x.copy()
+		x_noamp[3:] = 1.0
+		unit_model  = self.calc_model(x_noamp)
+		for gi, g in enumerate(self.groups):
+			dmodel[3+g,gi] = unit_model[gi]
+		return dmodel
+	def format_sample(self, x):
+		return "%8.3f %8.3f %8.3f" % tuple(x[:3]) + " %8.3f"*(len(x)-3)%tuple(x[3:]/1e3)
+
 def find_candidates(snmap, lim=5.0, edge=0):
+	"""Given a S/N ratio map, find sources with S/N above lim while avoiding the
+	given amount of pixels around the edge. Returns a record array sorted by S/N,
+	with the fields [sn, type, pos[2], pix[2], npix[2]]."""
+	dtype  = [("sn","f"),("type","S10"),("pos","2f"),("pix","2f"),("npix","i")]
 	ny,nx= snmap.shape
 	mask = enmap.zeros(snmap.shape, snmap.wcs, np.bool)
 	mask[edge:ny-edge,edge:nx-edge] = (snmap > lim)[edge:ny-edge,edge:nx-edge]
 	labels, nlabel = ndimage.label(mask)
-	if nlabel == 0:
-		return bunch.Bunch(pix=np.zeros([0,2]), pos=np.zeros([0,2]), sn=np.zeros(0), npix=np.zeros(0,int), n=0)
-	pix  = np.array(ndimage.center_of_mass(snmap**2, labels, np.arange(1,nlabel+1))).T
-	pos  = snmap.pix2sky(pix)
-	sn   = ndimage.maximum(snmap, labels, np.arange(1,nlabel+1))
-	npix = ndimage.sum(snmap*0+1, labels, np.arange(1,nlabel+1))
-	inds = np.argsort(sn)[::-1]
-	return bunch.Bunch(pix=pix.T[inds], pos=pos.T[inds], sn=sn[inds], npix=npix[inds], n=len(inds))
+	res  = np.recarray(nlabel, dtype)
+	if len(res) > 0:
+		res.pix  = np.array(ndimage.center_of_mass(snmap**2, labels, np.arange(1,nlabel+1)))
+		res.pos  = snmap.pix2sky(res.pix.T).T
+		res.sn   = ndimage.maximum(snmap, labels, np.arange(1,nlabel+1))
+		res.npix = ndimage.sum(snmap*0+1, labels, np.arange(1,nlabel+1))
+		inds = np.argsort(res.sn[::-1])
+		res = res[inds]
+	return res
+
+def prune_candidates(cands, scale=3.0, xmax=7, tol=0.1, verbose=False):
+	"""Prune false positives caused by ringing in the filter. We assume that the
+	ringing goes as 1/(1+x)**3 where x = r/scale, up to xmax beyond which it is
+	zero. This is tuned to ACT beam etc.. What I really should use is the
+	filter profile here, but this will do for now."""
+	inds  = np.argsort(cands.sn)[::-1]
+	cands = cands[inds]
+	# Get the distance from all to all
+	dists = calc_dist(cands.pos.T[:,:,None],cands.pos.T[:,None,:])/utils.arcmin
+	# Estimate the signal leakage between all, assuming slowly varying noise so
+	# that S/N can approximate S
+	def calc_leak(x, sn_ratio): return sn_ratio/(1+x)**3*(x < xmax)
+	leaks = calc_leak(dists/scale, cands.sn[:,None]/cands.sn[None,:])
+	# To avoid double-disqualification, we will loop from strongest to weakest
+	ocands = cands[:1]
+	for i in range(1, len(cands)):
+		dists = calc_dist(ocands.pos.T,cands.pos.T[:,i,None])/utils.arcmin
+		leaks = calc_leak(dists/scale, ocands.sn/cands.sn[i])
+		if np.max(leaks) < tol:
+			ocands = np.rec.array(np.concatenate([ocands, cands[i:i+1]]))
+		j = np.argmax(leaks)
+		cand, ocan = cands[i], cands[j]
+		if verbose:
+			print "%3d %5s %8.3f %8.3f %8.3f  leak %8.3f %3d %5s %8.3f %8.3f %8.3f" % (
+					i, cand.type, cand.sn, cand.pos[0]/utils.degree, cand.pos[1]/utils.degree, leaks[j],
+					j, ocan.type, ocan.sn, ocan.pos[0]/utils.degree, ocan.pos[1]/utils.degree)
+	return ocands
+
+def format_catalogue(cat):
+	"""Format an object catalogue for screen display. This prints the most important entries"""
+	if cat.ndim == 0: cat = np.rec.array(cat[None])
+	res = ""
+	for i, c in enumerate(cat):
+		res += "%5s %7.2f %7.2f" % (c.type, c.sn, c.sn0)
+		res += "  %8.3f %5.3f %8.3f %5.3f" % (c.pos[0], c.dpos[0], c.pos[1], c.dpos[1])
+		res += "  %5.2f %5.2f  %10.3f %7.3f" % (c.fwhm, c.dfwhm, c.amp, c.damp)
+		res += "\n"
+	return res
 
 def div_nonan(a,b,fill=0):
 	with utils.nowarn(): res = a/b
@@ -1689,8 +2367,21 @@ def ps2d_to_mat(ps2d, n):
 	mat     = corr_to_mat(thumb, n)
 	return mat
 
-def extract_thumb(map, pix, n):
+def extract_thumb_roll(map, pix, n):
 	return np.roll(np.roll(map, n//2-pix[1], -1)[...,:n], n//2-pix[0], -2)[...,:n,:]
+
+def extract_thumb(map, pix, n):
+	y1, x1 = pix[0]-n//2, pix[1]-n//2
+	y2, x2 = y1+n, x1+n
+	if y1 >= 0 and y2 < map.shape[-2] and x1 >= 0 and x2 < map.shape[-1]:
+		return map[...,y1:y2,x1:x2].copy()
+	else:
+		return extract_thumb_roll(map, pix, n)
+
+def expand_thumb(thumb, pix, shape):
+	res = np.zeros(shape)
+	res[...,:thumb.shape[-2],:thumb.shape[-1]] = thumb
+	return np.roll(np.roll(res, -(thumb.shape[-1]//2-pix[-1]), -1), -(thumb.shape[-2]//2-pix[-2]), -2)
 
 def corrfun_thumb(corr, n):
 	tmp = np.roll(np.roll(corr, n, -1)[...,:2*n], n, -2)[...,:2*n,:]
@@ -1704,17 +2395,17 @@ def corr_to_mat(corr, n):
 			res[i,j] = np.roll(tmp, j, 1)[:,:n]
 	return res
 
-def shift_nonperiodic(a, shift, axes=None, pad=100):
+def shift_nonperiodic(a, shift, axes=None, pad=100, deriv=None):
 	apad = np.pad(a, pad, "constant")
-	opad = fft.shift(apad, shift, axes=axes)
+	opad = fft.shift(apad, shift, axes=axes, deriv=deriv)
 	return opad[(slice(pad,-pad),)*apad.ndim]
 
-def project_out(imat, modes):
+def project_out(imat, modes, frac=1.0):
 	imat  = np.asarray(imat)
 	modes = np.asarray(modes)
 	if modes.ndim == 1: modes = modes[:,None]
 	core = modes.T.dot(imat).dot(modes)
-	return imat - imat.dot(modes).dot(np.linalg.solve(core, modes.T.dot(imat)))
+	return imat - frac*imat.dot(modes).dot(np.linalg.solve(core, modes.T.dot(imat)))
 
 def binvec(vec, inds):
 	return np.bincount(inds, vec)
@@ -1734,3 +2425,21 @@ def draw_emcee_stretch(scale):
 	# inverse: ((a**0.5-a**-0.5)*p+a**-0.5)**2
 	a = scale
 	return (np.random.uniform(0,1)*(a**0.5-a**-0.5)+a**-0.5)**2
+
+def prob_gauss_positive(mu, cov):
+	"""Returns the probability that all gaussian variables with mean mu and cov cov
+	will be positive."""
+	zero = np.zeros(len(mu))
+	return stats.multivariate_normal.cdf(zero, -mu, cov)
+
+def calc_dist(decra1, decra2):
+	diff     = decra1 - decra2
+	diff[1] *= np.cos(0.5*(decra1[0]+decra2[0]))
+	dist     = np.sum(diff**2,0)**0.5
+	return dist
+
+def soft_prior(v, vmax, dv=0.01, deriv=False):
+	with utils.nowarn():
+		res = np.exp((v-vmax)/dv)
+		if deriv: return res/dv
+		else: return res

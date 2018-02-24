@@ -175,7 +175,7 @@ def empty(shape, dtype):
 def fftfreq(n, d=1.0): return np.fft.fftfreq(n, d=d)
 def rfftfreq(n, d=1.0): return np.arange(n//2+1)/(1.0*n*d)
 
-def shift(a, shift, axes=None, nofft=False):
+def shift(a, shift, axes=None, nofft=False, deriv=None):
 	"""Shift the array a by a (possibly fractional) number of samples "shift"
 	to the right, along the specified axis, which defaults to the last one.
 	shift can also be an array, in which case multiple axes are shifted together."""
@@ -188,6 +188,8 @@ def shift(a, shift, axes=None, nofft=False):
 		ax   %= ca.ndim
 		freqs = fftfreq(ca.shape[ax])
 		phase = np.exp(-2j*np.pi*freqs*shift[i])
+		if deriv == i:
+			phase *= -2j*np.pi*freqs
 		fa   *= phase[(None,)*ax + (slice(None),) + (None,)*(a.ndim-ax-1)]
 	if not nofft: ifft(fa, ca, axes=axes, normalize=True)
 	else:         ca = fa

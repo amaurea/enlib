@@ -1508,7 +1508,6 @@ def eigpow(A, e, axes=[-2,-1], rlim=None, alim=None):
 		fa = partial_flatten(A, axes)
 		fa = eigpow(fa, e, rlim=rlim, alim=alim)
 		return partial_expand(fa, A.shape, axes)
-	elif A.ndim == 2: return eigpow(A[None], e, rlim=rlim, alim=alim)[0]
 	else:
 		E, V = np.linalg.eigh(A)
 		if rlim is None: rlim = np.finfo(E.dtype).resolution*100
@@ -1518,10 +1517,16 @@ def eigpow(A, e, axes=[-2,-1], rlim=None, alim=None):
 			mask |= E < 0
 		if e < 0:
 			aE = np.abs(E)
-			mask |= (aE < np.max(aE,1)[:,None]*rlim) | (aE < alim)
+			if A.ndim > 2:
+				mask |= (aE < np.max(aE,1)[:,None]*rlim) | (aE < alim)
+			else:
+				mask |= (aE < np.max(aE)*rlim) | (aE < alim)
 		E[~mask] **= e
 		E[mask]    = 0
-		res = np.einsum("...ij,...kj->...ik",V*E[...,None,:],V)
+		if A.ndim > 2:
+			res = np.einsum("...ij,...kj->...ik",V*E[...,None,:],V)
+		else:
+			res = V.dot(E[:,None]*V.T)
 		return res
 
 def nint(a):
