@@ -1129,19 +1129,20 @@ def to_flipper(imap, omap=None, unpack=True):
 	by from_flipper does not give back an exactly identical map to the one
 	on started with.
 	"""
-	import flipper
+	import flipper.liteMap as lm
+        from astLib import astWCS
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
 	header = imap.wcs.to_header(relax=True)
 	header['NAXIS']  = 2
 	header['NAXIS1'] = imap.shape[-1]
 	header['NAXIS2'] = imap.shape[-2]
-	flipwcs = flipper.liteMap.astLib.astWCS.WCS(header, mode="pyfits")
+	flipwcs = astWCS.WCS(header, mode="pyfits")
 	iflat = imap.preflat
 	if omap is None:
 		omap = np.empty(iflat.shape[:-2],dtype=object)
 	for i, m in enumerate(iflat):
-		omap[i] = flipper.liteMap.liteMapFromDataAndWCS(iflat[i], flipwcs)
+		omap[i] = lm.liteMapFromDataAndWCS(iflat[i], flipwcs)
 	omap = omap.reshape(imap.shape[:-2])
 	if unpack and omap.ndim == 0: return omap.reshape(-1)[0]
 	else: return omap
