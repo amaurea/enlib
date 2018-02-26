@@ -1130,7 +1130,7 @@ def to_flipper(imap, omap=None, unpack=True):
 	on started with.
 	"""
 	import flipper.liteMap as lm
-        from astLib import astWCS
+	from astLib import astWCS
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
 	header = imap.wcs.to_header(relax=True)
