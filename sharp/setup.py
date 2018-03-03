@@ -3,10 +3,10 @@ from distutils.extension import Extension
 from Cython.Distutils import build_ext
 import subprocess, sys
 extra_link_args = ["-fopenmp"]
-try:
-	extra_link_args += subprocess.check_output(["mpicc", "--showme:link"]).split()
-except (OSError, subprocess.CalledProcessError) as e:
-	print "\033[0;31mCould not find mpi link options!\nSkipping mpi linkage. This will cause problems if libsharp was compiled with mpi support\033[0m"
+#try:
+#	extra_link_args += subprocess.check_output(["mpicc", "--showme:link"]).split()
+#except (OSError, subprocess.CalledProcessError) as e:
+#	print "\033[0;31mCould not find mpi link options!\nSkipping mpi linkage. This will cause problems if libsharp was compiled with mpi support\033[0m"
 
 setup(
 	name="sharp",
