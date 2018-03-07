@@ -1279,6 +1279,7 @@ class SignalFilter:
 	def calc_dalpha_empirical4(self, alpha, mask_pad=10):
 		"""Fit the variance of alpha as a linear combination of individual divs,
 		and return the best-fit rms map."""
+		if len(self.H) == 0: return alpha*0+np.inf
 		B     = np.array(self.H)**2
 		# Mask out underexposed regions
 		ref_val= np.percentile(self.tot_div,95)
@@ -1304,7 +1305,8 @@ class SignalFilter:
 		alpha_rms *= norm
 		#enmap.write_map("alpha_rms.fits", alpha_rms)
 		# Downweight the apodized region at the edge, and completley distrust the masked values
-		alpha_rms /= apod
+		with utils.nowarn():
+			alpha_rms /= apod
 		alpha_rms[~mask] = np.inf
 		return alpha_rms
 	def calc_filter_harmonic(self):
@@ -2157,8 +2159,6 @@ class SourceSZFinder2:
 		rhs    = filter.calc_rhs()
 		mu     = filter.calc_mu(rhs)
 		print "find candidates"
-		#enmap.write_map("test_mu.fits", map_ifft(enmap.enmap(mu, mu[0].wcs)))
-		#1/0
 		for name in ["ptsrc", "sz"]:
 			submaps = []
 			if name == "ptsrc":
@@ -2516,7 +2516,8 @@ def find_candidates(snmap, lim=5.0, edge=0):
 		res = res[inds]
 	return res
 
-def prune_candidates(cands, others=None, scale=2.0, xmax=7, tol=0.1, verbose=False, other_scale=0.05):
+def prune_candidates(cands, others=None, scale=2.0, xmax=7, tol=0.1, verbose=False, other_scale=0.05,
+		other_dist=1*utils.arcmin):
 	"""Prune false positives caused by ringing in the filter. We assume that the
 	ringing goes as 1/(1+x)**3 where x = r/scale, up to xmax beyond which it is
 	zero. This is tuned to ACT beam etc.. What I really should use is the
@@ -2528,6 +2529,7 @@ def prune_candidates(cands, others=None, scale=2.0, xmax=7, tol=0.1, verbose=Fal
 	ocands = cands[:1]
 	if others is None:
 		nother = 0
+		odists = None
 	else:
 		# This is to support avoiding strong candidates found in any previous passes.
 		# Prepend down-scaled versions of the previous candidates because we assume that
@@ -2537,7 +2539,9 @@ def prune_candidates(cands, others=None, scale=2.0, xmax=7, tol=0.1, verbose=Fal
 		dummy.pos = others.pos
 		ocands    = np.rec.array(np.concatenate([dummy,ocands]))
 		nother    = len(others)
+		odists    = np.min(calc_dist(cands.pos.T[:,:,None], others.pos.T[:,None,:]),1)
 	for i in range(1, len(cands)):
+		if odists is not None and odists[i] < other_dist: continue
 		dists = calc_dist(ocands.pos.T,cands.pos.T[:,i,None])/utils.arcmin
 		leaks = calc_leak(dists/scale, ocands.sn/cands.sn[i])
 		if np.max(leaks) < tol:
