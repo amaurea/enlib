@@ -54,7 +54,7 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	B = np.concatenate(B,0)
 
 	for it in range(niter):
-		if do_gapfill: gapfill.gapfill(d, cuts, inplace=True)
+		if do_gapfill: gapfill.gapfill_linear(d, cuts, inplace=True)
 		# Solve for the best fit for each detector, [nbasis,ndet]
 		# B[b,n], d[d,n], amps[b,d]
 		if weights is None:

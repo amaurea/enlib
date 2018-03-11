@@ -111,7 +111,7 @@ class Dmap(object):
 	@property
 	def ndim(self): return len(self.shape)
 	@property
-	def npix(self): return np.product(self.shape[-2:])
+	def npix(self): return np.product(self.shape[-2:], dtype=int)
 	def astype(self, dtype):
 		if dtype == self.dtype: return self
 		else:
@@ -312,7 +312,7 @@ class DGeometry(object):
 			tbufinfo  = np.zeros([2,comm.size],dtype=int)
 			winfo, tinfo = [], []
 			woff, toff = 0, 0
-			prelen = np.product(shape[:-2])
+			prelen = np.product(shape[:-2], dtype=int)
 			for id in xrange(comm.size):
 				## Buffer info to send to alltoallv
 				wbufinfo[1,id] = woff
@@ -368,9 +368,9 @@ class DGeometry(object):
 		"""Change the shape of the non-pixel dimensions. Both longer and shorter vals are supported."""
 		try: val = tuple(val)
 		except TypeError: val = (val,)
-		oldlen = np.product(self.pre)
+		oldlen = np.product(self.pre, dtype=int)
 		self.shape = tuple(val)+self.shape[-2:]
-		newlen = np.product(self.pre)
+		newlen = np.product(self.pre, dtype=int)
 		# These are affected by non-pixel slicing:
 		# shape, tile_geometry, work_geometry, tile_bufinfo, work_bufinfo
 		# Bufinfos change due to the different amount of data involved
@@ -379,9 +379,9 @@ class DGeometry(object):
 		self.tile_bufinfo  = self.tile_bufinfo.slice_helper(newlen, oldlen)
 		self.work_bufinfo  = self.work_bufinfo.slice_helper(newlen, oldlen)
 	@property
-	def size(self): return np.product(self.shape)
+	def size(self): return np.product(self.shape, dtype=int)
 	@property
-	def npix(self): return np.product(self.shape[-2:])
+	def npix(self): return np.product(self.shape[-2:], dtype=int)
 	@property
 	def ndim(self): return len(self.shape)
 	@property
@@ -729,5 +729,5 @@ class DmapZipper(zipper.ArrayZipper):
 		return self.template
 
 def select_nonempty(a, b):
-	asize = np.product(a[...,1,:]-a[...,0,:],-1)
+	asize = np.product(a[...,1,:]-a[...,0,:],-1,dtype=int)
 	return np.where(asize[...,None,None] > 0, a, b)
