@@ -569,7 +569,7 @@ def modrmap(shape, wcs, safe=True, corner=False):
 	return np.sum(slmap**2,0)**0.5
 
 def laxes(shape, wcs, oversample=1):
-	overample = int(oversample)
+	oversample = int(oversample)
 	step = extent(shape, wcs, signed=True)/shape[-2:]
 	ly = np.fft.fftfreq(shape[-2]*oversample, step[0])*2*np.pi
 	lx = np.fft.fftfreq(shape[-1]*oversample, step[1])*2*np.pi
