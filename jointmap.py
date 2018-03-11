@@ -910,6 +910,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		for i, split in enumerate(dataset.splits):
 			if split.data is None: continue
 			#enmap.write_map("test_map_%d.fits" % i, split.data.map)
+			#enmap.write_map("test_div_%d.fits" % i, split.data.div)
 			diff  = split.data.map - dset_map
 			#enmap.write_map("test_diff_%d.fits" % i, diff)
 			# We can't whiten diff with just H.
@@ -953,6 +954,16 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			lref = lmax*3/4
 			refval = np.mean(dset_ps[:,(mapset.l>=lref)&(mapset.l<lmax)],1)
 			dset_ps[:,mapset.l>=lmax] = refval[:,None]
+		elif noisewin == "separable":
+			# The map has been interpolated using something like bicubic interpolation,
+			# leading to an unknown but separable pixel window
+			ywin, xwin = estimate_separable_pixwin_from_normalized_ps(dset_ps[0])
+			ref_area = (ywin[:,None] > 0.9)&(xwin[None,:] > 0.9)&(dset_ps[0]<2)
+			dset_ps /= ywin[:,None]**2
+			dset_ps /= xwin[None,:]**2
+			dset_ps[:,(ywin[:,None]<0.25)|(xwin[None,:]<0.25)] = np.mean(dset_ps[:,ref_area],1)
+			# Store the separable window so it can be used for the beam too
+			dataset.ywin, dataset.xwin = ywin, xwin
 		else: raise ValueError("Noise window type '%s' not supported" % noisewin)
 		#enmap.write_map("test_ps_smooth.fits", dset_ps)
 		# If we have invalid values, then this whole dataset should be skipped
@@ -1035,6 +1046,14 @@ def setup_beams(mapset):
 				pass
 			elif d.pixel_window_params[0] == "lmax":
 				beam_2d[mapset.l>d.pixel_window_params[1]] = 0
+			elif d.pixel_window_params[0] == "separable":
+				try:
+					beam_2d *= d.ywin[:,None]
+					beam_2d *= d.xwin[None,:]
+				except AttributeError:
+					print "Automatic separable pixel window can only be used together with"
+					print "the corresponding automatic spearable noise pixel window"
+					raise
 			else: raise ValueError("Unrecognized pixel window type '%s'" % (d.pixel_window_params[0]))
 			cache[param] = beam_2d
 		d.beam_2d = cache[param]
@@ -2574,7 +2593,7 @@ class SourceSZFinder3:
 		t1     = time.time()
 		filter = SignalFilter(self.mapset)
 		rhs    = filter.calc_rhs()
-		mu     = filter.calc_mu(rhs)
+		mu     = filter.calc_mu(rhs, verbose=verbosity >= 3)
 		print "find candidates"
 		#enmap.write_map("test_mu.fits", map_ifft(enmap.enmap(mu, mu[0].wcs)))
 		#1/0
@@ -3409,3 +3428,18 @@ def read_catalogue(fname, return_box=False):
 		box = np.array(box).reshape(2,2)
 		return cat, box
 	else: return cat
+
+def estimate_separable_pixwin_from_normalized_ps(ps2d):
+	mask = ps2d < 2
+	res  = []
+	for i in range(2):
+		profile  = np.sum(ps2d*mask,1-i)/np.sum(mask,1-i)
+		profile /= np.percentile(profile,90)
+		profile  = np.fft.fftshift(profile)
+		edge     = np.where(profile >= 1)[0][[0,-1]]
+		profile[edge[0]:edge[1]] = 1
+		profile  = np.fft.ifftshift(profile)
+		# Pixel window is in signal, not power
+		profile **= 0.5
+		res.append(profile)
+	return res
