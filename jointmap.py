@@ -1,6 +1,6 @@
 import numpy as np, os, time, imp, copy, functools, sys
 from scipy import ndimage, optimize, interpolate, integrate, stats, special
-from enlib import enmap, retile, utils, bunch, cg, fft, powspec, array_ops
+from enlib import enmap, retile, utils, bunch, cg, fft, powspec, array_ops, memory
 from astropy import table
 from astropy.io import fits
 #from matplotlib import pyplot
@@ -909,10 +909,10 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		dset_ps = None
 		for i, split in enumerate(dataset.splits):
 			if split.data is None: continue
-			#enmap.write_map("test_map_%d.fits" % i, split.data.map)
-			#enmap.write_map("test_div_%d.fits" % i, split.data.div)
+			#enmap.write_map("test_map_%s_%d.fits" % (dataset.name, i), split.data.map)
+			#enmap.write_map("test_div_%s_%d.fits" % (dataset.name, i), split.data.div)
 			diff  = split.data.map - dset_map
-			#enmap.write_map("test_diff_%d.fits" % i, diff)
+			#enmap.write_map("test_diff_%s_%d.fits" % (dataset.name, i), diff)
 			# We can't whiten diff with just H.
 			# diff = m_i - sum(div)"sum(div_j m_j), and so has
 			# var  = div_i" + sum(div)"**2 * sum(div) - 2*sum(div)"div_i/div_i
@@ -922,7 +922,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 				diff_H   = (1/split.data.div - 1/dset_div)**-0.5
 			diff_H[~np.isfinite(diff_H)] = 0
 			wdiff = diff * diff_H
-			#enmap.write_map("test_wdiff_%d.fits" % i, wdiff)
+			#enmap.write_map("test_wdiff_%s_%d.fits" % (dataset.name, i), wdiff)
 			# What is the healthy area of wdiff? Wdiff should have variance
 			# 1 or above. This tells us how to upweight the power spectrum
 			# to take into account missing regions of the diff map.
@@ -933,7 +933,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			goodfrac = min(goodfrac_var, goodfrac_apod)
 			if goodfrac < 0.1: goodfrac = 0
 			ps    = np.abs(map_fft(wdiff))**2
-			#enmap.write_map("test_ps_raw_%d.fits" % i, ps)
+			#enmap.write_map("test_ps_raw_%s_%d.fits" % (dataset.name, i), ps)
 			# correct for unhit areas, which can't be whitend
 			with utils.nowarn(): ps   /= goodfrac
 			if dset_ps is None:
@@ -942,7 +942,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			nsplit += 1
 		if nsplit < 2: continue
 		dset_ps /= nsplit
-		#enmap.write_map("test_ps_raw.fits", dset_ps)
+		#enmap.write_map("test_ps_raw_%s.fits" % dataset.name, dset_ps)
 		# Smooth ps to reduce sample variance
 		dset_ps  = smooth_ps(dset_ps, ps_res, ndof=2*(nsplit-1))
 		# Apply noise window correction if necessary:
@@ -965,11 +965,19 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			# Store the separable window so it can be used for the beam too
 			dataset.ywin, dataset.xwin = ywin, xwin
 		else: raise ValueError("Noise window type '%s' not supported" % noisewin)
-		#enmap.write_map("test_ps_smooth.fits", dset_ps)
+		#enmap.write_map("test_ps_smooth_%s.fits" % dataset.name, dset_ps)
 		# If we have invalid values, then this whole dataset should be skipped
 		if not np.all(np.isfinite(dset_ps)): continue
-		#print "Sqrt"
-		#dset_ps **= 0.5
+		## Whiten
+		#for i, split in enumerate(dataset.splits):
+		#	if split.data is None: continue
+		#	diff  = split.data.map - dset_map
+		#	with utils.nowarn():
+		#		diff_H   = (1/split.data.div - 1/dset_div)**-0.5
+		#	diff_H[~np.isfinite(diff_H)] = 0
+		#	wdiff = diff * diff_H
+		#	pwdiff = map_ifft(dset_ps**-0.5*map_fft(wdiff))
+		#	enmap.write_map("test_pwdiff_%s_%d.fits" % (dataset.name, i), pwdiff)
 		dataset.iN  = 1/dset_ps
 	# Prune away bad datasets and splits
 	for dataset in mapset.datasets:
@@ -2400,7 +2408,7 @@ class SZLikelihood2(PtsrcLikelihood2):
 
 # This verison uses both ML amps and derivatives at the same time
 class SourceSZFinder3:
-	def __init__(self, mapset, sz_scales=[0.1,0.5,1.0,2.0], snmin=4, npass=4, pass_snmin=6, spix=33, mode="auto", ignore_mean=True, nmax=None, model_snmin=5):
+	def __init__(self, mapset, sz_scales=[0.1,0.25,0.5,1.0,2.0], snmin=4, npass=4, pass_snmin=6, spix=33, mode="auto", ignore_mean=True, nmax=None, model_snmin=5):
 		self.mapset = mapset
 		self.scales = sz_scales
 		self.snmin  = snmin
@@ -2906,6 +2914,7 @@ class SZLikelihood3(PtsrcLikelihood3):
 		r     = (1e-10+np.sum(x[:2]**2))**0.5
 		logp  = -log_prob_gauss_positive(ahat, A)
 		logp += soft_prior(r, self.rmax)
+		logp += soft_prior(-x[2], -self.smin) + soft_prior(x[2], self.smax)
 		logp += np.sum(soft_prior(-x[2:], 0))
 		return logp
 	def calc_Q(self, x, deriv=None):
