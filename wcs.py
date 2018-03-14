@@ -55,6 +55,11 @@ WCS.__repr__ = describe
 def equal(wcs1, wcs2):
 	return repr(wcs1.to_header()) == repr(wcs2.to_header())
 
+def nobcheck(wcs):
+	res = wcs.deepcopy()
+	res.wcs.bounds_check(False, False)
+	return res
+
 def is_compatible(wcs1, wcs2, tol=1e-3):
 	"""Checks whether two world coordinate systems represent
 	(shifted) versions of the same pixelizations, such that

@@ -1,6 +1,6 @@
 import numpy as np, os, time, imp, copy, functools, sys
 from scipy import ndimage, optimize, interpolate, integrate, stats, special
-from enlib import enmap, retile, utils, bunch, cg, fft, powspec, array_ops
+from enlib import enmap, retile, utils, bunch, cg, fft, powspec, array_ops, memory
 from astropy import table
 from astropy.io import fits
 #from matplotlib import pyplot
@@ -909,9 +909,10 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		dset_ps = None
 		for i, split in enumerate(dataset.splits):
 			if split.data is None: continue
-			#enmap.write_map("test_map_%d.fits" % i, split.data.map)
+			#enmap.write_map("test_map_%s_%d.fits" % (dataset.name, i), split.data.map)
+			#enmap.write_map("test_div_%s_%d.fits" % (dataset.name, i), split.data.div)
 			diff  = split.data.map - dset_map
-			#enmap.write_map("test_diff_%d.fits" % i, diff)
+			#enmap.write_map("test_diff_%s_%d.fits" % (dataset.name, i), diff)
 			# We can't whiten diff with just H.
 			# diff = m_i - sum(div)"sum(div_j m_j), and so has
 			# var  = div_i" + sum(div)"**2 * sum(div) - 2*sum(div)"div_i/div_i
@@ -921,7 +922,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 				diff_H   = (1/split.data.div - 1/dset_div)**-0.5
 			diff_H[~np.isfinite(diff_H)] = 0
 			wdiff = diff * diff_H
-			#enmap.write_map("test_wdiff_%d.fits" % i, wdiff)
+			#enmap.write_map("test_wdiff_%s_%d.fits" % (dataset.name, i), wdiff)
 			# What is the healthy area of wdiff? Wdiff should have variance
 			# 1 or above. This tells us how to upweight the power spectrum
 			# to take into account missing regions of the diff map.
@@ -932,7 +933,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			goodfrac = min(goodfrac_var, goodfrac_apod)
 			if goodfrac < 0.1: goodfrac = 0
 			ps    = np.abs(map_fft(wdiff))**2
-			#enmap.write_map("test_ps_raw_%d.fits" % i, ps)
+			#enmap.write_map("test_ps_raw_%s_%d.fits" % (dataset.name, i), ps)
 			# correct for unhit areas, which can't be whitend
 			with utils.nowarn(): ps   /= goodfrac
 			if dset_ps is None:
@@ -941,7 +942,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			nsplit += 1
 		if nsplit < 2: continue
 		dset_ps /= nsplit
-		#enmap.write_map("test_ps_raw.fits", dset_ps)
+		#enmap.write_map("test_ps_raw_%s.fits" % dataset.name, dset_ps)
 		# Smooth ps to reduce sample variance
 		dset_ps  = smooth_ps(dset_ps, ps_res, ndof=2*(nsplit-1))
 		# Apply noise window correction if necessary:
@@ -953,12 +954,30 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			lref = lmax*3/4
 			refval = np.mean(dset_ps[:,(mapset.l>=lref)&(mapset.l<lmax)],1)
 			dset_ps[:,mapset.l>=lmax] = refval[:,None]
+		elif noisewin == "separable":
+			# The map has been interpolated using something like bicubic interpolation,
+			# leading to an unknown but separable pixel window
+			ywin, xwin = estimate_separable_pixwin_from_normalized_ps(dset_ps[0])
+			ref_area = (ywin[:,None] > 0.9)&(xwin[None,:] > 0.9)&(dset_ps[0]<2)
+			dset_ps /= ywin[:,None]**2
+			dset_ps /= xwin[None,:]**2
+			dset_ps[:,(ywin[:,None]<0.25)|(xwin[None,:]<0.25)] = np.mean(dset_ps[:,ref_area],1)
+			# Store the separable window so it can be used for the beam too
+			dataset.ywin, dataset.xwin = ywin, xwin
 		else: raise ValueError("Noise window type '%s' not supported" % noisewin)
-		#enmap.write_map("test_ps_smooth.fits", dset_ps)
+		#enmap.write_map("test_ps_smooth_%s.fits" % dataset.name, dset_ps)
 		# If we have invalid values, then this whole dataset should be skipped
 		if not np.all(np.isfinite(dset_ps)): continue
-		#print "Sqrt"
-		#dset_ps **= 0.5
+		## Whiten
+		#for i, split in enumerate(dataset.splits):
+		#	if split.data is None: continue
+		#	diff  = split.data.map - dset_map
+		#	with utils.nowarn():
+		#		diff_H   = (1/split.data.div - 1/dset_div)**-0.5
+		#	diff_H[~np.isfinite(diff_H)] = 0
+		#	wdiff = diff * diff_H
+		#	pwdiff = map_ifft(dset_ps**-0.5*map_fft(wdiff))
+		#	enmap.write_map("test_pwdiff_%s_%d.fits" % (dataset.name, i), pwdiff)
 		dataset.iN  = 1/dset_ps
 	# Prune away bad datasets and splits
 	for dataset in mapset.datasets:
@@ -1035,6 +1054,14 @@ def setup_beams(mapset):
 				pass
 			elif d.pixel_window_params[0] == "lmax":
 				beam_2d[mapset.l>d.pixel_window_params[1]] = 0
+			elif d.pixel_window_params[0] == "separable":
+				try:
+					beam_2d *= d.ywin[:,None]
+					beam_2d *= d.xwin[None,:]
+				except AttributeError:
+					print "Automatic separable pixel window can only be used together with"
+					print "the corresponding automatic spearable noise pixel window"
+					raise
 			else: raise ValueError("Unrecognized pixel window type '%s'" % (d.pixel_window_params[0]))
 			cache[param] = beam_2d
 		d.beam_2d = cache[param]
@@ -1157,128 +1184,10 @@ class SignalFilter:
 		Ntot  = self.mapset.S*self.B[0]**2 + 1/np.maximum(Hmean**2*self.iN[0],1e-25)
 		filter= self.Q[0]*self.B[0]/Ntot
 		return map_ifft(filter*map_fft(self.m[0])), Ntot
-	def calc_dalpha_empirical(self, alpha, bsize=30):
-		return self.calc_dalpha_empirical4(alpha)
-	def calc_dalpha_empirical1(self, alpha, bsize=30, lim=10, mask_pad=6, bad_val=np.inf):
-		# Estimate the rms of the alpha map based on its actual variance.
-		# We assume that the per pixel variance will be proprotional to tot_div,
-		# with an unknown overall scale that we fit from the alpha map itself
-		# 1. Find bad areas, and mask them.
-		div_mask = self.tot_div > np.percentile(self.tot_div,95)*0.01
-		if np.sum(div_mask) == 0: return alpha*0+bad_val
-		ref   = np.median(alpha[div_mask]**2)**0.5
-		mask  = np.abs(alpha) > lim*ref
-		apod  = (alpha*0+1).apod(self.mapset.apod_edge)
-		mask |= apod < 0.8
-		# 2. Grow the mask to get rid of ringing
-		mask  = ndimage.distance_transform_edt(1-mask) > mask_pad
-		# 3. Measure the unmasked variance per tile.
-		tpix  = alpha.pixmap()/float(bsize)
-		nt    = np.max(tpix.astype(int),(1,2))+1
-		ipix  = np.ravel_multi_index(tpix.astype(int), nt)
-		def bin(arr): return np.bincount(ipix.reshape(-1), (arr*mask).reshape(-1), minlength=nt[0]*nt[1])
-		tile_hits = bin(1)
-		tile_vars = bin(alpha**2)/tile_hits - (bin(alpha)/tile_hits)**2
-		# If tile_vars is invalid, replace it with the median of the valid ones. This can
-		# only happen if the whole tile is masked
-		tile_vars[~(tile_vars > 0)] = np.median(tile_vars[~(tile_vars > 0)])
-		tile_vars = tile_vars.reshape(nt)
-		# 4. Interpolate to full resolution
-		full_vars = ndimage.map_coordinates(tile_vars, tpix-0.5+0.5/bsize, mode="nearest", order=1)
-		alpha_rms = full_vars**0.5
-		# 5. Undo the apodization to first order. The apodized region won't be used anyway,
-		# so this can be skipped.
-		alpha_rms *= enmap.apod(alpha_rms*0+1, self.mapset.apod_edge)
-		# 6. Get rid of the masked-out areas, which we don't trust. We do this by
-		# setting the rms values to a very high number, which will make the normalized snmap
-		# practically zero there.
-		alpha_rms[~div_mask] = bad_val
-
-		#enmap.write_map("test2.fits", alpha_rms)
-		#1/0
-		return alpha_rms
-	def calc_dalpha_empirical2(self, alpha, bsize=30, mask_pad=6):
-		# Estimate the rms of the alpha map based on its actual variance.
-		# Mask out underexposed regions
-		ref_val= np.percentile(self.tot_div,95)
-		apod   = (alpha*0+1).apod(self.mapset.apod_edge)
-		mask   = apod > 0.8
-		mask  &= ndimage.distance_transform_edt(self.tot_div > ref_val*0.01) > mask_pad
-
-		# Compute smoothed div
-		smooth_div = np.exp(enmap.smooth_gauss(np.log(np.maximum(self.tot_div, ref_val*0.01)),2*utils.arcmin))
-		# We expect the alpha rms to go roughly as smooth_div, so divide by it to make things more uniform
-		anorm  = alpha/smooth_div
-
-		alpha_rms = alpha*0
-		# Loop over blocks. We do manual looping here to keep things simple. It's fast enough anyway.
-		nblock = (np.array(alpha.shape[-2:])+bsize-1)//bsize
-		anorm_var_lowres = np.zeros(tuple(nblock))
-		for by in range(nblock[0]):
-			y1, y2 = by*bsize, (by+1)*bsize
-			for bx in range(nblock[1]):
-				x1, x2 = bx*bsize, (bx+1)*bsize
-				ablock = anorm[y1:y2,x1:x2]
-				mblock = mask[y1:y2,x1:x2]
-				vals   = ablock[mblock]
-				print "%3d %3d %4d %15.7e" % (by, bx, len(vals), np.mean(vals**2))
-				if len(vals) == 0: continue
-				# Mask extreme values. Iterate to improve the median estimate
-				for i in range(2):
-					bmask = np.abs(vals)<np.median(vals**2)*10
-					vals = vals[bmask]
-				var   = np.mean(vals**2)
-				anorm_var_lowres[by,bx] = var
-
-		# Fill cells that were fully masked with the median value
-		bad = ~(anorm_var_lowres>0)
-		anorm_var_lowres[bad] = np.median(anorm_var_lowres[~bad])
-		# Interpolate to full resolution
-		anorm_var_highres     = np.exp(ndimage.map_coordinates(np.log(anorm_var_lowres), np.mgrid[:alpha.shape[0],:alpha.shape[1]]/float(bsize), order=0, mode="nearest"))
-		# Go back to actual alpha units
-		alpha_rms  = anorm_var_highres**0.5 * smooth_div
-		# Downweight the apodized region at the edge, and completley distrust the masked values
-		alpha_rms /= apod
-		alpha_rms[~mask] = np.inf
-
-		#snmap = alpha/alpha_rms
-		#enmap.write_map("test1.fits", alpha_rms)
-		#enmap.write_map("test1s.fits", snmap)
-		#enmap.write_map("test1a.fits", alpha)
-		#enmap.write_map("test1n.fits", anorm)
-		#enmap.write_map("test1d.fits", self.tot_div)
-		#enmap.write_map("test1m.fits", mask+self.tot_div*0)
-		##1/0
-
-		return alpha_rms
-	def calc_dalpha_empirical3(self, alpha, mask_pad=10):
-		# Estimate the rms of the alpha map based on its actual variance.
-		# Mask out underexposed regions
-		ref_val= np.percentile(self.tot_div,95)
-		apod   = (alpha*0+1).apod(self.mapset.apod_edge)
-		mask   = apod > 0.8
-		# I don't trust the edge
-		mask  &= ndimage.distance_transform_edt(self.tot_div > ref_val*0.01) > mask_pad
-
-		# Compute smoothed div
-		scale  = np.exp(enmap.smooth_gauss(np.log(np.maximum(self.tot_div, ref_val*0.01)),2*utils.arcmin))**0.5
-		# We expect the alpha rms to go roughly as smooth_div, so divide by it to make things more uniform
-		anorm  = alpha/scale
-
-		vals = anorm[mask]
-		for i in range(3):
-			vals = vals[np.abs(vals)<np.median(vals**2)**0.5*10]
-
-		norm_var  = np.mean(vals**2)
-		alpha_rms = norm_var**0.5 * scale
-		# Downweight the apodized region at the edge, and completley distrust the masked values
-		alpha_rms /= apod
-		alpha_rms[~mask] = np.inf
-
-		return alpha_rms
-	def calc_dalpha_empirical4(self, alpha, mask_pad=10):
+	def calc_dalpha_empirical(self, alpha, mask_pad=10):
 		"""Fit the variance of alpha as a linear combination of individual divs,
 		and return the best-fit rms map."""
+		if len(self.H) == 0: return alpha*0+np.inf
 		B     = np.array(self.H)**2
 		# Mask out underexposed regions
 		ref_val= np.percentile(self.tot_div,95)
@@ -2158,8 +2067,6 @@ class SourceSZFinder2:
 		rhs    = filter.calc_rhs()
 		mu     = filter.calc_mu(rhs)
 		print "find candidates"
-		#enmap.write_map("test_mu.fits", map_ifft(enmap.enmap(mu, mu[0].wcs)))
-		#1/0
 		for name in ["ptsrc", "sz"]:
 			submaps = []
 			if name == "ptsrc":
@@ -2501,7 +2408,7 @@ class SZLikelihood2(PtsrcLikelihood2):
 
 # This verison uses both ML amps and derivatives at the same time
 class SourceSZFinder3:
-	def __init__(self, mapset, sz_scales=[0.1,0.5,1.0,2.0], snmin=4, npass=4, pass_snmin=6, spix=33, mode="auto", ignore_mean=True, nmax=None, model_snmin=5):
+	def __init__(self, mapset, sz_scales=[0.1,0.25,0.5,1.0,2.0], snmin=4, npass=4, pass_snmin=6, spix=33, mode="auto", ignore_mean=True, nmax=None, model_snmin=5):
 		self.mapset = mapset
 		self.scales = sz_scales
 		self.snmin  = snmin
@@ -2694,7 +2601,7 @@ class SourceSZFinder3:
 		t1     = time.time()
 		filter = SignalFilter(self.mapset)
 		rhs    = filter.calc_rhs()
-		mu     = filter.calc_mu(rhs)
+		mu     = filter.calc_mu(rhs, verbose=verbosity >= 3)
 		print "find candidates"
 		#enmap.write_map("test_mu.fits", map_ifft(enmap.enmap(mu, mu[0].wcs)))
 		#1/0
@@ -3007,6 +2914,7 @@ class SZLikelihood3(PtsrcLikelihood3):
 		r     = (1e-10+np.sum(x[:2]**2))**0.5
 		logp  = -log_prob_gauss_positive(ahat, A)
 		logp += soft_prior(r, self.rmax)
+		logp += soft_prior(-x[2], -self.smin) + soft_prior(x[2], self.smax)
 		logp += np.sum(soft_prior(-x[2:], 0))
 		return logp
 	def calc_Q(self, x, deriv=None):
@@ -3301,7 +3209,8 @@ def find_candidates(snmap, lim=5.0, edge=0):
 		res = res[inds]
 	return res
 
-def prune_candidates(cands, others=None, scale=2.0, xmax=7, tol=0.1, verbose=False, other_scale=0.05):
+def prune_candidates(cands, others=None, scale=2.0, xmax=7, tol=0.1, verbose=False, other_scale=0.05,
+		other_dist=1*utils.arcmin):
 	"""Prune false positives caused by ringing in the filter. We assume that the
 	ringing goes as 1/(1+x)**3 where x = r/scale, up to xmax beyond which it is
 	zero. This is tuned to ACT beam etc.. What I really should use is the
@@ -3313,6 +3222,7 @@ def prune_candidates(cands, others=None, scale=2.0, xmax=7, tol=0.1, verbose=Fal
 	ocands = cands[:1]
 	if others is None:
 		nother = 0
+		odists = None
 	else:
 		# This is to support avoiding strong candidates found in any previous passes.
 		# Prepend down-scaled versions of the previous candidates because we assume that
@@ -3322,7 +3232,9 @@ def prune_candidates(cands, others=None, scale=2.0, xmax=7, tol=0.1, verbose=Fal
 		dummy.pos = others.pos
 		ocands    = np.rec.array(np.concatenate([dummy,ocands]))
 		nother    = len(others)
+		odists    = np.min(calc_dist(cands.pos.T[:,:,None], others.pos.T[:,None,:]),1)
 	for i in range(1, len(cands)):
+		if odists is not None and odists[i] < other_dist: continue
 		dists = calc_dist(ocands.pos.T,cands.pos.T[:,i,None])/utils.arcmin
 		leaks = calc_leak(dists/scale, ocands.sn/cands.sn[i])
 		if np.max(leaks) < tol:
@@ -3525,3 +3437,18 @@ def read_catalogue(fname, return_box=False):
 		box = np.array(box).reshape(2,2)
 		return cat, box
 	else: return cat
+
+def estimate_separable_pixwin_from_normalized_ps(ps2d):
+	mask = ps2d < 2
+	res  = []
+	for i in range(2):
+		profile  = np.sum(ps2d*mask,1-i)/np.sum(mask,1-i)
+		profile /= np.percentile(profile,90)
+		profile  = np.fft.fftshift(profile)
+		edge     = np.where(profile >= 1)[0][[0,-1]]
+		profile[edge[0]:edge[1]] = 1
+		profile  = np.fft.ifftshift(profile)
+		# Pixel window is in signal, not power
+		profile **= 0.5
+		res.append(profile)
+	return res

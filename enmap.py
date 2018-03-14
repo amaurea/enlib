@@ -198,7 +198,7 @@ def box(shape, wcs, npoint=10, corner=True):
 	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
 		np.linspace(0,shape[-1],num=npoint,endpoint=True)])
 	if corner: pix -= 0.5
-	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
+	coords = enlib.wcs.nobcheck(wcs).wcs_pix2world(pix[1],pix[0],0)[::-1]
 	if enlib.wcs.is_plain(wcs):
 		return np.array(coords).T[[0,-1]]
 	else:
@@ -258,7 +258,7 @@ def pix2sky(shape, wcs, pix, safe=True, corner=False):
 	pix = np.asarray(pix).astype(float)
 	if corner: pix -= 0.5
 	pflat = pix.reshape(pix.shape[0], -1)
-	coords = np.asarray(wcs.wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*get_unit(wcs)
+	coords = np.asarray(enlib.wcs.nobcheck(wcs).wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*get_unit(wcs)
 	coords = coords.reshape(pix.shape)
 	if safe and not enlib.wcs.is_plain(wcs):
 		coords = enlib.utils.unwind(coords)
@@ -274,7 +274,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 	coords = np.asarray(coords)/get_unit(wcs)
 	cflat  = coords.reshape(coords.shape[0], -1)
 	# Quantities with a w prefix are in wcs ordering (ra,dec)
-	wpix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
+	wpix = np.asarray(enlib.wcs.nobcheck(wcs).wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
 	if corner: wpix += 0.5
 	if safe and not enlib.wcs.is_plain(wcs):
 		wshape = shape[-2:][::-1]
@@ -311,7 +311,7 @@ def box(shape, wcs, npoint=10, corner=True):
 	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
 		np.linspace(0,shape[-1],num=npoint,endpoint=True)])
 	if corner: pix -= 0.5
-	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
+	coords = enlib.wcs.nobcheck(wcs).wcs_pix2world(pix[1],pix[0],0)[::-1]
 	if enlib.wcs.is_plain(wcs):
 		return np.array(coords).T[[0,-1]]
 	else:
@@ -717,7 +717,7 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs)
 		# assured the former. Our job is to find shape that puts
 		# the top edge close to the requested value, while still
 		# being valied. If we always round down, we should be safe:
-		faredge = wcs.wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
+		faredge = enlib.wcs.nobcheck(wcs).wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
 		shape = tuple(np.floor(faredge+0.5).astype(int))
 	return pre+tuple(shape), wcs
 
