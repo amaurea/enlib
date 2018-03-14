@@ -959,6 +959,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			# leading to an unknown but separable pixel window
 			ywin, xwin = estimate_separable_pixwin_from_normalized_ps(dset_ps[0])
 			ref_area = (ywin[:,None] > 0.9)&(xwin[None,:] > 0.9)&(dset_ps[0]<2)
+			if np.sum(ref_area) == 0: ref_area[:] = 1
 			dset_ps /= ywin[:,None]**2
 			dset_ps /= xwin[None,:]**2
 			dset_ps[:,(ywin[:,None]<0.25)|(xwin[None,:]<0.25)] = np.mean(dset_ps[:,ref_area],1)
@@ -3336,7 +3337,9 @@ def log_prob_gauss_positive(mu, cov):
 	mu = np.asarray(mu)
 	zero = np.zeros(mu.shape)
 	# logcdf is not as accurate as the log promises
-	return stats.multivariate_normal.logcdf(zero, -mu, cov)
+	try:
+		return stats.multivariate_normal.logcdf(zero, -mu, cov)
+	except np.linalg.LinAlgError: return -np.inf
 
 # we want an accurate log erf.
 # erf(x) = 2/sqrt(pi) int^x exp(-t**2) dt
@@ -3445,7 +3448,11 @@ def estimate_separable_pixwin_from_normalized_ps(ps2d):
 		profile  = np.sum(ps2d*mask,1-i)/np.sum(mask,1-i)
 		profile /= np.percentile(profile,90)
 		profile  = np.fft.fftshift(profile)
-		edge     = np.where(profile >= 1)[0][[0,-1]]
+		edge     = np.where(profile >= 1)[0]
+		if len(edge) == 0:
+			res.append(np.full(len(profile),1.0))
+			continue
+		edge = edge[[0,-1]]
 		profile[edge[0]:edge[1]] = 1
 		profile  = np.fft.ifftshift(profile)
 		# Pixel window is in signal, not power
