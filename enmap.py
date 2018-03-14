@@ -169,7 +169,7 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 	pre, shape = shape[:-2], shape[-2:]
 	oshape = np.array(shape)
 	# The wcs object has the indices in reverse order
-	for i,s in enumerate(sel):
+	for i,s in enumerate(sel[-2:]):
 		s = enlib.slice.expand_slice(s, shape[i], nowrap=nowrap)
 		j = -1-i
 		start = s.start if s.step > 0 else s.start + 1

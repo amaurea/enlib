@@ -112,8 +112,9 @@ class mark:
 		stats.add(self.name, self.time2 -self.time1, self.clock2-self.clock1, self.mem1, self.mem2-self.mem1)
 
 class show:
-	def __init__(self, name):
+	def __init__(self, name, display=True):
 		self.name = name
+		self.display = display
 	def __enter__(self):
 		self.time1  = time.time()
 		self.clock1 = time.clock()
@@ -123,7 +124,8 @@ class show:
 		self.clock2 = time.clock()
 		self.mem2   = memory.current()
 		self.memmax = memory.max()
-		print("%5.2f %5.2f %5.2f %s" % (self.time2-self.time1, self.mem2*1e-9, self.memmax*1e-9, self.name))
+		if self.display:
+			print("%5.2f %5.2f %5.2f %s" % (self.time2-self.time1, self.mem2*1e-9, self.memmax*1e-9, self.name))
 
 class dummy:
 	def __init__(self, name): pass
