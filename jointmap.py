@@ -2459,7 +2459,9 @@ class SourceSZFinder3:
 		others = None
 		for it in range(npass):
 			if verbosity >= 1: print "Pass %d" % (it+1)
-			cands, snmaps = self.find_candidates(self.snmin, maps=True, verbosity=verbosity, others=others)
+			# We gradually restrict our edge as we iterate to reduce the effect of ringing
+			# from objects that are just ourside our edge, and hence can't be properly subtracted
+			cands, snmaps = self.find_candidates(self.snmin, maps=True, verbosity=verbosity, others=others, edge=self.mapset.apod_edge*it)
 			others        = np.rec.array(np.concatenate([others,cands])) if others is not None else cands
 			info          = self.measure_candidates(cands, verbosity=verbosity)
 			info.snmaps   = snmaps
@@ -2589,7 +2591,7 @@ class SourceSZFinder3:
 			return SZLikelihood3(m, iN, self.B, self.iS, shape, wcs, self.freqs, groups=groups)
 		else:
 			raise ValueError("Unknown signal type '%s'" % type)
-	def find_candidates(self, lim=5.0, maps=False, prune=True, verbosity=0, others=None):
+	def find_candidates(self, lim=5.0, maps=False, prune=True, verbosity=0, others=None, edge=0):
 		"""Find matched filter point source and sz candidates with S/N of at least lim.
 		Returns a single list containing both ptsrc and sz candidates, sorted by S/N. They
 		are returned as a recarray with the fields [sn, type, pos[2], pix[2], npix[2]].
@@ -2623,7 +2625,7 @@ class SourceSZFinder3:
 					else: snmap = np.maximum(snmap, snmap_1scale)
 					submaps.append(bunch.Bunch(name="%03.1f"%scale, snmap=snmap_1scale))
 			else: raise ValueError("Unknown signal type '%s'" % name)
-			cand = find_candidates(snmap, lim, edge=self.mapset.apod_edge)
+			cand = find_candidates(snmap, lim, edge=edge)
 			cand.type  = name
 			cands.append(cand)
 			snmaps.append((name,snmap))
