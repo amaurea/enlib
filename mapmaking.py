@@ -401,6 +401,46 @@ class PreconDmapHitcount:
 	def write(self, prefix):
 		self.signal.write(prefix, "hits", self.hits)
 
+class PreconMapTod:
+	def __init__(self, signal, signal_cut, scans, weights):
+		"""Preconditioner based on inverting the tod noise model independently per TOD,
+		along with a P'P inversion: precon = P"'NP", where P" = P(P'P)" """
+		# First get P'P, which is the standard div but with no noise model applied
+		ncomp = signal.area.shape[0]
+		self.ptp  = enmap.zeros((ncomp,)+signal.area.shape, signal.area.wcs, signal.area.dtype)
+		calc_div_map(self.ptp, signal, signal_cut, scans, weights, noise=False)
+		self.iptp = array_ops.eigpow(self.ptp, -1, axes=[0,1], lim=config.get("eig_limit"))
+		self.hits = self.ptp[0,0].astype(np.int32)
+		self.signal     = signal
+		self.signal_cut = signal_cut
+		self.weights = weights
+		self.scans   = scans
+	def __call__(self, m):
+		# This is pretty slow. Let's see if it is worth it. I fear the discontinuities
+		# will be just as slow to resolve
+		m[:]    = array_ops.matmul(self.iptp, m, axes=[0,1])
+		omap    = m*0
+		ijunk   = self.signal_cut.zeros()
+		ojunk   = self.signal_cut.zeros()
+		for scan in self.scans:
+			tod  = np.zeros([scan.ndet, scan.nsamp], self.dtype)
+			self.signal.precompute(scan)
+			self.signal.forward    (scan, tod, m)
+			self.signal_cut.forward(scan, tod, ijunk)
+			for weight in self.weights:       weight(scan, tod)
+			scan.noise.apply(tod, inverse=True)
+			for weight in self.weights[::-1]: weight(scan, tod)
+			self.signal_cut.backward(scan, tod, ojunk)
+			self.signal.backward(scan, tod, omap)
+			self.signal.free(scan)
+		m[:] = 0
+		self.signal.finish(m, omap)
+		m[:] = array_ops.matmul(self.iptp, m, axes=[0,1])
+		return m
+	def write(self, prefix):
+		self.signal.write(prefix, "ptp", self.ptp)
+		self.signal.write(prefix, "hits", self.hits)
+
 class PreconCut:
 	def __init__(self, signal, scans):
 		junk  = signal.zeros()
