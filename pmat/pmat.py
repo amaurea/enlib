@@ -444,7 +444,7 @@ class pos2pix:
 			# Need to extract the boresight pointing for the time in question
 			bore = ipos[1:].copy()
 			bore[0] = np.interp(ipos[0], self.scan.boresight[:,0], self.scan.boresight[:,1])
-			bore[1] = np.interp(ipos[0], self.scan.boresight[:,0], self.scan.boresight[:,1])
+			bore[1] = np.interp(ipos[0], self.scan.boresight[:,0], self.scan.boresight[:,2])
 		else: bore = None
 		opos = coordinates.transform(self.scan.sys, self.sys, ipos[1:], time=time, site=self.scan.site, pol=True, bore=bore)
 		# Parallax correction
