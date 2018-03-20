@@ -415,6 +415,7 @@ class PreconMapTod:
 		self.signal_cut = signal_cut
 		self.weights = weights
 		self.scans   = scans
+		self.maxnoise = 10
 	def __call__(self, m):
 		# This is pretty slow. Let's see if it is worth it. I fear the discontinuities
 		# will be just as slow to resolve
@@ -423,16 +424,19 @@ class PreconMapTod:
 		ijunk   = self.signal_cut.zeros()
 		ojunk   = self.signal_cut.zeros()
 		for scan in self.scans:
-			tod  = np.zeros([scan.ndet, scan.nsamp], self.dtype)
+			tod  = np.zeros([scan.ndet, scan.nsamp], self.signal.dtype)
 			self.signal.precompute(scan)
 			self.signal.forward    (scan, tod, m)
 			self.signal_cut.forward(scan, tod, ijunk)
 			for weight in self.weights:       weight(scan, tod)
+			noise_ref = np.median(scan.noise.D)*self.maxnoise
+			scan.noise.D = np.minimum(scan.noise.D, noise_ref)
+			scan.noise.E = np.minimum(scan.noise.E, noise_ref)
 			scan.noise.apply(tod, inverse=True)
 			for weight in self.weights[::-1]: weight(scan, tod)
 			self.signal_cut.backward(scan, tod, ojunk)
 			self.signal.backward(scan, tod, omap)
-			self.signal.free(scan)
+			self.signal.free()
 		m[:] = 0
 		self.signal.finish(m, omap)
 		m[:] = array_ops.matmul(self.iptp, m, axes=[0,1])
