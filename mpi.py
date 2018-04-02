@@ -1,5 +1,5 @@
 """Utilities for making mpi use safer and easier."""
-import sys
+import sys,os
 
 try:
 	disable_mpi_env = os.environ['DISABLE_MPI']
