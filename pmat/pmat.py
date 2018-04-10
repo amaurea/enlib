@@ -24,8 +24,7 @@ config.default("pmat_accuracy",     1.0, "Factor by which to lower accuracy requ
 config.default("pmat_interpol_max_size", 100000, "Maximum mesh size in pointing interpolation. Worst-case time and memory scale at most proportionally with this.")
 config.default("pmat_interpol_max_time", 50, "Maximum time to spend in pointing interpolation constructor. Actual time spent may be up to twice this.")
 config.default("pmat_interpol_pad", 5.0, "Number of arcminutes to pad the interpolation coordinate system by")
-# Disable window for now - it is buggy
-config.default("tod_window",        0.0, "Seconds by which to window each end of the TOD.")
+config.default("tod_window",        5.0, "Seconds by which to window each end of the TOD.")
 
 class PointingMatrix:
 	def forward(self, tod, m): raise NotImplementedError
@@ -440,13 +439,12 @@ class pos2pix:
 		shape = ipos.shape[1:]
 		ipos  = ipos.reshape(ipos.shape[0],-1)
 		time  = self.scan.mjd0 + ipos[0]/utils.day2sec
-		if "bore" in self.sys or "sidelobe" in self.sys:
-			# Need to extract the boresight pointing for the time in question
-			bore = ipos[1:].copy()
-			bore[0] = np.interp(ipos[0], self.scan.boresight[:,0], self.scan.boresight[:,1])
-			bore[1] = np.interp(ipos[0], self.scan.boresight[:,0], self.scan.boresight[:,2])
-		else: bore = None
-		opos = coordinates.transform(self.scan.sys, self.sys, ipos[1:], time=time, site=self.scan.site, pol=True, bore=bore)
+		# We support sidelobe mapping by passing the detector pointing "ipos" as the "boresight"
+		# pointing, which is only used in boresight-relative coordinates or sidelobe mapping.
+		# This actually results in a better coordinate system than if we had passed in the actual
+		# boresight, since we don't really want boresight-centered coordinates, we want detector
+		# centered coordinates.
+		opos = coordinates.transform(self.scan.sys, self.sys, ipos[1:], time=time, site=self.scan.site, pol=True, bore=ipos[1:])
 		# Parallax correction
 		sundist = config.get("pmat_parallax_au")
 		if sundist:

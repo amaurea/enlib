@@ -577,6 +577,7 @@ def calc_icov_map(signal, scans, pos, weights, signal_cut=None):
 	operation, so if the points are too close to each other their covariance
 	information will interfere with each other."""
 	icov   = signal.zeros()
+	ocov   = icov.copy()
 	# Set the chosen positions to one. This is very inelegant. Should have
 	# global pixel setting methods in dmap
 	pos    = np.zeros([1,2],int)+pos # broadcast to correct shape
@@ -590,13 +591,14 @@ def calc_icov_map(signal, scans, pos, weights, signal_cut=None):
 				if y >= 0 and x >= 0 and y < tile.shape[-2] and x < tile.shape[-1]:
 					tile[0,y,x] = 1
 	# The rest proceeds similarly to the crosslinking map
-	owork   = signal.prepare(icov)
+	iwork   = signal.prepare(icov)
+	owork   = signal.prepare(ocov)
 	if signal_cut is not None: ojunk = signal_cut.prepare(signal_cut.zeros())
 	for scan in scans:
 		with bench.mark("icov_Pr_" + signal.name): signal.precompute(scan)
 		with bench.mark("icov_P_" + signal.name):
-			tod = np.full((scan.ndet, scan.nsamp), 1.0, signal.dtype)
-			signal.forward(scan, tod, owork)
+			tod = np.zeros((scan.ndet, scan.nsamp), signal.dtype)
+			signal.forward(scan, tod, iwork)
 			if signal_cut is not None: signal_cut.forward(scan, tod, ojunk)
 		with bench.mark("icov_nmat"):
 			for weight in weights: weight(scan, tod)
@@ -608,8 +610,8 @@ def calc_icov_map(signal, scans, pos, weights, signal_cut=None):
 		with bench.mark("icov_Fr_" + signal.name): signal.free()
 		times = [bench.stats[s]["time"].last for s in ["icov_P_" + signal.name, "icov_nmat", "icov_PT_" + signal.name]]
 		L.debug("div %s %6.3f %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
-	signal.finish(icov, owork)
-	return icov[0]
+	signal.finish(ocov, owork)
+	return ocov[0]
 
 def calc_hits_map(hits, signal, signal_cut, scans):
 	work = signal.prepare(hits)
@@ -724,6 +726,7 @@ class FilterPickup:
 		else:
 			waz = (np.max(scan.boresight[:,1])-np.min(scan.boresight[:,1]))/utils.degree
 			naz = utils.nint(waz/self.daz)
+			print "A", self.daz, waz, naz
 		todfilter.filter_poly_jon(tod, scan.boresight[:,1], hwp=scan.hwp, naz=naz, nt=self.nt, nhwp=self.nhwp, niter=self.niter, cuts=scan.cut)
 
 class FilterHWPNotch:
@@ -940,7 +943,7 @@ class Eqsys:
 		self.weights = weights
 		self.dof     = zipper.MultiZipper([signal.dof for signal in signals], comm=comm)
 		self.b       = None
-	def A(self, x):
+	def A(self, x, debug_file=None):
 		"""Apply the A-matrix P'N"P to the zipped vector x, returning the result."""
 		with bench.mark("A_init"):
 			imaps  = self.dof.unzip(x)
@@ -950,7 +953,7 @@ class Eqsys:
 			iwork = [signal.prepare(map) for signal, map in zip(self.signals, imaps)]
 			owork = [signal.work() for signal in self.signals]
 			#owork = [signal.prepare(map) for signal, map in zip(self.signals, omaps)]
-		for scan in self.scans:
+		for si, scan in enumerate(self.scans):
 			# Set up a TOD for this scan
 			tod = np.zeros([scan.ndet, scan.nsamp], self.dtype)
 			# Project each signal onto the TOD (P) in reverse order. This is done
@@ -961,6 +964,13 @@ class Eqsys:
 						signal.precompute(scan)
 					with bench.mark("A_P_" + signal.name):
 						signal.forward(scan, tod, work)
+			if debug_file is not None and si == 0:
+				print "Eqsys A dumping debug"
+				with h5py.File(debug_file,"w") as hfile:
+					hfile["tod"]  = tod[:16]
+					hfile["mask"] = scan.cut[:16].to_mask()
+					hfile["dets"] = scan.dets[:16]
+					hfile["id"]   = scan.id
 			# Apply the noise matrix (N")
 			with bench.mark("A_N"):
 				for weight in self.weights: weight(scan, tod)
@@ -1023,7 +1033,7 @@ class Eqsys:
 			#dump("dump_prenoise.hdf", tod[:32])
 			with bench.mark("b_N_build"):
 				scan.noise = scan.noise.update(tod, scan.srate)
-				#print "FIXME"
+				#print "FIXME gapfill const after building noise model", scan.id, scan.cut.ndet, scan.cut.nsamp, tod.shape
 				#sampcut.gapfill_const(scan.cut, tod, 0.0, True)
 			with bench.mark("b_filter2"):
 				for filter in self.filters2: filter(scan, tod)

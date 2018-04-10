@@ -2404,16 +2404,16 @@ class SZLikelihood2(PtsrcLikelihood2):
 	def format_sample(self, x):
 		return "%8.3f %8.3f %8.3f" % tuple(x[:3]) + " %8.3f"*(len(x)-3)%tuple(x[3:]/1e3)
 
-
 # This verison uses both ML amps and derivatives at the same time
 class SourceSZFinder3:
-	def __init__(self, mapset, sz_scales=[0.1,0.25,0.5,1.0,2.0], snmin=4, npass=4, pass_snmin=6, spix=33, mode="auto", ignore_mean=True, nmax=None, model_snmin=5):
+	def __init__(self, mapset, signals=["ptsrc","sz"], sz_scales=[0.1,0.25,0.5,1.0,2.0], snmin=4, npass=4, pass_snmin=6, spix=33, mode="auto", ignore_mean=True, nmax=None, model_snmin=5):
 		print "A %8.3f %8.3f" % (memory.current()/1024.**3, memory.max()/1024.**3)
 		self.mapset = mapset
 		self.scales = sz_scales
 		self.snmin  = snmin
 		self.npass  = npass
 		self.pass_snmin = pass_snmin
+		self.signals= signals
 		self.spix   = spix
 		self.npix   = spix*spix
 		# Precompute the matrix building blocks. These are common for all the sources
@@ -2614,7 +2614,7 @@ class SourceSZFinder3:
 		print "find candidates"
 		#enmap.write_map("test_mu.fits", map_ifft(enmap.enmap(mu, mu[0].wcs)))
 		#1/0
-		for name in ["ptsrc", "sz"]:
+		for name in self.signals:
 			submaps = []
 			print name
 			if name == "ptsrc":

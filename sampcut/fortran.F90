@@ -252,11 +252,13 @@ contains
 		integer, intent(in)    :: ranges(:,:), detmap(:)
 		real(_), intent(inout) :: tod(:,:)
 		real(_), intent(in)    :: const
-		integer :: di, i, r(2)
+		integer :: di, i, r1, r2, nsamp
+		nsamp = size(tod,1)
 		do di = 1, size(detmap)-1
 			do i = detmap(di)+1, detmap(di+1)
-				r = ranges(:,i)+1
-				tod(r(1):r(2),di) = const
+				r1 = max(0,    ranges(1,i))+1 ! first cut index
+				r2 = min(nsamp,ranges(2,i))   ! last cut index
+				tod(r1:r2,di) = const
 			end do
 		end do
 	end subroutine

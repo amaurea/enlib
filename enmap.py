@@ -134,8 +134,6 @@ class ndmap(np.ndarray):
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
 
-
-
 def subinds(shape, wcs, box, inclusive=False, cap=True):
 	"""Helper function for submap. Translates the bounding
 	box provided into a pixel units. Assumes rectangular
@@ -1366,4 +1364,11 @@ def fix_endian(map):
 	Returns the result."""
 	if map.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
 		map = map.byteswap(True).newbyteorder()
+	return map
+
+def shift(map, off):
+	off = np.atleast_1d(off)
+	for i, o in enumerate(off):
+		if o != 0:
+			map[:] = np.roll(map, o, -len(off)+i)
 	return map

@@ -291,7 +291,7 @@ def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,basestring) else 
 def get_handedness(sys):
 	"""Return the handedness of the coordinate system sys, as seen from inside
 	the celestial sphere, in the standard IAU convention."""
-	if sys in ["altaz"]: return 'R'
+	if sys in ["altaz","tele","bore"]: return 'R'
 	else: return 'L'
 
 def getsys_full(sys, time=None, site=default_site, bore=None):

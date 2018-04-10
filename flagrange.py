@@ -328,7 +328,7 @@ def fill_right(inds, vals, n):
 	inds, vals = np.asarray(inds), np.asarray(vals)
 	# Add default start condition of 0
 	inds  = np.concatenate([[0],inds,[n]])
-	vals  = np.concatenate([[0],vals])
+	vals  = np.concatenate([np.array([0],vals.dtype),vals])
 	nums  = inds[1:]-inds[:-1]
 	return np.repeat(vals, nums)
 

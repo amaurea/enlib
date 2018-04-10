@@ -23,7 +23,7 @@ def resample_bin(d, factors=[0.5], axes=None):
 
 def downsample_bin(d, steps=[2], axes=None):
 	assert len(steps) <= d.ndim
-	if axes is None: axes = np.arange(-1,-len(steps)-1,-1)
+	if axes is None: axes =range(-len(steps),0)
 	assert len(axes) == len(steps)
 	# Expand steps to cover every axis in order
 	fullsteps = np.zeros(d.ndim,dtype=int)+1
