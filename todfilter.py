@@ -35,14 +35,12 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 	B = []
 	# Set up our time basis
 	if nt  > 0:
-		B.append(np.full((1,nsamp), 1.0, d.dtype))
-	if nt  > 1:
 		t = np.linspace(-1,1,nsamp,endpoint=False)
-		B.append(utils.build_legendre(t, nt-1))
+		B.append(utils.build_legendre(t, nt))
 	if naz > 0:
 		if not use_phase:
 			# Set up our azimuth basis
-			B.append(utils.build_legendre(az, naz))
+			B.append(utils.build_legendre(az, naz+1)[1:])
 		else:
 			# Set up phase basis. Vectors should be periodic
 			# in phase to avoid discontinuities. cossin is good for this.
