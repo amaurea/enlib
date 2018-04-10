@@ -1621,10 +1621,10 @@ def build_legendre(x, nmax):
 	vmin, vmax = minmax(x)
 	x   = (x-vmin)*(2.0/(vmax-vmin))-1
 	res = np.zeros((nmax,)+x.shape)
-	if nmax > 0: res[0] = x
-	if nmax > 1: res[1] = 1.5*x**2-0.5
-	for i in range(2, nmax):
-		res[i] = ((2*i+1)*x*res[i-1] - i*res[i-2])/(i+1)
+	if nmax > 0: res[0] = 1
+	if nmax > 1: res[1] = x
+	for i in range(1, nmax-1):
+		res[i+1] = ((2*i+1)*x*res[i] - i*res[i-1])/(i+1)
 	return res
 
 def build_cossin(x, nmax):
