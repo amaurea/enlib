@@ -283,7 +283,7 @@ cdef class alm_info:
 				for c1 in range(ncomp):
 					alm[c1,lm] = 0
 					for c2 in range(ncomp):
-						alm[c1,lm] = alm[c1,lm] + lmat[c1,c2,l]*v[c2]
+						alm[c1,lm] += lmat[c1,c2,l]*v[c2]
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
 	cdef lmul_sp(self,np.ndarray[np.complex64_t,ndim=2] alm, np.ndarray[np.float32_t,ndim=3] lmat):
@@ -293,7 +293,8 @@ cdef class alm_info:
 		l,m=0,0
 		ncomp = alm.shape[0]
 		v = np.empty(ncomp,dtype=np.complex64)
-		for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
+		#for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
+		for m in range(self.mmax+1):
 			for l in range(m, self.lmax+1):
 				lm = mstart[m]+l*self.stride
 				for c1 in range(ncomp):

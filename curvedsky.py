@@ -19,7 +19,7 @@ def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=
 
 	ctype = np.result_type(dtype,0j)
 	if verbose: print "Generating alms with seed %s up to lmax=%d dtype %s" % (str(seed), lmax, np.dtype(ctype).char)
-	alm   = rand_alm(ps, lmax=lmax, seed=seed, dtype=ctype, m_major=False)
+	alm   = rand_alm_healpy(ps, lmax=lmax, seed=seed, dtype=ctype)
 	if verbose: print "Allocating output map shape %s dtype %s" % (str((ncomp,)+shape[-2:]), np.dtype(dtype).char)
 	map   = enmap.empty((ncomp,)+shape[-2:], wcs, dtype=dtype)
 	alm2map(alm, map, spin=spin, oversample=oversample, method=method, direct=direct, verbose=verbose)
