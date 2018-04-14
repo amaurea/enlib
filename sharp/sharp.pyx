@@ -274,7 +274,8 @@ cdef class alm_info:
 		l,m=0,0
 		ncomp = alm.shape[0]
 		v = np.empty(ncomp,dtype=np.complex128)
-		for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
+		#for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
+		for m in range(self.mmax+1):
 			for l in range(m, self.lmax+1):
 				lm = mstart[m]+l*self.stride
 				for c1 in range(ncomp):
