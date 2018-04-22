@@ -643,7 +643,7 @@ def rotate_pol_power(shape,wcs,cov,iau=False,inverse=False):
 	"""
 	rot = np.zeros((3,3,cov.shape[-2],cov.shape[-1]))
 	rot[0,0,:,:] = 1
-	prot = enmap.queb_rotmat(enmap.lmap(shape,wcs), inverse=inverse, iau=iau)
+	prot = queb_rotmat(lmap(shape,wcs), inverse=inverse, iau=iau)
 	rot[1:,1:,:,:] = prot
 	Rt = np.transpose(rot, (1,0,2,3))
 	tmp = np.einsum("ab...,bc...->ac...",rot,cov)
