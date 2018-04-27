@@ -163,6 +163,10 @@ def build_work_shift(transform, hor_box, scan_period):
 	wbox[0] = np.floor(wbox[0])
 	wbox[1] = np.ceil (wbox[1])
 	wbox    = wbox.astype(int)
+	print "wbox"
+	print wbox
+	print "wshift"
+	print wshift
 	return wbox, wshift
 
 def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, nsamp=None, ntry=None):
@@ -261,6 +265,7 @@ class PmatMapMultibeam(PointingMatrix):
 		ibox = np.array([np.min(scan.boresight,0)+np.min(beam_offs,(0,1)),
 				np.max(scan.boresight,0)+np.max(beam_offs,(0,1))])
 		# Build our pointing interpolator
+		sys        = config.get("map_sys", sys)
 		transform  = pos2pix(scan,template,sys)
 		ipol, obox, err = build_interpol(transform, ibox, id=scan.entry.id)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)

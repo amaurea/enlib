@@ -37,8 +37,8 @@ class NoiseMatrix:
 		res, detslice, sampslice = self.getitem_helper(sel)
 		res.ndet = len(np.arange(self.ndet)[detslice])
 		return res
-	def resample(self, fsamp_rel):
-		"""Update to a new sample rate which is fsamp_rel times higher than the previous one"""
+	def resample(self, mapping):
+		"""Update to a new sample rate which is mapping.fsamp_rel times higher than the previous one"""
 		return self
 	@property
 	def ivar(self): return np.full(self.ndet, 1.0)
@@ -114,8 +114,8 @@ class NmatBinned(NoiseMatrix):
 		icovs = enlib.array_ops.eigpow(covs,  -1, axes=[-2,-1])
 		# Downsampling changes the noise per sample
 		return BinnedNmat(dets, bins, icovs*step)
-	def resample(self, fsamp_rel):
-		fmax = self.bins[-1,-1]*fsamp_rel
+	def resample(self, mapping):
+		fmax = self.bins[-1,-1]*mapping.fsamp_rel
 		mask = self.bins[:,0] < fmax
 		bins, icovs = self.bins[mask], self.icovs[mask]
 		bins[-1,-1] = fmax
@@ -214,12 +214,12 @@ class NmatDetvecs(NmatBinned):
 		# Slice covs, not icovs. Downsampling changes the noise per sample, which is why we divide
 		# the variances here.
 		return NmatDetvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, dets)
-	def resample(self, fsamp_rel):
-		fmax = self.bins[-1,-1]*fsamp_rel
+	def resample(self, mapping):
+		fmax = self.bins[-1,-1]*mapping.fsamp_rel
 		mask = self.bins[:,0] < fmax
 		bins, ebins = self.bins[mask], self.ebins[mask]
 		bins[-1,-1] = fmax
-		return NmatDetvecs(self.D[mask]*fsamp_rel, self.V, self.E*fsamp_rel, bins, ebins, self.dets)
+		return NmatDetvecs(self.D[mask]*mapping.fsamp_rel, self.V, self.E*mapping.fsamp_rel, bins, ebins, self.dets)
 	def __mul__(self, a):
 		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.dets)
 	def export(self):
@@ -267,12 +267,12 @@ class NmatSharedvecs(NmatDetvecs):
 		bins[-1,-1] = fmax
 		# Slice covs, not icovs
 		return NmatSharedvecs(res.D[mask][:,detslice]/step, res.V[:,detslice], res.E/step, bins, ebins, vbins, dets)
-	def resample(self, fsamp_rel):
-		fmax = self.bins[-1,-1]*fsamp_rel
+	def resample(self, mapping):
+		fmax = self.bins[-1,-1]*mapping.fsamp_rel
 		mask = self.bins[:,0] < fmax
 		bins, ebins, vbins = self.bins[mask], self.ebins[mask], self.vbins[mask]
 		bins[-1,-1] = fmax
-		return NmatSharedvecs(self.D[mask]*fsamp_rel, self.V, self.E*fsamp_rel, bins, ebins, vbins, self.dets)
+		return NmatSharedvecs(self.D[mask]*mapping.fsamp_rel, self.V, self.E*mapping.fsamp_rel, bins, ebins, vbins, self.dets)
 	def __mul__(self, a):
 		return NmatDetvecs(self.D/a, self.V, self.E/a, self.bins, self.ebins, self.vbins, self.dets)
 	def export(self):
@@ -363,14 +363,14 @@ class NmatScaled(NoiseMatrix):
 		bins[-1,-1] = fmax
 		scale= res.scale[detslice,mask]
 		return NmatScaled(scale/step**0.5, bins, nmat)
-	def resample(self, fsamp_rel):
-		nmat = self.nmat.resample(fsamp_rel) * fsamp_rel
-		fmax = self.bins[-1,-1]*fsamp_rel
+	def resample(self, mapping):
+		nmat = self.nmat.resample(mapping) * mapping.fsamp_rel
+		fmax = self.bins[-1,-1]*mapping.fsamp_rel
 		mask = self.bins[:,0] < fmax
 		bins = self.bins[mask]
 		bins[-1,-1] = fmax
 		scale= self.scale[:,mask]
-		return NmatScaled(scale*fsamp_rel**0.5, bins, nmat)
+		return NmatScaled(scale*mapping.fsamp_rel**0.5, bins, nmat)
 	def __mul__(self, a):
 		return NmatScaled(self.scale*a**0.5, self.bins, self.nmat)
 	def export(self):

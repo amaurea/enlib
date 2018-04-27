@@ -1256,11 +1256,11 @@ def read_fits(fname, hdu=None, sel=None, box=None, inclusive=False, sel_threshol
 	hdu = astropy.io.fits.open(fname)[hdu]
 	if hdu.header["NAXIS"] < 2:
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
-        if wcs_override is None:
-                with warnings.catch_warnings():
-                        wcs = enlib.wcs.WCS(hdu.header).sub(2)
-        else:
-                wcs = wcs_override
+	if wcs_override is None:
+		with warnings.catch_warnings():
+			wcs = enlib.wcs.WCS(hdu.header).sub(2)
+	else:
+		wcs = wcs_override
 	# Slice if requested. Slicing at this point avoids unneccessary
 	# I/O and memory usage.
 	if sel is not None:

@@ -158,7 +158,7 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		enmap.write_map(oname, omap)
 		if verbose: print oname
 
-def monolithic(idir, ofile, verbose=True, slice=None, dtype=None):
+def read_monolithic(idir, verbose=True, slice=None, dtype=None):
 	# Find the range of input tiles
 	ipathfmt = idir + "/tile%(y)03d_%(x)03d.fits"
 	itile1, itile2 = find_tile_range(ipathfmt)
@@ -182,6 +182,10 @@ def monolithic(idir, ofile, verbose=True, slice=None, dtype=None):
 			ox = tx - itile1[1]
 			omap[...,oy*wy:(oy+1)*wy,ox*wx:(ox+1)*wx] = m
 			if verbose: print ipathfmt % {"y":ty,"x":tx}
+	return omap
+
+def monolithic(idir, ofile, verbose=True, slice=None, dtype=None):
+	omap = read_monolithic(idir, verbose=verbose, slice=slice, dtype=dtype)
 	enmap.write_map(ofile, omap)
 
 def range_overlap(a,b):

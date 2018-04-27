@@ -66,6 +66,7 @@ class Scan:
 		self.dets      = np.arange(len(self.comps)) if dets is None else dets
 		self.dgrid     = (1,np.max(self.dets)+1)
 		self.hwp       = None
+		self.mapping   = None
 		# Not part of the general interface
 		self._tod      = np.asfarray(tod)       # [ndet,nsamp]
 	def get_samples(self):
@@ -128,7 +129,8 @@ class Scan:
 		except AttributeError as e: pass
 		res.cut          = resample_cut(res.cut,          mapping)
 		res.cut_noiseest = resample_cut(res.cut_noiseest, mapping)
-		res.noise        = resample_noise(res.noise,      mapping)
+		res.noise        = res.noise.resample(mapping)
+		res.mapping      = mapping
 		return res
 
 config.default("downsample_method", "fft", "Method to use when downsampling the TOD")
@@ -244,6 +246,3 @@ def resample_cut(cut, mapping):
 	# Widen cut because we had to round the cut indices
 	ocut = ocut.widen(1)
 	return ocut
-
-def resample_noise(nmat, mapping):
-	return nmat.resample(mapping.fsamp_rel)
