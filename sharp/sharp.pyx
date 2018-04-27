@@ -223,7 +223,7 @@ cdef class alm_info:
 		cdef np.complex128_t v
 		cdef np.ndarray[np.int64_t,ndim=1] mstart = self.mstart
 		cdef np.ndarray[np.complex128_t,ndim=1] work = np.empty(alm.shape[1],alm.dtype)
-		for comp in prange(alm.shape[0],nogil=True):
+		for comp in range(alm.shape[0]):
 			l,m = 0,0
 			for i in range(alm.shape[1]):
 				j = mstart[m]+l*self.stride
@@ -241,7 +241,7 @@ cdef class alm_info:
 		cdef np.complex64_t v
 		cdef np.ndarray[np.int64_t,ndim=1] mstart = self.mstart
 		cdef np.ndarray[np.complex64_t,ndim=1] work = np.empty(alm.shape[1],alm.dtype)
-		for comp in prange(alm.shape[0],nogil=True):
+		for comp in range(alm.shape[0]):
 			l,m = 0,0
 			for i in range(alm.shape[1]):
 				j = mstart[m]+l*self.stride
