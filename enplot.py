@@ -115,6 +115,7 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser.add_argument("--method", default="auto", help="Which colorization implementation to use: auto, fortran or python.")
 	parser.add_argument("--slice", type=str, help="Apply this numpy slice to the map before plotting.")
 	parser.add_argument("--sub",   type=str, help="Slice a map based on dec1:dec2,ra1:ra2.")
+	parser.add_argument("-H", "--hdu",  type=int, default=0, help="Header unit of the fits file to use")
 	parser.add_argument("--op", type=str, help="Apply this general operation to the map before plotting. For example, 'log(abs(m))' would give you a lograithmic plot.")
 	parser.add_argument("-d", "--downgrade", type=str, default="1", help="Downsacale the map by this factor before plotting. This is done by averaging nearby pixels. See --scale for syntax.")
 	parser.add_argument("--prefix", type=str, default="", help="Specify a prefix for the output file. See --oname.")
@@ -179,7 +180,7 @@ def get_map(ifile, args, return_info=False):
 		warnings.filterwarnings("ignore")
 		toks = ifile.split(":")
 		ifile, slice = toks[0], ":".join(toks[1:])
-		m0 = enmap.read_map(ifile)
+		m0 = enmap.read_map(ifile, hdu=args.hdu)
 		if args.fix_wcs:
 			m0.wcs = enwcs.fix_wcs(m0.wcs)
 		# Save the original map, so we can compare its wcs later

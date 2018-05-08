@@ -12,7 +12,7 @@ def remap(pos, dir, beta, pol=True, modulation=True, recenter=False):
 	direction dir. If pol=True (the default), then the output
 	will have three columns, with the third column being
 	the aberration-induced rotation of the polarization angle."""
-	pos = coordinates.transform("equ",["equ",dir],pos,pol=pol)
+	pos = coordinates.transform("equ",["equ",[dir,False]],pos,pol=pol)
 	if recenter: before = np.mean(pos[1,::10])
 	# Use -beta here to get the original position from the deflection,
 	# instead of getting the deflection from the original one as
@@ -21,7 +21,7 @@ def remap(pos, dir, beta, pol=True, modulation=True, recenter=False):
 	if recenter:
 		after = np.mean(pos[1,::10])
 		pos[1] -= after-before
-	res = coordinates.transform(["equ",dir],"equ",pos,pol=pol)
+	res = coordinates.transform(["equ",[dir,False]],"equ",pos,pol=pol)
 	if modulation:
 		amp = mod_amplitude(np.pi/2-pos[1], beta)
 		res = np.concatenate([res,[amp]])
@@ -30,7 +30,7 @@ def remap(pos, dir, beta, pol=True, modulation=True, recenter=False):
 def distortion(pos, dir, beta):
 	"""Returns the local aberration distortion, defined as the
 	second derivative of the aberration displacement."""
-	pos = coordinates.transform("equ",["equ",dir],pos,pol=True)
+	pos = coordinates.transform("equ",["equ",[dir,False]],pos,pol=True)
 	return aber_deriv(np.pi/2-pos[1], -beta)-1
 
 def aberrate(imap, dir, beta, mode="wrap", order=3, recenter=False):
