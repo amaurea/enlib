@@ -236,16 +236,16 @@ contains
 			end select
 			! Make 1-indexed
 			pix(1:2,si) = point(1:2)+1
-			phase(1:2,si) = det_comps(2:3)
+			phase(1:3,si) = det_comps(1:3)
 			if(use_hwp) then
-				tmp = phase(1,si)
-				phase(1,si) = -hwp(1,si)*tmp + hwp(2,si)*phase(2,si)
-				phase(2,si) = +hwp(2,si)*tmp + hwp(1,si)*phase(2,si)
+				tmp = phase(2,si)
+				phase(2,si) = -hwp(1,si)*tmp + hwp(2,si)*phase(3,si)
+				phase(3,si) = +hwp(2,si)*tmp + hwp(1,si)*phase(3,si)
 			end if
 			! Then the sky rotation
-			tmp = phase(1,si)
-			phase(1,si) = point(3)*tmp - point(4)*phase(2,si)
-			phase(2,si) = point(4)*tmp + point(3)*phase(2,si)
+			tmp = phase(2,si)
+			phase(2,si) = point(3)*tmp - point(4)*phase(3,si)
+			phase(3,si) = point(4)*tmp + point(3)*phase(3,si)
 		end do
 	end subroutine
 
@@ -274,9 +274,9 @@ contains
 					cycle
 				end if
 				if(tmul .eq. 0) then
-					tod(si) = map(1,p(2),p(1)) + sum(map(2:3,p(2),p(1))*phase(1:2,si))
+					tod(si) = sum(map(1:3,p(2),p(1))*phase(1:3,si))
 				else
-					tod(si) = tod(si)*tmul + map(1,p(2),p(1)) + sum(map(2:3,p(2),p(1))*phase(1:2,si))
+					tod(si) = tod(si)*tmul + sum(map(1:3,p(2),p(1))*phase(1:3,si))
 				end if
 			end do
 		else
@@ -284,10 +284,8 @@ contains
 				do si = 1, nsamp
 					p = nint(pix(:,si))
 					if(p(1) .eq. 0) cycle ! skip OOB pixels
-					!$omp atomic
-					map(1,p(2),p(1)) = map(1,p(2),p(1)) + tod(si)*tmul
-					do ci = 2, 3
-						v = (tod(si)*tmul)*phase(ci-1,si)
+					do ci = 1, 3
+						v = (tod(si)*tmul)*phase(ci,si)
 						!$omp atomic
 						map(ci,p(2),p(1)) = map(ci,p(2),p(1)) + v
 					end do
@@ -297,9 +295,8 @@ contains
 				do si = 1, nsamp
 					p = nint(pix(:,si))
 					if(p(1) .eq. 0) cycle ! skip OOB pixels
-					map(1,p(2),p(1)) = map(1,p(2),p(1)) + tod(si)*tmul
-					do ci = 2, 3
-						v = (tod(si)*tmul)*phase(ci-1,si)
+					do ci = 1, 3
+						v = (tod(si)*tmul)*phase(ci,si)
 						map(ci,p(2),p(1)) = map(ci,p(2),p(1)) + v
 					end do
 				end do
@@ -351,7 +348,7 @@ contains
 				v3 = v1*(1-x(1)) + v2*x(1)
 				! Interpolate along x direction
 				v4 = v3(:,1)*(1-x(2)) + v3(:,2)*x(2)
-				v  = v4(1) + sum(v4(2:3)*phase(1:2,si))
+				v  = sum(v4(1:3)*phase(1:3,si))
 				! Update tod
 				if(tmul .eq. 0) then
 					tod(si) = v
@@ -361,8 +358,7 @@ contains
 			else
 				! Transpose of the above
 				v  = tod(si)*tmul
-				v4(1) = v
-				v4(2:3) = v*phase(1:2,si)
+				v4(1:3) = v*phase(1:3,si)
 				v3(:,1) = v4*(1-x(2))
 				v3(:,2) = v4*x(2)
 				v1 = v3*(1-x(1))
@@ -443,7 +439,7 @@ contains
 				do i = 1, 4
 					vx = vx + vy(:,i)*w(i,2)
 				end do
-				vtot = vx(1) + sum(vx(2:3)*phase(1:2,si))
+				vtot = sum(vx(1:3)*phase(1:3,si))
 				! Update tod
 				if(tmul .eq. 0) then
 					tod(si) = vtot
@@ -453,8 +449,7 @@ contains
 			else
 				! Transpose of the above
 				vtot = tod(si)*tmul
-				vx(1) = vtot
-				vx(2:3) = vtot*phase(1:2,si)
+				vx(1:3) = vtot*phase(1:3,si)
 				do i = 1, 4
 					vy(:,i) = vx*w(i,2)
 				end do
@@ -611,9 +606,9 @@ contains
 			do si = 1, nsamp
 				p = pix(si)
 				if(tmul .eq. 0) then
-					tod(si) = map(1,p) + sum(map(2:3,p)*phase(1:2,si))
+					tod(si) = + sum(map(1:3,p)*phase(1:3,si))
 				else
-					tod(si) = tod(si)*tmul + map(1,p) + sum(map(2:3,p)*phase(1:2,si))
+					tod(si) = tod(si)*tmul + map(1,p) + sum(map(1:3,p)*phase(1:3,si))
 				end if
 			end do
 		else
@@ -621,10 +616,8 @@ contains
 				do si = 1, nsamp
 					p = pix(si)
 					v = tod(si)*tmul
-					!$omp atomic
-					map(1,p) = map(1,p) + v
-					do ci = 2, 3
-						v = (tod(si)*tmul)*phase(ci-1,si)
+					do ci = 1, 3
+						v = (tod(si)*tmul)*phase(ci,si)
 						!$omp atomic
 						map(ci,p) = map(ci,p) + v
 					end do
@@ -633,10 +626,8 @@ contains
 				! Avoid slowing down single-proc case with atomics
 				do si = 1, nsamp
 					p = pix(si)
-					v = tod(si)*tmul
-					map(1,p) = map(1,p) + v
-					do ci = 2, 3
-						v = (tod(si)*tmul)*phase(ci-1,si)
+					do ci = 1, 3
+						v = (tod(si)*tmul)*phase(ci,si)
 						map(ci,p) = map(ci,p) + v
 					end do
 				end do
@@ -682,16 +673,16 @@ contains
 			!end if
 			pix(si) = (nint(wy)-1)*nwx+nint(wx)
 			! Make 1-indexed
-			phase(1:2,si) = det_comps(2:3)
+			phase(1:3,si) = det_comps(1:3)
 			if(use_hwp) then
-				tmp = phase(1,si)
-				phase(1,si) = -hwp(1,si)*tmp + hwp(2,si)*phase(2,si)
-				phase(2,si) = +hwp(2,si)*tmp + hwp(1,si)*phase(2,si)
+				tmp = phase(2,si)
+				phase(2,si) = -hwp(1,si)*tmp + hwp(2,si)*phase(3,si)
+				phase(3,si) = +hwp(2,si)*tmp + hwp(1,si)*phase(3,si)
 			end if
 			! Then the sky rotation
-			tmp = phase(1,si)
-			phase(1,si) = work(3)*tmp - work(4)*phase(2,si)
-			phase(2,si) = work(4)*tmp + work(3)*phase(2,si)
+			tmp = phase(2,si)
+			phase(2,si) = work(3)*tmp - work(4)*phase(3,si)
+			phase(2,si) = work(4)*tmp + work(3)*phase(3,si)
 		end do
 	end subroutine
 
@@ -920,16 +911,16 @@ contains
 			! And flatten to 1d
 			pix(si) = (wytot-1)*nwx+wx
 			! Make 1-indexed
-			phase(1:2,si) = det_comps(2:3)
+			phase(1:3,si) = det_comps(1:3)
 			if(use_hwp) then
-				tmp = phase(1,si)
-				phase(1,si) = -hwp(1,si)*tmp + hwp(2,si)*phase(2,si)
-				phase(2,si) = +hwp(2,si)*tmp + hwp(1,si)*phase(2,si)
+				tmp = phase(2,si)
+				phase(2,si) = -hwp(1,si)*tmp + hwp(2,si)*phase(3,si)
+				phase(3,si) = +hwp(2,si)*tmp + hwp(1,si)*phase(3,si)
 			end if
 			! Then the sky rotation
-			tmp = phase(1,si)
-			phase(1,si) = work(3)*tmp - work(4)*phase(2,si)
-			phase(2,si) = work(4)*tmp + work(3)*phase(2,si)
+			tmp = phase(2,si)
+			phase(2,si) = work(3)*tmp - work(4)*phase(3,si)
+			phase(3,si) = work(4)*tmp + work(3)*phase(3,si)
 		end do
 	end subroutine
 

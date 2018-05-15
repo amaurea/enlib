@@ -263,11 +263,11 @@ contains
 		end do
 	end subroutine
 
-	subroutine gapfill_linear(ranges, detmap, tod, context)
+	subroutine gapfill_linear(ranges, detmap, tod, context, trans)
 		implicit none
-		integer, intent(in)    :: ranges(:,:), detmap(:), context
+		integer, intent(in)    :: ranges(:,:), detmap(:), context, trans
 		real(_), intent(inout) :: tod(:,:)
-		real(_) :: v1, v2, c1, c2
+		real(_) :: v1, v2, c1, c2, a
 		integer :: di, i, j, r0, r1, r2, r3, nsamp
 		nsamp = size(tod,1)
 		do di = 1, size(detmap)-1
@@ -288,21 +288,43 @@ contains
 				if(i == detmap(di+1)) then; r3 = nsamp+1; else; r3 = min(nsamp,ranges(1,i+1))+1; end if
 				r0 = max(r0, r1-context) ! first sample of left context
 				r3 = min(r3, r2+context) ! one past last sample of right context
-				! Now calculate the representive value on either side
-				v1 = sum(tod(r0:r1-1,di))/(r1-r0)
-				v2 = sum(tod(r2:r3-1,di))/(r3-r2)
-				if(r0 == r1) then
-					tod(r1:r2-1,di) = v2
-				elseif(r2 == r3) then
-					tod(r1:r2-1,di) = v1
+				if(trans == 0) then
+					! Now calculate the representive value on either side
+					v1 = sum(tod(r0:r1-1,di))/(r1-r0)
+					v2 = sum(tod(r2:r3-1,di))/(r3-r2)
+					if(r0 == r1) then
+						tod(r1:r2-1,di) = v2
+					elseif(r2 == r3) then
+						tod(r1:r2-1,di) = v1
+					else
+						! v1 has a center of mass at (r0+r1-1)/2 instead of r1 where we
+						! want it.
+						c1 = (r0+r1-1)/2d0
+						c2 = (r2+r3-1)/2d0
+						do j = r1, r2-1
+							tod(j,di) = v1 + (v2-v1)*(j-c1)/(c2-c1)
+						end do
+					end if
 				else
-					! v1 has a center of mass at (r0+r1-1)/2 instead of r1 where we
-					! want it.
-					c1 = (r0+r1-1)/2d0
-					c2 = (r2+r3-1)/2d0
-					do j = r1, r2-1
-						tod(j,di) = v1 + (v2-v1)*(j-c1)/(c2-c1)
-					end do
+					! For the transpose, we do the steps in reverse, and assignments
+					! become accumulation into the RHS
+					if(r0 == r1) then
+						tod(r2:r3-1,di) = tod(r2:r3-1,di) + sum(tod(r1:r2-1,di))/(r3-r2)
+					elseif(r2 == r3) then
+						tod(r0:r1-1,di) = tod(r0:r1-1,di) + sum(tod(r1:r2-1,di))/(r1-r0)
+					else
+						c1 = (r0+r1-1)/2d0
+						c2 = (r2+r3-1)/2d0
+						v1 = 0; v2 = 0
+						do j = r1, r2-1
+							a = tod(j,di)*(j-c1)/(c2-c1)
+							v2 = v2 + a
+							v1 = v1 + tod(j,di) - a
+						end do
+						tod(r0:r1-1,di) = tod(r0:r1-1,di) + v1/(r1-r0)
+						tod(r2:r3-1,di) = tod(r2:r3-1,di) + v2/(r3-r2)
+					end if
+					tod(r1:r2-1,di) = 0
 				end if
 			end do
 		end do

@@ -78,6 +78,7 @@ class ndmap(np.ndarray):
 	def padslice(self, box, default=np.nan): return padslice(self, box, default=default)
 	def downgrade(self, factor): return downgrade(self, factor)
 	def upgrade(self, factor): return upgrade(self, factor)
+	def fillbad(self, val=0, inplace=False): fillbad(self, val=val, inplace=inplace)
 	def to_healpix(self, nside=0, order=3, omap=None, chunk=100000, destroy_input=False):
 		return to_healpix(self, nside=nside, order=order, omap=omap, chunk=chunk, destroy_input=destroy_input)
 	def to_flipper(self, omap=None, unpack=True): return to_flipper(self, omap=omap, unpack=unpack)
@@ -1371,4 +1372,9 @@ def shift(map, off):
 	for i, o in enumerate(off):
 		if o != 0:
 			map[:] = np.roll(map, o, -len(off)+i)
+	return map
+
+def fillbad(map, val=0, inplace=False):
+	if not inplace: map = map.copy()
+	map[~np.isfinite(map)] = val
 	return map

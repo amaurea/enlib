@@ -535,18 +535,7 @@ def calc_div_map(div, signal, signal_cut, scans, weights, noise=True):
 		prec_div_helper(signal, signal_cut, scans, weights, iwork, owork, ijunk, ojunk, noise=noise)
 		signal.finish(div[i], owork)
 
-def calc_crosslink_map(cmap, signal, signal_cut, scans, weights, noise=True):
-	# This is really messy, but it should work. The signal contain a list of
-	# pmats, each of which has a reference to a scan which contains the polarization
-	# phase information. Since it's just a reference, we can change the scans instead
-	# of mucking around inside the pmats. But this is a fragile construction - if
-	# pmat internals change, it will break.
-	saved_comps = [scan.comps.copy() for scan in scans]
-	for scan in scans: scan.comps[:] = np.array([1,1,0])
-	calc_div_map(cmap, signal, signal_cut, scans, weights, noise=noise)
-	for scan, comp in zip(scans, saved_comps): scan.comps = comp
-
-def calc_crosslink_map2(signal, signal_cut, scans, weights, noise=True):
+def calc_crosslink_map(signal, signal_cut, scans, weights, noise=True):
 	saved_comps = [scan.comps.copy() for scan in scans]
 	for scan in scans: scan.comps[:] = np.array([1,1,0])
 	cmap    = signal.zeros()
@@ -563,12 +552,38 @@ def calc_crosslink_map2(signal, signal_cut, scans, weights, noise=True):
 		with bench.mark("cmap_PT_" + signal.name):
 			signal_cut.backward(scan, tod, ojunk)
 			signal.backward(scan, tod, owork)
-		with bench.mark("cmap_Fr_" + signal.name): signal.free()
+		signal.free()
 		times = [bench.stats[s]["time"].last for s in ["cmap_white", "cmap_PT_" + signal.name]]
-		L.debug("div %s %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
+		L.debug("crossmap %s %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
 	signal.finish(cmap, owork)
 	# Restore saved components
 	for scan, comp in zip(scans, saved_comps): scan.comps = comp
+	return cmap
+
+def calc_ptsrc_map(signal, signal_cut, scans, src_filters):
+	# First compute P'W"srcs
+	cmap    = signal.zeros()
+	ojunk   = signal_cut.prepare(signal_cut.zeros())
+	owork   = signal.prepare(cmap)
+	for scan in scans:
+		tod = np.zeros((scan.ndet, scan.nsamp), signal.dtype)
+		with bench.mark("srcmap_srcs"):
+			for src_filter in src_filters:
+				src_filter(scan, tod)
+		with bench.mark("srcmap_PT_" + signal.name):
+			signal_cut.backward(scan, tod, ojunk)
+			signal.backward(scan, tod, owork)
+		signal.free()
+		times = [bench.stats[s]["time"].last for s in ["srcmap_srcs", "srcmap_PT_" + signal.name]]
+		L.debug("srcmap %s %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
+	signal.finish(cmap, owork)
+	# Then divide out the hits
+	with utils.nowarn():
+		cmap /= signal.precon.hits
+	cmap.fillbad(0, inplace=True)
+	# We want to know what the source model is, which is the opposite of what was
+	# subtracted
+	cmap *= -1
 	return cmap
 
 def calc_icov_map(signal, scans, pos, weights, signal_cut=None):
@@ -609,11 +624,12 @@ def calc_icov_map(signal, scans, pos, weights, signal_cut=None):
 			signal.backward(scan, tod, owork)
 		with bench.mark("icov_Fr_" + signal.name): signal.free()
 		times = [bench.stats[s]["time"].last for s in ["icov_P_" + signal.name, "icov_nmat", "icov_PT_" + signal.name]]
-		L.debug("div %s %6.3f %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
+		L.debug("icov %s %6.3f %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
 	signal.finish(ocov, owork)
 	return ocov[0]
 
 def calc_hits_map(hits, signal, signal_cut, scans):
+	hits = hits*0
 	work = signal.prepare(hits)
 	ojunk= signal_cut.prepare(signal_cut.zeros())
 	for scan in scans:
@@ -726,7 +742,6 @@ class FilterPickup:
 		else:
 			waz = (np.max(scan.boresight[:,1])-np.min(scan.boresight[:,1]))/utils.degree
 			naz = utils.nint(waz/self.daz)
-			print "A", self.daz, waz, naz
 		todfilter.filter_poly_jon(tod, scan.boresight[:,1], hwp=scan.hwp, naz=naz, nt=self.nt, nhwp=self.nhwp, niter=self.niter, cuts=scan.cut)
 
 class FilterHWPNotch:
@@ -769,13 +784,19 @@ class PostPickup:
 			wwork = self.signal_map.prepare(wmap)
 		for scan in self.scans:
 			tod = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
-			for signal, work in zip(signals, iwork)[::-1]:
-				signal.forward(scan, tod, work)
-			if self.weighted: 
-				# Weighted needs quite a bit more memory :/
-				weights = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
-				self.signal_map.forward(scan, weights, wwork)
-			else: weights = None
+			# Skip cut when going forwards - we don't want to introduce lots
+			# of sudden jumps to zero in our simulated tod. We do this by
+			# writing [:0:-1] instead of [::-1], since the 0th entry is the cut.
+			# This could cause problems if a tod both starts outside our hit
+			# area and has cuts there, though...
+			with bench.mark("post_P"):
+				for signal, work in zip(signals, iwork)[:0:-1]:
+					signal.forward(scan, tod, work)
+				if self.weighted:
+					# Weighted needs quite a bit more memory :/
+					weights = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
+					self.signal_map.forward(scan, weights, wwork)
+				else: weights = None
 			# I'm worried about the effect of single, high pixels at the edge
 			# here. Even when disabling desloping, we may still end up introducing
 			# striping when subtracting polynomials fit to data with very
@@ -785,10 +806,16 @@ class PostPickup:
 			else:
 				waz = (np.max(scan.boresight[:,1])-np.min(scan.boresight[:,1]))/utils.degree
 				naz = utils.nint(waz/self.daz)
-			todfilter.filter_poly_jon(tod, scan.boresight[:,1], weights=weights, naz=naz, nt=self.nt)
-			for signal, work in zip(signals, owork):
-				signal.backward(scan, tod, work)
-			if self.weighted: del weights, tod
+			with bench.mark("post_F"):
+				todfilter.filter_poly_jon(tod, scan.boresight[:,1], weights=weights, naz=naz, nt=self.nt, deslope=False)
+			# Here we include the cuts. This isn't strictly necessary, but it
+			# preserves our hit area
+			with bench.mark("post_PT"):
+				for signal, work in zip(signals, owork):
+					signal.backward(scan, tod, work)
+				if self.weighted: del weights, tod
+			times = [bench.stats[s]["time"].last for s in ["post_P","post_F","post_PT"]]
+			L.debug("post P %5.3f N %5.3f P' %5.3f %s %4d" % (tuple(times)+(scan.id,scan.ndet)))
 		for signal, map, work in zip(signals, omaps, owork):
 			signal.finish(map, work)
 		# Must use (P'P)" here, not any other preconditioner!

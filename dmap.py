@@ -159,6 +159,12 @@ class Dmap(object):
 		for tile in self.tiles:
 			for i in range(n):
 				tile[tuple([i]*ndim)] = value
+	def fillbad(self, value=0, inplace=False):
+		if not inplace: res = self.copy()
+		else: res = self
+		for i, tile in enumerate(res.tiles):
+			tile[~np.isfinite(tile)] = value
+		return res
 	def write(self, name, ext="fits", merged=True):
 		write_map(name, self, ext=ext, merged=merged)
 
