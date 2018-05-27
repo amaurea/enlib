@@ -104,12 +104,13 @@ def get_pix_ranges(shape, wcs, horbox, daz, nt=4, ndet=1.0, site=None):
 	# observing time per pixel if ndet=1. We know the total number of pixels
 	# hit (ny*nx) and the total time (t2-t1), and we know the relative
 	# weight per row (1/grad), so we can just normalize things
-	npix = (x2[0]-x1[0])*len(y)
-	if np.any(npix == 0) or np.any(grad <= 0):
+	ny, nx = len(y), x2[0]-x1[0]
+	npix = ny*nx
+	if npix == 0 or np.any(grad <= 0):
 		return pix_ranges, grad*0
 	else:
 		weights = 1/grad
-		weights *= (t2-t1)/npix/np.sum(weights) * ndet
+		weights *= (t2-t1)/(np.sum(weights)*nx) * ndet # *nx because weight is per row
 		return pix_ranges, weights
 
 def add_weight(omap, pix_ranges, weights, nphi=0, method="fortran"):
@@ -134,7 +135,9 @@ def smooth_tophat(map, rad):
 	pos[0] -= pos[0,refy,refx]
 	pos[1] -= pos[1,refy,refx]
 	r2     = np.sum(pos**2,0)
-	kernel = (r2 < rad**2).astype(map.dtype) / (np.pi*rad**2) / map.size**0.5 * map.area()
+	kernel  = (r2 < rad**2).astype(map.dtype)
+	kernel /= np.sum(kernel)
+	kernel *= map.size**0.5
 	kernel = np.roll(kernel,-refy,0)
 	kernel = np.roll(kernel,-refx,1)
 	res = enmap.ifft(enmap.fft(map)*np.conj(enmap.fft(kernel))).real
