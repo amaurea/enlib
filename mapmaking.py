@@ -772,6 +772,13 @@ class PostPickup:
 		self.ptp = prec_ptp
 		self.weighted = weighted
 	def __call__(self, imap):
+		return self.postfilter_TP_separately(imap)
+	def postfilter_TP_separately(self, imap):
+		res = imap*0
+		tmp = imap.copy(); tmp[1:] = 0; res[:1] = self.postfilter_map(tmp)[:1]
+		tmp = imap.copy(); tmp[:1] = 0; res[1:] = self.postfilter_map(tmp)[1:]
+		return res
+	def postfilter_map(self, imap):
 		# This function has a lot of duplicate code with Eqsys.A :/
 		signals = [self.signal_cut, self.signal_map]
 		imaps   = [self.signal_cut.zeros(), imap]
