@@ -262,6 +262,8 @@ class PmatMapMultibeam(PointingMatrix):
 		# each detector to have a separate beam. The dt part is pretty useless.
 		# beam_comps has format [nbeam,ndet,{T,Q,U}].
 		# Get the full box after taking all beam offsets into account
+		self.empty = len(beam_offs) == 0
+		if self.empty: return
 		ibox = np.array([np.min(scan.boresight,0)+np.min(beam_offs,(0,1)),
 				np.max(scan.boresight,0)+np.max(beam_offs,(0,1))])
 		# Build our pointing interpolator
@@ -280,6 +282,7 @@ class PmatMapMultibeam(PointingMatrix):
 		# Loop over each beam, summing its contributions
 		if times is None: times = np.zeros(5)
 		tod *= tmul
+		if self.empty: return
 		core = get_core(tod.dtype)
 		#print "max m", np.max(m)
 		#print "max comp", np.max(np.abs(self.beam_comps))
@@ -299,6 +302,7 @@ class PmatMapMultibeam(PointingMatrix):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
 		m *= mmul
+		if self.empty: return
 		core = get_core(tod.dtype)
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
 			core.pmat_map_direct_grid(-1, tod.T, tmul, m.T, 1.0, 1, self.order, self.scan.boresight.T,

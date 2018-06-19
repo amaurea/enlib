@@ -455,8 +455,11 @@ class Bufmap:
 		"""Transfer data from one configuration (as described by this
 		bufmap) to another (as described by target_bufmap), allocating
 		buffers internally as needed."""
-		source_buffer = np.zeros(self.buf_shape, source_data[0].dtype)
-		target_buffer = np.zeros(target_bufmap.buf_shape, target_data[0].dtype)
+		# Use dtype.name here to work around mpi4py's inability to handle
+		# numpy's several equivalent descriptions of the same dtype. This
+		# prevents errors like "KeyError '<f'"
+		source_buffer = np.zeros(self.buf_shape, source_data[0].dtype.name)
+		target_buffer = np.zeros(target_bufmap.buf_shape, target_data[0].dtype.name)
 		self.data2buf(source_data, source_buffer)
 		self.buf2buf(source_buffer, target_bufmap, target_buffer, comm)
 		target_bufmap.buf2data(target_buffer, target_data)
