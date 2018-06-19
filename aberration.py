@@ -33,13 +33,13 @@ def distortion(pos, dir, beta):
 	pos = coordinates.transform("equ",["equ",[dir,False]],pos,pol=True)
 	return aber_deriv(np.pi/2-pos[1], -beta)-1
 
-def aberrate(imap, dir, beta, mode="wrap", order=3, recenter=False):
+def aberrate(imap, dir, beta, mode="wrap", order=3, recenter=False, modulation=True):
 	pol = imap.ndim > 2
 	pos = imap.posmap()
 	# The ::-1 stuff switches between dec,ra and ra,dec ordering.
 	# It is a bit confusing to have different conventions in enmap
 	# and coordinates.
-	pos = remap(pos[::-1], dir, beta, pol=pol, recenter=recenter)
+	pos = remap(pos[::-1], dir, beta, pol=pol, recenter=recenter, modulation=modulation)
 	pos[:2] = pos[1::-1]
 	pix = imap.sky2pix(pos[:2], corner=True) # interpol needs corners
 	omap= en.ndmap(utils.interpol(imap, pix, mode=mode, order=order), imap.wcs)
@@ -47,7 +47,8 @@ def aberrate(imap, dir, beta, mode="wrap", order=3, recenter=False):
 		c,s = np.cos(2*pos[2]), np.sin(2*pos[2])
 		omap[1] = c*omap[1] + s*omap[2]
 		omap[2] =-s*omap[1] + c*omap[2]
-	omap *= pos[2+pol,None]
+	if modulation:
+		omap *= pos[2+pol]
 	return omap
 
 def aber_angle(theta, beta):
