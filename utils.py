@@ -1531,7 +1531,7 @@ def eigpow(A, e, axes=[-2,-1], rlim=None, alim=None):
 
 def nint(a):
 	"""Return a rounded to the nearest integer, as an integer."""
-	return np.int0(np.round(a))
+	return np.round(a).astype(int)
 
 format_regex = r"%(\([a-zA-Z]\w*\)|\(\d+)\)?([ +0#-]*)(\d*|\*)(\.\d+|\.\*)?(ll|[lhqL])?(.)"
 def format_to_glob(format):

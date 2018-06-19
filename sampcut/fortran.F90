@@ -389,5 +389,26 @@ contains
 		end do
 	end subroutine
 
+	! Sum the tod samples in each range
+	subroutine cut_sum(ranges, detmap, tod, vals)
+		implicit none
+		integer, intent(in) :: ranges(:,:), detmap(:)
+		real(_), intent(in) :: tod(:,:)
+		real(_), intent(inout) :: vals(:)
+		integer :: i, j, k, ri
+		real(_) :: v
+		ri = 0
+		do i = 1, size(detmap)-1
+			do j = detmap(i)+1, detmap(i+1)
+				ri = ri+1
+				v  = 0
+				do k = ranges(1,j)+1, ranges(2,j)
+					v = v + tod(k,i)
+				end do
+				vals(ri) = v
+			end do
+		end do
+	end subroutine
+
 end module
 

@@ -335,8 +335,7 @@ def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, pr
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	return ndmap(pmap, wcs)
 
-def extract(map, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b,
-		cval=0):
+def extract(map, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b, cval=0):
 	"""Like project, but only works for pixel-compatible wcs. Much
 	faster because it simply copies over pixels. Can be used in
 	co-adding by specifying an output map and a combining operation.

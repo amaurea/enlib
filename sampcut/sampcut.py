@@ -114,6 +114,8 @@ class Sampcut:
 		return extract_samples(self, tod)
 	def insert_samples(self, tod, samples):
 		return insert_samples(self, tod, samples)
+	def sum_samples(self, tod):
+		return sum_samples(self, tod)
 	def __len__(self): return self.ndet
 	def __mul__(self, other):
 		"""Compute the composition of these cuts and the right-hand-side,
@@ -224,6 +226,12 @@ def insert_samples(cut, tod, samples):
 	"""Inverse of extract_samples. Inserts samples into tod at the location
 	given by Sampcut cut"""
 	get_core(tod.dtype).cut_insert(cut.ranges.T, cut.detmap, tod.T, samples)
+def sum_samples(cut, tod):
+	"""Sum the samples indicated by the Sampcut cut from the given tod,
+	and return them as a 1d array"""
+	vals = np.empty(cut.nrange, tod.dtype)
+	get_core(tod.dtype).cut_sum(cut.ranges.T, cut.detmap, tod.T, vals)
+	return vals
 
 def gapfill_const(cut, tod, value, inplace=False):
 	"""Fill cut values in tod by the given value. Returns the result."""
