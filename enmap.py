@@ -68,7 +68,7 @@ class ndmap(np.ndarray):
 	def npix(self): return np.product(self.shape[-2:])
 	@property
 	def geometry(self): return self.shape, self.wcs
-	def project(self, shape, wcs, order=3, mode="nearest", cval=0, prefilter=True, mask_nan=True, safe=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
+	def project(self, shape, wcs, order=3, mode="constant", cval=0, prefilter=True, mask_nan=True, safe=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width, profile="cos", fill="zero"): return apod(self, width, profile=profile, fill=fill)
@@ -329,14 +329,12 @@ def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, pr
 		if enlib.wcs.equal(map.wcs, wcs) and tuple(shape[-2:]) == tuple(shape[-2:]):
 			return map
 		elif enlib.wcs.is_compatible(map.wcs, wcs) and mode == "constant":
-			print "Using extract instead"
 			return extract(map, shape, wcs, cval=cval)
 	pix  = map.sky2pix(posmap(shape, wcs), safe=safe)
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	return ndmap(pmap, wcs)
 
-def extract(map, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b,
-		cval=0):
+def extract(map, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b, cval=0):
 	"""Like project, but only works for pixel-compatible wcs. Much
 	faster because it simply copies over pixels. Can be used in
 	co-adding by specifying an output map and a combining operation.
@@ -1367,7 +1365,8 @@ def fix_endian(map):
 		map = map.byteswap(True).newbyteorder()
 	return map
 
-def shift(map, off):
+def shift(map, off, inplace=False):
+	if not inplace: map = map.copy()
 	off = np.atleast_1d(off)
 	for i, o in enumerate(off):
 		if o != 0:

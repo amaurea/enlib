@@ -57,6 +57,7 @@ class Signal:
 		self.precon = PreconNull()
 		self.prior  = PriorNull()
 		self.post   = []
+		self.filters= []
 		self.name   = name
 		self.ofmt   = ofmt
 		self.output = output
@@ -71,6 +72,10 @@ class Signal:
 	def write   (self, prefix, tag, x): pass
 	def postprocess(self, x):
 		for p in self.post: x = p(x)
+		return x
+	def filter(self, x):
+		for f in self.filters:
+			x = f(x)
 		return x
 
 class SignalMap(Signal):
@@ -136,8 +141,7 @@ class SignalDmap(Signal):
 			for scan, subind in zip(scans, subinds):
 				data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys), subind]
 		self.data = data
-	def prepare(self, m):
-		return m.tile2work()
+	def prepare(self, m): return m.tile2work()
 	def forward(self, scan, tod, work):
 		if scan not in self.data: return
 		mat, ind = self.data[scan]
@@ -148,6 +152,13 @@ class SignalDmap(Signal):
 		mat.backward(tod, work[ind])
 	def finish(self, m, work):
 		m.work2tile(work)
+	def filter(self, work):
+		res = []
+		for w in work:
+			for filter in self.filters:
+				w = filter(w)
+			res.append(w)
+		return res
 	def zeros(self): return dmap.zeros(self.area.geometry)
 	def work(self):  return self.area.geometry.build_work()
 	def write(self, prefix, tag, m):
@@ -965,6 +976,23 @@ class FilterGapfill:
 	def __call__(self, scan, tod):
 		gapfill.gapfill(tod, scan.cut, inplace=True)
 
+###### Map filters ######
+
+class MapfilterGauss:
+	def __init__(self, scale, cap=None):
+		self.scale = scale
+		self.cap   = cap
+	def __call__(self, map):
+		l2 = np.sum(map.lmap()**2,0)
+		f  = np.exp(-0.5*l2*self.scale**2)
+		if self.scale < 0: f = 1-f
+		if self.cap:
+			f = np.maximum(f, 1/self.cap)
+		f = f.astype(map.dtype)
+		res = enmap.harm2map(enmap.map2harm(map)/f)
+		res = enmap.samewcs(np.ascontiguousarray(res), res)
+		return res
+
 ######## Equation system ########
 
 class Eqsys:
@@ -984,7 +1012,7 @@ class Eqsys:
 			omaps  = [signal.zeros() for signal in self.signals]
 			# Set up our input and output work arrays. The output work array will accumulate
 			# the results, so it must start at zero.
-			iwork = [signal.prepare(map) for signal, map in zip(self.signals, imaps)]
+			iwork = [signal.filter(signal.prepare(map)) for signal, map in zip(self.signals, imaps)]
 			owork = [signal.work() for signal in self.signals]
 			#owork = [signal.prepare(map) for signal, map in zip(self.signals, omaps)]
 		for si, scan in enumerate(self.scans):
@@ -1023,6 +1051,7 @@ class Eqsys:
 		# Collect all the results, and flatten them
 		with bench.mark("A_reduce"):
 			for signal, map, work in zip(self.signals, omaps, owork):
+				work = signal.filter(work)
 				signal.finish(map, work)
 		# priors
 		with bench.mark("A_prior"):
@@ -1088,6 +1117,7 @@ class Eqsys:
 		# Collect results
 		with bench.mark("b_reduce"):
 			for signal, map, work in zip(self.signals, maps, owork):
+				work = signal.filter(work)
 				signal.finish(map, work)
 		with bench.mark("b_zip"):
 			self.b = self.dof.zip(maps)
