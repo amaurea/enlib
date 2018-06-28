@@ -5,6 +5,10 @@ from enlib import enmap, colorize, mpi, cgrid, utils, memory, bunch, wcs as enwc
 try: from enlib import array_ops
 except ImportError: pass
 
+# Python 3 compatibility
+try: basestring
+except NameError: basestring = str
+
 class Printer:
 	def __init__(self, level=1, prefix=""):
 		self.level  = level
@@ -24,27 +28,99 @@ class Printer:
 		return PrintTimer(self)
 noprint = Printer(0)
 
-def plot(ifiles, args=None, comm=None, noglob=False):
-	"""Plot the given maps, writing each field to disk with the same
-	name as each input file, with the extension changed to .png.
-	There are two main formats: plot(command_string) and plot(ifiles, args).
-	Command string is a command-line argument like what the enplot program
-	accepts, and is translated to ifiles, args internally. Args is a
-	bunch-like object that can be used to modify how the plots are generated
-	and where they are written. See the enplot.parse_args function for a list."""
-	if args is None:
-		args = parse_args(ifiles, noglob=noglob)
-		ifiles = args.ifiles
+def plot(*arglist, **args):
+	"""The main plotting function in this module. Plots the given maps/files,
+	writing the results to disk. This function has two equivalent interfaces:
+	1. A command-line like interface, where plotting options are specified with
+	strings like "-r 500:50 -m 0 -t 2".
+	2. A python-like interface, where plotting options are specified with
+	keyword arguments, like range="500:50", mask=0, ticks=2.
+	These interfaces can be mixed and matched.
+	
+	Input maps are specified either as part of the option strings, as separate
+	file names, or as enmaps passed to the function. Here are some examples:
+	
+	plot(mapobj):
+	  Plots the given enmap object mapobj. Since no file name is
+	  specified, it will be written to the generic name "map.png"
+	  (or "map_0.png", "map_1.png", "map_2.png" if it is a TQU map)
+	plot((mapobj,"foo")):
+	  If a tuple is given, the second element specifies the name tag to
+	  use. In this case the file will be written to "foo.png" if it is a
+	  scalar map, or "foo_0.png" etc. for a vector map.
+	 plot("file.fits"):
+	  Reads a map from file.fits, and plots it. The result is written to
+	  "file.png" (or "file_0.png" etc)
+	 plot(["a.fits","b.fits",(mapobj,"c"),(mapobj,"d.fits")])
+	  Reads a.fits and plots it to a.png, reads b.fits and plots it to b.png,
+	  plots the first mapobj to c.png and the second one to d.png (yes, the
+	  extension in the filename specified in the tuple is ignored. This is
+	  because that filename actually supplies the *input* filename that the
+	  output filename should be computed from).
+	 plot("foo*.fits")
+	  Reads and plots every file matching the glob foo*.fits.
+	 plot("a.fits -r 500:50 -m 0 -d 4 -t 4")
+	  Reads and plots the file a.fits to a.png, using a color range of +-500
+	  for the first field in the map (typically the total intensity), and
+	  +-50 for the remaining fields (typically Q and U). The maps are downsampled
+	  by a factor of 4, and plotted with a grid spacing of 4.
+	
+	Here is a list of the individual options plot recognizes. The short and long
+	ones are recognized when used in the argument string syntax, while the long
+	ones (with - replaced by _) also work as keyword arguments."""
+	for plot in plot_iterator(*arglist, **args):
+		write_plot(plot.name, plot)
+
+def get_plots(*arglist, **args):
+	"""Return a list of all the plots for all the input maps/files.
+	This is equivalent to collecting all the outputs of plot_iterator in
+	a list. If the number of files/maps to plot is large, then so will
+	this list be, with the corresponding memory requirements."""
+	return list(plot_iterator(*arglist, **args))
+
+def plot_iterator(*arglist, **args):
+	"""Iterator that yields the plots for each input map/file. Each yield
+	will be a plot object, with fields
+	.type: The type of the plot. Can be "pil" or "mpl". Usually "pil".
+	.img:  The plot image object, of the given .type.
+	.name: Suggested file name
+	These plots objects can be written to disk using write_plot.
+	See the plot function documentation for a description of the arguments"""
+	# This allows us to pass in both command-line style plot specifications
+	# as well as python-style lists of enmaps and keyword arguments. The maps
+	# to be plotted are collected in maps, which is a list that can contain
+	# either enmaps or filenames. Filenames will later be read in as enmaps
+	imaps = []
+	comm   = extract_arg(args, "comm",   None)
+	noglob = extract_arg(args, "noglob", False)
+
+	for arg in arglist:
+		if isinstance(arg, basestring):
+			parsed = parse_args(arg, noglob=noglob)
+			imaps += parsed.ifiles
+			parsed.update(args)
+			args   = parsed
+		else:
+			imaps.append(arg)
+	del args["ifiles"]
+	args = bunch.Bunch(**args)
 	if comm is None:
 		comm = mpi.COMM_WORLD
 	# Set up verbose output
 	printer = Printer(args.verbosity)
 	cache = {}
-	# Plot each file
-	for fi in range(comm.rank,len(ifiles),comm.size):
-		ifile = ifiles[fi]
-		with printer.time("read %s" % ifile, 3):
-			map, minfo = get_map(ifile, args, return_info=True)
+	# Plot each map
+	for fi in range(comm.rank,len(imaps),comm.size):
+		imap  = imaps[fi]
+		if isinstance(imap, basestring):
+			iname = imap
+		elif isinstance(imap, tuple):
+			imap, iname = imap
+		else:
+			if len(imaps) == 1: iname = "map.fits"
+			else: iname = "map%0*d.fits" % (get_num_digits(len(imaps)), fi)
+		with printer.time("read %s" % iname, 3):
+			map, minfo = get_map(imap, args, return_info=True, name=iname)
 		with printer.time("ranges", 3):
 			crange= get_color_range(map, args)
 		for ci, cr in enumerate(crange.T):
@@ -53,6 +129,7 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 		ncomp  = map.shape[0]
 		ngroup = 3 if args.rgb else 1
 		crange_ind = 0
+		# Collect output images for this map in a list
 		for i in range(0, ncomp, ngroup):
 			# The unflattened index of the current field
 			N = minfo.ishape[:-2]
@@ -70,7 +147,7 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 				map_field.wcs = minfo.wcslist[I[0]]
 			# Build output file name
 			oinfo = {"dir":"" if dir == "." else dir + "/", "base":base, "iext":ext,
-					"fi":fi, "fn":len(args.ifiles), "ci":i, "cn":ncomp, "pi":comm.rank, "pn":comm.size,
+					"fi":fi, "fn":len(imaps), "ci":i, "cn":ncomp, "pi":comm.rank, "pn":comm.size,
 					"pre":args.prefix, "suf":args.suffix,
 					"comp": "_"+"_".join(["%0*d" % (ndig,ind) for ndig,ind in zip(ndigits,I)]) if len(N) > 0 else "",
 					"fcomp": "_%0*d" % (ndigit,i) if len(minfo.ishape) > 2 else "",
@@ -85,24 +162,33 @@ def plot(ifiles, args=None, comm=None, noglob=False):
 					for layer, name in zip(img, info.names):
 						oinfo["layer"] = "_" + name
 						oname = args.oname.format(**oinfo)
-						with subprint.time("write to %s" % oname, 3):
-							layer.save(oname)
+						yield bunch.Bunch(img=layer, name=oname, type="pil", info=info, printer=subprint, **oinfo)
 				else:
-					with subprint.time("write to %s" % oname, 3):
-						img.save(oname)
+					yield bunch.Bunch(img=img, name=oname, type="pil", info=info, printer=subprint, **oinfo)
 			elif args.driver.lower() in ["matplotlib","mpl"]:
 				figure = draw_map_field_mpl(map_field, args, crange[:,crange_ind:crange_ind+ngroup], printer=subprint)
-				with subprint.time("write to %s" % oname, 3):
-					figure.savefig(oname,bbox_inches="tight",dpi=args.mpl_dpi)
+				yield bunch.Bunch(img=figure, name=oname, type="mpl", dpi=args.mpl_dpi, printer=subprint, **oinfo)
 			# Progress report
-			printer.write("\r%s %5d/%d" % (ifile, i+1,ncomp), 2, exact=True, newline=False)
+			printer.write("\r%s %5d/%d" % (iname, i+1,ncomp), 2, exact=True, newline=False)
 			crange_ind += 1
 		printer.write("",    2, exact=True)
-		printer.write(ifile, 1, exact=True)
+		printer.write(iname, 1, exact=True)
 
-def parse_args(args=sys.argv[1:], noglob=False):
+def write_plot(fname, plot):
+	"""Write the given plot to the specified file."""
+	printer = plot.printer if "printer" in plot else noprint
+	if plot.type == "pil":
+		with printer.time("write to %s" % fname, 3):
+			plot.img.save(fname)
+	elif plot.type == "mpl":
+		with printer.time("write to %s" % fname, 3):
+			plot.img.savefig(fname,bbox_inches="tight",dpi=plot.dpi)
+	else:
+		raise ValueError("Unknown plot type '%s'" % plot.type)
+
+def define_arg_parser():
 	parser = argparse.ArgumentParser()
-	parser.add_argument("ifiles", nargs="+", help="The map files to plot. Each file will be processed independently and output as an image file with a name derived from that of the input file (see --oname). For each file a color range will be determined, and each component of the map (if multidimensional) will be written to a separate image file. If the file has more than 1 non-pixel dimension, these will be flattened first.")
+	parser.add_argument("ifiles", nargs="*", help="The map files to plot. Each file will be processed independently and output as an image file with a name derived from that of the input file (see --oname). For each file a color range will be determined, and each component of the map (if multidimensional) will be written to a separate image file. If the file has more than 1 non-pixel dimension, these will be flattened first.")
 	parser.add_argument("-o", "--oname", default="{dir}{pre}{base}{suf}{comp}{layer}.{ext}", help="The format to use for the output name. Default is {dir}{pre}{base}{suf}{comp}{layer}.{ext}")
 	parser.add_argument("-c", "--color", default="planck", help="The color scheme to use, e.g. planck, wmap, gray, hotcold, etc., or a colors pecification in the form val:rrggbb,val:rrggbb,.... Se enlib.colorize for details.")
 	parser.add_argument("-r", "--range", type=str, help="The symmetric color bar range to use. If specified, colors in the map will be truncated to [-range,range]. To give each component in a multidimensional map different color ranges, use a colon-separated list, for example -r 250:100:50 would plot the first component with a range of 250, the second with a range of 100 and the third and any subsequent component with a range of 50.")
@@ -155,9 +241,16 @@ def parse_args(args=sys.argv[1:], noglob=False):
 	parser.add_argument("-S", "--symmetric", action="store_true", help="Treat the non-pixel axes as being asymmetric matrix, and only plot a non-redundant triangle of this matrix.")
 	parser.add_argument("-z", "--zenith",    action="store_true", help="Plot the zenith angle instead of the declination.")
 	parser.add_argument("-F", "--fix-wcs",   action="store_true", help="Fix the wcs for maps in cylindrical projections where the reference point was placed too far away from the map center.")
+	return parser
+
+arg_parser = define_arg_parser()
+# Hack: Update the plot docstring. I suspect that this will confuse automated tools
+plot.__doc__ += "\n\t" + "\n\t".join(arg_parser.format_help().split("optional arguments:")[1].split("\n"))
+
+def parse_args(args=sys.argv[1:], noglob=False):
 	if isinstance(args, basestring):
 		args = shlex.split(args)
-	res = parser.parse_args(args)
+	res = arg_parser.parse_args(args)
 	res = bunch.Bunch(**res.__dict__)
 	# Glob expansion
 	if not noglob:
@@ -171,16 +264,28 @@ def parse_args(args=sys.argv[1:], noglob=False):
 		res.ifiles = ifiles
 	return res
 
-def get_map(ifile, args, return_info=False):
+def extract_arg(args, name, default):
+	if name not in args: return default
+	res = args[name]
+	del args[name]
+	return res
+
+def get_map(ifile, args, return_info=False, name=None):
 	"""Read the specified map, and massage it according to the options
 	in args. Relevant ones are sub, autocrop, slice, op, downgrade, scale,
 	mask. Retuns with shape [:,ny,nx], where any extra dimensions have been
 	flattened into a single one."""
 	with warnings.catch_warnings():
 		warnings.filterwarnings("ignore")
-		toks = ifile.split(":")
-		ifile, slice = toks[0], ":".join(toks[1:])
-		m0 = enmap.read_map(ifile, hdu=args.hdu)
+		if isinstance(ifile, basestring):
+			toks  = ifile.split(":")
+			ifile, slice = toks[0], ":".join(toks[1:])
+			m0    = enmap.read_map(ifile, hdu=args.hdu)
+			if name is None: name = ifile
+		else:
+			m0    = ifile
+			slice = ""
+			if name is None: name = ".fits"
 		if args.fix_wcs:
 			m0.wcs = enwcs.fix_wcs(m0.wcs)
 		# Save the original map, so we can compare its wcs later
@@ -200,7 +305,7 @@ def get_map(ifile, args, return_info=False):
 		# are parts of that hack.
 		for i, m in enumerate(mlist):
 			# Downgrade
-			downgrade = [int(w) for w in args.downgrade.split(",")]
+			downgrade = parse_list(args.downgrade, int)
 			m = enmap.downgrade(m, downgrade)
 			# Slicing, either at the file name level or though the slice option
 			m = eval("m"+slice)
@@ -213,7 +318,7 @@ def get_map(ifile, args, return_info=False):
 			if args.op is not None:
 				m = eval(args.op, {"m":m},np.__dict__)
 			# Scale if requested
-			scale = [int(w) for w in args.scale.split(",")]
+			scale = parse_list(args.scale, int)
 			if np.any(np.array(scale)>1):
 				m = enmap.upgrade(m, scale)
 			# Flip such that pixels are in PIL or matplotlib convention,
@@ -234,7 +339,7 @@ def get_map(ifile, args, return_info=False):
 		mf = m.reshape((-1,)+m.shape[-2:])
 		# Stack
 		if args.tile is not None:
-			toks = [int(i) for i in args.tile.split(",")]
+			toks = parse_list(args.tile, int)
 			nrow = toks[0] if len(toks) > 0 else -1
 			ncol = toks[1] if len(toks) > 1 else -1
 			mf = hwstack(hwexpand(mf, nrow, ncol, args.tile_transpose))[None]
@@ -245,7 +350,7 @@ def get_map(ifile, args, return_info=False):
 		# Done
 		if not return_info: return mf
 		else:
-			info = bunch.Bunch(fname=ifile, ishape=m.shape, wcslist=wcslist)
+			info = bunch.Bunch(fname=name, ishape=m.shape, wcslist=wcslist)
 			return mf, info
 
 def extract_stamps(map, args):
@@ -382,7 +487,8 @@ def draw_map_field_mpl(map, args, crange=None, printer=noprint):
 		pyplot.axes().set_aspect(1/np.cos(np.mean(map.box()[:,0])))
 		if args.grid % 2:
 			ax = pyplot.axes()
-			ticks = np.full(2,1.0); ticks[:] = [float(w) for w in args.ticks.split(",")]
+			ticks = np.full(2,1.0)
+			ticks[:] = parse_list(args.ticks)
 			ax.xaxis.set_major_locator(ticker.MultipleLocator(ticks[1]))
 			ax.yaxis.set_major_locator(ticker.MultipleLocator(ticks[0]))
 			if args.subticks:
@@ -400,6 +506,12 @@ def draw_map_field_mpl(map, args, crange=None, printer=noprint):
 def parse_range(desc,n):
 	res = np.array([float(w) for w in desc.split(":")])[:n]
 	return np.concatenate([res,np.repeat([res[-1]],n-len(res))])
+
+def parse_list(desc, dtype=float, sep=","):
+	if isinstance(desc, basestring):
+		return [dtype(w) for w in desc.split(sep)]
+	else:
+		return desc
 
 def get_color_range(map, args):
 	"""Compute an appropriate color bare range from map[:,ny,nx]
@@ -457,7 +569,8 @@ def map_to_color(map, crange, args):
 def calc_gridinfo(shape, wcs, args):
 	"""Compute the points making up the grid lines for the given map.
 	Depends on args.ticks and args.nstep."""
-	ticks = np.full(2,1.0); ticks[:] = [float(w) for w in args.ticks.split(",")]
+	ticks = np.full(2,1.0)
+	ticks[:] = parse_list(args.ticks)
 	return cgrid.calc_gridinfo(shape, wcs, steps=ticks, nstep=args.nstep, zenith=args.zenith)
 
 def draw_grid(ginfo, args):
