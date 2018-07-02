@@ -3,7 +3,7 @@ import numpy as np
 cimport numpy as np
 cimport csharp
 from libc.math cimport atan2
-from cython.parallel import prange, parallel
+#from cython.parallel import prange, parallel
 
 cdef class map_info:
 	"""This class is a thin wrapper for the sharp geom_info struct, which represents
