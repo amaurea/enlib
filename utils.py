@@ -16,7 +16,7 @@ def lines(file_or_fname):
 		with open(file_or_fname,"r") as file:
 			for line in file: yield line
 	else:
-		for line in file: yield line
+		for line in file_or_fname: yield line
 
 def listsplit(seq, elem):
 	"""Analogue of str.split for lists.
