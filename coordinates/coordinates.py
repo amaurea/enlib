@@ -1,14 +1,11 @@
 """This module provides conversions between astronomical coordinate systems.
 When c is more developed, it might completely replace this
 module. For now, it is used as a part of the implementation."""
-import numpy as np, pyfsla
+import numpy as np
 import astropy.coordinates as c, astropy.units as u
 from enlib import utils
-# Optional dependencies
-try: from enlib import iers
-except ImportError: pass
-try: import ephem
-except ImportError: pass
+# Optional dependencies are imported in the functions that
+# use them. These include ephem, iers and pyfsla
 
 class default_site:
 	lat  = -22.9585
@@ -22,20 +19,20 @@ class default_site:
 	base_tilt =    0.0107693
 	base_az   = -114.9733961
 
-def transform(from_sys, to_sys, coords, time=55500, site=default_site, pol=None, mag=None):
+def transform(from_sys, to_sys, coords, time=55500, site=default_site, pol=None, mag=None, bore=None):
 	"""Transforms coords[2,...] from system from_sys to system to_sys, where
 	systems can be "hor", "cel" or "gal". For transformations involving
 	"hor", the optional arguments time (in modified julian days) and site (which must
 	contain .lat (rad), .lon (rad), .P (pressure, mBar), .T (temperature, K),
 	.hum (humidity, 0.2 by default), .alt (altitude, m)). Returns an array
 	with the same shape as the input. The coordinates are in ra,dec-ordering."""
-	from_info, to_info = getsys_full(from_sys,time,site), getsys_full(to_sys,time,site)
+	from_info, to_info = getsys_full(from_sys,time,site,bore=bore), getsys_full(to_sys,time,site,bore=bore)
 	ihand = get_handedness(from_info[0])
 	ohand = get_handedness(to_info[0])
 	# Apply the specified transformation, optionally computing the induced
 	# polarization rotation and apparent magnification
 	def transfunc(coords):
-		return transform_raw(from_info, to_info, coords, time=time, site=site)
+		return transform_raw(from_info, to_info, coords, time=time, site=site, bore=bore)
 	fields = []
 	if pol: fields.append("ang")
 	if mag: fields.append("mag")
@@ -121,7 +118,7 @@ def transform_meta(transfun, coords, fields=["ang","mag"], offset=5e-7):
 		res.mag = (tri_area(diff).T/tri_area(offsets[1:]-offsets[0]).T).T
 	return res
 
-def transform_raw(from_sys, to_sys, coords, time=None, site=default_site):
+def transform_raw(from_sys, to_sys, coords, time=None, site=default_site, bore=None):
 	"""Transforms coords[2,...] from system from_sys to system to_sys, where
 	systems can be "hor", "cel" or "gal". For transformations involving
 	"hor", the optional arguments time (in modified julian days) and site (which must
@@ -151,27 +148,33 @@ def transform_raw(from_sys, to_sys, coords, time=None, site=default_site):
 	# 1. To/from object-centered coordinates
 	# 2. cel-hor transformation, using slalib
 	# 3. cel-gal transformation, using astropy
-	(from_sys,from_ref), (to_sys,to_ref) = getsys_full(from_sys,time,site), getsys_full(to_sys,time,site)
-	if from_ref is not None: coords[:] = decenter(coords, from_ref)
+	(from_sys,from_ref), (to_sys,to_ref) = getsys_full(from_sys,time,site,bore=bore), getsys_full(to_sys,time,site,bore=bore)
+	if from_ref is not None: coords[:] = decenter(coords, from_ref[0], restore=from_ref[1])
 	while True:
 		if from_sys == to_sys: break
+		elif from_sys == "bore":
+			coords[:] = bore2tele(coords, bore)
+			from_sys = "tele"
+		elif from_sys == "tele" and to_sys in ["bore"]:
+			coords[:] = tele2bore(coords, bore)
+			from_sys = "bore"
 		elif from_sys == "tele":
 			coords[:] = tele2hor(coords, site, copy=False)
 			from_sys  = "altaz"
-		elif from_sys == "altaz" and to_sys in ["tele"]:
+		elif from_sys == "altaz" and to_sys in ["tele","bore"]:
 			coords[:] = hor2tele(coords, site, copy=False)
 			from_sys  = "tele"
 		elif from_sys == "altaz":
 			coords[:] = hor2cel(coords, time, site, copy=False)
 			from_sys = "icrs"
-		elif from_sys == "icrs" and to_sys in ["altaz","tele"]:
+		elif from_sys == "icrs" and to_sys in ["altaz","tele","bore"]:
 			coords[:] = cel2hor(coords, time, site, copy=False)
 			from_sys = "altaz"
 		else:
 			to_sys_astropy = nohor(to_sys)
 			coords[:] = transform_astropy(from_sys, to_sys_astropy, coords)
 			from_sys = to_sys_astropy
-	if to_ref is not None: coords[:] = recenter(coords, to_ref)
+	if to_ref is not None: coords[:] = recenter(coords, to_ref[0], restore=to_ref[1])
 	return coords.reshape(oshape)
 
 def transform_astropy(from_sys, to_sys, coords):
@@ -187,6 +190,8 @@ def transform_astropy(from_sys, to_sys, coords):
 		getattr(getattr(coords, names[1]),unit.name)])
 
 def hor2cel(coord, time, site, copy=True):
+	from . import pyfsla
+	from enlib import iers
 	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]
 	info   = iers.lookup(trepr)
@@ -199,6 +204,8 @@ def hor2cel(coord, time, site, copy=True):
 	return coord
 
 def cel2hor(coord, time, site, copy=True):
+	from . import pyfsla
+	from enlib import iers
 	# This is very slow for objects near the horizon!
 	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]
@@ -221,6 +228,20 @@ def hor2tele(coord, site, copy=True):
 	coord = euler_rot([site.base_az*utils.degree, -site.base_tilt*utils.degree, -site.base_az*utils.degree], coord)
 	return coord
 
+def tele2bore(coord, bore, copy=True):
+	"""Transforms coordinates [{ra,dec},...] to boresight-relative coordinates given by the boresight pointing
+	[{ra,dec},...] with the same shape as coords. After the rotation, the boresight will be at the zenith;
+	things above the boresight will be at 'ra'=180 and things below will be 'ra'=0."""
+	coord = np.array(coord, copy=copy)
+	return recenter(coord, bore)
+
+def bore2tele(coord, bore, copy=True):
+	"""Transforms coordinates [{ra,dec},...] from boresight-relative coordinates given by the boresight pointing
+	[{ra,dec},...] with the same shape as coords. After the rotation, the coordinates will be in telescope
+	coordinates, which are similar to horizontal coordinates."""
+	coord = np.array(coord, copy=copy)
+	return decenter(coord, bore)
+
 def euler_mat(euler_angles, kind="zyz"):
 	"""Defines the rotation matrix M for a ABC euler rotation,
 	such that M = A(alpha)B(beta)C(gamma), where euler_angles =
@@ -240,7 +261,7 @@ def euler_rot(euler_angles, coords, kind="zyz"):
 	co     = utils.rect2ang(rect, False)
 	return co.reshape(coords.shape)
 
-def recenter(angs, center):
+def recenter(angs, center, restore=False):
 	"""Recenter coordinates "angs" (as ra,dec) on the location given by "center",
 	such that center moves to the north pole."""
 	# Performs the rotation E(0,-theta,-phi). Originally did
@@ -254,23 +275,26 @@ def recenter(angs, center):
 	# Now supports specifying where to recenter by specifying center as
 	# lon_from,lat_from,lon_to,lat_to
 	if len(center) == 4: ra0, dec0, ra1, dec1 = center
-	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], 0, np.pi/2
+	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], center[0]*0, center[1]*0+np.pi/2
+	if restore: ra1 += ra0
 	return euler_rot([ra1,dec0-dec1,-ra0], angs, kind="zyz")
-def decenter(angs, center):
+
+def decenter(angs, center, restore=False):
 	"""Inverse operation of recenter."""
 	if len(center) == 4: ra0, dec0, ra1, dec1 = center
-	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], 0, np.pi/2
+	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], center[0]*0, center[1]*0+np.pi/2
+	if restore: ra1 += ra0
 	return euler_rot([ra0,dec1-dec0,-ra1],  angs, kind="zyz")
 
-def nohor(sys): return sys if sys not in ["altaz","tele"] else "icrs"
+def nohor(sys): return sys if sys not in ["altaz","tele","bore"] else "icrs"
 def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,basestring) else sys
 def get_handedness(sys):
 	"""Return the handedness of the coordinate system sys, as seen from inside
 	the celestial sphere, in the standard IAU convention."""
-	if sys in ["altaz"]: return 'R'
+	if sys in ["altaz","tele","bore"]: return 'R'
 	else: return 'L'
 
-def getsys_full(sys, time=None, site=default_site):
+def getsys_full(sys, time=None, site=default_site, bore=None):
 	"""Handles our expanded coordinate system syntax: base[:ref[:refsys]].
 	This allows a system to be recentered on a given position or object.
 	The argument can either be a string of the above format (with [] indicating
@@ -289,6 +313,11 @@ def getsys_full(sys, time=None, site=default_site):
 	Used to be sys:center_on/center_at:sys_of_center_coordinates. But much
 	more flexible to do sys:center_on:sys/center_at:sys. This syntax
 	would be backwards compatible, though it's starting to get a bit clunky.
+
+	Big hack: If the system is "sidelobe", then we will use sidelobe-oriented
+	centering instead of object-oriented centering. This will result in
+	a coordinate system where the boresight has the zenith-mirrored
+	position of what the object would have in zenith-relative coordinates.
 	"""
 	if isinstance(sys, basestring): sys = sys.split(":",1)
 	else:
@@ -296,6 +325,10 @@ def getsys_full(sys, time=None, site=default_site):
 		except TypeError: sys = [sys]
 	if len(sys) < 2: sys += [None]*(2-len(sys))
 	base, ref = sys
+	if base == "sidelobe":
+		base = "bore"
+		sidelobe = True
+	else: sidelobe = False
 	base = getsys(base)
 	prevsys = base
 	#refsys = getsys(refsys) if refsys is not None else base
@@ -315,20 +348,22 @@ def getsys_full(sys, time=None, site=default_site):
 			try:
 				r = np.asfarray(r.split("_"))*utils.degree
 				assert(r.ndim == 1 and len(r) == 2)
-				r = transform_raw(refsys, base, r[:,None], time=time, site=site)
+				r = transform_raw(refsys, base, r[:,None], time=time, site=site, bore=bore)
 			except ValueError:
 				# Otherwise, treat as an ephemeris object
 				r = ephem_pos(r, time)
-				r = transform_raw("equ", base, r, time=time, site=site)
+				r = transform_raw("equ", base, r, time=time, site=site, bore=bore)
 			ref_expanded += list(r)
 			prevsys = refsys
-		ref = np.array(ref_expanded)
+		ref_coords = np.array(ref_expanded)
+		ref = [ref_coords, sidelobe]
 	return [base, ref]
 
 def ephem_pos(name, mjd):
 	"""Given the name of an ephemeris object from pyephem and a
 	time in modified julian date, return its position in ra, dec
 	in radians in equatorial coordinates."""
+	import ephem
 	mjd = np.asarray(mjd)
 	djd = mjd + 2400000.5 - 2415020
 	obj = getattr(ephem, name)()
@@ -371,6 +406,7 @@ str2sys = make_mapping({
 	"icrs":     ["equ", "equatorial", "cel", "celestial", "icrs"],
 	"altaz":    ["altaz", "azel", "hor", "horizontal"],
 	"tele":     ["tele","telescope"],
+	"bore":     ["bore","boresight"],
 	"barycentrictrueecliptic": ["ecl","ecliptic","barycentrictrueecliptic"],
 	})
 coord_names = {
@@ -379,4 +415,5 @@ coord_names = {
 	"altaz":["az","alt"],
 	"barycentrictrueecliptic":["lon","lat"],
 	"tele":["az","alt"],
+	"bore":["az","alt"],
 	}

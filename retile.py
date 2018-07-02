@@ -1,5 +1,7 @@
 import numpy as np, glob, re, sys, os
-from enlib import utils, enmap, bunch
+from . import utils, enmap, bunch
+
+default_pathformat = "tile%(y)03d_%(x)03d.fits"
 
 def leaftile(idir, odir, tsize=675, comm=None, verbose=False, lrange=[0,-6],
 		monolithic=False, slice=None):
@@ -156,7 +158,7 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		enmap.write_map(oname, omap)
 		if verbose: print oname
 
-def monolithic(idir, ofile, verbose=True, slice=None):
+def read_monolithic(idir, verbose=True, slice=None, dtype=None):
 	# Find the range of input tiles
 	ipathfmt = idir + "/tile%(y)03d_%(x)03d.fits"
 	itile1, itile2 = find_tile_range(ipathfmt)
@@ -169,14 +171,21 @@ def monolithic(idir, ofile, verbose=True, slice=None):
 	m2 = read(ipathfmt % {"y":itile2[0]-1,"x":itile2[1]-1})
 	wy,wx  = m1.shape[-2:]
 	oshape = tuple(np.array(m1.shape[-2:])*(itile2-itile1-1) + np.array(m2.shape[-2:]))
-	omap  = enmap.zeros(m1.shape[:-2] + oshape, m1.wcs, m1.dtype)
+	if dtype is None: dtype = m1.dtype
+	omap  = enmap.zeros(m1.shape[:-2] + oshape, m1.wcs, dtype)
 	del m1, m2
 	# Now loop through all tiles and copy them in to the correct position
 	for ty in range(itile1[0],itile2[0]):
 		for tx in range(itile1[1],itile2[1]):
 			m = read(ipathfmt % {"y":ty,"x":tx})
-			omap[...,ty*wy:(ty+1)*wy,tx*wx:(tx+1)*wx] = m
+			oy = ty - itile1[0]
+			ox = tx - itile1[1]
+			omap[...,oy*wy:(oy+1)*wy,ox*wx:(ox+1)*wx] = m
 			if verbose: print ipathfmt % {"y":ty,"x":tx}
+	return omap
+
+def monolithic(idir, ofile, verbose=True, slice=None, dtype=None):
+	omap = read_monolithic(idir, verbose=verbose, slice=slice, dtype=dtype)
 	enmap.write_map(ofile, omap)
 
 def range_overlap(a,b):
@@ -231,7 +240,7 @@ def read_tileset_geometry(ipathfmt, itile1=(None,None), itile2=(None,None)):
 			tshape=m1.shape[-2:])
 
 def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=False,
-		cache=None, slice=None):
+		cache=None, slice=None, wrap=True):
 	"""Given a set of tiles on disk with locations ipathfmt % {"y":...,"x":...},
 	read the data corresponding to the pixel range opix[{from,to],{y,x}] in
 	the full map."""
@@ -244,6 +253,10 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 		geo = read_tileset_geometry(ipathfmt, itile1=itile1, itile2=itile2)
 	else: geo = cache[2]
 	if cache is not None: cache[2] = geo
+	# Determine tile wrapping
+	npix_phi  = np.abs(360./geo.wcs.wcs.cdelt[0])
+	ntile_phi = utils.nint(npix_phi/geo.tshape[-1])
+
 	isize = geo.tshape
 	osize = opix[1]-opix[0]
 	omap  = enmap.zeros(geo.shape[:-2]+tuple(osize), geo.wcs, geo.dtype)
@@ -260,13 +273,14 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 		oy1,oy2 = overlap-opix[0,0]
 		iy1,iy2 = overlap-ipy1
 		for itx in range(it1[1],it2[1]):
-			if itx < itile1[1] or itx >= itile2[1]: continue
+			if wrap: itx_wrap = itx % ntile_phi
+			if itx_wrap < itile1[1] or itx_wrap >= itile2[1]: continue
 			ipx1, ipx2 = itx*isize[1], (itx+1)*isize[1]
 			overlap = range_overlap(opix[:,1],[ipx1,ipx2])
 			ox1,ox2 = overlap-opix[0,1]
 			ix1,ix2 = overlap-ipx1
 			# Read the input tile and copy over
-			iname = ipathfmt % {"y":ity,"x":itx}
+			iname = ipathfmt % {"y":ity,"x":itx_wrap}
 			if cache is None or cache[0] != iname:
 				imap  = enmap.read_map(iname)
 				if slice: imap = eval("imap"+slice)

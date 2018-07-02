@@ -3,6 +3,8 @@ full sky."""
 import numpy as np
 from enlib import sharp, enmap, powspec, wcs as enwcs, utils
 
+class ShapeError(Exception): pass
+
 def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, method="auto", direct=False, verbose=False):
 	"""Generates a CMB realization with the given power spectrum for an enmap
 	with the specified shape and WCS. This is identical to enlib.rand_map, except
@@ -10,14 +12,14 @@ def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=
 	slower and more memory-intensive. The map should not cross the poles."""
 	# Ensure everything has the right dimensions and restrict to relevant dimensions
 	ps = utils.atleast_3d(ps)
-	assert ps.shape[0] == ps.shape[1], "ps must be [ncomp,ncomp,nl] or [nl]"
-	assert len(shape) == 2 or len(shape) == 3, "shape must be (ncomp,ny,nx) or (ny,nx)"
+	if not ps.shape[0] == ps.shape[1]: raise ShapeError("ps must be [ncomp,ncomp,nl] or [nl]")
+	if not (len(shape) == 2 or len(shape) == 3): raise ShapeError("shape must be (ncomp,ny,nx) or (ny,nx)")
 	ncomp = 1 if len(shape) == 2 else shape[-3]
 	ps = ps[:ncomp,:ncomp]
 
 	ctype = np.result_type(dtype,0j)
 	if verbose: print "Generating alms with seed %s up to lmax=%d dtype %s" % (str(seed), lmax, np.dtype(ctype).char)
-	alm   = rand_alm(ps, lmax=lmax, seed=seed, dtype=ctype)
+	alm   = rand_alm_healpy(ps, lmax=lmax, seed=seed, dtype=ctype)
 	if verbose: print "Allocating output map shape %s dtype %s" % (str((ncomp,)+shape[-2:]), np.dtype(dtype).char)
 	map   = enmap.empty((ncomp,)+shape[-2:], wcs, dtype=dtype)
 	alm2map(alm, map, spin=spin, oversample=oversample, method=method, direct=direct, verbose=verbose)
@@ -81,8 +83,8 @@ def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False,
 	than the output map, and bicubic spline interpolation will be used to tranfer
 	its values to the output map. This uses more memory, is slower and less
 	accurate than the direct evaluation used for cylindrical projections. If
-	method is "cyl" only the cylindrical method will be used, resulting in an
-	AssertionError if the pixelization is not actually cylindrical. If method is
+	method is "cyl" only the cylindrical method will be used, resulting in a
+	ShapeError if the pixelization is not actually cylindrical. If method is
 	"pos", then the slow, general method will always be used.
 
 	If ainfo is provided, it is an alm_info describing the layout of the input alm.
@@ -103,7 +105,7 @@ def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False,
 		# Cylindrical method if possible, else slow pos-based method
 		try:
 			alm2map_cyl(alm, map, ainfo=ainfo, spin=spin, deriv=deriv, direct=direct, copy=copy, verbose=verbose)
-		except AssertionError as e:
+		except ShapeError as e:
 			# Wrong pixelization. Fall back on slow, general method
 			if verbose: print "Computing pixel positions %s dtype d" % str((2,)+map.shape[-2:])
 			pos = map.posmap()
@@ -124,7 +126,7 @@ def map2alm(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False, copy=Fal
 		try:
 			alm = map2alm_cyl(map, alm, ainfo=ainfo, lmax=lmax, spin=spin, direct=direct,
 					copy=copy, rtol=rtol, atol=atol)
-		except AssertionError as e:
+		except ShapeError as e:
 			raise NotImplementedError("map2alm for noncylindrical layouts not implemented")
 	else:
 		raise ValueError("Unknown alm2map method %s" % method)
@@ -244,14 +246,14 @@ def map2alm_cyl(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False,
 	minfo = match_predefined_minfo(tmap, rtol=rtol, atol=atol)
 	return map2alm_raw(tmap, alm, minfo, ainfo, spin=spin)
 
-def map2alm_healpix(healmap, alm=None, ainfo=None, lmax=None, spin=2, deriv=False, copy=False):
+def map2alm_healpix(healmap, alm=None, ainfo=None, lmax=None, spin=2, copy=False):
 	"""Projects the given alm[...,ncomp,nalm] onto the given healpix map
 	healmap[...,ncomp,npix]."""
 	alm, ainfo = prepare_alm(alm, ainfo, lmax, healmap.shape[:-1], healmap.dtype)
 	nside = npix2nside(healmap.shape[-1])
 	minfo = sharp.map_info_healpix(nside)
 	return map2alm_raw(healmap[...,None], alm, minfo=minfo, ainfo=ainfo,
-			spin=spin, deriv=deriv, copy=copy)
+			spin=spin, copy=copy)
 
 ######################
 ### Raw transforms ###
@@ -293,6 +295,7 @@ def map2alm_raw(map, alm, minfo, ainfo, spin=2, copy=False):
 	"""Direct wrapper of libsharp's map2alm. Requires ainfo and minfo
 	to already be set up, and that the map and alm must be fully compatible
 	with these."""
+	if not (map.dtype == np.float32 or map.dtype == np.float64): raise TypeError("Only float32 or float64 dtype supported for shts")
 	if copy: alm = alm.copy()
 	alm_full = utils.to_Nd(alm, 3)
 	map_full = utils.to_Nd(map, 4)
@@ -322,10 +325,11 @@ def make_projectable_map_cyl(map, verbose=False):
 	hy,hx = enmap.pix2sky(map.shape, map.wcs, [np.zeros(nx),np.arange(nx)])
 	dx    = hx[1:]-hx[:-1]
 	dx    = dx[np.isfinite(dx)] # Handle overextended coordinates
-	assert np.allclose(dx,dx[0]), "Map must have constant phi spacing"
+
+	if not np.allclose(dx,dx[0]): raise ShapeError("Map must have constant phi spacing")
 	nphi = utils.nint(2*np.pi/dx[0])
-	assert np.allclose(2*np.pi/nphi,dx[0]), "Pixels must evenly circumference"
-	assert np.allclose(vx,vx[0]), "Different phi0 per row indicates non-cylindrical enmap"
+	if not np.allclose(2*np.pi/nphi,dx[0]): raise ShapeError("Pixels must evenly circumference")
+	if not np.allclose(vx,vx[0]): raise ShapeError("Different phi0 per row indicates non-cylindrical enmap")
 	phi0 = vx[0]
 	# Make a map with the same geometry covering a whole band around the sky
 	# We can do this simply by extending it in the positive pixel dimension.
@@ -333,7 +337,7 @@ def make_projectable_map_cyl(map, verbose=False):
 	owcs   = map.wcs
 	# Our input map could in theory cover multiple copies of the sky, which
 	# would require us to copy out multiple slices.
-	nslice = (nx+nphi-1)/nphi
+	nslice = (nx+nphi-1)//nphi
 	islice, oslice = [], []
 	def negnone(x): return x if x >= 0 else None
 	for i in range(nslice):
@@ -444,8 +448,8 @@ def match_predefined_minfo(m, rtol=None, atol=None):
 	best  = np.argmin(scores)
 	aoff, roff, i1 = aroffs[best]
 	i2 = i1+ntheta
-	assert aoff < atol, "Could not find a map_info with predefined weights matching input map (abs offset %e >= %e)" % (aoff, atol)
-	assert roff < rtol, "Could not find a map_info with predefined weights matching input map (%rel offset e >= %e)" % (aoff, atol)
+	if not aoff < atol: raise ShapeError("Could not find a map_info with predefined weights matching input map (abs offset %e >= %e)" % (aoff, atol))
+	if not roff < rtol: raise ShapeError("Could not find a map_info with predefined weights matching input map (%rel offset e >= %e)" % (aoff, atol))
 	minfo = minfos2[best]
 	# Modify the minfo to restrict it to only the rows contained in m
 	minfo_cut = sharp.map_info(
@@ -461,7 +465,7 @@ def match_predefined_minfo(m, rtol=None, atol=None):
 	return minfo_cut
 
 def npix2nside(npix):
-	return utils.nint((healmap.shape[-1]/12)**0.5)
+	return utils.nint((npix/12)**0.5)
 
 def prepare_alm(alm=None, ainfo=None, lmax=None, pre=(), dtype=np.float64):
 	"""Set up alm and ainfo based on which ones of them are available."""

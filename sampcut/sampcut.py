@@ -44,7 +44,10 @@ class Sampcut:
 				if len(dlist) > 0:
 					ranges.append(dlist)
 					detmap[di+1] = detmap[di] + len(dlist)
-			ranges = np.concatenate(ranges,0).astype(np.int32)
+			if len(ranges) == 0:
+				ranges = np.zeros([0,2],np.int32)
+			else:
+				ranges = np.concatenate(ranges,0).astype(np.int32)
 			if ranges.ndim != 2:
 				raise ValueError("Can only construct Sampcut from list of format [det][cuts][2]")
 		return Sampcut(ranges, detmap, nsamp)
@@ -53,7 +56,7 @@ class Sampcut:
 		return [self.ranges[self.detmap[i]:self.detmap[i+1]] for i in range(self.ndet)]
 	@staticmethod
 	def from_mask(mask):
-		mask = np.asarray(mask)
+		mask = np.asarray(mask, dtype=bool)
 		if mask.ndim == 1: mask = mask[None]
 		assert mask.ndim == 2, "Sampcut.from_mask requires a 1 or 2 dimensional array, but got %d" % mask.ndim
 		mask = mask.view(np.int8)
@@ -111,6 +114,8 @@ class Sampcut:
 		return extract_samples(self, tod)
 	def insert_samples(self, tod, samples):
 		return insert_samples(self, tod, samples)
+	def sum_samples(self, tod):
+		return sum_samples(self, tod)
 	def __len__(self): return self.ndet
 	def __mul__(self, other):
 		"""Compute the composition of these cuts and the right-hand-side,
@@ -221,21 +226,29 @@ def insert_samples(cut, tod, samples):
 	"""Inverse of extract_samples. Inserts samples into tod at the location
 	given by Sampcut cut"""
 	get_core(tod.dtype).cut_insert(cut.ranges.T, cut.detmap, tod.T, samples)
+def sum_samples(cut, tod):
+	"""Sum the samples indicated by the Sampcut cut from the given tod,
+	and return them as a 1d array"""
+	vals = np.empty(cut.nrange, tod.dtype)
+	get_core(tod.dtype).cut_sum(cut.ranges.T, cut.detmap, tod.T, vals)
+	return vals
 
 def gapfill_const(cut, tod, value, inplace=False):
 	"""Fill cut values in tod by the given value. Returns the result."""
 	if not inplace: tod = tod.copy()
+	ishape = tod.shape
 	if tod.ndim == 1: tod = tod.reshape(-1,tod.shape[-1])
 	if cut.ndet == 1 and tod.shape[0] > 1: cut = cut.repeat(tod.shape[0])
 	get_core(tod.dtype).gapfill_const(cut.ranges.T, cut.detmap, tod.T, value)
-	return tod
-def gapfill_linear(cut, tod, context=1, inplace=False):
+	return tod.reshape(ishape)
+def gapfill_linear(cut, tod, context=1, inplace=False, transpose=False):
 	"""Fill cut ranges in tod with straight lines. context determines
 	how many samples at each edge of the cut to use for determining the
 	start and end value for each straight line. Defaults to 1 sample.
 	Returns the result."""
 	if not inplace: tod = tod.copy()
+	ishape = tod.shape
 	if tod.ndim == 1: tod = tod.reshape(-1,tod.shape[-1])
 	if cut.ndet == 1 and tod.shape[0] > 1: cut = cut.repeat(tod.shape[0])
-	get_core(tod.dtype).gapfill_linear(cut.ranges.T, cut.detmap, tod.T, context)
-	return tod
+	get_core(tod.dtype).gapfill_linear(cut.ranges.T, cut.detmap, tod.T, context, transpose)
+	return tod.reshape(ishape)

@@ -57,9 +57,9 @@ class ndmap(np.ndarray):
 	def modrmap(self, safe=True, corner=False): return modrmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def area(self): return area(self.shape, self.wcs)
 	def pixsize(self): return pixsize(self.shape, self.wcs)
-	def pixshape(self): return pixshape(self.shape, self.wcs)
+	def pixshape(self, signed=False): return pixshape(self.shape, self.wcs, signed=signed)
 	def pixsizemap(self): return pixsizemap(self.shape, self.wcs)
-	def extent(self, method="default"): return extent(self.shape, self.wcs, method=method)
+	def extent(self, method="default", signed=False): return extent(self.shape, self.wcs, method=method, signed=signed)
 	@property
 	def preflat(self):
 		"""Returns a view of the map with the non-pixel dimensions flattened."""
@@ -68,7 +68,7 @@ class ndmap(np.ndarray):
 	def npix(self): return np.product(self.shape[-2:])
 	@property
 	def geometry(self): return self.shape, self.wcs
-	def project(self, shape, wcs, order=3, mode="nearest", cval=0, prefilter=True, mask_nan=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
+	def project(self, shape, wcs, order=3, mode="constant", cval=0, prefilter=True, mask_nan=True, safe=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width, profile="cos", fill="zero"): return apod(self, width, profile=profile, fill=fill)
@@ -78,6 +78,7 @@ class ndmap(np.ndarray):
 	def padslice(self, box, default=np.nan): return padslice(self, box, default=default)
 	def downgrade(self, factor): return downgrade(self, factor)
 	def upgrade(self, factor): return upgrade(self, factor)
+	def fillbad(self, val=0, inplace=False): fillbad(self, val=val, inplace=inplace)
 	def to_healpix(self, nside=0, order=3, omap=None, chunk=100000, destroy_input=False):
 		return to_healpix(self, nside=nside, order=order, omap=omap, chunk=chunk, destroy_input=destroy_input)
 	def to_flipper(self, omap=None, unpack=True): return to_flipper(self, omap=omap, unpack=unpack)
@@ -115,35 +116,49 @@ class ndmap(np.ndarray):
 		inclusive : boolean
 			Whether to include pixels that are only partially
 			inside the bounding box. Default: False."""
-		ibox = self.subinds(box, inclusive)
-		islice = enlib.utils.sbox2slice(ibox.T)
-		return self[islice]
-	def subinds(self, box, inclusive=False, cap=True):
-		"""Helper function for submap. Translates the bounding
-		box provided into a pixel units. Assumes rectangular
-		coordinates."""
-		box  = np.asarray(box)
-		# Translate the box to pixels. The 0.5 moves us from
-		# pixel-center coordinates to pixel-edge coordinates,
-		# which we need to distinguish between fully or partially
-		# included pixels
-		bpix = self.sky2pix(box.T).T
-		dir  = 2*(bpix[1]>bpix[0])-1
-		# If we are inclusive, find a bounding box, otherwise,
-		# an internal box
-		if inclusive:
-			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
-		else:
-			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
-		# Turn into list of slices, so we can handle reverse slices properly
-		# Make sure we stay inside our map bounds
-		if cap:
-			for b, n in zip(ibox.T,self.shape[-2:]):
-				if b[2] > 0: b[:2] = [max(b[0],  0),min(b[1], n)]
-				else:        b[:2] = [min(b[0],n-1),max(b[1],-1)]
-		return ibox
+
+		ibox   = self.subinds(box, inclusive, cap=False)
+		#islice = enlib.utils.sbox2slice(ibox.T)
+		#return self[islice]
+		def helper(b):
+			if b[2] >= 0: return False, slice(b[0],b[1],b[2])
+			else: return True, slice(b[1]-b[2],b[0]-b[2],-b[2])
+		yflip, yslice = helper(ibox[:,0])
+		xflip, xslice = helper(ibox[:,1])
+		oshape, owcs = slice_geometry(self.shape, self.wcs, (yslice, xslice), nowrap=True)
+		omap = extract(self, oshape, owcs)
+		# Unflip if neccessary
+		if yflip: omap = omap[...,::-1,:]
+		if xflip: omap = omap[...,:,::-1]
+		return omap
+	def subinds(self, box, inclusive=False, cap=True): return subinds(self.shape, self.wcs, box=box, inclusive=inclusive, cap=cap)
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
+
+def subinds(shape, wcs, box, inclusive=False, cap=True):
+	"""Helper function for submap. Translates the bounding
+	box provided into a pixel units. Assumes rectangular
+	coordinates."""
+	box  = np.asarray(box)
+	# Translate the box to pixels. The 0.5 moves us from
+	# pixel-center coordinates to pixel-edge coordinates,
+	# which we need to distinguish between fully or partially
+	# included pixels
+	#bpix = self.sky2pix(box.T).T
+	bpix = skybox2pixbox(shape, wcs, box, include_direction=True)
+	# If we are inclusive, find a bounding box, otherwise,
+	# an internal box
+	if inclusive:
+		ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),bpix[2]],dtype=int)
+	else:
+		ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),bpix[2]],dtype=int)
+	# Turn into list of slices, so we can handle reverse slices properly
+	# Make sure we stay inside our map bounds
+	if cap:
+		for b, n in zip(ibox.T,shape[-2:]):
+			if b[2] > 0: b[:2] = [max(b[0],	 0),min(b[1], n)]
+			else:	     b[:2] = [min(b[0],n-1),max(b[1],-1)]
+	return ibox
 
 def slice_geometry(shape, wcs, sel, nowrap=False):
 	"""Slice a geometry specified by shape and wcs according to the
@@ -153,7 +168,7 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 	pre, shape = shape[:-2], shape[-2:]
 	oshape = np.array(shape)
 	# The wcs object has the indices in reverse order
-	for i,s in enumerate(sel):
+	for i,s in enumerate(sel[-2:]):
 		s = enlib.slice.expand_slice(s, shape[i], nowrap=nowrap)
 		j = -1-i
 		start = s.start if s.step > 0 else s.start + 1
@@ -162,7 +177,7 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 		wcs.wcs.cdelt[j] *= s.step
 		wcs.wcs.crpix[j] += 0.5
 		oshape[i] = s.stop-s.start
-		oshape[i] = (oshape[i]+s.step-1)/s.step
+		oshape[i] = (oshape[i]+s.step-1)//s.step
 	return tuple(pre)+tuple(oshape), wcs
 
 def scale_geometry(shape, wcs, scale):
@@ -182,7 +197,7 @@ def box(shape, wcs, npoint=10, corner=True):
 	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
 		np.linspace(0,shape[-1],num=npoint,endpoint=True)])
 	if corner: pix -= 0.5
-	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
+	coords = enlib.wcs.nobcheck(wcs).wcs_pix2world(pix[1],pix[0],0)[::-1]
 	if enlib.wcs.is_plain(wcs):
 		return np.array(coords).T[[0,-1]]
 	else:
@@ -202,13 +217,15 @@ def enmap(arr, wcs=None, dtype=None, copy=True):
 		Default: Same as arr.
 	copy : boolean
 		If true, arr is copied. Otherwise, a referance is kept."""
-	if copy:
-		arr = np.asanyarray(arr, dtype=dtype).copy()
 	if wcs is None:
 		if isinstance(arr, ndmap):
 			wcs = arr.wcs
+		elif isinstance(arr, list) and len(arr) > 0 and isinstance(arr[0], ndmap):
+			wcs = arr[0].wcs
 		else:
 			wcs = enlib.wcs.WCS(naxis=2)
+	if copy:
+		arr = np.asanyarray(arr, dtype=dtype).copy()
 	return ndmap(arr, wcs)
 
 def empty(shape, wcs=None, dtype=None):
@@ -240,7 +257,7 @@ def pix2sky(shape, wcs, pix, safe=True, corner=False):
 	pix = np.asarray(pix).astype(float)
 	if corner: pix -= 0.5
 	pflat = pix.reshape(pix.shape[0], -1)
-	coords = np.asarray(wcs.wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*get_unit(wcs)
+	coords = np.asarray(enlib.wcs.nobcheck(wcs).wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*get_unit(wcs)
 	coords = coords.reshape(pix.shape)
 	if safe and not enlib.wcs.is_plain(wcs):
 		coords = enlib.utils.unwind(coords)
@@ -256,7 +273,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 	coords = np.asarray(coords)/get_unit(wcs)
 	cflat  = coords.reshape(coords.shape[0], -1)
 	# Quantities with a w prefix are in wcs ordering (ra,dec)
-	wpix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
+	wpix = np.asarray(enlib.wcs.nobcheck(wcs).wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
 	if corner: wpix += 0.5
 	if safe and not enlib.wcs.is_plain(wcs):
 		wshape = shape[-2:][::-1]
@@ -267,10 +284,40 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 		if corner: wrefpix += 0.5
 		for i in range(len(wpix)):
 			wn = np.abs(360./wcs.wcs.cdelt[i])
-			wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
+			if safe == 1:
+				wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
+			else:
+				wpix[i] = enlib.utils.unwind(wpix[i], period=wn, ref=wrefpix[i])
 	return wpix[::-1].reshape(coords.shape)
 
-def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, prefilter=True, mask_nan=True):
+def skybox2pixbox(shape, wcs, skybox, npoint=10, corner=False, include_direction=False):
+	"""Given a coordinate box [{from,to},{dec,ra}], compute a
+	corresponding pixel box [{from,to},{y,x}]. We avoiding
+	wrapping issues by evaluating a number of subpoints."""
+	coords = np.array([
+		np.linspace(skybox[0,0],skybox[1,0],num=npoint,endpoint=True),
+		np.linspace(skybox[0,1],skybox[1,1],num=npoint,endpoint=True)])
+	pix = sky2pix(shape, wcs, coords, corner=corner, safe=2)
+	dir = np.sign(pix[:,1]-pix[:,0])
+	res = pix[:,[0,-1]].T
+	if include_direction: res = np.concatenate([res,dir[None]],0)
+	return res
+
+def box(shape, wcs, npoint=10, corner=True):
+	"""Compute a bounding box for the given geometry."""
+	# Because of wcs's wrapping, we need to evaluate several
+	# extra pixels to make our unwinding unambiguous
+	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
+		np.linspace(0,shape[-1],num=npoint,endpoint=True)])
+	if corner: pix -= 0.5
+	coords = enlib.wcs.nobcheck(wcs).wcs_pix2world(pix[1],pix[0],0)[::-1]
+	if enlib.wcs.is_plain(wcs):
+		return np.array(coords).T[[0,-1]]
+	else:
+		return enlib.utils.unwind(np.array(coords)*enlib.utils.degree).T[[0,-1]]
+
+
+def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, prefilter=True, mask_nan=True, safe=True):
 	"""Project the map into a new map given by the specified
 	shape and wcs, interpolating as necessary. Handles nan
 	regions in the map by masking them before interpolating.
@@ -282,33 +329,37 @@ def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, pr
 		if enlib.wcs.equal(map.wcs, wcs) and tuple(shape[-2:]) == tuple(shape[-2:]):
 			return map
 		elif enlib.wcs.is_compatible(map.wcs, wcs) and mode == "constant":
-			print "Using extract instead"
 			return extract(map, shape, wcs, cval=cval)
-	pix  = map.sky2pix(posmap(shape, wcs))
+	pix  = map.sky2pix(posmap(shape, wcs), safe=safe)
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	return ndmap(pmap, wcs)
 
-def extract(map, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b,
-		cval=0):
+def extract(map, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b, cval=0):
 	"""Like project, but only works for pixel-compatible wcs. Much
 	faster because it simply copies over pixels. Can be used in
 	co-adding by specifying an output map and a combining operation.
 	The deafult operation overwrites the output. Use np.ndarray.__iadd__
 	to get a copy-less += operation."""
+	return extract_generic(map,map.shape,map.wcs,shape,wcs,omap,wrap,op,cval)
+	
+def extract_generic(map, ishape, iwcs, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b,
+	    cval=0):
+	"""Like extract, but accepts maps that might not be ndmaps as long as shape
+	and wcs are specified separately."""
 	# First check that our wcs is compatible
-	assert enlib.wcs.is_compatible(map.wcs, wcs), "Incompatible wcs in enmap.extract: %s vs. %s" % (str(map.wcs), str(wcs))
+	assert enlib.wcs.is_compatible(iwcs, wcs), "Incompatible wcs in enmap.extract: %s vs. %s" % (str(iwcs), str(wcs))
 	# Find the bounding box of the output in terms of input pixels.
 	# This is simple because our wcses are compatible, so they
 	# can only differ by a simple pixel offset. Here pixoff is
 	# pos_input - pos_output
 	if omap is None:
-		omap = full(map.shape[:-2]+tuple(shape[-2:]), wcs, cval, map.dtype)
-	nphi   = enlib.utils.nint(360/np.abs(map.wcs.wcs.cdelt[0]))
-	pixoff = enlib.utils.nint((wcs.wcs.crpix-map.wcs.wcs.crpix) - (wcs.wcs.crval-map.wcs.wcs.crval)/map.wcs.wcs.cdelt)[::-1]
+		omap = full(ishape[:-2]+tuple(shape[-2:]), wcs, cval, map.dtype)
+	nphi   = enlib.utils.nint(360/np.abs(iwcs.wcs.cdelt[0]))
+	pixoff = enlib.utils.nint((wcs.wcs.crpix-iwcs.wcs.crpix) - (wcs.wcs.crval-iwcs.wcs.crval)/iwcs.wcs.cdelt)[::-1]
 	if wrap: pixoff[1] %= nphi
 	# Get bounding boxes in output map coordinates
 	obox = np.array([[0,0],[shape[-2],shape[-1]]])
-	ibox = np.array([pixoff,pixoff+np.array(map.shape[-2:])])
+	ibox = np.array([pixoff,pixoff+np.array(ishape[-2:])])
 	# This function copies the intersection of ibox and obox over
 	# from imap to omap
 	def icopy(imap, omap, ibox, obox, ioff, op):
@@ -345,7 +396,7 @@ def _arghelper(map, func, unit):
 	if unit == "coord": res = pix2sky(map.shape, map.wcs, res.T).T
 	return res
 
-def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
+def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False,iau=False):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
 	the provided power spectrum. If cov.ndim is 4, 2D power is assumed else 1D
 	power is assumed. If pixel_units is True, the 2D power spectra is assumed
@@ -355,7 +406,7 @@ def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
 	if scalar:
 		return ifft(kmap).real
 	else:
-		return harm2map(kmap)
+		return harm2map(kmap,iau=iau)
 
 def rand_gauss(shape, wcs, dtype=None):
 	"""Generate a map with random gaussian noise in pixel space."""
@@ -386,19 +437,21 @@ def rand_gauss_iso_harm(shape, wcs, cov, pixel_units=False):
 	data = map_mul(covsqrt, rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
 
-def extent(shape, wcs, method="default", nsub=None):
+def extent(shape, wcs, method="default", nsub=None, signed=False):
 	if method == "default": method = extent_model[-1]
 	if method == "intermediate":
-		return extent_intermediate(shape, wcs)
+		return extent_intermediate(shape, wcs, signed=signed)
 	elif method == "subgrid":
-		return extent_subgrid(shape, wcs, nsub=nsub)
+		return extent_subgrid(shape, wcs, nsub=nsub, signed=signed)
 	else:
 		raise ValueError("Unrecognized extent method '%s'" % method)
 
-def extent_intermediate(shape, wcs):
+def extent_intermediate(shape, wcs, signed=False):
 	"""Estimate the flat-sky extent of the map as the WCS
 	intermediate coordinate extent."""
-	return np.abs(wcs.wcs.cdelt[::-1]*shape[-2:]*get_unit(wcs))
+	res = wcs.wcs.cdelt[::-1]*shape[-2:]*get_unit(wcs)
+	if not signed: res = np.abs(res)
+	return res
 
 # Approximations to physical box size and area are needed
 # for transforming to l-space. We can do this by dividing
@@ -416,7 +469,7 @@ def extent_intermediate(shape, wcs):
 # To construct the coarser system, slicing won't do, as it
 # shaves off some of our area. Instead, we must modify
 # cdelt to match our new pixels: cdelt /= nnew/nold
-def extent_subgrid(shape, wcs, nsub=None):
+def extent_subgrid(shape, wcs, nsub=None, safe=True, signed=False):
 	"""Returns an estimate of the "physical" extent of the
 	patch given by shape and wcs as [height,width] in
 	radians. That is, if the patch were on a sphere with
@@ -433,7 +486,7 @@ def extent_subgrid(shape, wcs, nsub=None):
 	wcs.wcs.crpix /= step
 	wcs.wcs.crpix += 0.5
 	# Get position of all the corners, including the far ones
-	pos = posmap([nsub+1,nsub+1], wcs, corner=True)
+	pos = posmap([nsub+1,nsub+1], wcs, corner=True, safe=safe)
 	# Apply az scaling
 	scale = np.zeros([2,nsub,nsub])
 	scale[1] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
@@ -449,7 +502,9 @@ def extent_subgrid(shape, wcs, nsub=None):
 	Ay, Ax = np.sum(areas,0), np.sum(areas,1)
 	Ly = np.sum(np.sum(ly,0)*Ay)/np.sum(Ay)
 	Lx = np.sum(np.sum(lx,1)*Ax)/np.sum(Ax)
-	return np.array([Ly,Lx])
+	res= np.array([Ly,Lx])
+	if signed: res *= np.sign(wcs.wcs.cdelt[::-1])
+	return res
 
 def area(shape, wcs, nsub=0x10):
 	"""Returns the area of a patch with the given shape
@@ -460,9 +515,9 @@ def pixsize(shape, wcs):
 	"""Returns the area of a single pixel, in steradians."""
 	return area(shape, wcs)/np.product(shape[-2:])
 
-def pixshape(shape, wcs):
+def pixshape(shape, wcs, signed=False):
 	"""Returns the height and width of a single pixel, in radians."""
-	return extent(shape, wcs)/shape[-2:]
+	return extent(shape, wcs, signed=signed)/shape[-2:]
 
 def pixsizemap(shape, wcs):
 	"""Returns the physical area of each pixel in the map in steradians.
@@ -486,7 +541,7 @@ def pixsizemap(shape, wcs):
 	for a in area:
 		bad  = ~np.isfinite(a)
 		a[bad] = np.mean(a[~bad])
-	return area
+	return ndmap(area, wcs)
 
 def lmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
@@ -511,8 +566,8 @@ def modrmap(shape, wcs, safe=True, corner=False):
 	return np.sum(slmap**2,0)**0.5
 
 def laxes(shape, wcs, oversample=1):
-	overample = int(oversample)
-	step = extent(shape, wcs)/shape[-2:]
+	oversample = int(oversample)
+	step = extent(shape, wcs, signed=True)/shape[-2:]
 	ly = np.fft.fftfreq(shape[-2]*oversample, step[0])*2*np.pi
 	lx = np.fft.fftfreq(shape[-1]*oversample, step[1])*2*np.pi
 	if oversample > 1:
@@ -532,7 +587,7 @@ def laxes(shape, wcs, oversample=1):
 def lrmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
 	of a map with the given shape and wcs."""
-	return lmap(shape, wcs, oversample=oversample)[...,:shape[-1]/2+1]
+	return lmap(shape, wcs, oversample=oversample)[...,:shape[-1]//2+1]
 
 def fft(emap, omap=None, nthread=0, normalize=True):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
@@ -549,26 +604,27 @@ def ifft(emap, omap=None, nthread=0, normalize=True):
 # T,E,B hamonic maps. They are not the most efficient way of doing this.
 # It would be better to precompute the rotation matrix and buffers, and
 # use real transforms.
-def map2harm(emap, nthread=0, normalize=True):
+def map2harm(emap, nthread=0, normalize=True,iau=False):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
 	emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
 	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap())
+		rot = queb_rotmat(emap.lmap(),iau=iau)
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
 	return emap
-def harm2map(emap, nthread=0, normalize=True):
+def harm2map(emap, nthread=0, normalize=True,iau=False):
 	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap(), inverse=True)
+		rot = queb_rotmat(emap.lmap(), inverse=True,iau=iau)
 		emap = emap.copy()
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
 	return samewcs(ifft(emap,nthread=nthread,normalize=normalize), emap).real
 
-def queb_rotmat(lmap, inverse=False):
+def queb_rotmat(lmap, inverse=False, iau=False):
 	# atan2(x,y) instead of (y,x) because Qr points in the
 	# tangential direction, not radial. This matches flipperpol too.
 	# This corresponds to the Healpix convention. To get IAU,
 	# flip the sign of a.
-	a    = 2*np.arctan2(-lmap[1], lmap[0])
+	sgn = -1 if iau else 1
+	a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
 	c, s = np.cos(a), np.sin(a)
 	if inverse: s = -s
 	return samewcs(np.array([[c,-s],[s,c]]),lmap)
@@ -658,7 +714,7 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs)
 		# assured the former. Our job is to find shape that puts
 		# the top edge close to the requested value, while still
 		# being valied. If we always round down, we should be safe:
-		faredge = wcs.wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
+		faredge = enlib.wcs.nobcheck(wcs).wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
 		shape = tuple(np.floor(faredge+0.5).astype(int))
 	return pre+tuple(shape), wcs
 
@@ -670,11 +726,13 @@ def fullsky_geometry(res=None, shape=None, dims=(), proj="car"):
 	if shape is None:
 		res   = np.zeros(2)+res
 		shape = ([1*np.pi,2*np.pi]/res+0.5).astype(int)
+		shape[0] += 1
 	ny,nx = shape
+	ny   -= 1
 	wcs   = enlib.wcs.WCS(naxis=2)
 	wcs.wcs.crval = [0,0]
 	wcs.wcs.cdelt = [-360./nx,180./ny]
-	wcs.wcs.crpix = [nx/2+1,ny/2+1]
+	wcs.wcs.crpix = [nx/2.+1,ny/2.+1]
 	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
 	return dims+(ny+1,nx+0), wcs
 
@@ -740,11 +798,11 @@ def spec2flat_corr(shape, wcs, cov, exp=1.0, mode="constant"):
 	# (remember to move to the corner because this is
 	# a correlation function)
 	dpos = posmap(shape, wcs)
-	dpos -= dpos[:,None,None,dpos.shape[-2]/2,dpos.shape[-1]/2]
+	dpos -= dpos[:,None,None,dpos.shape[-2]//2,dpos.shape[-1]//2]
 	ipos = np.arccos(np.cos(dpos[0])*np.cos(dpos[1]))*nr/rmax
 	corr2d = enlib.utils.interpol(corrfun, ipos.reshape((-1,)+ipos.shape), mode=mode, mask_nan=False, order=1)
-	corr2d = np.roll(corr2d, -corr2d.shape[-2]/2, -2)
-	corr2d = np.roll(corr2d, -corr2d.shape[-1]/2, -1)
+	corr2d = np.roll(corr2d, -corr2d.shape[-2]//2, -2)
+	corr2d = np.roll(corr2d, -corr2d.shape[-1]//2, -1)
 	corr2d = ndmap(corr2d, wcs)
 	return fft(corr2d).real * np.product(shape[-2:])**0.5
 
@@ -802,9 +860,10 @@ def downgrade(emap, factor):
 	inside pixels."""
 	fact = np.full(2, 1, dtype=int)
 	fact[:] = factor
-	tshape = emap.shape[-2:]/fact*fact
-	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]/fact[0],fact[0],tshape[1]/fact[1],fact[1])),(-3,-1))
-	return ndmap(res, emap[...,::fact[0],::fact[1]].wcs)
+	tshape = emap.shape[-2:]//fact*fact
+	res = np.mean(np.reshape(emap[...,:tshape[0],:tshape[1]],emap.shape[:-2]+(tshape[0]//fact[0],fact[0],tshape[1]//fact[1],fact[1])),(-3,-1))
+	try: return ndmap(res, emap[...,::fact[0],::fact[1]].wcs)
+	except AttributeError: return res
 
 def upgrade(emap, factor):
 	"""Upgrade emap to a larger size using nearest neighbor interpolation,
@@ -822,7 +881,7 @@ def upgrade(emap, factor):
 		res.wcs.wcs.crpix[j] += 0.5
 	return res
 
-def pad(emap, pix, return_slice=False,wrap=False):
+def pad(emap, pix, return_slice=False, wrap=False):
 	"""Pad enmap "emap", creating a larger map with zeros filled in on the sides.
 	How much to pad is controlled via pix. If pix is a scalar, it specifies the number
 	of pixels to add on all sides. If it is 1d, it specifies the number of pixels to add
@@ -927,7 +986,7 @@ def grad_pix(m):
 	Useful for avoiding sky2pix-calls for e.g. lensing,
 	and removes the complication of axes that increase in
 	nonstandard directions."""
-	return grad(m)*(m.shape[-2:]/m.extent())[(slice(None),)+(None,)*m.ndim]
+	return grad(m)*(m.shape[-2:]/m.extent(signed=True))[(slice(None),)+(None,)*m.ndim]
 
 def div(m):
 	"""Returns the divergence of the map m[2,...] as [...]."""
@@ -1156,12 +1215,15 @@ def read_map_geometry(fname, fmt=None, hdu=None):
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
-		return read_fits_geometry(fname, hdu=hdu)
+		shape, wcs = read_fits_geometry(fname, hdu=hdu)
 	elif fmt == "hdf":
-		return read_hdf_geometry(fname)
+		shape, wcs = read_hdf_geometry(fname)
 	else:
 		raise ValueError
-	return res
+	if len(toks) > 1:
+		sel = eval("enlib.utils.sliceeval"+":".join(toks[1:]))[-2:]
+		shape, wcs = slice_geometry(shape, wcs, sel)
+	return shape, wcs
 
 def write_fits(fname, emap, extra={}):
 	"""Write an enmap to a fits file."""
@@ -1181,22 +1243,27 @@ def write_fits(fname, emap, extra={}):
 		warnings.filterwarnings('ignore')
 		hdus.writeto(fname, clobber=True)
 
-def read_fits(fname, hdu=None, sel=None, sel_threshold=10e6):
+def read_fits(fname, hdu=None, sel=None, box=None, inclusive=False, sel_threshold=10e6, wcs_override=None):
 	"""Read an enmap from the specified fits file. By default,
 	the map and coordinate system will be read from HDU 0. Use
 	the hdu argument to change this. The map must be stored as
 	a fits image. If sel is specified, it should be a slice
 	that will be applied to the image before reading. This avoids
-	reading more of the image than necessary."""
+	reading more of the image than necessary. Instead of sel,
+	a coordinate box [[yfrom,xfrom],[yto,xto]] can be specified."""
 	if hdu is None: hdu = 0
 	hdu = astropy.io.fits.open(fname)[hdu]
 	if hdu.header["NAXIS"] < 2:
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
-	with warnings.catch_warnings():
-		wcs = enlib.wcs.WCS(hdu.header).sub(2)
+	if wcs_override is None:
+		with warnings.catch_warnings():
+			wcs = enlib.wcs.WCS(hdu.header).sub(2)
+	else:
+		wcs = wcs_override
 	# Slice if requested. Slicing at this point avoids unneccessary
 	# I/O and memory usage.
-	if sel:
+	if sel is not None:
+		assert box is None
 		# First slice the wcs
 		sel1, sel2 = enlib.slice.split_slice(sel, [len(hdu.shape)-2,2])
 		_, wcs = slice_geometry(hdu.shape, wcs, sel2)
@@ -1209,6 +1276,20 @@ def read_fits(fname, hdu=None, sel=None, sel_threshold=10e6):
 		else:
 			data = hdu.data
 			data = data[sel]
+	elif box is not None:
+		ibox   = subinds(hdu.shape, wcs, box, inclusive, cap=False)
+		def helper(b):
+			if b[2] >= 0: return False, slice(b[0],b[1],b[2])
+			else: return True, slice(b[1]-b[2],b[0]-b[2],-b[2])
+		yflip, yslice = helper(ibox[:,0])
+		xflip, xslice = helper(ibox[:,1])
+		oshape, owcs = slice_geometry(hdu.shape, wcs, (yslice, xslice), nowrap=True)
+		data = extract_generic(hdu.data, hdu.shape,wcs,oshape, owcs)
+		# Unflip if neccessary
+		if yflip: data = data[...,::-1,:]
+		if xflip: data = data[...,:,::-1]
+		wcs = data.wcs
+
 	else: data = hdu.data
 	res = fix_endian(ndmap(data, wcs))
 	return res
@@ -1281,5 +1362,18 @@ def fix_endian(map):
 	"""Make endianness of array map match the current machine.
 	Returns the result."""
 	if map.dtype.byteorder not in ['=','<' if sys.byteorder == 'little' else '>']:
-		map = map.byteswap().newbyteorder()
+		map = map.byteswap(True).newbyteorder()
+	return map
+
+def shift(map, off, inplace=False):
+	if not inplace: map = map.copy()
+	off = np.atleast_1d(off)
+	for i, o in enumerate(off):
+		if o != 0:
+			map[:] = np.roll(map, o, -len(off)+i)
+	return map
+
+def fillbad(map, val=0, inplace=False):
+	if not inplace: map = map.copy()
+	map[~np.isfinite(map)] = val
 	return map

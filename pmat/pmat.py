@@ -8,7 +8,7 @@ to incrementally project different parts of the signal.
 """
 import numpy as np, time, sys
 from enlib import enmap, interpol, utils, coordinates, config, errors, array_ops
-from enlib import parallax, bunch
+from enlib import parallax, bunch, pointsrcs
 import pmat_core_32
 import pmat_core_64
 def get_core(dtype):
@@ -21,11 +21,10 @@ config.default("pmat_map_order",      0, "The interpolation order of the map poi
 config.default("pmat_cut_type",  "full", "The cut sample representation used. 'full' uses one degree of freedom for each cut sample. 'bin:N' uses one degree of freedom for every N samples. 'exp' used one degree of freedom for the first sample, then one for the next two, one for the next 4, and so on, giving high resoultion at the edges of each cut range, and low resolution in the middle.")
 config.default("map_sys",       "equ", "The coordinate system of the maps. Can be eg. 'hor', 'equ' or 'gal'.")
 config.default("pmat_accuracy",     1.0, "Factor by which to lower accuracy requirement in pointing interpolation. 1.0 corresponds to 1e-3 pixels and 0.1 arc minute in polangle")
-config.default("pmat_interpol_max_size", 100000, "Maximum mesh size in pointing interpolation. Worst-case time and memory scale at most proportionally with this.")
+config.default("pmat_interpol_max_size", 1000000, "Maximum mesh size in pointing interpolation. Worst-case time and memory scale at most proportionally with this.")
 config.default("pmat_interpol_max_time", 50, "Maximum time to spend in pointing interpolation constructor. Actual time spent may be up to twice this.")
 config.default("pmat_interpol_pad", 5.0, "Number of arcminutes to pad the interpolation coordinate system by")
-# Disable window for now - it is buggy
-config.default("tod_window",        0.0, "Seconds by which to window each end of the TOD.")
+config.default("tod_window",        5.0, "Seconds by which to window each end of the TOD.")
 
 class PointingMatrix:
 	def forward(self, tod, m): raise NotImplementedError
@@ -164,6 +163,10 @@ def build_work_shift(transform, hor_box, scan_period):
 	wbox[0] = np.floor(wbox[0])
 	wbox[1] = np.ceil (wbox[1])
 	wbox    = wbox.astype(int)
+	print "wbox"
+	print wbox
+	print "wshift"
+	print wshift
 	return wbox, wshift
 
 def measure_sweep_pixels(transform, trange, azrange, el, yrange, padstep=None, nsamp=None, ntry=None):
@@ -259,9 +262,12 @@ class PmatMapMultibeam(PointingMatrix):
 		# each detector to have a separate beam. The dt part is pretty useless.
 		# beam_comps has format [nbeam,ndet,{T,Q,U}].
 		# Get the full box after taking all beam offsets into account
+		self.empty = len(beam_offs) == 0
+		if self.empty: return
 		ibox = np.array([np.min(scan.boresight,0)+np.min(beam_offs,(0,1)),
 				np.max(scan.boresight,0)+np.max(beam_offs,(0,1))])
 		# Build our pointing interpolator
+		sys        = config.get("map_sys", sys)
 		transform  = pos2pix(scan,template,sys)
 		ipol, obox, err = build_interpol(transform, ibox, id=scan.entry.id)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
@@ -269,7 +275,6 @@ class PmatMapMultibeam(PointingMatrix):
 		self.beam_offs, self.beam_comps = beam_offs, beam_comps
 		self.pixbox, self.nphi  = build_pixbox(obox[:,:2], template)
 		self.scan,   self.dtype = scan, template.dtype
-		self.func  = get_core(self.dtype).pmat_map
 		self.order = config.get("pmat_map_order", order)
 		self.err   = err
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
@@ -277,16 +282,30 @@ class PmatMapMultibeam(PointingMatrix):
 		# Loop over each beam, summing its contributions
 		if times is None: times = np.zeros(5)
 		tod *= tmul
+		if self.empty: return
+		core = get_core(tod.dtype)
+		#print "max m", np.max(m)
+		#print "max comp", np.max(np.abs(self.beam_comps))
+		#import h5py
+		#foo_before = tod[:5].copy()
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
-			self.core.pmat_map_direct_grid(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+			#print "A", bi, boff, bcomp, mmul
+			core.pmat_map_direct_grid(1, tod.T, 1.0, m.T, mmul, 1, self.order, self.scan.boresight.T,
 					self.scan.hwp_phase.T, boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T,
 					self.pixbox.T, self.nphi, times)
+		#foo_after = tod[:5].copy()
+		#with h5py.File("test.hdf","w") as hfile:
+		#	hfile["before"] = foo_before
+		#	hfile["after"]  = foo_after
+		#1/0
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
 		m *= mmul
+		if self.empty: return
+		core = get_core(tod.dtype)
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
-			self.core.pmat_map_direct_grid(-11, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+			core.pmat_map_direct_grid(-1, tod.T, tmul, m.T, 1.0, 1, self.order, self.scan.boresight.T,
 					self.scan.hwp_phase.T, boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T,
 					self.pixbox.T, self.nphi, times)
 
@@ -440,7 +459,12 @@ class pos2pix:
 		shape = ipos.shape[1:]
 		ipos  = ipos.reshape(ipos.shape[0],-1)
 		time  = self.scan.mjd0 + ipos[0]/utils.day2sec
-		opos = coordinates.transform(self.scan.sys, self.sys, ipos[1:], time=time, site=self.scan.site, pol=True)
+		# We support sidelobe mapping by passing the detector pointing "ipos" as the "boresight"
+		# pointing, which is only used in boresight-relative coordinates or sidelobe mapping.
+		# This actually results in a better coordinate system than if we had passed in the actual
+		# boresight, since we don't really want boresight-centered coordinates, we want detector
+		# centered coordinates.
+		opos = coordinates.transform(self.scan.sys, self.sys, ipos[1:], time=time, site=self.scan.site, pol=True, bore=ipos[1:])
 		# Parallax correction
 		sundist = config.get("pmat_parallax_au")
 		if sundist:
@@ -506,38 +530,43 @@ class PmatPtsrc(PointingMatrix):
 		ipol, obox, err = build_interpol(transform, scan.box, scan.entry.id, posunit=0.5*utils.arcsec)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, srcs.dtype)
 
-		# Build source hit grid
-		cbox    = obox[:,:2]
-		cshape  = tuple(np.ceil(((cbox[1]-cbox[0])/cres)).astype(int))
-		self.ref = np.mean(cbox,0)
-		srcs[...,:2] = utils.rewind(srcs[...,:2], self.ref)
+		self.cbox = obox[:,:2]
+		self.ref  = np.mean(self.cbox,0)
+		self.ncell, self.cells = pointsrcs.build_src_cells(self.cbox, srcs[...,:2], cres, unwind=True)
 
-		# A cell is hit if it overlaps both horizontally and vertically
-		# with the point source +- rmax
-		# ncell is [ndir,nsrc_det,ncy,ncx]
-		ncell = np.zeros((ndir,src_ndet)+cshape,dtype=np.int32)
-		# cells is [ndir,nsrc_det,ncy,ncx,maxcell]
-		cells = np.zeros((ndir,src_ndet)+cshape+(maxcell,),dtype=np.int32)
-		c0 = cbox[0]; inv_dc = cshape/(cbox[1]-cbox[0])
-		for si in range(nsrc):
-			for sdir in range(ndir):
-				for sdi in range(src_ndet):
-					src = srcs[si,sdir,sdi]
-					i1 = (src[:2]-rmax-c0)*inv_dc
-					i2 = (src[:2]+rmax-c0)*inv_dc+1 # +1 because this is a half-open interval
-					# Truncate to edges - any source outside of our region
-					# will be put on one of the edge cells
-					i1 = np.maximum(i1.astype(int), 0)
-					i2 = np.minimum(i2.astype(int), np.array(cshape)-1)
-					#print si, sdir, i1, i2, cshape
-					if np.any(i1 >= cshape) or np.any(i2 < 0): continue
-					sel= (sdir,sdi,slice(i1[0],i2[0]),slice(i1[1],i2[1]))
-					cells[sel][:,:,ncell[sel]] = si
-					ncell[sel] += 1
+		## Build source hit grid
+		#cbox    = obox[:,:2]
+		#cshape  = tuple(np.ceil(((cbox[1]-cbox[0])/cres)).astype(int))
+		#self.ref = np.mean(cbox,0)
+		#srcs[...,:2] = utils.rewind(srcs[...,:2], self.ref)
 
-		self.cells, self.ncell = cells, ncell
+		## A cell is hit if it overlaps both horizontally and vertically
+		## with the point source +- rmax
+		## ncell is [ndir,nsrc_det,ncy,ncx]
+		#ncell = np.zeros((ndir,src_ndet)+cshape,dtype=np.int32)
+		## cells is [ndir,nsrc_det,ncy,ncx,maxcell]
+		#cells = np.zeros((ndir,src_ndet)+cshape+(maxcell,),dtype=np.int32)
+		#c0 = cbox[0]; inv_dc = cshape/(cbox[1]-cbox[0])
+		#for si in range(nsrc):
+		#	for sdir in range(ndir):
+		#		for sdi in range(src_ndet):
+		#			src = srcs[si,sdir,sdi]
+		#			i1 = (src[:2]-rmax-c0)*inv_dc
+		#			i2 = (src[:2]+rmax-c0)*inv_dc+1 # +1 because this is a half-open interval
+		#			# Truncate to edges - any source outside of our region
+		#			# will be put on one of the edge cells
+		#			i1 = np.maximum(i1.astype(int), 0)
+		#			i2 = np.minimum(i2.astype(int), np.array(cshape)-1)
+		#			#print si, sdir, i1, i2, cshape
+		#			if np.any(i1 >= cshape) or np.any(i2 < 0): continue
+		#			sel= (sdir,sdi,slice(i1[0],i2[0]),slice(i1[1],i2[1]))
+		#			cells[sel][:,:,ncell[sel]] = si
+		#			ncell[sel] += 1
+
+		#self.cells, self.ncell = cells, ncell
+		#print self.cells.shape, self.ncell.shape
+
 		self.rmax = rmax
-		self.cbox = cbox
 		self.tmul = 1 if tmul is None else tmul
 		self.pmul = 1 if pmul is None else pmul
 		self.err  = err
@@ -578,7 +607,7 @@ def build_interpol(transform, box, id="none", posunit=1.0, sys=None):
 	# Build pointing interpolator
 	errlim = np.array([1e-3*posunit,1e-3*posunit,utils.arcmin,utils.arcmin])*acc
 	ipol, obox, ok, err = interpol.build(transform, interpol.ip_linear, box, errlim, maxsize=ip_size, maxtime=ip_time, return_obox=True, return_status=True)
-	if not ok: print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, id)
+	if not ok and np.any(err>errlim): print "Warning: Accuracy %g was specified, but only reached %g for tod %s" % (acc, np.max(err/errlim)*acc, id)
 	return ipol, obox, err
 
 def build_pos_transform(scan, sys):

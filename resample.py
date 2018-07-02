@@ -1,6 +1,6 @@
 """This module handles resampling of time-series and similar arrays."""
 import numpy as np
-from enlib import utils, fft
+from . import utils, fft
 
 def resample(d, factors=[0.5], axes=None, method="fft"):
 	factors = np.atleast_1d(factors)
@@ -23,7 +23,7 @@ def resample_bin(d, factors=[0.5], axes=None):
 
 def downsample_bin(d, steps=[2], axes=None):
 	assert len(steps) <= d.ndim
-	if axes is None: axes = np.arange(-1,-len(steps)-1,-1)
+	if axes is None: axes =range(-len(steps),0)
 	assert len(axes) == len(steps)
 	# Expand steps to cover every axis in order
 	fullsteps = np.zeros(d.ndim,dtype=int)+1
@@ -56,7 +56,7 @@ def upsample_bin(d, steps=[2], axes=None):
 def resample_fft(d, n, axes=None):
 	"""Resample numpy array d via fourier-reshaping. Requires periodic data.
 	n indicates the desired output lengths of the axes that are to be
-	resampled. By the fault the last len(n) axes are resampled, but this
+	resampled. By default the last len(n) axes are resampled, but this
 	can be controlled via the axes argument."""
 	d = np.asanyarray(d)
 	# Compute output lengths from factors if necessary
@@ -86,12 +86,12 @@ def resample_fft(d, n, axes=None):
 		dn   = nnew-nold
 		if dn > 0:
 			padvals = np.zeros(fd.shape[:ax]+(dn,)+fd.shape[ax+1:],fd.dtype)
-			spre  = tuple([slice(None)]*ax+[slice(0,nold/2)]+[slice(None)]*(fd.ndim-ax-1))
-			spost = tuple([slice(None)]*ax+[slice(nold/2,None)]+[slice(None)]*(fd.ndim-ax-1))
+			spre  = tuple([slice(None)]*ax+[slice(0,nold//2)]+[slice(None)]*(fd.ndim-ax-1))
+			spost = tuple([slice(None)]*ax+[slice(nold//2,None)]+[slice(None)]*(fd.ndim-ax-1))
 			fd = np.concatenate([fd[spre],padvals,fd[spost]],axis=ax)
 		elif dn < 0:
-			spre  = tuple([slice(None)]*ax+[slice(0,nnew/2)]+[slice(None)]*(fd.ndim-ax-1))
-			spost = tuple([slice(None)]*ax+[slice(nnew/2-dn,None)]+[slice(None)]*(fd.ndim-ax-1))
+			spre  = tuple([slice(None)]*ax+[slice(0,nnew//2)]+[slice(None)]*(fd.ndim-ax-1))
+			spost = tuple([slice(None)]*ax+[slice(nnew//2-dn,None)]+[slice(None)]*(fd.ndim-ax-1))
 			fd = np.concatenate([fd[spre],fd[spost]],axis=ax)
 		norm *= float(nnew)/nold
 	# And transform back
@@ -117,3 +117,22 @@ def resample_fft_simple(d, n, ngroup=100):
 	del fd
 	res *= float(n)/nold
 	return res
+
+def make_equispaced(d, t, quantile=0.1, order=3, mask_nan=False):
+	"""Given an array d[...,nt] of data that has been sampled at times t[nt],
+	return an array that has been resampled to have a constant sampling rate."""
+	# Find the typical sampling rate of the input. We will lose information if
+	# we don't use a sampling rate that's higher than the highest rate in the
+	# input. But we also don't want to exaggerate the number of samples. Use a
+	# configurable quantile as a compromise.
+	dt   = np.percentile(np.abs(t[1:]-t[:-1]), quantile*100)
+	# Modify so we get a whole number of samples
+	nout = utils.nint(np.abs(t[-1]-t[0])/dt)+1
+	dt   = (t[-1]-t[0])/(nout-1)
+	# Construct our output time steps
+	tout = np.arange(nout)*dt + t[0]
+	# To interpolate, we need the input sample number as a function of time
+	samples = np.interp(tout, t, np.arange(len(t)))
+	# Now that we have the samples we can finally evaluate the function
+	dout = utils.interpol(d, samples[None], mode="nearest", order=order, mask_nan=mask_nan)
+	return dout, tout

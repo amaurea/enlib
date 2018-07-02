@@ -55,6 +55,11 @@ WCS.__repr__ = describe
 def equal(wcs1, wcs2):
 	return repr(wcs1.to_header()) == repr(wcs2.to_header())
 
+def nobcheck(wcs):
+	res = wcs.deepcopy()
+	res.wcs.bounds_check(False, False)
+	return res
+
 def is_compatible(wcs1, wcs2, tol=1e-3):
 	"""Checks whether two world coordinate systems represent
 	(shifted) versions of the same pixelizations, such that
@@ -64,8 +69,9 @@ def is_compatible(wcs1, wcs2, tol=1e-3):
 	h1 = wcs1.to_header()
 	h2 = wcs2.to_header()
 	for key in h1:
-		if key.startswith("CRVAL") or key.startswith("CRPIX"): continue
+		if key.startswith("CRVAL") or key.startswith("CRPIX") or key.startswith("CDELT"): continue
 		if key not in h2 or h2[key] != h1[key]: return False
+	if np.max(np.abs(wcs1.wcs.cdelt-wcs2.wcs.cdelt))/np.min(np.abs(wcs1.wcs.cdelt)) > tol: return False
 	crdelt = wcs1.wcs.crval - wcs2.wcs.crval
 	cpdelt = wcs1.wcs.crpix - wcs2.wcs.crpix
 	subpix = (crdelt/wcs1.wcs.cdelt - cpdelt + 0.5)%1-0.5
@@ -222,7 +228,16 @@ def fix_wcs(wcs, axis=0):
 	"""Returns a new WCS object which has had the reference pixel moved to the
 	middle of the possible pixel space."""
 	res = wcs.deepcopy()
-	off = np.abs(360/wcs.wcs.cdelt[axis])/2 - res.wcs.crpix[axis]
-	res.wcs.crpix[axis] += off
-	res.wcs.crval[axis] += off*res.wcs.cdelt[axis]
+	# Find the center ra manually: mean([crval - crpix*cdelt, crval + (-crpix+shape)*cdelt])
+	#  = crval + (-crpix+shape/2)*cdelt
+	# What pixel does this correspond to?
+	#  crpix2 = crpix + (crval2-crval)/cdelt
+	# But that requires shape. Can we do without it? Yes, let's use the
+	# biggest possible shape. n = 360/cdelt
+	n = abs(360/wcs.wcs.cdelt[axis])
+	delta_ra  = wcs.wcs.cdelt[axis]*(n/2-wcs.wcs.crpix[axis])
+	delta_pix = delta_ra/wcs.wcs.cdelt[axis]
+	res.wcs.crval[axis] += delta_ra
+	res.wcs.crpix[axis] += delta_pix
+	repr(res.wcs) # wcs not properly updated if I don't do this
 	return res

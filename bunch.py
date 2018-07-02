@@ -9,7 +9,7 @@ class Bunch:
 	def __getattr__(self, name):
 		if name in self.__dict__["_dict"].keys():
 			return self.__dict__["_dict"][name]
-		raise AttributeError
+		raise AttributeError(name)
 	def __setattr__(self, name, value):
 		if "_dict" in self.__dict__:
 			self._dict[name] = value
@@ -24,6 +24,8 @@ class Bunch:
 			del self._dict[name]
 		else:
 			del self.__dict__[name]
+	def __delitem__(self, name):
+		self.__delattr__(name)
 	def __contains__(self, name):
 		return name in self._dict
 	def __dir__(self):

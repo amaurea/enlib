@@ -22,6 +22,6 @@ finals.all:
 	wget --no-check-certificate -O finals.all "https://datacenter.iers.org/eop/-/somos/5Rgv/latest/9"
 
 clean: tidy
-	rm -rf libiers.so _iers.so iers.py *.pyc finals.all
+	rm -rf libiers.so _iers*.so iers.py *.pyc finals.all
 tidy:
 	rm -rf iers2struct iers_wrap.c build iers.c

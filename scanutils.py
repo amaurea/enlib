@@ -1,5 +1,6 @@
 import numpy as np, logging, h5py, sys
 from enlib import scan as enscan, errors, utils, coordinates, dmap
+from enact import actdata, filedb
 L = logging.getLogger(__name__)
 
 def calc_sky_bbox_scan(scan, osys, nsamp=100):
@@ -76,7 +77,7 @@ def classify_scanning_patterns(myscans, tol=0.5*utils.degree, comm=None):
 		pids = pids[rank==comm.rank]
 	return pboxes, pids
 
-def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1):
+def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1, hwp_resample=False):
 	"""Given a set of ids/files and a set of indices into that list. Try
 	to read each of these scans. Returns a list of successfully read scans
 	and a list of their indices."""
@@ -84,6 +85,7 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 		try:
 			if isinstance(filelist[ind],list): raise IOError
 			d = enscan.read_scan(filelist[ind])
+			actdata.read(filedb.data[filelist[ind]])
 		except IOError:
 			try:
 				if isinstance(filelist[ind],list):
@@ -103,16 +105,20 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 				d = d[det_inds]
 			else:
 				d = eval("d[%s]" % dets)
+		hwp_active = np.any(d.hwp_phase[0] != 0)
+		if hwp_resample and hwp_active:
+			mapping = enscan.build_hwp_sample_mapping(d.hwp)
+			d = d.resample(mapping)
 		d = d[:,::downsample]
 		if not quiet: L.debug("Read %s" % str(filelist[ind]))
 		yield ind, d
 
-def read_scans(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1):
+def read_scans(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1, hwp_resample=False):
 	"""Given a set of ids/files and a set of indices into that list. Try
 	to read each of these scans. Returns a list of successfully read scans
 	and a list of their indices."""
 	myinds, myscans  = [], []
-	for ind, scan in scan_iterator(filelist, inds, reader, db=db, dets=dets, quiet=quiet, downsample=downsample):
+	for ind, scan in scan_iterator(filelist, inds, reader, db=db, dets=dets, quiet=quiet, downsample=downsample, hwp_resample=hwp_resample):
 		myinds.append(ind)
 		myscans.append(scan)
 	return myinds, myscans

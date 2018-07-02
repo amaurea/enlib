@@ -1,5 +1,5 @@
 import numpy as np, h5py
-from enlib import rangelist, sampcut
+from enlib import rangelist, sampcut, utils
 
 # Flagranges implement the new cuts format,
 # where samples are tagged with flags instead
@@ -51,14 +51,13 @@ class Flagrange:
 		"""Construct a Flagrange.
 		nsamp int is the total number of samples in the dataset the flagrange applies to.
 		stack_bounds int[ndet+1] is the index of the boundaries between each det's ranges
-		index_stack int[:,2] are the """
-
+		index_stack"""
 		self.nsamp        = int(nsamp)
 		self.sample_offset= int(sample_offset)
 		self.index_stack  = np.array(index_stack, np.uint32)
 		self.flag_stack   = np.array(flag_stack,  np.uint8)
 		self.stack_bounds = np.array(stack_bounds,np.uint32)
-		self.dets         = np.arange(self.stack_bounds.size, dtype=np.uint32)
+		self.dets         = np.arange(self.stack_bounds.size-1, dtype=np.uint32)
 		if dets is not None: self.dets = np.array(dets, np.uint32)
 		self.flag_names   = ["flag%d" % i for i in range(self.nbyte*8)]
 		if flag_names is not None: self.flag_names = list(flag_names)
@@ -229,6 +228,109 @@ class Flagrange:
 		# int he internal representation
 		ranges = self.to_ranges()
 		return sampcut.from_list(ranges, self.nsamp)
+	@staticmethod
+	def from_sampcut(scut, dets=None, name="cut", sample_offset=0):
+		from_sampcut(scut, dets=dets, name=name, sample_offset=sample_offset)
+	def write(self, hfile, group=None):
+		write_flagrange(hfile, self, group=group)
+
+def from_sampcut(scut, dets=None, name="cut", sample_offset=0):
+	# To zeroeth order, flags simply become 1 when we enter a cut range and 0 when we exit
+	flag_stack  = scut.ranges.copy()
+	flag_stack[:] = [1,0]
+	flag_stack  = flag_stack.reshape(-1)
+	index_stack = scut.ranges.reshape(-1)
+	# However, each detector starts out uncut by default, so we must insert an uncut
+	# at all the beginnings
+	stack_bounds= utils.cumsum(2*scut.nranges, True)
+	flag_stack  = np.insert(flag_stack, stack_bounds[:-1], 0)
+	index_stack = np.insert(index_stack,stack_bounds[:-1], 0)
+	stack_bounds= utils.cumsum(2*scut.nranges+1, True)
+	# At this point we may have some empty ranges. I think that's acceptable
+	# Expand flag_stack to full dimensionality
+	flag_stack = flag_stack[:,None]
+	return Flagrange(scut.nsamp, index_stack, flag_stack,
+			stack_bounds, dets=dets, flag_names=[name], derived_names=["cuts"],
+			derived_masks=[[[1],[0]]], sample_offset=sample_offset)
+
+def merge(franges):
+	"""Given a list of flagranges franges covering the same time period, merge them
+	into a single flagrange containing the union of their cut causes"""
+	# We don't support changing sample ranges or detectors present currently. They could
+	# be added if necessary.
+	for i, fr in enumerate(franges):
+		assert fr.nsamp == franges[0].nsamp, "Inconsistent nsamp in Flagrange #%d: %d != %d" % (i, fr.nsamp, franges[0].nsamp)
+		assert fr.sample_offset == franges[0].sample_offset, "Inconsistent sample_offset in Flagrange #%d: %d != %d" % (i, fr.sample_offset, franges[0].sample_offset)
+		assert np.array_equal(fr.dets, franges[0].dets), "Inconsistent detectors in Flagrange #d" % i
+	F = franges[0]
+	# Find the flat names across all inputs
+	name_list  = [fr.flag_names for fr in franges]
+	name_union = utils.union(name_list)
+	# And find the index of each local name into the name union
+	name_rel   = [np.searchsorted(name_union, names) for names in name_list]
+	# Translate these indices into an index and bit into the output flag array
+	nbyte_out  = (len(name_union)+7)//8
+	flag_ind_map = [nrel//8 for nrel in name_rel]
+	flag_bit_map = [1<<(nrel%8) for nrel in name_rel]
+	# How should we handle the derived flags? These should just be the union of their local
+	# definitions. To do this we must translate each of their definitions into names
+	derived_flags_dict = {}
+	for fr in franges:
+		for dname, fmask in zip(fr.derived_names, fr.derived_masks):
+			if dname not in derived_flags_dict:
+				derived_flags_dict[dname] = [set(), set()]
+			for fi in range(fr.nflag):
+				byte = fi//8
+				bit  = 1<<(fi%8)
+				for op in range(2):
+					if fmask[op][byte] & bit:
+						derived_flags_dict[dname][op].add(fr.flag_names[fi])
+	# Turn this set of names back into indices and bits
+	derived_names = sorted(derived_flags_dict.keys())
+	derived_masks = np.zeros([len(derived_names),2,nbyte_out],np.uint8)
+	for fi, dname in enumerate(derived_names):
+		for op in range(2):
+			for fname in derived_flags_dict[dname][op]:
+				find = utils.find(name_union, fname)
+				derived_masks[fi][op][find//8] |= 1<<(find%8)
+	# We can avoid a slow loop over detectors by expanding indices to a global indexing
+	stack_inds_list = []
+	for fr in franges:
+		nper = fr.stack_bounds[1:]-fr.stack_bounds[:-1]
+		stack_inds_list.append(fr.index_stack + np.repeat(np.arange(fr.ndet)*fr.nsamp, nper))
+	# We will have an index anywhere any one of the input ranges has an index
+	stack_inds_union = utils.union(stack_inds_list)
+	# and we need to know how each input range maps to it
+	stack_inds_rel   = [np.searchsorted(stack_inds_union, sinds) for sinds in stack_inds_list]
+	# Populate the output flag stack
+	flag_stack  = np.zeros([len(stack_inds_union),nbyte_out],np.uint8)
+	for i, fr in enumerate(franges):
+		for fi in range(fr.nflag):
+			fo = name_rel[i][fi]
+			ibyte, ibit = fi//8, 1<<(fi%8)
+			obyte, obit = fo//8, 1<<(fo%8)
+			# We we will use np.repeat to handle the flags staying on until they
+			# are changed again.
+			vals = np.full(len(fr.flag_stack), obit, np.uint8)
+			vals[fr.flag_stack[:,ibyte] & ibit == 0] = 0
+			flag_stack[:,ibyte] |= fill_right(stack_inds_rel[i], vals, len(flag_stack))
+	# Undo expansion and recover stack bounds
+	index_stack  = stack_inds_union % F.nsamp
+	stack_dets   = stack_inds_union //F.nsamp
+	stack_bounds = np.concatenate([[0], np.searchsorted(stack_dets, np.arange(F.ndet), side="right")])
+	# Phew! Finally done. Return the resulting Flagrange
+	res = Flagrange(F.nsamp, index_stack, flag_stack, stack_bounds, dets=F.dets,
+			flag_names=name_union, derived_masks=derived_masks, derived_names=derived_names,
+			sample_offset=F.sample_offset)
+	return res
+
+def fill_right(inds, vals, n):
+	inds, vals = np.asarray(inds), np.asarray(vals)
+	# Add default start condition of 0
+	inds  = np.concatenate([[0],inds,[n]])
+	vals  = np.concatenate([np.array([0],vals.dtype),vals])
+	nums  = inds[1:]-inds[:-1]
+	return np.repeat(vals, nums)
 
 #def combine_flagranges(franges):
 #	offsets = [frange.sample_offset for frange in franges]
@@ -237,8 +339,9 @@ class Flagrange:
 def read_flagrange(hfile, group=None):
 	if isinstance(hfile, basestring):
 		with h5py.File(hfile, "r") as f:
-			if group is not None: f = f[group]
-			return read_flagrange(f)
+			return read_flagrange(f, group=group)
+	elif group is not None:
+		hfile = hfile[group]
 	nsamp = 1000000
 	sample_offset = 0
 	attrs = hfile.attrs
@@ -259,17 +362,20 @@ def read_flagrange(hfile, group=None):
 def write_flagrange(hfile, frange, group=None):
 	if isinstance(hfile, basestring):
 		with h5py.File(hfile, "w") as f:
-			if group is not None: f = f.create_group(group)
-			write_flagrange(f, frange)
-	hfile["det_uid"]      = frange.dets
-	hfile["flag_names"]   = frange.flag_names
-	hfile["stack_bounds"] = frange.stack_bounds
-	hfile["flag_stack"]   = frange.flag_stack
-	hfile["index_stack"]  = frange.index_stack
-	hfile["derived_names"]= frange.derived_names
-	hfile["derived_masks"]= frange.derived_masks
-	hfile["sample_offset"]= frange.sample_offset
-	hfile["sample_count"] = frange.sample_count
+			write_flagrange(f, frange, group=group)
+	elif group is not None:
+		g = hfile.create_group(group)
+		write_flagrange(g, frange)
+	else:
+		hfile["det_uid"]      = frange.dets
+		hfile["flag_names"]   = frange.flag_names
+		hfile["stack_bounds"] = frange.stack_bounds
+		hfile["flag_stack"]   = frange.flag_stack
+		hfile["index_stack"]  = frange.index_stack
+		hfile["derived_names"]= frange.derived_names
+		hfile["derived_masks"]= frange.derived_masks
+		hfile.attrs["sample_offset"]= frange.sample_offset
+		hfile.attrs["sample_count"] = frange.nsamp
 
 # While I don't like rangelist and multirange, I'll use them
 # for now instead of building a new boolean range type.

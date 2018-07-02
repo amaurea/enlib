@@ -59,9 +59,14 @@ def slice_downgrade(d, s, axis=-1):
 	step = s.step or 1
 	a = a[s.start:s.stop:-1 if step < 0 else 1]
 	step = abs(step)
-	a = a[:len(a)/step*step]
-	a = np.mean(a.reshape((len(a)/step,step)+a.shape[1:]),1)
-	return moveaxis(a, 0, axis)
+	# Handle the whole blocks first
+	a2 = a[:len(a)/step*step]
+	a2 = np.mean(a2.reshape((len(a2)/step,step)+a2.shape[1:]),1)
+	# Then append the incomplete block
+	if len(a2)*step != len(a):
+		rest = a[len(a2)*step:]
+		a2 = np.concatenate([a2,[np.mean(rest,0)]],0)
+	return moveaxis(a2, 0, axis)
 
 def slice_union(a,b,n):
 	"""Compute the effective slice from slicing first with a, then with b.

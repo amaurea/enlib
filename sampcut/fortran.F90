@@ -252,20 +252,22 @@ contains
 		integer, intent(in)    :: ranges(:,:), detmap(:)
 		real(_), intent(inout) :: tod(:,:)
 		real(_), intent(in)    :: const
-		integer :: di, i, r(2)
+		integer :: di, i, r1, r2, nsamp
+		nsamp = size(tod,1)
 		do di = 1, size(detmap)-1
 			do i = detmap(di)+1, detmap(di+1)
-				r = ranges(:,i)+1
-				tod(r(1):r(2),di) = const
+				r1 = max(0,    ranges(1,i))+1 ! first cut index
+				r2 = min(nsamp,ranges(2,i))   ! last cut index
+				tod(r1:r2,di) = const
 			end do
 		end do
 	end subroutine
 
-	subroutine gapfill_linear(ranges, detmap, tod, context)
+	subroutine gapfill_linear(ranges, detmap, tod, context, trans)
 		implicit none
-		integer, intent(in)    :: ranges(:,:), detmap(:), context
+		integer, intent(in)    :: ranges(:,:), detmap(:), context, trans
 		real(_), intent(inout) :: tod(:,:)
-		real(_) :: v1, v2, c1, c2
+		real(_) :: v1, v2, c1, c2, a
 		integer :: di, i, j, r0, r1, r2, r3, nsamp
 		nsamp = size(tod,1)
 		do di = 1, size(detmap)-1
@@ -284,23 +286,45 @@ contains
 				if(i == detmap(di)+1) then; r0 = 1; else; r0 = ranges(2,i-1)+1; end if
 				! next cut start
 				if(i == detmap(di+1)) then; r3 = nsamp+1; else; r3 = min(nsamp,ranges(1,i+1))+1; end if
-				r0 = max(r0, r1-context)
-				r3 = min(r3, r2+context)
-				! Now calculate the representive value on either side
-				v1 = sum(tod(r0:r1-1,di))/(r1-r0)
-				v2 = sum(tod(r2:r3-1,di))/(r3-r2)
-				if(r0 == r1) then
-					tod(r1:r2-1,di) = v2
-				elseif(r2 == r3) then
-					tod(r1:r2-1,di) = v1
+				r0 = max(r0, r1-context) ! first sample of left context
+				r3 = min(r3, r2+context) ! one past last sample of right context
+				if(trans == 0) then
+					! Now calculate the representive value on either side
+					v1 = sum(tod(r0:r1-1,di))/(r1-r0)
+					v2 = sum(tod(r2:r3-1,di))/(r3-r2)
+					if(r0 == r1) then
+						tod(r1:r2-1,di) = v2
+					elseif(r2 == r3) then
+						tod(r1:r2-1,di) = v1
+					else
+						! v1 has a center of mass at (r0+r1-1)/2 instead of r1 where we
+						! want it.
+						c1 = (r0+r1-1)/2d0
+						c2 = (r2+r3-1)/2d0
+						do j = r1, r2-1
+							tod(j,di) = v1 + (v2-v1)*(j-c1)/(c2-c1)
+						end do
+					end if
 				else
-					! v1 has a center of mass at (r0+r1-1)/2 instead of r1 where we
-					! want it.
-					c1 = (r0+r1-1)/2d0
-					c2 = (r2+r3-1)/2d0
-					do j = r1, r2-1
-						tod(j,di) = v1 + (v2-v1)*(j-c1)/(c2-c1)
-					end do
+					! For the transpose, we do the steps in reverse, and assignments
+					! become accumulation into the RHS
+					if(r0 == r1) then
+						tod(r2:r3-1,di) = tod(r2:r3-1,di) + sum(tod(r1:r2-1,di))/(r3-r2)
+					elseif(r2 == r3) then
+						tod(r0:r1-1,di) = tod(r0:r1-1,di) + sum(tod(r1:r2-1,di))/(r1-r0)
+					else
+						c1 = (r0+r1-1)/2d0
+						c2 = (r2+r3-1)/2d0
+						v1 = 0; v2 = 0
+						do j = r1, r2-1
+							a = tod(j,di)*(j-c1)/(c2-c1)
+							v2 = v2 + a
+							v1 = v1 + tod(j,di) - a
+						end do
+						tod(r0:r1-1,di) = tod(r0:r1-1,di) + v1/(r1-r0)
+						tod(r2:r3-1,di) = tod(r2:r3-1,di) + v2/(r3-r2)
+					end if
+					tod(r1:r2-1,di) = 0
 				end if
 			end do
 		end do
@@ -361,6 +385,27 @@ contains
 		do di = 1, size(detmap)-1
 			do j = detmap(di)+1, detmap(di+1)
 				mask(ranges(1,j)+1:ranges(2,j),di) = 1
+			end do
+		end do
+	end subroutine
+
+	! Sum the tod samples in each range
+	subroutine cut_sum(ranges, detmap, tod, vals)
+		implicit none
+		integer, intent(in) :: ranges(:,:), detmap(:)
+		real(_), intent(in) :: tod(:,:)
+		real(_), intent(inout) :: vals(:)
+		integer :: i, j, k, ri
+		real(_) :: v
+		ri = 0
+		do i = 1, size(detmap)-1
+			do j = detmap(i)+1, detmap(i+1)
+				ri = ri+1
+				v  = 0
+				do k = ranges(1,j)+1, ranges(2,j)
+					v = v + tod(k,i)
+				end do
+				vals(ri) = v
 			end do
 		end do
 	end subroutine

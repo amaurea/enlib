@@ -179,7 +179,7 @@ cdef class alm_info:
 				if lmax is None: lmax = nalm2lmax(nalm)
 				if mmax is None: mmax = lmax
 				m = np.arange(mmax+1)
-				mstart = stride*(m*(2*lmax+1-m)/2)
+				mstart = stride*(m*(2*lmax+1-m)//2)
 			elif layout == "rectangular" or layout == "rect":
 				if lmax is None: lmax = int(nalm**0.5)-1
 				if mmax is None: mmax = lmax
@@ -223,7 +223,7 @@ cdef class alm_info:
 		cdef np.complex128_t v
 		cdef np.ndarray[np.int64_t,ndim=1] mstart = self.mstart
 		cdef np.ndarray[np.complex128_t,ndim=1] work = np.empty(alm.shape[1],alm.dtype)
-		for comp in prange(alm.shape[0],nogil=True):
+		for comp in range(alm.shape[0]):
 			l,m = 0,0
 			for i in range(alm.shape[1]):
 				j = mstart[m]+l*self.stride
@@ -241,7 +241,7 @@ cdef class alm_info:
 		cdef np.complex64_t v
 		cdef np.ndarray[np.int64_t,ndim=1] mstart = self.mstart
 		cdef np.ndarray[np.complex64_t,ndim=1] work = np.empty(alm.shape[1],alm.dtype)
-		for comp in prange(alm.shape[0],nogil=True):
+		for comp in range(alm.shape[0]):
 			l,m = 0,0
 			for i in range(alm.shape[1]):
 				j = mstart[m]+l*self.stride
@@ -274,7 +274,8 @@ cdef class alm_info:
 		l,m=0,0
 		ncomp = alm.shape[0]
 		v = np.empty(ncomp,dtype=np.complex128)
-		for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
+		#for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
+		for m in range(self.mmax+1):
 			for l in range(m, self.lmax+1):
 				lm = mstart[m]+l*self.stride
 				for c1 in range(ncomp):
@@ -282,7 +283,7 @@ cdef class alm_info:
 				for c1 in range(ncomp):
 					alm[c1,lm] = 0
 					for c2 in range(ncomp):
-						alm[c1,lm] = alm[c1,lm] + lmat[c1,c2,l]*v[c2]
+						alm[c1,lm] += lmat[c1,c2,l]*v[c2]
 	@cython.boundscheck(False)
 	@cython.wraparound(False)
 	cdef lmul_sp(self,np.ndarray[np.complex64_t,ndim=2] alm, np.ndarray[np.float32_t,ndim=3] lmat):
@@ -292,7 +293,8 @@ cdef class alm_info:
 		l,m=0,0
 		ncomp = alm.shape[0]
 		v = np.empty(ncomp,dtype=np.complex64)
-		for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
+		#for m in prange(self.mmax+1,nogil=True,schedule="dynamic"):
+		for m in range(self.mmax+1):
 			for l in range(m, self.lmax+1):
 				lm = mstart[m]+l*self.stride
 				for c1 in range(ncomp):

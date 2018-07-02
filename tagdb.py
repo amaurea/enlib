@@ -52,16 +52,22 @@ class Tagdb:
 		"""Return a tagdb which only contains the selected ids."""
 		if isinstance(ids, basestring):
 			ids = self.query(ids)
-		# Extract the subids
-		ids, subids = split_ids(ids)
-		# Restrict to the subset of these ids
-		inds = utils.find(self.ids, ids)
-		odata = dslice(self.data, inds)
-		# Update subids
-		odata["subids"] = np.array([merge_subid(a,b) for a, b in zip(odata["subids"], subids)])
-		res = self.copy()
-		res.data = odata
-		return res
+		ids = np.asarray(ids)
+		if issubclass(ids.dtype.type, np.integer):
+			# Fast integer slicing
+			return self.__class__(dslice(self.data, ids))
+		else:
+			# Slice by id
+			# Extract the subids
+			ids, subids = split_ids(ids)
+			# Restrict to the subset of these ids
+			inds = utils.find(self.ids, ids)
+			odata = dslice(self.data, inds)
+			# Update subids
+			odata["subids"] = np.array([merge_subid(a,b) for a, b in zip(odata["subids"], subids)])
+			res = self.copy()
+			res.data = odata
+			return res
 	def query(self, query=None, apply_default_query=True):
 		"""Query the database. The query takes the form
 		tag,tag,tag,...:sort[slice], where all tags must be satisfied for an id to

@@ -34,7 +34,7 @@ class Colorscheme:
 			val, code = tok.split(":")
 			vals[i] = float(val)
 			color = np.array((0,0,0,0xff),dtype=np.uint8)
-			m = len(code)/2
+			m = len(code)//2
 			for j in range(m):
 				color[j] = int(code[2*j:2*(j+1)],16)
 			cols[i,:] = color
@@ -147,3 +147,8 @@ def mpl_register(names=None):
 	for name in names:
 		cmap = to_mpl_colormap(name, schemes[name])
 		matplotlib.cm.register_cmap(name, cmap)
+
+def mpl_setdefault(name):
+	import matplotlib.pyplot
+	mpl_register(name)
+	matplotlib.pyplot.rcParams['image.cmap'] = name
