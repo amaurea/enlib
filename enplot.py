@@ -94,6 +94,11 @@ def plot_iterator(*arglist, **args):
 	comm   = extract_arg(args, "comm",   None)
 	noglob = extract_arg(args, "noglob", False)
 
+	# Set up defaults
+	parsed = parse_args([])
+	parsed.update(args)
+	args = parsed
+	# Then process all the args
 	for arg in arglist:
 		if isinstance(arg, basestring):
 			parsed = parse_args(arg, noglob=noglob)
