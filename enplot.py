@@ -78,7 +78,7 @@ def get_plots(*arglist, **args):
 	this list be, with the corresponding memory requirements."""
 	return list(plot_iterator(*arglist, **args))
 
-def plot_iterator(*arglist, **args):
+def plot_iterator(*arglist, **kwargs):
 	"""Iterator that yields the plots for each input map/file. Each yield
 	will be a plot object, with fields
 	.type: The type of the plot. Can be "pil" or "mpl". Usually "pil".
@@ -91,23 +91,22 @@ def plot_iterator(*arglist, **args):
 	# to be plotted are collected in maps, which is a list that can contain
 	# either enmaps or filenames. Filenames will later be read in as enmaps
 	imaps = []
-	comm   = extract_arg(args, "comm",   None)
-	noglob = extract_arg(args, "noglob", False)
+	comm   = extract_arg(kwargs, "comm",   None)
+	noglob = extract_arg(kwargs, "noglob", False)
 
 	# Set up defaults
-	parsed = parse_args([])
-	parsed.update(args)
-	args = parsed
+	args = parse_args([])
 	# Then process all the args
 	for arg in arglist:
 		if isinstance(arg, basestring):
 			parsed = parse_args(arg, noglob=noglob)
 			imaps += parsed.ifiles
-			parsed.update(args)
-			args   = parsed
+			args.update(parsed)
 		else:
 			imaps.append(arg)
 	del args["ifiles"]
+	# Override with kwargs
+	args.update(kwargs)
 	args = bunch.Bunch(**args)
 	if comm is None:
 		comm = mpi.COMM_WORLD
