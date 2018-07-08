@@ -1,6 +1,6 @@
 from __future__ import print_function
 import numpy as np, scipy.ndimage, warnings, astropy.io.fits, sys, time
-from . import utils, wcs as wcsutils, slice as sliceutils, powspec, fft
+from . import utils, wcs as wcsutils, slice as sliceutils, powspec, fft as enfft
 
 # Things that could be improved:
 #  1. We assume exactly 2 WCS axes in spherical projection in {dec,ra} order.
@@ -610,12 +610,12 @@ def lrmap(shape, wcs, oversample=1):
 
 def fft(emap, omap=None, nthread=0, normalize=True):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
-	res = samewcs(fft.fft(emap,omap,axes=[-2,-1],nthread=nthread), emap)
+	res = samewcs(enfft.fft(emap,omap,axes=[-2,-1],nthread=nthread), emap)
 	if normalize: res /= np.prod(emap.shape[-2:])**0.5
 	return res
 def ifft(emap, omap=None, nthread=0, normalize=True):
 	"""Performs the 2d iFFT of the complex enmap given, and returns a pixel-space enmap."""
-	res = samewcs(fft.ifft(emap,omap,axes=[-2,-1],nthread=nthread, normalize=False), emap)
+	res = samewcs(enfft.ifft(emap,omap,axes=[-2,-1],nthread=nthread, normalize=False), emap)
 	if normalize: res /= np.prod(emap.shape[-2:])**0.5
 	return res
 
@@ -864,9 +864,9 @@ def smooth_spectrum(ps, kernel="gauss", weight="mode", width=1.0):
 def _convolute_sym(a,b):
 	sa = np.concatenate([a,a[:,-2:0:-1]],-1)
 	sb = np.concatenate([b,b[:,-2:0:-1]],-1)
-	fa = fft.rfft(sa)
-	fb = fft.rfft(sb)
-	sa = fft.ifft(fa*fb,sa,normalize=True)
+	fa = enfft.rfft(sa)
+	fb = enfft.rfft(sb)
+	sa = enfft.ifft(fa*fb,sa,normalize=True)
 	return sa[:,:a.shape[-1]]
 
 def multi_pow(mat, exp, axes=[0,1]):
@@ -969,7 +969,7 @@ def autocrop(m, method="plain", value="auto", margin=0, factors=None, return_inf
 	if method == "plain":
 		goodshape = minshape
 	elif method == "fft":
-		goodshape = np.array([fft.fft_len(l, direction="above", factors=None) for l in minshape])
+		goodshape = np.array([enfft.fft_len(l, direction="above", factors=None) for l in minshape])
 	else:
 		raise ValueError("Unknown autocrop method %s!" % method)
 	# Pad if necessary
