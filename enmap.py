@@ -732,9 +732,10 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs)
 		# shape-(0.5,0.5). We assume that wcs.build has already
 		# assured the former. Our job is to find shape that puts
 		# the top edge close to the requested value, while still
-		# being valied. If we always round down, we should be safe:
-		faredge = wcsutils.nobcheck(wcs).wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
-		shape = tuple(np.floor(faredge+0.5).astype(int))
+		# being valid. If we always round down, we should be safe:
+		nearedge = wcsutils.nobcheck(wcs).wcs_world2pix(pos[0:1,::-1],0)[0,::-1]
+		faredge  = wcsutils.nobcheck(wcs).wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
+		shape = tuple(np.round(faredge-nearedge).astype(int))
 	return pre+tuple(shape), wcs
 
 def fullsky_geometry(res=None, shape=None, dims=(), proj="car"):
