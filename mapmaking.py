@@ -332,7 +332,22 @@ class PreconNull:
 	def __call__(self, m): pass
 	def write(self, prefix="", ext="fits"): pass
 
-config.default("eig_limit", 1e-6, "Smallest relative eigenvalue to invert in eigenvalue inversion. Ones smaller than this are set to zero.")
+config.default("eig_limit", 1e-3, "Smallest relative eigenvalue to invert in eigenvalue inversion. Ones smaller than this are set to zero.")
+# The binned preconditioners use a 3x3 covmat per pixel. This matrix is sometimes
+# poorly conditioned, and can't be inverted. I currently use eigenvalue inversion
+# for this, which works by setting bad eigenvalues to zero. But is this sufficient?
+# Consider a pixel that is hit by a single sample with phase [1,1,0], resulting in
+# the covmat [110,110,000]. This has a single nonzero eigenvalue, and after
+# eigenvalue inversion it will still be proportional to [110,110,000]. This preconditioner
+# forces U to be zero, but it allows T,Q to float. This means that we can't distinguish
+# [0,0,0] from [1,-1,0] or [1e9,-1e9,0], which can lead to runaway pixel values.
+# To avoid this problem we can make the poorly conditioned pixels T-only by setting
+# all but [0,0] of icov to 0.
+#
+# I've moved to this workaround, even though it appears to perform marginally worse
+# at for my one-tod 10-cg test. The main thing that helps in both cases is to use an
+# eig_limit like 1e-3 instead of 1e-6, which I used before
+
 class PreconMapBinned:
 	def __init__(self, signal, signal_cut, scans, weights, noise=True, hits=True):
 		"""Binned preconditioner: (P'W"P)", where W" is a white
@@ -341,7 +356,7 @@ class PreconMapBinned:
 		ncomp = signal.area.shape[0]
 		self.div = enmap.zeros((ncomp,)+signal.area.shape, signal.area.wcs, signal.area.dtype)
 		calc_div_map(self.div, signal, signal_cut, scans, weights, noise=noise)
-		self.idiv = array_ops.svdpow(self.div, -1, axes=[0,1], lim=config.get("eig_limit"))
+		self.idiv = array_ops.eigpow(self.div, -1, axes=[0,1], lim=config.get("eig_limit"), fallback="scalar")
 		#self.idiv[:] = np.eye(3)[:,:,None,None]
 		if hits:
 			# Build hitcount map too

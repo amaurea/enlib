@@ -127,7 +127,7 @@ def gen_mat2mat(**funcs):
 matmul_sym = wrap_mm_m(vec2mat=True, **get_funcs("matmul_multi_sym"))
 solve_multi = wrap_mm_m(**get_funcs("solve_multi"))
 solve_masked = wrap_mm_m(**get_funcs("solve_masked"))
-condition_number_multi = gen_wrap1(**get_funcs("condition_number_multi"))
+#condition_number_multi = gen_wrap1(**get_funcs("condition_number_multi"))
 eigflip = wrap_m_m(**get_funcs("eigflip"))
 
 def measure_cov(d, delay=0):
@@ -142,14 +142,29 @@ def ang2rect(a):
 	core.ang2rect(a.T,res.T)
 	return res
 
-def eigpow(A, pow, axes=[-2,-1], lim=None, lim0=None, copy=True):
+def eigpow(A, pow, axes=[-2,-1], lim=None, lim0=None, copy=True, fallback="eigkill"):
 	core = get_core(A.dtype)
 	if lim  is None: lim  = 1e-6
 	if lim0 is None: lim0 = np.finfo(A.dtype).tiny**0.2
 	if copy: A = A.copy()
 	with utils.flatview(A, axes=axes) as Af:
-		core.eigpow(Af.T, pow, lim, lim0)
+		if   fallback == "eigkill":
+			core.eigpow(Af.T, pow, lim, lim0)
+		elif fallback == "scalar":
+			core.eigpow_scalar_fallback(Af.T, pow, lim, lim0)
+		else:
+			raise ValueError("Unknown fallback in eigpow: '%s'" % str(fallback))
 	return A
+
+def condition_number_multi(A, axes=[-2,-1]):
+	core = get_core(A.dtype)
+	inds = [slice(None) for i in range(A.ndim)]
+	for ax in axes: inds[ax] = 0
+	b = A.real[tuple(inds)].copy()
+	with utils.flatview(A, axes=axes) as Af:
+		with utils.flatview(b, axes=axes) as bf:
+			core.condition_number_multi(Af.T,bf.T)
+	return b
 
 def svdpow(A, pow, axes=[-2,-1], lim=None, lim0=None, copy=True):
 	core = get_core(A.dtype)

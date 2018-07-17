@@ -100,7 +100,7 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 				continue
 		if dets:
 			if dets.startswith("@"):
-				uids = [int(w) for w in open(dets[1:],"r")]
+				uids = [int(line.split()[0]) for line in open(dets[1:],"r")]
 				_,det_inds = utils.common_inds([uids,d.dets])
 				d = d[det_inds]
 			else:
