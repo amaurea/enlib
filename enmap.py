@@ -1288,7 +1288,7 @@ def read_fits(fname, hdu=None, sel=None, box=None, pixbox=None, wrap="auto", mod
 			chunk = hdu.section[isel1][(Ellipsis,)+isel2]
 		else: chunk = hdu.data[isel]
 		if omap is None:
-			omap = zeros(chunk.shape[:-2]+oshape, wcs, chunk.dtype)
+			omap = zeros(chunk.shape[:-2]+oshape, owcs, chunk.dtype)
 		omap[osel] = chunk
 	omap = fix_endian(omap)
 	return omap
@@ -1346,7 +1346,7 @@ def read_hdf(fname, hdu=None, sel=None, box=None, pixbox=None, wrap="auto", mode
 				chunk = data[isel1][(Ellipsis,)+isel2]
 			else: chunk = data[isel]
 			if omap is None:
-				omap = zeros(chunk.shape[:-2]+oshape, wcs, chunk.dtype)
+				omap = zeros(chunk.shape[:-2]+oshape, owcs, chunk.dtype)
 			omap[osel] = chunk
 		omap = fix_endian(omap)
 		return omap
