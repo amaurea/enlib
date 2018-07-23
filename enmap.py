@@ -1386,7 +1386,12 @@ def read_helper(shape, sel=None, box=None, pixbox=None, wrap="auto", mode=None, 
 	# Ok, we now have our slicing in a single, easy-to-work-with format.
 	oshape, owcs = slice_geometry(shape[-2:], wcs, (slice(*pbox[:,-2]),slice(*pbox[:,-1])), nowrap=True)
 	# Apply wrapping
-	nphi = utils.nint(360/np.abs(wcs.wcs.cdelt[0]))
+	nphi  = utils.nint(360/np.abs(wcs.wcs.cdelt[0]))
+	# If our map is actually wider than our wrapping length, then wrapping doesn't
+	# make much sense. We can either just disable it, or generalize it to assume
+	# e.g. a spin-1/2 field. I do the latter here, by wrapping at the smallest multiple
+	# of nphi that's not smaller than the width of the map in pixels
+	nphi *= (nphi+shape[-1]-1)//nphi
 	if wrap is "auto": wrap = [0,nphi]
 	else: wrap = np.zeros(2,int)+wrap
 	info = []
