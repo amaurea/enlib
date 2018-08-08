@@ -221,43 +221,75 @@ class SignalCut(Signal):
 		with h5py.File(oname, "w") as hfile:
 			hfile["data"] = m
 
-class SignalPhase(Signal):
-	def __init__(self, scans, pids, patterns, array_shape, res, dtype, comm, cuts=None,
-			name="phase", ofmt="{name}_{pid:02}_{az0:.0f}_{az1:.0f}_{el:.0f}", output=True,
-			ext="fits", col_major=True, hysteresis=True):
-		Signal.__init__(self, name, ofmt, output, ext)
-		nrow,ncol = array_shape
-		ndet = nrow*ncol
-		self.pids = pids
+class PhaseMap:
+	"""Helper class for SignalPhase. Represents a set of [...,ndet,naz] phase "maps",
+	one per scanning pattern."""
+	def __init__(self, patterns, dets, maps):
 		self.patterns = patterns
-		self.comm = comm
-		self.dtype = dtype
-		self.col_major = col_major
-		self.cuts = cuts
-		self.data = {}
-		self.areas = []
-		# Set up an area for each scanning pattern. We assume that these are constant
-		# elevation scans, so only azimuth matters. This setup is ugly and would be
-		# nicer if passed in, but then the ugliness would only be moved to the calling
-		# code instead.
+		self.dets    = dets
+		self.maps    = maps
+	@staticmethod
+	def read(dirname):
+		dets     = np.loadtxt(dirname + "/dets.txt").astype(int)
+		patterns = []
+		maps     = []
+		with open(dirname + "/info.txt", "r") as f:
+			for line in f:
+				line = line.strip()
+				if len(line) == 0 or line.startswith("#"): continue
+				toks = line.split()
+				dec, ra1, ra2 = [float(w)*utils.degree for w in toks[:3]]
+				patterns.append([[dec,ra1],[dec,ra2]])
+				maps.append(enmap.read_map(dirname + "/" + toks[3]))
+		return PhaseMap(patterns, dets, maps)
+	def write(self, dirname, fmt="{pid:02}_{az0:.0f}_{az1:.0f}_{el:.0f}"):
+		utils.mkdir(dirname)
+		np.savetxt(dirname + "/dets.txt", self.dets, fmt="%5d")
+		with open(dirname + "/info.txt", "w") as f:
+			for pid, (pattern, m) in enumerate(zip(self.patterns, self.maps)):
+				oname = ("scan_" + fmt + ".fits").format(pid=pid, el=pattern[0,0]/utils.degree, az0=pattern[0,1]/utils.degree, az1=pattern[1,1]/utils.degree)
+				enmap.write_map(dirname + "/" + oname, m)
+				f.write("%8.3f %8.3f %8.3f %s\n" % (pattern[0,0]/utils.degree, pattern[0,1]/utils.degree,
+						pattern[1,1]/utils.degree, oname))
+	@staticmethod
+	def zeros(patterns, dets, res=1*utils.arcmin, det_unit=1, hysteresis=True, dtype=np.float64):
+		maps = []
+		ndet = len(dets)
 		for pattern in patterns:
-			az0,az1 = utils.widen_box(pattern)[:,1]
+			az0, az1 = utils.widen_box(pattern, margin=2*res, relative=False)[:,1]
 			naz = int(np.ceil((az1-az0)/res))
 			az1 = az0 + naz*res
-			det_unit = nrow if col_major else ncol
-			shape, wcs = enmap.geometry(pos=[[0,az0],[ndet/det_unit*utils.degree,az1]], shape=(ndet,naz), proj="car")
-			if hysteresis:
-				area = enmap.zeros((2,)+shape, wcs, dtype=dtype)
-			else:
-				area = enmap.zeros(shape, wcs, dtype=dtype)
-			self.areas.append(area)
+			shape, wcs = enmap.geometry(pos=[[0,az0],[float(ndet)/det_unit*utils.degree,az1]], shape=(ndet,naz), proj="car")
+			if hysteresis: shape = (2,)+tuple(shape)
+			maps.append(enmap.zeros(shape, wcs, dtype=dtype))
+		return PhaseMap(patterns, dets, maps)
+	def copy(self):
+		patterns = np.array(self.patterns)
+		dets     = np.array(self.dets)
+		maps     = [m.copy() for m in self.maps]
+		return PhaseMap(patterns, dets, maps)
+
+## Store which detector each row in our "map" corresponds to
+#self.dets = np.arange(ndet)%ncol
+#if col_major:
+#	self.dets = utils.transpose_inds(dets, nrow, ncol)
+
+class SignalPhase(Signal):
+	def __init__(self, scans, areas, pids, comm, cuts=None, name="phase", ofmt="{name}", output=True, ext="fits"):
+		Signal.__init__(self, name, ofmt, output, ext)
+		self.areas     = areas # template PhaseMaps defining scan patterns and pixelizations
+		self.pids      = pids  # index of each scan into scanning patterns
+		self.comm      = comm
+		self.cuts      = cuts
+		self.dtype     = areas.maps[0].dtype
+		self.data = {}
+		# Set up the detector mapping for each scan
 		for pid, scan in zip(pids,scans):
-			dets = scan.dets
-			if col_major: dets = utils.transpose_inds(dets, nrow, ncol)
-			mat = pmat.PmatScan(scan, self.areas[pid], dets)
+			inds = utils.find(areas.dets, scan.dets)
+			mat  = pmat.PmatScan(scan, areas.maps[pid], inds)
 			self.data[scan] = [pid, mat]
 		self.dof = zipper.MultiZipper([
-			zipper.ArrayZipper(area, comm=comm) for area in self.areas],
+			zipper.ArrayZipper(map, comm=comm) for map in self.areas.maps],
 			comm=comm)
 	def prepare(self, ms):
 		return [m.copy() for m in ms]
@@ -273,14 +305,15 @@ class SignalPhase(Signal):
 		for m, w in zip(ms, work):
 			self.dof.comm.Allreduce(w,m)
 	def zeros(self):
-		return [area*0 for area in self.areas]
+		return [area*0 for area in self.areas.maps]
 	def write(self, prefix, tag, ms):
 		if not self.output: return
-		for pid, (pattern, m) in enumerate(zip(self.patterns, ms)):
-			oname = self.ofmt.format(name=self.name, pid=pid, el=pattern[0,0]/utils.degree, az0=pattern[0,1]/utils.degree, az1=pattern[1,1]/utils.degree)
-			oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
-			if self.dof.comm.rank == 0:
-				enmap.write_map(oname, m)
+		if self.comm.rank != 0: return
+		omaps = self.areas.copy()
+		omaps.maps = ms
+		oname = self.ofmt.format(name=self.name)
+		oname = "%s%s_%s" % (prefix, oname, tag)
+		omaps.write(oname)
 
 class SignalMapBuddies(SignalMap):
 	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True, ext="fits", pmat_order=None, sys=None, nuisance=False):
@@ -496,7 +529,7 @@ class PreconCut:
 
 class PreconPhaseBinned:
 	def __init__(self, signal, signal_cut, scans, weights):
-		div = [area*0+1 for area in signal.areas]
+		div = [area*0+1 for area in signal.areas.maps]
 		# The cut samples are included here becuase they must be avoided, but the
 		# actual computation of the junk sample preconditioner happens elsewhere.
 		# This is a bit redundant, but should not cost much time since this only happens
@@ -758,6 +791,10 @@ class PriorProjectOut:
 #     weighting. Moving all of these into the noise matrix would be very
 #     messy.
 
+class FilterScale:
+	def __init__(self, scale): self.scale = scale
+	def __call__(self, scan, tod): tod *= self.scale
+
 class FilterPickup:
 	def __init__(self, daz=None, nt=None, nhwp=None, niter=None):
 		self.daz, self.nt, self.nhwp, self.niter = daz, nt, nhwp, niter
@@ -990,6 +1027,73 @@ class FilterCommonBlockwise:
 class FilterGapfill:
 	def __call__(self, scan, tod):
 		gapfill.gapfill(tod, scan.cut, inplace=True)
+
+class FilterAddPhase:
+	def __init__(self, scans, phasemap, pids, mmul=1, tmul=1):
+		self.phasemap = phasemap
+		self.tmul     = tmul
+		for i,m in enumerate(self.phasemap.maps):
+			self.phasemap.maps[i] = m*mmul
+		self.data = {}
+		for pid, scan in zip(pids, scans):
+			inds = utils.find(phasemap.dets, scan.dets)
+			mat  = pmat.PmatScan(scan, phasemap.maps[pid], inds)
+			self.data[scan] = [pid, mat]
+	def __call__(self, scan, tod):
+		pid, mat = self.data[scan]
+		if self.tmul != 1: tod *= self.tmul
+		mat.forward(tod, self.phasemap.maps[pid])
+
+class FilterDeprojectPhase:
+	def __init__(self, scans, phasemap, pids, perdet=False, mmul=1, tmul=1):
+		print "Warning: FilterDeprojectPhase gives nonsensical fits due to ignoring template noise"
+		self.phasemap = phasemap
+		self.perdet   = perdet
+		self.mmul     = mmul
+		self.tmul     = tmul
+		self.data = {}
+		for pid, scan in zip(pids, scans):
+			inds = utils.find(phasemap.dets, scan.dets)
+			mat  = pmat.PmatScan(scan, phasemap.maps[pid], inds)
+			self.data[scan] = [pid, mat]
+	def __call__(self, scan, tod):
+		pid, mat = self.data[scan]
+		def weight(a):
+			fa = fft.rfft(a)
+			fa[...,:2000] = 0
+			fa[...,fa.shape[-1]/4:] = 0
+			fft.irfft(fa,a, normalize=True)
+		t  = tod*0
+		mat.forward(t, self.phasemap.maps[pid])
+		Nt = t.copy()
+		# This doesn't work - scan.noise is undefined at this point
+		weight(t)
+		# Debug dump
+		Nd = tod.copy()
+		weight(Nd)
+		with h5py.File("test_tod.hdf","w") as hfile:
+			hfile["d"]   = tod[:16]
+			hfile["t"]   = t[:16]
+			hfile["Nd"]  = Nd[:16]
+			hfile["Nt"]  = Nt[:16]
+		with h5py.File("test_phase.hdf","w") as hfile:
+			for name, arr in [("d",tod),("t",t),("Nd",Nd),("Nt",Nt)]:
+				map = self.phasemap.maps[pid]*0
+				mat.backward(arr, map)
+				hfile[name] = map
+
+
+		rhs = np.sum(Nt*tod,1)
+		div = np.sum(Nt*t,  1)
+		del Nt
+		if not self.perdet or True:
+			rhs = np.sum(rhs)[None]
+			div = np.sum(div)[None]
+		amps = rhs/div * self.mmul
+		print np.sort(amps)[::10]
+		1/0
+		if self.tmul != 1: tod *= self.tmul
+		tod -= t * amps[:,None]
 
 ###### Map filters ######
 
