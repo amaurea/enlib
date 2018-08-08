@@ -72,6 +72,15 @@ class Sampcut:
 		omask = omask.view(np.int8)
 		icore.cut_to_mask(self.ranges.T, self.detmap, omask.T)
 		return omask.view(np.bool)
+	@staticmethod
+	def from_detmask(detmask, nsamp):
+		"""Construct a Sampcut from bool detmask[ndet]. Each detector will be either
+		fully cut (True) or fully accepted (False) based on the values in the mask."""
+		detmask= np.array(detmask,bool)
+		ncut   = np.sum(detmask)
+		ranges = np.tile([[0,nsamp]], [ncut,1]).reshape(-1,2)
+		detmap = np.concatenate([[0],np.cumsum(detmask)])
+		return Sampcut(ranges, detmap, nsamp)
 	@property
 	def ndet(self): return len(self.detmap)-1
 	@property
@@ -188,6 +197,12 @@ class Sampcut:
 			self.ndet, self.nsamp, self.detmap[-1], 100.0*self.sum()/(self.ndet*self.nsamp))
 	def __repr__(self): return "Sampcut(ranges=%s, detmap=%s, nsamp=%d)" % (
 			str(self.ranges), str(self.detmap), self.nsamp)
+	def __eq__(self, other):
+		if self.nsamp != other.nsamp: return False
+		if np.any(self.detmap != other.detmap): return False
+		if self.ranges.shape != other.ranges.shape: return False
+		if np.any(self.ranges != other.ranges): return False
+		return True
 
 def sampcut(ranges, detmap, nsamp, copy=True):
 	"""Construct a new sampcut. Convenience wrapper for Sampcut"""
@@ -204,6 +219,10 @@ def from_list(rlist, nsamp):
 def from_mask(mask):
 	"""Construct a Sampcut from the given bool mask[ndet,nsamp]"""
 	return Sampcut.from_mask(mask)
+def from_detmask(detmask, nsamp):
+	"""Construct a Sampcut from bool detmask[ndet]. Each detector will be either
+	fully cut (True) or fully accepted (False) based on the values in the mask."""
+	return Sampcut.from_detmask(detmask, nsamp)
 
 def stack(cuts):
 	"""stack((c1, c2, ...)). Concatenates the sample cuts c1, c2, etc.

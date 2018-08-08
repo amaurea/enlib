@@ -92,35 +92,66 @@ subroutine solve_masked(A, b)
 	end do
 end subroutine
 
+!subroutine condition_number_multi(A, nums)
+!	implicit none
+!	T(_), intent(in)  :: A(:,:,:)
+!	real(_), intent(inout) :: nums(:)
+!	real(_)              :: eigs(size(A,1)), badval, tmp(1), rwork(size(A,1)*3-2)
+!	T(_)              :: Acopy(size(A,1),size(A,2))
+!	T(_), allocatable :: work(:)
+!	integer(4) :: i, n, m, lwork, info
+!	n = size(A,3)
+!	m = size(A,1)
+!	call C##SY##ev('n', 'u', m, A(:,:,1), m, eigs, tmp, -1, R, info)
+!	lwork = int(tmp(1))
+!	! Generate +inf as badval, while hiding this from gfortran
+!	info   = 0
+!	badval = 1d0/info
+!	!$omp parallel private(i,Acopy,info,work,eigs)
+!	allocate(work(lwork))
+!	!$omp parallel do
+!	do i = 1, n
+!		if(all(A(:,:,i) == 0)) then
+!			nums(i) = badval
+!		else
+!			Acopy = A(:,:,i)
+!			call C##SY##ev('n', 'u', m, Acopy, m, eigs, work, lwork, R, info)
+!			if(info .ne. 0) then
+!				nums(i) = badval
+!			else
+!				nums(i) = maxval(eigs)/max(0,minval(eigs)) ! eigs(m)/eigs(1)
+!			end if
+!		end if
+!	end do
+!	deallocate(work)
+!	!$omp end parallel
+!end subroutine
+
 subroutine condition_number_multi(A, nums)
 	implicit none
-	T(_), intent(in)  :: A(:,:,:)
+	T(_), intent(inout) :: A(:,:,:)
 	real(_), intent(inout) :: nums(:)
-	real(_)              :: eigs(size(A,1)), badval, tmp(1), rwork(size(A,1)*3-2)
-	T(_)              :: Acopy(size(A,1),size(A,2))
+	real(_) :: eigs(size(A,1)), meig, badval, rwork(size(A,1)*3-2)
+	T(_) :: vecs(size(A,1),size(A,2)), tmp2(size(A,1),size(A,2)), tmp(1)
 	T(_), allocatable :: work(:)
-	integer(4) :: i, n, m, lwork, info
+	integer(4) :: i, j, n, m, lwork, info
 	n = size(A,3)
 	m = size(A,1)
-	call C##SY##ev('n', 'u', m, A(:,:,1), m, eigs, tmp, -1, R, info)
+	! Workspace query
+	call C##SY##ev('v', 'u', m, A(:,:,1), m, eigs, tmp, -1, R, info)
 	lwork = int(tmp(1))
-	! Generate +inf as badval, while hiding this from gfortran
 	info   = 0
 	badval = 1d0/info
-	!$omp parallel private(i,Acopy,info,work,eigs)
+	!$omp parallel private(work,i,vecs,tmp2,info,eigs,j,meig)
 	allocate(work(lwork))
-	!$omp parallel do
+	!$omp do
 	do i = 1, n
 		if(all(A(:,:,i) == 0)) then
 			nums(i) = badval
 		else
-			Acopy = A(:,:,i)
-			call C##SY##ev('n', 'u', m, Acopy, m, eigs, work, lwork, R, info)
-			if(info .ne. 0) then
-				nums(i) = badval
-			else
-				nums(i) = eigs(m)/eigs(1)
-			end if
+			vecs = A(:,:,i)
+			call C##SY##ev('v', 'u', m, vecs, m, eigs, work, lwork, R, info)
+			nums(i) = maxval(eigs)/max(0d0,minval(eigs))
 		end if
 	end do
 	deallocate(work)
@@ -226,6 +257,54 @@ subroutine eigflip(A)
 			tmp2(:,j) = vecs(:,j)*eigs(j)
 		end do
 		call C##gemm('n','c', m, m, m, ONE, tmp2, m, vecs, m, ZERO, A(:,:,i), m)
+	end do
+	deallocate(work)
+	!$omp end parallel
+end subroutine
+
+! This subroutine is like eigpow, except that instead of
+! setting too small eigenvalues to zero, it zeros all but
+! the [0,0] entry of the matrix when the matrix is poorly
+! conditioned. This is a pretty weird operation that's
+! mostly useful for making the binned preconditioner safe
+! along the edges of the map.
+subroutine eigpow_scalar_fallback(A, pow, lim, lim0)
+	implicit none
+	T(_), intent(inout) :: A(:,:,:)
+	real(_), intent(in) :: pow, lim, lim0
+	real(_) :: eigs(size(A,1)), rwork(size(A,1)*3-2), meig
+	T(_) :: vecs(size(A,1),size(A,2)), tmp2(size(A,1),size(A,2)), tmp(1)
+	real(_) :: vmax, vmin
+	T(_), allocatable :: work(:)
+	integer(4) :: i, j, n, m, lwork, info
+	n = size(A,3)
+	m = size(A,1)
+	! Workspace query
+	call C##SY##ev('v', 'u', m, A(:,:,1), m, eigs, tmp, -1, R, info)
+	lwork = int(tmp(1))
+	!$omp parallel private(work,i,vecs,tmp2,info,eigs,j,rwork,meig,vmax,vmin)
+	allocate(work(lwork))
+	!$omp do
+	do i = 1, n
+		vecs = A(:,:,i)
+		call C##SY##ev('v', 'u', m, vecs, m, eigs, work, lwork, R, info)
+		vmax = maxval(eigs)
+		if(vmax <= lim0) then
+			A(:,:,i) = 0
+		else
+			vmin = minval(eigs)
+			if(vmin < 0 .or. vmax*lim/vmin > 1 .and. pow < 0) then
+				! Matrix is bad, make it scalar
+				A(:,:,i) = 0
+				A(1,1,i) = vmax**pow
+			else
+				! Matrix is fine, use normal inversion
+				do j = 1, m
+					tmp2(:,j) = vecs(:,j) * eigs(j)**pow
+				end do
+				call C##gemm('n','c', m, m, m, ONE, tmp2, m, vecs, m, ZERO, A(:,:,i), m)
+			end if
+		end if
 	end do
 	deallocate(work)
 	!$omp end parallel
