@@ -164,6 +164,18 @@ def get(name, override=None):
 	for a variable in the code."""
 	return parameters[name]["value"] if override is None or parameters[name]["priority"] > 1 else override
 
+class override:
+	"""Use in with block to suppress warnings inside that block."""
+	def __init__(self, name, value):
+		self.name  = name
+		self.value = value
+	def __enter__(self):
+		self.old = parameters[self.name]
+		set(self.name, self.value)
+		return self
+	def __exit__(self, type, value, traceback):
+		parameters[self.name] = self.old
+
 class ArgumentParser(argparse.ArgumentParser):
 	def __init__(self, *args, **kwargs):
 		"""A replacement for argparse.ArgumentParser that transparently handles

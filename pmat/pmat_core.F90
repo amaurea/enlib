@@ -1709,6 +1709,56 @@ contains
 		end if
 	end subroutine
 
+	subroutine pmat_az_off(dir, tod, map, az, azoff, az0, daz, yoff, comps)
+		use omp_lib
+		implicit none
+		integer, intent(in)    :: dir, yoff(:)
+		real(_), intent(inout) :: tod(:,:), map(:,:,:)
+		real(_), intent(in)    :: az0, daz, az(:), azoff(:), comps(:,:)
+		real(_), allocatable   :: wmap(:,:,:,:)
+		real(_)                :: idaz, v, q
+		integer :: di, si, ndet, nsamp, naz, ai, nproc, ci, rank, x, y
+		ndet  = size(tod,2)
+		nsamp = size(tod,1)
+		naz   = size(map,1)
+		idaz  = 1/daz
+
+		if(dir > 0) then
+			!$omp parallel do private(di,si,ai,v)
+			do di = 1, ndet
+				do si = 1, nsamp
+					ai = int((az(si)+azoff(di)-az0)*idaz)+1
+					! Skip all out-of-bounds pixels
+					if(ai < 1 .or. ai > naz) cycle
+					tod(si,di) = sum(map(ai,yoff(di)+1,1:3)*comps(1:3,di))
+				end do
+			end do
+		else
+			nproc = omp_get_max_threads()
+			allocate(wmap(size(map,3),size(map,1),size(map,2),nproc))
+			wmap = 0
+			!$omp parallel private(di,si,ai,v,rank)
+			rank = omp_get_thread_num()+1
+			!$omp do
+			do di = 1, ndet
+				do si = 1, nsamp
+					ai = int((az(si)+azoff(di)-az0)*idaz)+1
+					! Skip all out-of-bounds pixels
+					if(ai < 1 .or. ai > naz) cycle
+					wmap(1:3,ai,yoff(di)+1,rank) = wmap(1:3,ai,yoff(di)+1,rank) + tod(si,di)*comps(1:3,di)
+				end do
+			end do
+			!$omp end parallel
+			do y = 1, size(map,2)
+				do x = 1, size(map,1)
+					do ci = 1, 3
+						map(x,y,ci) = map(x,y,ci) + sum(wmap(ci,x,y,:))
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
 	subroutine pmat_phase(dir, tod, map, az, dets, az0, daz)
 		implicit none
 		integer, intent(in)    :: dir, dets(:)
