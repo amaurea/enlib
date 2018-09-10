@@ -2,6 +2,7 @@
 import numpy as np, ephem, os
 from enlib import utils
 
+yr = 365.2425
 def mjd2djd(mjd): return np.asarray(mjd) + 2400000.5 - 2415020
 def djd2mjd(djd): return np.asarray(djd) - 2400000.5 + 2415020
 
@@ -68,6 +69,56 @@ def ephem_pos(objname, mjd, dt=10, nodelay=False):
 	# Interpolate to target resolution
 	full_pos = utils.interpol(sub_pos, inds[None])
 	return full_pos
+
+def trace_orbit(obj, mjd, tref, nsub=1, Psub=yr):
+	"""Trace a constant-time orbit, showing where the object would go
+	if nothing else changed other than its position along the orbit (e.g.
+	parallax, precession etc. held constant. The orbit is evaluated at
+	the times given by mjd. Since everything else is held fixed, this
+	is just a proxy for the mean anomaly, such that
+	M = M0 + 2*pi*(mjd-tref)/P, where M0 is the standard mean anomaly
+	from the orbital elements and P is the time at which everything else
+	was fixed.
+	
+	Nsub specifies the number of subsamples per earth orbit at which
+	the trace should be repeated. The purpose of this is to average out
+	the effect of parallax. nsub=2 should be sufficient for this. nsub=1
+	(the default) disables this subsampling, resulting in an orbit trace
+	that includes the effect of whatever position the Earth happened to
+	be at at tref.
+
+	Unlike what happens when normally evaluating the orbit for one period,
+	this trace is guaranteed to be properly periodic.
+	"""
+	mjd  = np.asarray(mjd)
+	if nsub > 1:
+		# Subsample the yearly parallax
+		res  = np.zeros((3,)+mjd.shape)
+		vec  = np.zeros((3,)+mjd.shape)
+		offs = (np.arange(nsub)-(nsub-1)/2.0)*Psub/nsub
+		for off in offs:
+			pos  = trace_orbit(obj, mjd-off, tref+off)
+			vec += utils.ang2rect(pos[:2],zenith=False)*pos[2]
+		vec /= nsub
+		res[:2] = utils.rect2ang(vec,zenith=False)
+		res[2]  = np.sum(vec**2,0)**0.5
+		return res
+	obj  = obj.copy()
+	M0   = obj._M
+	P    = obj._a**1.5*yr
+	with utils.flatview(mjd, mode="r") as tflat:
+		djd = mjd2djd(tref)
+		obj = get_object(obj)
+		res = np.zeros([3,len(tflat)])
+		for i, t in enumerate(tflat):
+			# ._M is radians when read but degrees when set, so must compensate
+			obj._M = (M0 + 2*np.pi*(t-tref)/P)/utils.degree
+			obj.compute(djd)
+			res[0,i] = obj.a_ra
+			res[1,i] = obj.a_dec
+			res[2,i] = obj.earth_distance
+	res.reshape((3,)+mjd.shape)
+	return res
 
 def make_object(a=1, e=0, inc=0, M=0, Omega=0, omega=0, epoch=36525):
 	"""Construct a pyephem EllipticalBody with the given parameters."""

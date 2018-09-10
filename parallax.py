@@ -10,7 +10,7 @@ def sun2earth(pos_sunrel, sundist, time, mul=1):
 	# Compute the position of the object relative to the earth at each time
 	vec_obj_sunrel   = utils.ang2rect(pos_sunrel, zenith=False)*sundist
 	vec_sun_earthrel = ephemeris.ephem_vec("Sun", time)
-	vec_obj_earthrel = (vec_sun_earthrel.T + mul*vec_obj_sunrel.T).T
+	vec_obj_earthrel   = (vec_obj_sunrel.T + mul*vec_sun_earthrel.T).T
 	# Translate this into an angular position
 	pos_earthrel = utils.rect2ang(vec_obj_earthrel, zenith=False)
 	earthdist = np.sum(vec_obj_earthrel**2,0)**0.5
@@ -24,7 +24,9 @@ def earth2sun(pos_earthrel, earthdist, time):
 
 def earth2sun_mixed(pos_earthrel, sundist, time):
 	"""Like earth2sun, but distances are sun-relative instead of earth-relative.
-	Returns pos_sunrel, earthdist."""
+	Returns pos_sunrel, earthdist. FIXME: For planets interior to Earth, this
+	function may give the wrong result.
+	"""
 	# Compute the position of the object relative to the earth at each time
 	vec_obj_earthrel = utils.ang2rect(pos_earthrel, zenith=False)
 	vec_earth_sunrel = -ephemeris.ephem_vec("Sun", time)
@@ -33,9 +35,11 @@ def earth2sun_mixed(pos_earthrel, sundist, time):
 	b = np.sum(vec_earth_sunrel**2,0)**0.5
 	c = sundist
 	cosC = np.sum(-(vec_obj_earthrel.T*vec_earth_sunrel.T).T,0)/b
-	sinC = (1-cosC**2)**0.5
-	sinB = sinC * b / c
-	sinA = np.sin(np.pi - np.arcsin(sinB) - np.arcsin(sinC))
+	C    = np.arccos(cosC)
+	sinB = np.sin(C) * b/c
+	# This assumes that B < 90 degrees. For interior planets this can
+	# break down. In this case there may not be an unambiguous solution.
+	sinA = np.sin(np.pi - np.arcsin(sinB) - C)
 	a = b * sinA/sinB
 	earthdist = a
 	vec_obj_earthrel *= earthdist
