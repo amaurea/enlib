@@ -2,6 +2,7 @@ from distutils.core import setup
 from distutils.extension import Extension
 from Cython.Distutils import build_ext
 import subprocess, sys
+import numpy as np
 extra_link_args = ["-fopenmp"]
 #try:
 #	extra_link_args += subprocess.check_output(["mpicc", "--showme:link"]).split()
@@ -16,7 +17,7 @@ setup(
 			name="sharp",
 			sources=["sharp.c"],
 			libraries=["sharp","c_utils","fftpack"],
-			include_dirs=["."],
+			include_dirs=[".",np.get_include()],
 			extra_link_args = extra_link_args,
 			)
 		]
