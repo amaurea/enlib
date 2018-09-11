@@ -4,7 +4,7 @@
 
 import numpy as np, ephem
 from enlib import utils, parallax, ephemeris, coordinates, fft
-from scipy import interpolate
+from scipy import interpolate, special
 
 def smooth(arr, n):
 	arr = np.array(arr)
@@ -43,7 +43,7 @@ def orb_subsample(t, step=0.1, nsub=3):
 #    any manual parallax work?
 
 class MotionCompensator:
-	def __init__(self, obj=None, nsamp=1000):
+	def __init__(self, obj=None, nsamp=1000, nderiv=2):
 		if obj is None:
 			obj = ephemeris.make_object(a=500, e=0.25, inc=20, Omega=90, omega=150)
 		self.o    = obj
@@ -52,10 +52,10 @@ class MotionCompensator:
 		dt   = self.period / nsamp
 		t    = self.tref + (np.arange(nsamp)-nsamp//2)*dt
 		pos  = ephemeris.trace_orbit(obj, t, self.tref, nsub=20)
-		# Use two points 1/4 of an orbit apart to find the spin vector of the orbit
-		refi   = [0,len(t)/4]
-		v1, v2 = utils.ang2rect(pos[:2,refi], zenith=False).T
-		vzen   = np.cross(v1,v2)
+		# Find the normal vector for the orbit. We use a lot of cross products to make it
+		# robust to deviations from ellipticity
+		vs    = utils.ang2rect(pos[:2], zenith=False)
+		vzen  = np.mean(np.cross(vs, np.roll(vs,-1,1),0,0),0)
 		self.pzen = utils.rect2ang(vzen, zenith=False)
 		# Transform the orbit to orbit-aligned coordinates so that the rotation is purely
 		# in the lon direction
@@ -66,26 +66,21 @@ class MotionCompensator:
 		# Hack: smooth lon and sundist to avoid pyephem-induced jitter that
 		# especially affects the speed and accel. We have to extract the average
 		# orbital motion before smoothing, to avoid discontinuity
-		nkeep   = 20
+		nkeep     = 20
 		avg_speed = 2*np.pi/self.period
 		delta_lon = lon - avg_speed * np.arange(nsamp)*dt
-		self.delta_lon = delta_lon
 		delta_lon = smooth(delta_lon, nkeep)
 		#sundist   = smooth(sundist,   nkeep)
 		lon       = delta_lon + avg_speed * np.arange(nsamp)*dt
-		# Compute the speed and acceleration
-		speed   = fourier_deriv(delta_lon, 1, dt=dt) + avg_speed
-		accel   = fourier_deriv(delta_lon, 2, dt=dt)
-		# Build our interpolators
+		# Compute and spline the derivatives
 		self.lon0   = lon[0]
 		x           = utils.unwind(lon-self.lon0)
-		self.speed_spline = interpolate.splrep(x, speed)
-		self.accel_spline = interpolate.splrep(x, accel)
-		self.dist_spline  = interpolate.splrep(x, sundist)
+		self.dist_spline   = interpolate.splrep(x, sundist)
+		self.deriv_splines = [interpolate.splrep(x, fourier_deriv(delta_lon, i+1, dt=dt) + (avg_speed if i == 0 else 0)) for i in range(nderiv)]
 		# Debug
 		self.lon = lon
-		self.speed = speed
-		self.accel = accel
+		#self.speed = speed
+		#self.accel = accel
 		self.sundist = sundist
 		self.pos_oo = pos_oo
 		self.t = t
@@ -109,39 +104,11 @@ class MotionCompensator:
 		# Then apply the orbital correction
 		pos_oo  = coordinates.recenter(pos_sunrel, self.pzen)
 		x       = (pos_oo[0]-self.lon0)%(2*np.pi)
-		speed   = interpolate.splev(x, self.speed_spline)
-		accel   = interpolate.splev(x, self.accel_spline)
 		delta_t = t-tref
 		old = pos_oo.copy()
-		pos_oo[0] -= delta_t*speed + delta_t**2*accel
+		for i, spline in enumerate(self.deriv_splines):
+			deriv = interpolate.splev(x, spline)
+			pos_oo[0] -= delta_t**(i+1)/special.factorial(i+1) * deriv
 		# Transform back to celestial coordinates
 		opos = coordinates.decenter(pos_oo, self.pzen)
 		return opos
-
-#def solve_kepler(M, e, n=10):
-#	E = M if e < 0.8 else np.pi
-#	for i in range(n):
-#		E -= (E-e*np.sin(E)-M)/(1-e*np.cos(E))
-#	return E
-#
-#class SimpleEllipse:
-#	def __init__(self, a=1, e=0, inc=0, Om=0, om=0, M=0, epoch=36525, eps=23.43686):
-#		self.a, self.e, self.inc, self.Om, self.om, self.M, self.epoch, self.eps = a, e, inc, Om, om, M, epoch, eps
-#		rot_orient  = coordinates.euler_mat([Om*utils.degree, inc*utils.degree, om*utils.degree])
-#		rot_ecl2cel = utils.rotmatrix(eps*utils.degree, "x")
-#		self.R = rot_ecl2cel.dot(rot_orient)
-#	@property
-#	def P(self): return self.a**1.5*ephemeris.yr
-#	@property
-#	def b(self): return self.a * (1-self.e**2)**0.5
-#	def calc_rect(self, time):
-#		time = np.asarray(time)
-#		M = self.M + 2*np.pi*(time - self.epoch)/self.P
-#		E = solve_kepler(M, self.e)
-#		p = np.zeros((3,) + time.shape)
-#		p[0] = self.a * (np.cos(E)-self.e)
-#		p[1] = self.b * np.sin(E)
-#		return np.einsum("ab,b...->a...", self.R, p)
-#	def calc_ang(self, time):
-#		p = self.calc_rect(time)
-#		return utils.rect2ang(p, zenith=False)
