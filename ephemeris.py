@@ -137,7 +137,7 @@ def read_object(fname):
 	"""Construct a pyephem EllipticalBody based on the key = value entries in
 	the given parameter file."""
 	o = make_object()
-	fields = [("a","_a"),("e","_e"),("inc","_inc"),("M","_M"),("Omega","_Om"),("omega","_om"),("epoch","_epoch")]
+	fields = [("a","_a"),("e","_e"),("inc","_inc"),("M","_M"),("Omega","_Om"),("omega","_om"),("epoch","_epoch"),("epoch","_epoch_M")]
 	with open(fname, "r") as f:
 		for line in f:
 			line = line.split("#")[0]
