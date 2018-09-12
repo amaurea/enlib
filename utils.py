@@ -160,6 +160,10 @@ def ctime2mjd(ctime):
 def mjd2ctime(mjd):
 	"""Converts from modified julian date to unix time."""
 	return (np.asarray(mjd)-40587.0)*86400
+def mjd2djd(mjd): return np.asarray(mjd) + 2400000.5 - 2415020
+def djd2mjd(djd): return np.asarray(djd) - 2400000.5 + 2415020
+def ctime2djd(ctime): return mjd2djd(ctime2mjd(ctime))
+def djd2mjd(cdjd):    return mjd2ctime(djd2mjd(djd))
 
 def mjd2ctime(mjd):
 	"""Converts from modified julian date to unix time"""
