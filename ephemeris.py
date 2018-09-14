@@ -40,7 +40,8 @@ def ephem_raw(objname, mjd, nodelay=False):
 			obj.compute(t)
 			res[0,i] = obj.a_ra
 			res[1,i] = obj.a_dec
-			res[2,i] = obj.earth_distance
+			try: res[2,i] = obj.earth_distance
+			except AttributeError: res[2,i] = 1.0
 	res.reshape((3,)+mjd.shape)
 	return res
 

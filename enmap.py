@@ -159,19 +159,19 @@ def subinds(shape, wcs, box, mode=None, cap=True):
 	box = np.asarray(box)
 	# Translate the box to pixels
 	bpix = skybox2pixbox(shape, wcs, box, include_direction=True)
-	if   mode == "round": ibox = np.round(bpix)
-	elif mode == "floor": ibox = np.floor(bpix)
-	elif mode == "ceil":  ibox = np.ceil(bpix)
-	elif mode == "inclusive": ibox = [np.floor(bpix[0]),np.ceil (bpix[1]), bpix[2]]
-	elif mode == "exclusive": ibox = [np.ceil (bpix[0]),np.floor(bpix[1]), bpix[2]]
+	if   mode == "round": bpix = np.round(bpix)
+	elif mode == "floor": bpix = np.floor(bpix)
+	elif mode == "ceil":  bpix = np.ceil(bpix)
+	elif mode == "inclusive": bpix = [np.floor(bpix[0]),np.ceil (bpix[1]), bpix[2]]
+	elif mode == "exclusive": bpix = [np.ceil (bpix[0]),np.floor(bpix[1]), bpix[2]]
 	else: raise ValueError("Unrecognized mode '%s' in subinds" % str(mode))
 	bpix = np.array(bpix, int)
 	if cap:
 		# Make sure we stay inside our map bounds
-		for b, n in zip(ibox.T,shape[-2:]):
+		for b, n in zip(bpix.T,shape[-2:]):
 			if b[2] > 0: b[:2] = [max(b[0],  0),min(b[1], n)]
 			else:        b[:2] = [min(b[0],n-1),max(b[1],-1)]
-	return ibox
+	return bpix
 
 def slice_geometry(shape, wcs, sel, nowrap=False):
 	"""Slice a geometry specified by shape and wcs according to the
@@ -369,9 +369,9 @@ def extract(map, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b, cval=0, iw
 	# Find the bounding box of the output in terms of input pixels.
 	# This is simple because our wcses are compatible, so they
 	# can only differ by a simple pixel offset. Here pixoff is
-	# pos_input - pos_output
-	pixoff = utils.nint((wcs.wcs.crpix-iwcs.wcs.crpix) - (wcs.wcs.crval-iwcs.wcs.crval)/iwcs.wcs.cdelt)[::-1]
-	pixbox = np.array([pixoff,pixoff+np.array(map.shape[-2:])])
+	# pos_input - pos_output. This is equivalent to the coordinates of
+	pixoff = utils.nint((iwcs.wcs.crpix-wcs.wcs.crpix) - (iwcs.wcs.crval-wcs.wcs.crval)/iwcs.wcs.cdelt)[::-1]
+	pixbox = np.array([pixoff,pixoff+np.array(shape[-2:])])
 	return extract_pixbox(map, pixbox, omap=omap, wrap=wrap, op=op, cval=cval, iwcs=iwcs)
 
 def extract_pixbox(map, pixbox, omap=None, wrap="auto", op=lambda a,b:b, cval=0, iwcs=None):
@@ -383,14 +383,14 @@ def extract_pixbox(map, pixbox, omap=None, wrap="auto", op=lambda a,b:b, cval=0,
 	if iwcs is None: iwcs = map.wcs
 	oshape, owcs = slice_geometry(map.shape, iwcs, (slice(*pixbox[:,-2]),slice(*pixbox[:,-1])), nowrap=True)
 	if omap is None:
-		omap = full(map.shape[:-2]+tuple(shape[-2:]), wcs, cval, map.dtype)
+		omap = full(map.shape[:-2]+tuple(oshape[-2:]), owcs, cval, map.dtype)
 	nphi = utils.nint(360/np.abs(iwcs.wcs.cdelt[0]))
-	if wrap is "auto": wrap = [0]*map.ndim + [nphi]
-	else: wrap = np.zeros(map.ndim,int)+wrap
+	if wrap is "auto": wrap = [0,nphi]
+	else: wrap = np.zeros(2,int)+wrap
 	for ibox, obox in utils.sbox_wrap(pixbox.T, wrap=wrap, cap=map.shape[-2:]):
 		islice = utils.sbox2slice(ibox)
 		oslice = utils.sbox2slice(obox)
-		omap[oslice] = op(omap[oslice], imap[islice])
+		omap[oslice] = op(omap[oslice], map[islice])
 	return omap
 
 def at(map, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True):
