@@ -355,13 +355,18 @@ def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, pr
 
 def extract(map, shape, wcs, omap=None, wrap="auto", op=lambda a,b:b, cval=0, iwcs=None):
 	"""Like project, but only works for pixel-compatible wcs. Much
-	faster because it simply copies over pixels. Can be used in
-	co-adding by specifying an output map and a combining operation.
-	The deafult operation overwrites the output. Use np.ndarray.__iadd__
-	to get a copy-less += operation. The optional iwcs argument
-	is there to support input maps that are numpy-like but can't be made into
-	actual enmaps. The main example of this is a fits hdu object, which can be
-	sliced like an array to avoid reading more into memory than necessary.
+	faster because it simply copies over pixels.
+
+	Can be used in co-adding by specifying an output map and a combining
+	operation. The deafult operation overwrites the output. Use
+	np.ndarray.__iadd__ to get a copy-less += operation. Not that
+	areas outside are not assumed to be zero if an omap is specified -
+	instead those areas will simply not be operated on.
+
+	The optional iwcs argument is there to support input maps that are
+	numpy-like but can't be made into actual enmaps. The main example of
+	this is a fits hdu object, which can be sliced like an array to avoid
+	reading more into memory than necessary.
 	"""
 	# First check that our wcs is compatible
 	if iwcs is None: iwcs = map.wcs
