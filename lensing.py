@@ -54,28 +54,13 @@ def displace_map(imap, pix, order=3, mode="spline", border="cyclic", trans=False
 	"""Displace map m[{pre},ny,nx] by pix[2,ny,nx], where pix indicates the location
 	in the input map each output pixel should get its value from (float). The output
 	is [{pre},ny,nx]."""
-	iwork = np.empty(imap.shape[-2:]+imap.shape[:-2],imap.dtype)
-	if not deriv:
-		out = imap.copy()
-	else:
-		out = enmap.empty((2,)+imap.shape, imap.wcs, imap.dtype)
-	# Why do we have to manually allocate outputs and juggle whcih is copied over here?
-	# Because it is in general not possible to infer from odata what shape idata should have.
-	# So the map_coordinates can't allocate the output array automatically in the transposed
-	# case. But in this function we know that they will have the same shape, so we can.
+	if not deriv: omap = imap.copy()
+	else:         omap = enmap.empty((2,)+imap.shape, imap.wcs, imap.dtype)
 	if not trans:
-		iwork[:] = utils.moveaxes(imap, (-2,-1), (0,1))
-		owork = interpol.map_coordinates(iwork, pix, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
-		out[:] = utils.moveaxes(owork, (0,1), (-2,-1))
+		interpol.map_coordinates(imap, pix, omap, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
 	else:
-		if not deriv:
-			owork = iwork.copy()
-		else:
-			owork = np.empty(imap.shape[-2:]+(2,)+imap.shape[:-2],imap.dtype)
-		owork[:] = utils.moveaxes(imap, (-2,-1), (0,1))
-		interpol.map_coordinates(iwork, pix, owork, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
-		out[:] = utils.moveaxes(iwork, (0,1), (-2,-1))
-	return out
+		interpol.map_coordinates(omap, pix, imap, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
+	return omap
 
 # Compatibility function. Not quite equivalent lens_map above due to taking phi rather than
 # its gradient as an argument.
