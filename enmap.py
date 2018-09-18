@@ -20,6 +20,10 @@ from . import utils, wcs as wcsutils, slice as sliceutils, powspec, fft as enfft
 
 extent_model = ["subgrid"]
 
+# Python 2/3 compatibility
+try: basestring
+except NameError: basestring = str
+
 # PyFits uses row-major ordering, i.e. C ordering, while the fits file
 # itself uses column-major ordering. So an array which is (ncomp,ny,nx)
 # will be (nx,ny,ncomp) in the file. This means that the axes in the ndmap
