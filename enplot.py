@@ -1,8 +1,8 @@
 import numpy as np, argparse, time, sys, warnings, os, shlex, glob, PIL.Image, PIL.ImageDraw
 from scipy import ndimage
-from enlib import enmap, colorize, mpi, cgrid, utils, memory, bunch, wcs as enwcs
+from . import enmap, colorize, mpi, cgrid, utils, memory, bunch, wcs as enwcs
 # Optional dependency array_ops needed for contour drawing
-try: from enlib import array_ops
+try: from . import array_ops
 except ImportError: pass
 
 # Python 3 compatibility
@@ -437,11 +437,7 @@ def draw_map_field(map, args, crange=None, return_layers=False, return_info=Fals
 	with printer.time("stack layers", 3):
 		layers, bounds = standardize_images(layers)
 		if not return_layers: layers = merge_images(layers)
-	class Info:
-		def __init__(self, bounds, names):
-			self.bounds = bounds
-			self.names  = names
-	info = Info(bounds, names)
+	info = bunch.Bunch(bounds=bounds, names=names)
 	if return_info: return layers, info
 	else: return layers
 
@@ -508,7 +504,7 @@ def draw_map_field_mpl(map, args, crange=None, printer=noprint):
 	#pyplot.savefig(oname,bbox_inches="tight",dpi=dpi)
 
 def parse_range(desc,n):
-	res = np.array([float(w) for w in desc.split(":")])[:n]
+	res = parse_list(desc, sep=":")[:n]
 	return np.concatenate([res,np.repeat([res[-1]],n-len(res))])
 
 def parse_list(desc, dtype=float, sep=","):
