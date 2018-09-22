@@ -1,7 +1,7 @@
 """This module provides functions for dealing with apparent parallax displacement
 in maps. This module works in equatorial coordinates."""
 import numpy as np
-from enlib import utils, ephemeris
+from . import utils, ephemeris
 
 def sun2earth(pos_sunrel, sundist, time, mul=1):
 	"""Apply parallax to the given sun_relative coordinates pos_sunrel[{ra,dec},...]

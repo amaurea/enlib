@@ -1,5 +1,5 @@
 import numpy as np, h5py
-from enlib import rangelist, sampcut, utils
+from . import rangelist, sampcut, utils
 
 # Flagranges implement the new cuts format,
 # where samples are tagged with flags instead

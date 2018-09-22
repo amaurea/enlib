@@ -37,9 +37,6 @@ class EphemObj:
 		djd = mjd + 2400000.5 - 2415020
 		self.eph.compute(djd)
 		pos = np.array([float(self.eph.ra), float(self.eph.dec)])
-		
-
-
 		# We assume that only points close to the object are
 		# relevant, so use flat sky approximation
 		diff = utils.rewind(point[:,1:]-pos, 0, 2*np.pi)

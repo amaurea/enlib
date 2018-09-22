@@ -1,5 +1,5 @@
 import numpy as np, time
-from enlib import utils
+from .. import utils
 import fortran_32, fortran_64
 
 def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_obox=False, return_status=False, verbose=False, nstart=None, *args, **kwargs):

@@ -2,7 +2,7 @@
 coordinate axes on an image, for example for use with enmap."""
 import numpy as np, time, os, enlib.wcs
 from PIL import Image, ImageDraw, ImageFont
-from enlib import utils, enmap
+from . import utils, enmap
 
 def calc_line_segs(pixs, steplim=10.0, extrapolate=2.0):
 	"""Given a sequence of points, split into subsequences

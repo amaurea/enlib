@@ -1,7 +1,7 @@
 # Transform from real numbers to RGB colors.
 import numpy as np, time
 has_fortran = True
-try: import fortran
+try: import .fortran
 except ImportError: has_fortran = False
 
 # Predefined schemes

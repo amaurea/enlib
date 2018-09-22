@@ -1,7 +1,7 @@
 """This module handles deprojection of a set of arrays from another set of
 arrays. This is useful for cleaning TODs of unwanted signals, for example."""
 import numpy as np, scipy.signal
-from enlib import utils, pmat, sampcut, gapfill, fft
+from . import utils, pmat, sampcut, gapfill, fft
 
 def estimate_white_noise(tod, nchunk=10, chunk_size=1000):
 	"""Robust time-domain estimation of white noise level."""

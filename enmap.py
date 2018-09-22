@@ -193,8 +193,7 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 		wcs.wcs.crpix[j] /= s.step
 		wcs.wcs.cdelt[j] *= s.step
 		wcs.wcs.crpix[j] += 0.5
-		oshape[i] = s.stop-s.start
-		oshape[i] = (oshape[i]+s.step-1)//s.step
+		oshape[i] = (s.stop-s.start+s.step-np.sign(s.step))//s.step
 	return tuple(pre)+tuple(oshape), wcs
 
 def scale_geometry(shape, wcs, scale):
@@ -394,6 +393,8 @@ def extract_pixbox(map, pixbox, omap=None, wrap="auto", op=lambda a,b:b, cval=0,
 	if omap is None:
 		omap = full(map.shape[:-2]+tuple(oshape[-2:]), owcs, cval, map.dtype)
 	nphi = utils.nint(360/np.abs(iwcs.wcs.cdelt[0]))
+	# If our map is wider than the wrapping length, assume we're a lower-spin field
+	nphi *= (nphi+map.shape[-1]-1)//nphi
 	if wrap is "auto": wrap = [0,nphi]
 	else: wrap = np.zeros(2,int)+wrap
 	for ibox, obox in utils.sbox_wrap(pixbox.T, wrap=wrap, cap=map.shape[-2:]):

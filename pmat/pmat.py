@@ -7,8 +7,8 @@ The reason for allowing the other argument to be modified is to make it easier
 to incrementally project different parts of the signal.
 """
 import numpy as np, time, sys
-from enlib import enmap, interpol, utils, coordinates, config, errors, array_ops
-from enlib import parallax, bunch, pointsrcs
+from .. import enmap, interpol, utils, coordinates, config, errors, array_ops
+from .. import parallax, bunch, pointsrcs
 import pmat_core_32
 import pmat_core_64
 def get_core(dtype):

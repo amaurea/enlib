@@ -3,7 +3,7 @@ When c is more developed, it might completely replace this
 module. For now, it is used as a part of the implementation."""
 import numpy as np
 import astropy.coordinates as c, astropy.units as u
-from enlib import utils
+from .. import utils
 # Optional dependencies are imported in the functions that
 # use them. These include ephem, iers and pyfsla
 

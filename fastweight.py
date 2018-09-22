@@ -1,6 +1,6 @@
 """This module provides fast weightmap estimation based on a todinfo database."""
 import numpy as np, os
-from enlib import utils, coordinates, enmap, bench, pmat
+from . import utils, coordinates, enmap, bench, pmat
 
 def fastweight(shape, wcs, db, weight="det", array_rad=0.7*utils.degree,
 		comm=None, dtype=np.float64, daz=0.5*utils.degree, nt=4, chunk_size=100,

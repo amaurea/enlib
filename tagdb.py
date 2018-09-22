@@ -4,7 +4,7 @@ For example query("deep56,night,ar2,in(bounds,Moon)") woult return a
 set of ids with the tags deep56, night and ar2, and where th Moon[2]
 array is in the polygon specified by the bounds [:,2] array."""
 import re, numpy as np, h5py, shlex, copy, warnings, time, os
-from enlib import utils
+from . import utils
 
 class Tagdb:
 	def __init__(self, data=None, sort="id", default_fields=[], default_query=""):

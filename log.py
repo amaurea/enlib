@@ -1,7 +1,7 @@
 """This module provids a simple logging/output interface."""
 import time
 from logging import *
-from enlib import memory, colors, mpi
+from . import memory, colors, mpi
 
 class EnFilter(Filter):
 	def __init__(self, rank=0):

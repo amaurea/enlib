@@ -1,7 +1,7 @@
 """"This module pulls together all the different effects that can go into
 CMB map simulations, such as curved sky, lensing, aberration, etc."""
 import numpy as np
-from enlib import enmap, curvedsky, lensing, aberration, utils
+from . import enmap, curvedsky, lensing, aberration, utils
 
 def rand_map(shape, wcs, ps, lmax=None, curved=True, lens=True, aberrate=True,
 		beta=None, dir=None, seed=None, dtype=None, verbose=False, recenter=False,

@@ -3,7 +3,7 @@
 # the coordinates module.
 
 import numpy as np, ephem
-from enlib import utils, parallax, ephemeris, coordinates, fft
+from . import utils, parallax, ephemeris, coordinates, fft
 from scipy import interpolate, special
 
 def smooth(arr, n):

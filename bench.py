@@ -21,7 +21,7 @@ last value for the execution time for category "foo", for example.
 """
 import time, numpy as np
 from collections import defaultdict
-from enlib import memory
+from . import memory
 
 class Value:
 	def __init__(self, n=0, v=0, vv=0):

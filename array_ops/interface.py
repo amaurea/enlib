@@ -1,5 +1,5 @@
 import numpy as np
-from enlib import utils
+from .. import utils
 import fortran_32, fortran_64, fortran_c64, fortran_c128
 
 def get_core(dtype):

@@ -1,5 +1,5 @@
 import numpy as np
-from enlib import coordinates, enmap as en, utils
+from . import coordinates, enmap, utils
 
 beta    = 0.0012301
 dir_equ = np.array([167.929, -6.927])*np.pi/180
@@ -42,7 +42,7 @@ def aberrate(imap, dir, beta, mode="wrap", order=3, recenter=False, modulation=T
 	pos = remap(pos[::-1], dir, beta, pol=pol, recenter=recenter, modulation=modulation)
 	pos[:2] = pos[1::-1]
 	pix = imap.sky2pix(pos[:2], corner=True) # interpol needs corners
-	omap= en.ndmap(utils.interpol(imap, pix, mode=mode, order=order), imap.wcs)
+	omap= enmap.ndmap(utils.interpol(imap, pix, mode=mode, order=order), imap.wcs)
 	if pol:
 		c,s = np.cos(2*pos[2]), np.sin(2*pos[2])
 		omap[1] = c*omap[1] + s*omap[2]

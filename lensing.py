@@ -1,5 +1,5 @@
 import numpy as np
-from enlib import enmap, utils, powspec, interpol
+from . import enmap, utils, powspec, interpol
 
 ####### Flat sky lensing #######
 

@@ -2,7 +2,7 @@
 full sky."""
 from __future__ import print_function
 import numpy as np
-from enlib import sharp, enmap, powspec, wcs as enwcs, utils
+from . import sharp, enmap, powspec, wcs as wcsutils, utils
 
 class ShapeError(Exception): pass
 
@@ -376,7 +376,7 @@ def make_projectable_map_by_pos(pos, lmax, dims=(), oversample=2.0, dtype=float,
 	# First set up the pixelization for the whole sky. Negative cdelt to
 	# make sharp extra happy. Not really necessary, but makes some things
 	# simpler later.
-	wcs   = enwcs.WCS(naxis=2)
+	wcs   = wcsutils.WCS(naxis=2)
 	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
 	wcs.wcs.crval = [ra_ref,0]
 	wcs.wcs.cdelt = [360./nx,-180./nytot]

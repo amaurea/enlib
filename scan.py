@@ -45,7 +45,7 @@ of skipping samples here.
 # system, especially considering the large overlap with Dataset.
 
 import numpy as np, enlib.slice, copy as cpy, h5py, os
-from enlib import sampcut, nmat, config, resample, utils, bunch, fft
+from . import sampcut, nmat, config, resample, utils, bunch, fft
 
 class Scan:
 	"""This defines the minimal interface for a Scan. It will usually be

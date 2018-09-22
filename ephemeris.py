@@ -1,6 +1,6 @@
 """Helper functions for pyephem."""
 import numpy as np, ephem, os
-from enlib import utils
+from . import utils
 
 yr = 365.2425
 def mjd2djd(mjd): return np.asarray(mjd) + 2400000.5 - 2415020
