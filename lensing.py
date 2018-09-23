@@ -81,20 +81,20 @@ def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64
 	oshape  = shape[-3:]
 	if len(oshape) == 2: shape = (1,)+tuple(shape)
 
-        #van Engelen added this:
+	#van Engelen added this:
 
 	# First draw a random lensing field, and use it to compute the undeflected positions
-        if not separate_phi_from_cmb:
-                #AVE - this was the default option.
-                if verbose: print("Generating alms")
-                alm, ainfo = curvedsky.rand_alm(ps_lensinput, lmax=lmax, seed=seed, dtype=ctype, return_ainfo=True)
-                phi_alm, cmb_alm = alm[0], alm[1:1+shape[-3]]
-	        del alm
+	if not separate_phi_from_cmb:
 
+		#AVE - this was the default option.
+		if verbose: print("Generating alms")
+		alm, ainfo = curvedsky.rand_alm(ps_lensinput, lmax=lmax, seed=seed, dtype=ctype, return_ainfo=True)
+		phi_alm, cmb_alm = alm[0], alm[1:1+shape[-3]]
+		del alm
         else:
-                if verbose: print("Generating alms, separating phi from cmb")
-                phi_alm, phi_ainfo = curvedsky.rand_alm(ps_lensinput[0, 0, :], lmax=lmax, seed=phi_seed, dtype=ctype, return_ainfo=True)
-                cmb_alm, cmb_ainfo = curvedsky.rand_alm(ps_lensinput[1:, 1:, :], lmax=lmax, seed=seed, dtype=ctype, return_ainfo=True)
+		if verbose: print("Generating alms, separating phi from cmb")
+		phi_alm, phi_ainfo = curvedsky.rand_alm(ps_lensinput[0, 0, :], lmax=lmax, seed=phi_seed, dtype=ctype, return_ainfo=True)
+		cmb_alm, cmb_ainfo = curvedsky.rand_alm(ps_lensinput[1:, 1:, :], lmax=lmax, seed=seed, dtype=ctype, return_ainfo=True)
 	# Truncate alm if we want a smoother map. In taylens, it was necessary to truncate
 	# to a lower lmax for the map than for phi, to avoid aliasing. The appropriate lmax
 	# for the cmb was the one that fits the resolution. FIXME: Can't slice alm this way.
