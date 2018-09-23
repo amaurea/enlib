@@ -57,9 +57,9 @@ def displace_map(imap, pix, order=3, mode="spline", border="cyclic", trans=False
         if not deriv: omap = imap.copy()
         else:         omap = enmap.empty((2,)+imap.shape, imap.wcs, imap.dtype)
         if not trans:
-        interpol.map_coordinates(imap, pix, omap, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
+                interpol.map_coordinates(imap, pix, omap, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
         else:
-        interpol.map_coordinates(omap, pix, imap, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
+                interpol.map_coordinates(omap, pix, imap, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
         return omap
 
 # Compatibility function. Not quite equivalent lens_map above due to taking phi rather than
