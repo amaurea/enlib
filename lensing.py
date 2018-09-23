@@ -52,8 +52,8 @@ def delens_grad(grad_phi, nstep=3, order=3, mode="spline", border="cyclic"):
 
 def displace_map(imap, pix, order=3, mode="spline", border="cyclic", trans=False, deriv=False):
 	"""Displace map m[{pre},ny,nx] by pix[2,ny,nx], where pix indicates the location
-        in the input map each output pixel should get its value from (float). The output
-        is [{pre},ny,nx]."""
+	in the input map each output pixel should get its value from (float). The output
+	is [{pre},ny,nx]."""
 	if not deriv: omap = imap.copy()
 	else:         omap = enmap.empty((2,)+imap.shape, imap.wcs, imap.dtype)
 	if not trans:
