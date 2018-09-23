@@ -1,5 +1,5 @@
 import numpy as np
-from . import enmap, utils, powspec, interpol
+from enlib import enmap, utils, powspec, interpol
 
 ####### Flat sky lensing #######
 
@@ -54,13 +54,28 @@ def displace_map(imap, pix, order=3, mode="spline", border="cyclic", trans=False
 	"""Displace map m[{pre},ny,nx] by pix[2,ny,nx], where pix indicates the location
 	in the input map each output pixel should get its value from (float). The output
 	is [{pre},ny,nx]."""
-	if not deriv: omap = imap.copy()
-	else:         omap = enmap.empty((2,)+imap.shape, imap.wcs, imap.dtype)
-	if not trans:
-		interpol.map_coordinates(imap, pix, omap, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
+	iwork = np.empty(imap.shape[-2:]+imap.shape[:-2],imap.dtype)
+	if not deriv:
+		out = imap.copy()
 	else:
-		interpol.map_coordinates(omap, pix, imap, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
-	return omap
+		out = enmap.empty((2,)+imap.shape, imap.wcs, imap.dtype)
+	# Why do we have to manually allocate outputs and juggle whcih is copied over here?
+	# Because it is in general not possible to infer from odata what shape idata should have.
+	# So the map_coordinates can't allocate the output array automatically in the transposed
+	# case. But in this function we know that they will have the same shape, so we can.
+	if not trans:
+		iwork[:] = utils.moveaxes(imap, (-2,-1), (0,1))
+		owork = interpol.map_coordinates(iwork, pix, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
+		out[:] = utils.moveaxes(owork, (0,1), (-2,-1))
+	else:
+		if not deriv:
+			owork = iwork.copy()
+		else:
+			owork = np.empty(imap.shape[-2:]+(2,)+imap.shape[:-2],imap.dtype)
+		owork[:] = utils.moveaxes(imap, (-2,-1), (0,1))
+		interpol.map_coordinates(iwork, pix, owork, order=order, mode=mode, border=border, trans=trans, deriv=deriv)
+		out[:] = utils.moveaxes(iwork, (0,1), (-2,-1))
+	return out
 
 # Compatibility function. Not quite equivalent lens_map above due to taking phi rather than
 # its gradient as an argument.
@@ -74,21 +89,31 @@ def lens_map_flat(cmb_map, phi_map):
 
 ######## Curved sky lensing ########
 
-def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False, delta_theta=None):
+def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False, delta_theta=None, phi_seed=None, separate_phi_from_cmb=False):
 	import curvedsky, sharp
 	ctype   = np.result_type(dtype,0j)
 	# Restrict to target number of components
 	oshape  = shape[-3:]
 	if len(oshape) == 2: shape = (1,)+tuple(shape)
+
+        #van Engelen added this:
+
 	# First draw a random lensing field, and use it to compute the undeflected positions
-	if verbose: print("Generating alms")
-	alm, ainfo = curvedsky.rand_alm(ps_lensinput, lmax=lmax, seed=seed, dtype=ctype, return_ainfo=True)
-	phi_alm, cmb_alm = alm[0], alm[1:1+shape[-3]]
+        if not separate_phi_from_cmb:
+                #AVE - this was the default option.
+                if verbose: print("Generating alms")
+                alm, ainfo = curvedsky.rand_alm(ps_lensinput, lmax=lmax, seed=seed, dtype=ctype, return_ainfo=True)
+                phi_alm, cmb_alm = alm[0], alm[1:1+shape[-3]]
+	        del alm
+
+        else:
+                if verbose: print("Generating alms, separating phi from cmb")
+                phi_alm, phi_ainfo = curvedsky.rand_alm(ps_lensinput[0, 0, :], lmax=lmax, seed=phi_seed, dtype=ctype, return_ainfo=True)
+                cmb_alm, cmb_ainfo = curvedsky.rand_alm(ps_lensinput[1:, 1:, :], lmax=lmax, seed=seed, dtype=ctype, return_ainfo=True)
 	# Truncate alm if we want a smoother map. In taylens, it was necessary to truncate
 	# to a lower lmax for the map than for phi, to avoid aliasing. The appropriate lmax
 	# for the cmb was the one that fits the resolution. FIXME: Can't slice alm this way.
 	#if maplmax: cmb_alm = cmb_alm[:,:maplmax]
-	del alm
 	if delta_theta is None: bsize = shape[-2]
 	else:
 		bsize = utils.nint(abs(delta_theta/utils.degree/wcs.wcs.cdelt[1]))
