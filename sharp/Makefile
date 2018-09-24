@@ -5,7 +5,7 @@ sharp.so: sharp.c csharp.h
 ifeq ($(CC),icc)
 	LDSHARED="icc -shared" CC=icc $(PYTHON) setup.py build_ext --inplace
 else
-        $(CC) -o foo $(objects) $(normal_libs)
+	$(CC) -o foo $(objects) $(normal_libs)
 endif
 
 
