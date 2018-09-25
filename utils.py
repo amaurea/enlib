@@ -1142,7 +1142,7 @@ def sbox_fix(sbox):
 	return sbox
 
 def sbox_wrap(sbox, wrap=0, cap=0):
-	""""Given a single sbox representing a slice of an N-dim array,
+	""""Given a single sbox [...,{from,to,step?}] representing a slice of an N-dim array,
 	wraps and caps the sbox, returning a list of sboxes for each
 	contiguous section of the slice.
 

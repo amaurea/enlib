@@ -142,7 +142,7 @@ def subinds(shape, wcs, box, mode=None, cap=True):
 	"""Helper function for submap. Translates the bounding
 	box provided into a pixel units. Assumes rectangular
 	coordinates.
-	
+
 	When translated to box into pixels, the result will in general have
 	fractional pixels, which need to be rounded before we can do any slicing.
 	To get as robust results as possible, we want
@@ -450,7 +450,7 @@ def rand_gauss_harm(shape, wcs):
 
 def rand_gauss_iso_harm(shape, wcs, cov, pixel_units=False):
 	"""Generates a random map with component covariance
-	cov in harmonic space, where cov is a (comp,comp,l) array or a 
+	cov in harmonic space, where cov is a (comp,comp,l) array or a
 	(comp,comp,Ny,Nx) array. Despite the name, the map doesn't need
 	to be isotropic since 2D power spectra are allowed.
 
@@ -1396,7 +1396,7 @@ def read_helper(shape, sel=None, box=None, pixbox=None, wrap="auto", mode=None, 
 	# Ok, we now have our slicing in a single, easy-to-work-with format.
 	oshape, owcs = slice_geometry(shape[-2:], wcs, (slice(*pbox[:,-2]),slice(*pbox[:,-1])), nowrap=True)
 	# Apply wrapping
-	nphi  = utils.nint(360/np.abs(wcs.wcs.cdelt[0]))
+	nphi = utils.nint(360/np.abs(wcs.wcs.cdelt[0]))
 	# If our map is actually wider than our wrapping length, then wrapping doesn't
 	# make much sense. We can either just disable it, or generalize it to assume
 	# e.g. a spin-1/2 field. I do the latter here, by wrapping at the smallest multiple
