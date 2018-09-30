@@ -3,7 +3,7 @@ import numpy as np, time
 from . import enmap, utils, interpol, cg
 
 def reproject(map, shape, wcs, omap=None, order=3, border="zero", rot=None,
-		subsample=1, elim=1e-12, maxit=20, bsize=100, wrap="auto",
+		subsample=1, elim=1e-12, maxit=20, bsize=100, wrap="auto", margin=2,
 		verbose=False, retall=False):
 	"""Reproject map onto the geometry given by shape, wcs by
 	approximately minimizing the difference between the spline
@@ -37,8 +37,11 @@ def reproject(map, shape, wcs, omap=None, order=3, border="zero", rot=None,
 	If retall is True, then all intermediate steps in the solution process
 	are returned as a list of maps.
 	"""
-	if omap is None: omap = enmap.zeros(shape, wcs, map.dtype)
+	if omap is None: omap = enmap.zeros(map.shape[:-2]+tuple(shape), wcs, map.dtype)
 	if rot  is None: rot  = (lambda x: x, lambda x:x)
+	# Work with a padded coordinate system to avoid edge issues
+	owork, oslice = enmap.pad(omap, margin, return_slice=True)
+	shape, wcs = owork.shape, owork.wcs
 	osub_shape, osub_wcs = enmap.scale_geometry(shape,     wcs,     subsample)
 	isub_shape, isub_wcs = enmap.scale_geometry(map.shape, map.wcs, subsample)
 	# Prepare to handle wrapping in the input map
@@ -88,9 +91,9 @@ def reproject(map, shape, wcs, omap=None, order=3, border="zero", rot=None,
 	# We're now done with the input map. The rest is just solving for the
 	# output map.
 	opix = enmap.sky2pix(shape, wcs, opos)
-	rhs  = interpol.map_coordinates(omap*0, opix, vals, order=order, border=border, trans=True)
+	rhs  = interpol.map_coordinates(owork*0, opix, vals, order=order, border=border, trans=True)
 	def A(x):
-		xmap = x.reshape(omap.shape)
+		xmap = x.reshape(owork.shape)
 		v    = interpol.map_coordinates(xmap,   opix,    order=order, border=border)
 		res  = interpol.map_coordinates(xmap*0, opix, v, order=order, border=border, trans=True)
 		return res.reshape(-1)
@@ -102,7 +105,7 @@ def reproject(map, shape, wcs, omap=None, order=3, border="zero", rot=None,
 		if verbose:
 			print("%4d %15.7e %15.7e %7.3f" % (solver.i, solver.err, np.std(solver.x), t2-t1))
 		if solver.err <= elim: break
-	omap[:] = solver.x.reshape(omap.shape)
+	omap[:] = solver.x.reshape(owork.shape)[oslice]
 	return omap
 
 #	# These will
