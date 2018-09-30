@@ -288,9 +288,13 @@ def alm2map_raw(alm, map, ainfo, minfo, spin=2, deriv=False, copy=False):
 		# general.
 		map_flat[:,0] = -map_flat[:,0]
 	else:
-		map_flat[:,:1,:] = sht.alm2map(alm_full[:,:1,:], map_flat[:,:1,:])
-		if map_flat.shape[1] > 1:
-			map_flat[:,1:,:] = sht.alm2map(alm_full[:,1:,:], map_flat[:,1:,:], spin=spin)
+		# We support scalar, spin and scalar-spin
+		if map_flat.shape[1] == 2: # spin
+			map_flat[:,:2,:] = sht.alm2map(alm_full[:,:2,:], map_flat[:,:2,:], spin=spin)
+		else:
+			map_flat[:,:1,:] = sht.alm2map(alm_full[:,:1,:], map_flat[:,:1,:]) # scalar
+			if map_flat.shape[1] > 1: # spin
+				map_flat[:,1:,:] = sht.alm2map(alm_full[:,1:,:], map_flat[:,1:,:], spin=spin)
 	return map
 
 def map2alm_raw(map, alm, minfo, ainfo, spin=2, copy=False):
@@ -303,9 +307,12 @@ def map2alm_raw(map, alm, minfo, ainfo, spin=2, copy=False):
 	map_full = utils.to_Nd(map, 4)
 	map_flat = map_full.reshape(map_full.shape[:-2]+(-1,))
 	sht      = sharp.sht(minfo, ainfo)
-	alm_full[:,:1,:] = sht.map2alm(map_flat[:,:1,:],alm_full[:,:1,:])
-	if map_flat.shape[1] > 1:
-		alm_full[:,1:,:] = sht.map2alm(map_flat[:,1:,:], alm_full[:,1:,:], spin=spin)
+	if map_flat.shape[1] == 2:
+		alm_full[:,:2,:] = sht.map2alm(map_flat[:,:2,:], alm_full[:,:2,:], spin=spin)
+	else:
+		alm_full[:,:1,:] = sht.map2alm(map_flat[:,:1,:],alm_full[:,:1,:])
+		if map_flat.shape[1] > 1:
+			alm_full[:,1:,:] = sht.map2alm(map_flat[:,1:,:], alm_full[:,1:,:], spin=spin)
 	return alm
 
 ### Helper function ###
