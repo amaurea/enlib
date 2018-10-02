@@ -665,6 +665,20 @@ def rotate_pol(emap, angle, comps=[-2,-1]):
 	res[...,comps[1],:,:] = s*emap[...,comps[0],:,:] + c*emap[...,comps[1],:,:]
 	return res
 
+def rotate_pol_power(shape,wcs,cov,iau=False,inverse=False):
+	"""Rotate a 2D power spectrum from TQU to TEB (inverse=False) or
+	back (inverse=True). cov is a (3,3,Ny,Nx) 2D power spectrum.
+	"""
+	rot = np.zeros((3,3,cov.shape[-2],cov.shape[-1]))
+	rot[0,0,:,:] = 1
+	prot = queb_rotmat(lmap(shape,wcs), inverse=inverse, iau=iau)
+	rot[1:,1:,:,:] = prot
+	Rt = np.transpose(rot, (1,0,2,3))
+	tmp = np.einsum("ab...,bc...->ac...",rot,cov)
+	rp2d = np.einsum("ab...,bc...->ac...",tmp,Rt)	 
+	return rp2d
+
+
 def map_mul(mat, vec):
 	"""Elementwise matrix multiplication mat*vec. Result will have
 	the same shape as vec. Multiplication happens along the first indices.
