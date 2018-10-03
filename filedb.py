@@ -5,7 +5,7 @@ For example, for the actpol data set, querying with "1376512459.1376536951.ar1"
 would respond with an object giving the location of the TOD, cuts, gains, etc.
 for that id."""
 import glob, shlex, pipes, re, itertools
-from enlib import bunch
+from . import bunch
 
 class Basedb:
 	def __init__(self, file=None, data=None):

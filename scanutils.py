@@ -1,5 +1,5 @@
 import numpy as np, logging, h5py, sys
-from enlib import scan as enscan, errors, utils, coordinates, dmap
+from . import scan as enscan, errors, utils, coordinates, dmap
 from enact import actdata, filedb
 L = logging.getLogger(__name__)
 

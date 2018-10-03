@@ -1,5 +1,5 @@
 import numpy as np, time
-from enlib import utils
+from .. import utils
 import fortran_32, fortran_64
 
 def build(func, interpolator, box, errlim, maxsize=None, maxtime=None, return_obox=False, return_status=False, verbose=False, nstart=None, *args, **kwargs):
@@ -181,6 +181,109 @@ def spline_filter(data, order=3, border="cyclic", ndim=None, trans=False):
 	core = get_core(data.dtype)
 	iborder = {"zero":0, "nearest":1, "cyclic":2, "mirror":3}[border]
 	if ndim is None: ndim = data.ndim
+	for axis in range(data.ndim-ndim,data.ndim)[::-1 if trans else 1]:
+		core.spline_filter1d(data.reshape(-1), data.shape, axis, order, iborder, trans)
+	return data
+
+def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="cyclic", trans=False, deriv=False,
+		prefilter=True):
+	"""An alternative implementation of scipy.ndimage.map_coordinates. It is slightly
+	slower (20-30%), but more general. Basic usage is
+	 odata[{pre},{pdims}] = map_coordinates(idata[{pre},{dims}], points[ndim,{pdims}])
+	where {foo} means a (possibly empty) shape. For example, if idata has shape (10,20)
+	and points has shape (2,100), then the result will have shape (100,), and if
+	idata has shape (10,20,30,40) and points has shape (3,1,2,3,4), then the result
+	will have shape (10,1,2,3,4). Except for the presence of {pre}, this is the same
+	as how map_coordinates works.
+
+	It is also possible to pass the output array as an argument (odata), which must
+	have the same data type as idata in that case.
+
+	The function differs from ndimage in the meaning of the optional arguments.
+	mode specifies the interpolation scheme to use: "conv", "spline" or "lanczos".
+	"conv" is polynomial convolution, which is commonly used in image processing.
+	"spline" is spline interpolation, which is what ndimage uses.
+	"lanczos" convolutes with a lanczos kernerl, which approximates the optimal
+	sinc kernel. This is slow, and the quality is not much better than spline.
+
+	order specifies the interpolation order, its exact meaning differs based on
+	mode.
+
+	border specifies the handling of boundary conditions. It can be "zero",
+	"nearest", "cyclic" or "mirror"/"reflect". The latter corresponds to ndimage's
+	"reflect". The others do not match ndimage due to ndimage's inconsistent
+	treatment of boundary conditions in spline_filter vs. map_coordiantes.
+
+	trans specifies whether to perform the transpose operation or not.
+	The interpolation performed by map_coordinates is a linear operation,
+	and can hence be expressed as out = A*data, where A is a matrix.
+	If trans is true, then what will instead be performed is data = A.T*in.
+	For this to work, the odata argument must be specified.
+
+	Normally idata is read and odata is written to, but when trans=True,
+	idata is written to and odata is read from.
+
+	If deriv is True, then the function will compute the derivative of the
+	interpolation operation with respect to the position, resulting in
+	odata[ndim,{pre},{pdims}]
+	"""
+
+	imode   = {"conv":0, "spline":1, "lanczos":2}[mode]
+	iborder = {"zero":0, "nearest":1, "cyclic":2, "mirror":3, "reflect":3}[border]
+	idata   = np.asarray(idata)
+	points  = np.asarray(points)
+	core    = get_core(idata.dtype)
+	ndim    = points.shape[0]
+	dpre,dpost= idata.shape[:-ndim], idata.shape[-ndim:]
+	def iprod(x): return np.product(x).astype(int)
+	if not trans:
+		if odata is None:
+			if not deriv:
+				odata = np.empty(points.shape[1:]+dpre,dtype=idata.dtype)
+			else:
+				# When using derivatives, the output will have shape [ndim,{idims},{pdims}]
+				odata = np.empty((ndim,)+dpre+points.shape[1:],dtype=idata.dtype)
+		if mode == "spline" and prefilter:
+			idata = spline_filter(idata, order=order, border=border, ndim=ndim, trans=False)
+		if not deriv:
+			core.interpol(
+				idata.reshape(iprod(dpre),iprod(dpost)).T, dpost,
+				odata.reshape(iprod(dpre),iprod(points.shape[1:])).T,
+				points.reshape(ndim, -1).T,
+				imode, order, iborder, False)
+		else:
+			core.interpol_deriv(
+				idata.reshape(iprod(dpre),iprod(dpost)).T, dpost,
+				odata.reshape(ndim,iprod(dpre),iprod(points.shape[1:])).T,
+				points.reshape(ndim, -1).T,
+				imode, order, iborder, False)
+		return odata
+	else:
+		# We cannot infer the shape of idata from odata and points. So both
+		# idata and odata must be specified in this case.
+		if not deriv:
+			core.interpol(
+				idata.reshape(iprod(dpre),iprod(dpost)).T, dpost,
+				odata.reshape(iprod(dpre),iprod(points.shape[1:])).T,
+				points.reshape(ndim,-1).T,
+				imode, order, iborder, True)
+		else:
+			core.interpol_deriv(
+				idata.reshape(iprod(dpre),iprod(dpost)).T, dpost,
+				odata.reshape(ndim,iprod(dpre),iprod(points.shape[1:])).T,
+				points.reshape(ndim,-1).T,
+				imode, order, iborder, True)
+		if mode == "spline" and prefilter:
+			idata[:] = spline_filter(idata, order=order, border=border, ndim=ndim, trans=True)
+		return idata
+
+###### The stuff below is obsolete and will be removed soon ######
+
+def spline_filter_old(data, order=3, border="cyclic", ndim=None, trans=False):
+	data = np.array(data)
+	core = get_core(data.dtype)
+	iborder = {"zero":0, "nearest":1, "cyclic":2, "mirror":3}[border]
+	if ndim is None: ndim = data.ndim
 	for axis in range(ndim)[::-1 if trans else 1]:
 		core.spline_filter1d(data.reshape(-1), data.shape, axis, order, iborder, trans)
 	return data
@@ -189,7 +292,7 @@ def spline_filter(data, order=3, border="cyclic", ndim=None, trans=False):
 # This differs from scipy.map_coordinates, which has idata[{dims}], points[ndim,{osub}],
 # odata[{osub}]. But they are compatible when there are no isub dimensions.
 # The keywords differ, though.
-def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="cyclic", trans=False, deriv=False,
+def map_coordinates_old(idata, points, odata=None, mode="spline", order=3, border="cyclic", trans=False, deriv=False,
 		prefilter=True):
 	"""An alternative implementation of scipy.ndimage.map_coordinates. It is slightly
 	slower (20-30%), but more general. Basic usage is
@@ -243,15 +346,15 @@ def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="c
 				# When using derivatives, the output will have shape ({pdims},ndim,{isub})
 				odata = np.empty(points.shape[1:]+(ndim,)+dpost,dtype=idata.dtype)
 		if mode == "spline" and prefilter:
-			idata = spline_filter(idata, order=order, border=border, ndim=ndim, trans=False)
+			idata = spline_filter_old(idata, order=order, border=border, ndim=ndim, trans=False)
 		if not deriv:
-			core.interpol(
+			core.interpol_old(
 				idata.reshape(iprod(dpre),iprod(dpost)).T, dpre,
 				odata.reshape(iprod(points.shape[1:]),iprod(dpost)).T,
 				points.reshape(ndim, -1).T,
 				imode, order, iborder, False)
 		else:
-			core.interpol_deriv(
+			core.interpol_deriv_old(
 				idata.reshape(iprod(dpre),iprod(dpost)).T, dpre,
 				odata.reshape(iprod(points.shape[1:]),ndim,iprod(dpost)).T,
 				points.reshape(ndim, -1).T,
@@ -261,17 +364,17 @@ def map_coordinates(idata, points, odata=None, mode="spline", order=3, border="c
 		# We cannot infer the shape of idata from odata and points. So both
 		# idata and odata must be specified in this case.
 		if not deriv:
-			core.interpol(
+			core.interpol_old(
 				idata.reshape(iprod(dpre),iprod(dpost)).T, dpre,
 				odata.reshape(iprod(points.shape[1:]),iprod(dpost)).T,
 				points.reshape(ndim,-1).T,
 				imode, order, iborder, True)
 		else:
-			core.interpol_deriv(
+			core.interpol_deriv_old(
 				idata.reshape(iprod(dpre),iprod(dpost)).T, dpre,
 				odata.reshape(iprod(points.shape[1:]),ndim,iprod(dpost)).T,
 				points.reshape(ndim,-1).T,
 				imode, order, iborder, True)
 		if mode == "spline" and prefilter:
-			idata[:] = spline_filter(idata, order=order, border=border, ndim=ndim, trans=True)
+			idata[:] = spline_filter_old(idata, order=order, border=border, ndim=ndim, trans=True)
 		return idata

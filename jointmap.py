@@ -1,6 +1,6 @@
 import numpy as np, os, time, imp, copy, functools, sys
 from scipy import ndimage, optimize, interpolate, integrate, stats, special
-from enlib import enmap, retile, utils, bunch, cg, fft, powspec, array_ops, memory
+from . import enmap, retile, utils, bunch, cg, fft, powspec, array_ops, memory
 from astropy import table
 from astropy.io import fits
 #from matplotlib import pyplot

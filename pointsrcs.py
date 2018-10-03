@@ -24,7 +24,7 @@ possible. Parametrizing them in a standard format may be difficult.
 """
 import numpy as np
 from astropy.io import fits
-from enlib import utils, enmap, bench
+from . import utils, enmap, bench
 
 #### Map-space source simulation ###
 

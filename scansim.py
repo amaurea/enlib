@@ -1,6 +1,6 @@
 import numpy as np, copy, warnings
-from enlib import scan, coordinates, utils, nmat, pmat, array_ops, enmap, bunch
-from enlib.bins import linbin
+from . import scan, coordinates, utils, nmat, pmat, array_ops, enmap, bunch
+from .bins import linbin
 from scipy import ndimage
 warnings.filterwarnings("ignore")
 

@@ -3,7 +3,7 @@ in maps. They are represented by their position, amplitude and ellipse. Only
 gaussian profiles are supported for now. To add more profiles, PmatPtsrc needs
 to be modified."""
 import numpy as np
-from enlib import utils, enmap
+from . import utils, enmap
 
 class SourceModel:
 	def __init__(self, pos, amps=None, widths=None, phi=None, amp_lim=0):

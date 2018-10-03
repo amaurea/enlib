@@ -1,4 +1,4 @@
-from enlib import bunch
+from . import bunch
 
 class ExecDB:
 	"""ExecDB is a flexible way of mapping from dataset ids to

@@ -35,7 +35,7 @@ The easiest way to do this is via alltoallv, which requires the use of
 flattened arrays.
 """
 import numpy as np, copy, os, re, enlib.slice, operator
-from enlib import enmap, utils, zipper, mpi
+from . import enmap, utils, zipper, mpi
 from astropy.wcs import WCS
 
 def empty(geometry):

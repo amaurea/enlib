@@ -1,7 +1,8 @@
 """This module provides functions for taking into account the curvature of the
 full sky."""
+from __future__ import print_function
 import numpy as np
-from enlib import sharp, enmap, powspec, wcs as enwcs, utils
+from . import sharp, enmap, powspec, wcs as wcsutils, utils
 
 class ShapeError(Exception): pass
 
@@ -18,9 +19,9 @@ def rand_map(shape, wcs, ps, lmax=None, dtype=np.float64, seed=None, oversample=
 	ps = ps[:ncomp,:ncomp]
 
 	ctype = np.result_type(dtype,0j)
-	if verbose: print "Generating alms with seed %s up to lmax=%d dtype %s" % (str(seed), lmax, np.dtype(ctype).char)
+	if verbose: print("Generating alms with seed %s up to lmax=%d dtype %s" % (str(seed), lmax, np.dtype(ctype).char))
 	alm   = rand_alm_healpy(ps, lmax=lmax, seed=seed, dtype=ctype)
-	if verbose: print "Allocating output map shape %s dtype %s" % (str((ncomp,)+shape[-2:]), np.dtype(dtype).char)
+	if verbose: print("Allocating output map shape %s dtype %s" % (str((ncomp,)+shape[-2:]), np.dtype(dtype).char))
 	map   = enmap.empty((ncomp,)+shape[-2:], wcs, dtype=dtype)
 	alm2map(alm, map, spin=spin, oversample=oversample, method=method, direct=direct, verbose=verbose)
 	if len(shape) == 2: map = map[0]
@@ -97,7 +98,7 @@ def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False,
 	if method == "cyl":
 		alm2map_cyl(alm, map, ainfo=ainfo, spin=spin, deriv=deriv, direct=direct, copy=copy, verbose=verbose)
 	elif method == "pos":
-		if verbose: print "Computing pixel positions %s dtype d" % str((2,)+map.shape[-2:])
+		if verbose: print("Computing pixel positions %s dtype d" % str((2,)+map.shape[-2:]))
 		pos = map.posmap()
 		res = alm2map_pos(alm, pos, ainfo=ainfo, oversample=oversample, spin=spin, deriv=deriv, verbose=verbose)
 		map[:] = res
@@ -107,7 +108,7 @@ def alm2map(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=False,
 			alm2map_cyl(alm, map, ainfo=ainfo, spin=spin, deriv=deriv, direct=direct, copy=copy, verbose=verbose)
 		except ShapeError as e:
 			# Wrong pixelization. Fall back on slow, general method
-			if verbose: print "Computing pixel positions %s dtype d" % str((2,)+map.shape[-2:])
+			if verbose: print("Computing pixel positions %s dtype d" % str((2,)+map.shape[-2:]))
 			pos = map.posmap()
 			res = alm2map_pos(alm, pos, ainfo=ainfo, oversample=oversample, spin=spin, deriv=deriv, verbose=verbose)
 			map[:] = res
@@ -195,21 +196,23 @@ def alm2map_cyl(alm, map, ainfo=None, spin=2, deriv=False, direct=False, copy=Fa
 	if copy: map = map.copy()
 	if direct: tmap, mslices, tslices = map, [(Ellipsis,)], [(Ellipsis,)]
 	else:      tmap, mslices, tslices = make_projectable_map_cyl(map, verbose=verbose)
-	if verbose: print "Performing alm2map"
+	if verbose: print("Performing alm2map")
 	alm2map_raw(alm, tmap, ainfo, map2minfo(tmap), spin=spin, deriv=deriv)
 	for mslice, tslice in zip(mslices, tslices):
 		map[mslice] = tmap[tslice]
 	return map
 
-def alm2map_healpix(alm, healmap=None, ainfo=None, nside=None, spin=2, deriv=False, copy=False):
+def alm2map_healpix(alm, healmap=None, ainfo=None, nside=None, spin=2, deriv=False, copy=False,
+		theta_min=None, theta_max=None):
 	"""Projects the given alm[...,ncomp,nalm] onto the given healpix map
 	healmap[...,ncomp,npix]."""
 	alm, ainfo = prepare_alm(alm, ainfo)
 	healmap    = prepare_healmap(healmap, nside, alm.shape[:-1], alm.real.dtype)
 	nside = npix2nside(healmap.shape[-1])
 	minfo = sharp.map_info_healpix(nside)
+	minfo = apply_minfo_theta_lim(minfo, theta_min, theta_max)
 	return alm2map_raw(alm, healmap[...,None], ainfo=ainfo, minfo=minfo,
-			spin=spin, deriv=deriv, copy=copy)
+			spin=spin, deriv=deriv, copy=copy)[...,0]
 
 def map2alm_cyl(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False,
 		copy=False, rtol=None, atol=None):
@@ -246,12 +249,14 @@ def map2alm_cyl(map, alm=None, ainfo=None, lmax=None, spin=2, direct=False,
 	minfo = match_predefined_minfo(tmap, rtol=rtol, atol=atol)
 	return map2alm_raw(tmap, alm, minfo, ainfo, spin=spin)
 
-def map2alm_healpix(healmap, alm=None, ainfo=None, lmax=None, spin=2, copy=False):
+def map2alm_healpix(healmap, alm=None, ainfo=None, lmax=None, spin=2, copy=False,
+		theta_min=None, theta_max=None):
 	"""Projects the given alm[...,ncomp,nalm] onto the given healpix map
 	healmap[...,ncomp,npix]."""
 	alm, ainfo = prepare_alm(alm, ainfo, lmax, healmap.shape[:-1], healmap.dtype)
 	nside = npix2nside(healmap.shape[-1])
 	minfo = sharp.map_info_healpix(nside)
+	minfo = apply_minfo_theta_lim(minfo, theta_min, theta_max)
 	return map2alm_raw(healmap[...,None], alm, minfo=minfo, ainfo=ainfo,
 			spin=spin, copy=copy)
 
@@ -271,6 +276,7 @@ def alm2map_raw(alm, map, ainfo, minfo, spin=2, deriv=False, copy=False):
 	to already be set up, and that the map and alm must be fully compatible
 	with these."""
 	if copy: map = map.copy()
+	alm = np.asarray(alm, dtype=np.result_type(map.dtype,1j))
 	alm_full = utils.to_Nd(alm, 2 if deriv else 3)
 	map_full = utils.to_Nd(map, 4)
 	map_flat = map_full.reshape(map_full.shape[:-2]+(-1,))
@@ -286,9 +292,13 @@ def alm2map_raw(alm, map, ainfo, minfo, spin=2, deriv=False, copy=False):
 		# general.
 		map_flat[:,0] = -map_flat[:,0]
 	else:
-		map_flat[:,:1,:] = sht.alm2map(alm_full[:,:1,:], map_flat[:,:1,:])
-		if map_flat.shape[1] > 1:
-			map_flat[:,1:,:] = sht.alm2map(alm_full[:,1:,:], map_flat[:,1:,:], spin=spin)
+		# We support scalar, spin and scalar-spin
+		if map_flat.shape[1] == 2: # spin
+			map_flat[:,:2,:] = sht.alm2map(alm_full[:,:2,:], map_flat[:,:2,:], spin=spin)
+		else:
+			map_flat[:,:1,:] = sht.alm2map(alm_full[:,:1,:], map_flat[:,:1,:]) # scalar
+			if map_flat.shape[1] > 1: # spin
+				map_flat[:,1:,:] = sht.alm2map(alm_full[:,1:,:], map_flat[:,1:,:], spin=spin)
 	return map
 
 def map2alm_raw(map, alm, minfo, ainfo, spin=2, copy=False):
@@ -301,9 +311,12 @@ def map2alm_raw(map, alm, minfo, ainfo, spin=2, copy=False):
 	map_full = utils.to_Nd(map, 4)
 	map_flat = map_full.reshape(map_full.shape[:-2]+(-1,))
 	sht      = sharp.sht(minfo, ainfo)
-	alm_full[:,:1,:] = sht.map2alm(map_flat[:,:1,:],alm_full[:,:1,:])
-	if map_flat.shape[1] > 1:
-		alm_full[:,1:,:] = sht.map2alm(map_flat[:,1:,:], alm_full[:,1:,:], spin=spin)
+	if map_flat.shape[1] == 2:
+		alm_full[:,:2,:] = sht.map2alm(map_flat[:,:2,:], alm_full[:,:2,:], spin=spin)
+	else:
+		alm_full[:,:1,:] = sht.map2alm(map_flat[:,:1,:],alm_full[:,:1,:])
+		if map_flat.shape[1] > 1:
+			alm_full[:,1:,:] = sht.map2alm(map_flat[:,1:,:], alm_full[:,1:,:], spin=spin)
 	return alm
 
 ### Helper function ###
@@ -350,7 +363,7 @@ def make_projectable_map_cyl(map, verbose=False):
 		yslice = slice(-1,None,-1)  if flipy else slice(None)
 		xslice = slice(nx-1,negnone(nx-1-(i2-i1)),-1) if flipx else slice(0,i2-i1)
 		oslice.append((Ellipsis,yslice,xslice))
-	if verbose: print "Allocating shape %s dtype %s intermediate map" % (str(oshape),np.dtype(map.dtype).char)
+	if verbose: print("Allocating shape %s dtype %s intermediate map" % (str(oshape),np.dtype(map.dtype).char))
 	return enmap.empty(oshape, owcs, dtype=map.dtype), islice, oslice
 
 def make_projectable_map_by_pos(pos, lmax, dims=(), oversample=2.0, dtype=float, verbose=False):
@@ -374,7 +387,7 @@ def make_projectable_map_by_pos(pos, lmax, dims=(), oversample=2.0, dtype=float,
 	# First set up the pixelization for the whole sky. Negative cdelt to
 	# make sharp extra happy. Not really necessary, but makes some things
 	# simpler later.
-	wcs   = enwcs.WCS(naxis=2)
+	wcs   = wcsutils.WCS(naxis=2)
 	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
 	wcs.wcs.crval = [ra_ref,0]
 	wcs.wcs.cdelt = [360./nx,-180./nytot]
@@ -387,7 +400,7 @@ def make_projectable_map_by_pos(pos, lmax, dims=(), oversample=2.0, dtype=float,
 	ny = y2-y1
 	wcs.wcs.crpix[1] -= y1
 	# Construct the map. +1 to put extra pixel at pole when we are fullsky
-	if verbose: print "Allocating shape %s dtype %s intermediate map" % (dims+(ny+1,nx),np.dtype(dtype).char)
+	if verbose: print("Allocating shape %s dtype %s intermediate map" % (dims+(ny+1,nx),np.dtype(dtype).char))
 	tmap = enmap.zeros(dims+(ny+1,nx),wcs,dtype=dtype)
 	return tmap
 
@@ -482,3 +495,10 @@ def prepare_alm(alm=None, ainfo=None, lmax=None, pre=(), dtype=np.float64):
 def prepare_healmap(healmap, nside=None, pre=(), dtype=np.float64):
 	if healmap is not None: return healmap
 	return np.zeros(pre + (12*nside**2,), dtype)
+
+def apply_minfo_theta_lim(minfo, theta_min=None, theta_max=None):
+	if theta_min is None and theta_max is None: return minfo
+	mask = np.full(minfo.nrow, True, bool)
+	if theta_min is not None: mask &= minfo.theta >= theta_min
+	if theta_max is not None: mask &= minfo.theta <= theta_max
+	return minfo.select_rows(mask)

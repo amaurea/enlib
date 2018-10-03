@@ -7,8 +7,8 @@ The reason for allowing the other argument to be modified is to make it easier
 to incrementally project different parts of the signal.
 """
 import numpy as np, time, sys
-from enlib import enmap, interpol, utils, coordinates, config, errors, array_ops
-from enlib import parallax, bunch, pointsrcs
+from .. import enmap, interpol, utils, coordinates, config, errors, array_ops
+from .. import parallax, bunch, pointsrcs
 import pmat_core_32
 import pmat_core_64
 def get_core(dtype):
@@ -32,9 +32,9 @@ class PointingMatrix:
 
 class PmatMap(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation."""
-	def __init__(self, scan, template, sys=None, order=None):
+	def __init__(self, scan, template, sys=None, order=None, extra=[]):
 		sys        = config.get("map_sys", sys)
-		transform  = pos2pix(scan,template,sys)
+		transform  = pos2pix(scan,template,sys, extra=extra)
 		ipol, obox, err = build_interpol(transform, scan.box, id=scan.entry.id)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
 		# Use obox to extract a pixel bounding box for this scan.
@@ -451,9 +451,10 @@ class pos2pix:
 	"""Transforms from scan coordinates to pixel-center coordinates.
 	This becomes discontinuous for scans that wrap from one side of the
 	sky to another for full-sky pixelizations."""
-	def __init__(self, scan, template, sys, ref_phi=0):
+	def __init__(self, scan, template, sys, ref_phi=0, extra=[]):
 		self.scan, self.template, self.sys = scan, template, sys
 		self.ref_phi = ref_phi
+		self.extra   = extra
 	def __call__(self, ipos):
 		"""Transform ipos[{t,az,el},nsamp] into opix[{y,x,c,s},nsamp]."""
 		shape = ipos.shape[1:]
@@ -465,12 +466,17 @@ class pos2pix:
 		# boresight, since we don't really want boresight-centered coordinates, we want detector
 		# centered coordinates.
 		opos = coordinates.transform(self.scan.sys, self.sys, ipos[1:], time=time, site=self.scan.site, pol=True, bore=ipos[1:])
-		# Parallax correction
+		# Apply any extra transformations
+		for trf in self.extra:
+			opos = trf(opos, time)
+
+		# Parallax correction. Can be replaced with extra
 		sundist = config.get("pmat_parallax_au")
 		if sundist:
 			# Transform to a sun-centered coordinate system, assuming all objects
-			# are at a distance of sundist from the sun
-			opos[1::-1] = parallax.earth2sun(opos[1::-1], self.scan.mjd0, sundist)
+			# are at a distance of sundist from the sun.
+			# This looks wrong: opos is {ra,dec}, so it doesn't need flipping
+			opos[1::-1] = parallax.earth2sun_mixed(opos[1::-1], sundist, self.scan.mjd0)
 
 		opix = np.zeros((4,)+ipos.shape[1:])
 		if self.template is not None:
@@ -510,13 +516,14 @@ class PmatPtsrc(PointingMatrix):
 		self.scan  = scan
 		maxcell    = 50 # max numer of sources per cell
 
-		# Compute parallax displacement if necessary
-		sundist = config.get("pmat_parallax_au")
-		self.dpos = 0
-		if sundist:
-			# Transformation to a sun-centered system
-			self.dpos = parallax.earth2sun(srcs.T[:2], self.scan.mjd0, sundist, diff=True).T
-		srcs[...,:2] += self.dpos
+		## Compute parallax displacement if necessary. Why is this needed here?
+		## Won't point sources want to use the normal coordinate system?
+		#sundist = config.get("pmat_parallax_au")
+		#self.dpos = 0
+		#if sundist:
+		#	# Transformation to a sun-centered system
+		#	self.dpos = parallax.earth2sun_mixed(srcs.T[:2], sundist, self.scan.mjd0, diff=True).T
+		#srcs[...,:2] += self.dpos
 
 		# Investigate the beam to find the max relevant radius
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
@@ -527,44 +534,12 @@ class PmatPtsrc(PointingMatrix):
 
 		# Build interpolator (dec,ra output ordering)
 		transform  = build_pos_transform(scan, sys=config.get("map_sys", sys))
-		ipol, obox, err = build_interpol(transform, scan.box, scan.entry.id, posunit=0.5*utils.arcsec)
+		ipol, obox, err = build_interpol(transform, scan.box, scan.entry.id, posunit=0.5*utils.arcmin)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, srcs.dtype)
 
 		self.cbox = obox[:,:2]
 		self.ref  = np.mean(self.cbox,0)
 		self.ncell, self.cells = pointsrcs.build_src_cells(self.cbox, srcs[...,:2], cres, unwind=True)
-
-		## Build source hit grid
-		#cbox    = obox[:,:2]
-		#cshape  = tuple(np.ceil(((cbox[1]-cbox[0])/cres)).astype(int))
-		#self.ref = np.mean(cbox,0)
-		#srcs[...,:2] = utils.rewind(srcs[...,:2], self.ref)
-
-		## A cell is hit if it overlaps both horizontally and vertically
-		## with the point source +- rmax
-		## ncell is [ndir,nsrc_det,ncy,ncx]
-		#ncell = np.zeros((ndir,src_ndet)+cshape,dtype=np.int32)
-		## cells is [ndir,nsrc_det,ncy,ncx,maxcell]
-		#cells = np.zeros((ndir,src_ndet)+cshape+(maxcell,),dtype=np.int32)
-		#c0 = cbox[0]; inv_dc = cshape/(cbox[1]-cbox[0])
-		#for si in range(nsrc):
-		#	for sdir in range(ndir):
-		#		for sdi in range(src_ndet):
-		#			src = srcs[si,sdir,sdi]
-		#			i1 = (src[:2]-rmax-c0)*inv_dc
-		#			i2 = (src[:2]+rmax-c0)*inv_dc+1 # +1 because this is a half-open interval
-		#			# Truncate to edges - any source outside of our region
-		#			# will be put on one of the edge cells
-		#			i1 = np.maximum(i1.astype(int), 0)
-		#			i2 = np.minimum(i2.astype(int), np.array(cshape)-1)
-		#			#print si, sdir, i1, i2, cshape
-		#			if np.any(i1 >= cshape) or np.any(i2 < 0): continue
-		#			sel= (sdir,sdi,slice(i1[0],i2[0]),slice(i1[1],i2[1]))
-		#			cells[sel][:,:,ncell[sel]] = si
-		#			ncell[sel] += 1
-
-		#self.cells, self.ncell = cells, ncell
-		#print self.cells.shape, self.ncell.shape
 
 		self.rmax = rmax
 		self.tmul = 1 if tmul is None else tmul
@@ -576,7 +551,7 @@ class PmatPtsrc(PointingMatrix):
 		while srcs.ndim < 4: srcs = srcs[:,None]
 		# Handle angle wrapping without modifying the original srcs array
 		wsrcs = srcs.copy()
-		wsrcs[...,:2] = utils.rewind(srcs[...,:2], self.ref) + self.dpos
+		wsrcs[...,:2] = utils.rewind(srcs[...,:2], self.ref) # + self.dpos
 		t1 = time.time()
 		core = get_core(tod.dtype)
 		core.pmat_ptsrc(dir, tmul, pmul, tod.T, wsrcs.T,

@@ -1,6 +1,6 @@
 import numpy as np
-from enlib import enmap, array_ops, cg
-from enlib.degrees_of_freedom import DOF, Arg
+from . import enmap, array_ops, cg
+from .degrees_of_freedom import DOF, Arg
 
 def mul(mat, vec, axes):
 	return array_ops.matmul(mat.astype(vec.dtype),vec,axes=axes)

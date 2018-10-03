@@ -80,7 +80,7 @@ class Signal:
 
 class SignalMap(Signal):
 	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True,
-			ext="fits", pmat_order=None, sys=None, nuisance=False, data=None):
+			ext="fits", pmat_order=None, sys=None, nuisance=False, data=None, extra=[]):
 		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
@@ -89,7 +89,7 @@ class SignalMap(Signal):
 		if data is not None:
 			self.data = data
 		else:
-			self.data = {scan: pmat.PmatMap(scan, area, order=pmat_order, sys=sys) for scan in scans}
+			self.data = {scan: pmat.PmatMap(scan, area, order=pmat_order, sys=sys, extra=extra) for scan in scans}
 	def forward(self, scan, tod, work):
 		if scan not in self.data: return
 		self.data[scan].forward(tod, work)
@@ -108,9 +108,9 @@ class SignalMap(Signal):
 
 class SignalMapFast(SignalMap):
 	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True,
-			ext="fits", sys=None, nuisance=False, data=None):
+			ext="fits", sys=None, nuisance=False, data=None, extra=[]):
 		if data is None:
-			data = {scan: pmat.PmatMapFast(scan, area, sys=sys) for scan in scans}
+			data = {scan: pmat.PmatMapFast(scan, area, sys=sys, extra=extra) for scan in scans}
 		SignalMap.__init__(self, scans, area, comm=comm, cuts=cuts, name=name, ofmt=ofmt,
 				output=output, ext=ext, sys=sys, nuisance=nuisance, data=data)
 	def precompute(self, scan):
@@ -128,7 +128,7 @@ class SignalMapFast(SignalMap):
 config.default("dmap_format","merged","How to store dmaps on disk. 'merged': combine into a single fits file before writing. This is memory intensive. 'tiles': Write the tiles that make up the dmap directly to disk.")
 class SignalDmap(Signal):
 	def __init__(self, scans, subinds, area, cuts=None, name="main", ofmt="{name}", output=True,
-			ext="fits", pmat_order=None, sys=None, nuisance=False, data=None):
+			ext="fits", pmat_order=None, sys=None, nuisance=False, data=None, extra=[]):
 		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
@@ -139,7 +139,7 @@ class SignalDmap(Signal):
 			data = {}
 			work = area.tile2work()
 			for scan, subind in zip(scans, subinds):
-				data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys), subind]
+				data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys, extra=extra), subind]
 		self.data = data
 	def prepare(self, m): return m.tile2work()
 	def forward(self, scan, tod, work):
@@ -170,12 +170,12 @@ class SignalDmap(Signal):
 
 class SignalDmapFast(SignalDmap):
 	def __init__(self, scans, subinds, area, cuts=None, name="main", ofmt="{name}", output=True,
-			ext="fits", sys=None, nuisance=False, data=None):
+			ext="fits", sys=None, nuisance=False, data=None, extra=[]):
 		if data is None:
 			data = {}
 			work = area.tile2work()
 			for scan, subind in zip(scans, subinds):
-				data[scan] = [pmat.PmatMapFast(scan, work[subind], sys=sys), subind]
+				data[scan] = [pmat.PmatMapFast(scan, work[subind], sys=sys, extra=extra), subind]
 		SignalDmap.__init__(self, scans, subinds, area, cuts=cuts, name=name, ofmt=ofmt,
 				output=output, ext=ext, sys=sys, nuisance=nuisance, data=data)
 	def precompute(self, scan):

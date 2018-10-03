@@ -1,6 +1,6 @@
 import numpy as np
 from copy  import deepcopy
-from enlib import utils, errors
+from . import utils, errors
 
 # read_foo should return a Data object, which constains lists of Datum objects, which
 # contain:

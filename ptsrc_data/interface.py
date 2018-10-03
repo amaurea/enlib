@@ -1,5 +1,5 @@
 import numpy as np, fortran_32, fortran_64
-from enlib import fft, utils, coordinates
+from .. import fft, utils, coordinates
 
 def get_core(dtype):
 	if dtype == np.float32:
