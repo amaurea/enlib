@@ -112,7 +112,9 @@ class Dmap(object):
 	def ndim(self): return len(self.shape)
 	@property
 	def npix(self): return np.product(self.shape[-2:], dtype=int)
-	def astype(self, dtype):
+	def astype(self, dtype, copy=True):
+		"""The copy argument is ignored. It's there for compatibility with
+		normal enmaps."""
 		if dtype == self.dtype: return self
 		else:
 			res = Dmap(self.geometry.astype(dtype))
@@ -482,7 +484,7 @@ def write_map(name, map, ext="fits", merged=True):
 		# in memory while writing. It is unclear how to avoid this
 		# without bypassing pyfits or becoming super-slow.
 		if map.comm.rank == 0:
-			canvas = enmap.zeros(map.shape, map.wcs, map.dtype)
+			canvas = enmap.zeros(map.shape, map.wcs, map.dtype.name)
 		else:
 			canvas = None
 		dmap2enmap(map, canvas)
@@ -563,7 +565,7 @@ def dmap2enmap(dmap, emap, root=0):
 		if dmap.comm.rank == root and id == root:
 			data = dmap.tiles[loc]
 		elif dmap.comm.rank == root:
-			data = np.zeros(dmap.pre+tuple(box[1]-box[0]), dtype=dmap.dtype)
+			data = np.zeros(dmap.pre+tuple(box[1]-box[0]), dtype=dmap.dtype.name)
 			dmap.comm.Recv(data, source=id, tag=loc)
 		elif dmap.comm.rank == id:
 			dmap.comm.Send(dmap.tiles[loc], dest=root, tag=loc)

@@ -827,13 +827,14 @@ class FilterHWPNotch:
 		return fft.ifft(ft, tod, normalize=True)
 
 class PostPickup:
-	def __init__(self, scans, signal_map, signal_cut, prec_ptp, daz=None, nt=None, weighted=False):
+	def __init__(self, scans, signal_map, signal_cut, prec_ptp, daz=None, nt=None, weighted=False, deslope=False):
 		self.scans = scans
 		self.signal_map = signal_map
 		self.signal_cut = signal_cut
 		self.daz, self.nt = daz, nt
 		self.ptp = prec_ptp
 		self.weighted = weighted
+		self.deslope  = deslope
 	def __call__(self, imap):
 		return self.postfilter_TP_separately(imap)
 	def postfilter_TP_separately(self, imap):
@@ -877,7 +878,7 @@ class PostPickup:
 				waz = (np.max(scan.boresight[:,1])-np.min(scan.boresight[:,1]))/utils.degree
 				naz = utils.nint(waz/self.daz)
 			with bench.mark("post_F"):
-				todfilter.filter_poly_jon(tod, scan.boresight[:,1], weights=weights, naz=naz, nt=self.nt, deslope=False)
+				todfilter.filter_poly_jon(tod, scan.boresight[:,1], weights=weights, naz=naz, nt=self.nt, deslope=self.deslope)
 			# Here we include the cuts. This isn't strictly necessary, but it
 			# preserves our hit area
 			with bench.mark("post_PT"):
