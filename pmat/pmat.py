@@ -35,7 +35,7 @@ class PmatMap(PointingMatrix):
 	def __init__(self, scan, template, sys=None, order=None, extra=[]):
 		sys        = config.get("map_sys", sys)
 		transform  = pos2pix(scan,template,sys, extra=extra)
-		ipol, obox, err = build_interpol(transform, scan.box, id=scan.entry.id)
+		ipol, obox, err = build_interpol(transform, scan.box, id=scan.id)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
 		# Use obox to extract a pixel bounding box for this scan.
 		# These are the only pixels pmat needs to concern itself with.
@@ -269,7 +269,7 @@ class PmatMapMultibeam(PointingMatrix):
 		# Build our pointing interpolator
 		sys        = config.get("map_sys", sys)
 		transform  = pos2pix(scan,template,sys)
-		ipol, obox, err = build_interpol(transform, ibox, id=scan.entry.id)
+		ipol, obox, err = build_interpol(transform, ibox, id=scan.id)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
 		# And store our data
 		self.beam_offs, self.beam_comps = beam_offs, beam_comps
@@ -416,8 +416,8 @@ class PmatCut(PointingMatrix):
 		self.cuts[:,2] = scan.cut.ranges[:,1]-scan.cut.ranges[:,0]
 		# Set up the parameter arguments
 		self.cuts[:,5:]= par[None,:]
-		assert np.all(self.cuts[:,2] > 0),  "Empty cut range detected in %s" % scan.entry.id
-		assert np.all(self.cuts[:,1] >= 0) and np.all(scan.cut.ranges[:,1] <= scan.nsamp), "Out of bounds cut range detected in %s" % scan.entry.id
+		assert np.all(self.cuts[:,2] > 0),  "Empty cut range detected in %s" % scan.id
+		assert np.all(self.cuts[:,1] >= 0) and np.all(scan.cut.ranges[:,1] <= scan.nsamp), "Out of bounds cut range detected in %s" % scan.id
 		if self.cuts.size > 0:
 			get_core(np.float32).measure_cuts(self.cuts.T)
 		self.cuts[:,3] = utils.cumsum(self.cuts[:,4])
@@ -534,7 +534,7 @@ class PmatPtsrc(PointingMatrix):
 
 		# Build interpolator (dec,ra output ordering)
 		transform  = build_pos_transform(scan, sys=config.get("map_sys", sys))
-		ipol, obox, err = build_interpol(transform, scan.box, scan.entry.id, posunit=0.5*utils.arcmin)
+		ipol, obox, err = build_interpol(transform, scan.box, scan.id, posunit=0.5*utils.arcmin)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, srcs.dtype)
 
 		self.cbox = obox[:,:2]
