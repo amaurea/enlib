@@ -83,15 +83,12 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 	and a list of their indices."""
 	for ind in inds:
 		try:
-			if isinstance(filelist[ind],list): raise IOError
+			if not isinstance(filelist[ind],basestring): raise IOError
 			d = enscan.read_scan(filelist[ind])
 			actdata.read(filedb.data[filelist[ind]])
 		except IOError:
 			try:
-				if isinstance(filelist[ind],list):
-					entry = [db[id] for id in filelist[ind]]
-				else:
-					entry = db[filelist[ind]]
+				entry = db[filelist[ind]]
 				d = reader(entry)
 				if d.ndet == 0 or d.nsamp == 0:
 					raise errors.DataMissing("Tod contains no valid data")

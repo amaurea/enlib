@@ -139,13 +139,13 @@ class DataSet:
 			if d.dets is not None: dets = d.dets
 			if d.samples is not None: samples = d.samples
 		return dets, samples
-	def shift(self, det_shift=0, sample_shift=0):
+	def shift(self, det_shift=None, sample_shift=None):
 		"""Renumber detectors and samples by adding the given numbers to them. Since
 		this is just a relabeling, this does not cause any changes to the data itself."""
 		for k in self.datafields:
 			d = self.datafields[k]
-			if d.dets is not None: d.dets += det_shift
-			if d.samples is not None: d.samples += sample_shift
+			if d.dets is not None and det_shift:       d.dets    += det_shift
+			if d.samples is not None and sample_shift: d.samples += sample_shift
 	def __contains__(self, name):
 		return name in self.datafields
 	def __setattr__(self, name, value):
