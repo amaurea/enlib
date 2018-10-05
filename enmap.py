@@ -1419,6 +1419,8 @@ def fix_endian(map):
 	return map
 
 def shift(map, off, inplace=False):
+	"""Cyclicly shift the pixels in map such that a pixel at
+	position (i,j) ends up at position (i+off[0],j+off[1])"""
 	if not inplace: map = map.copy()
 	off = np.atleast_1d(off)
 	for i, o in enumerate(off):
@@ -1430,3 +1432,41 @@ def fillbad(map, val=0, inplace=False):
 	if not inplace: map = map.copy()
 	map[~np.isfinite(map)] = val
 	return map
+
+def resample(map, oshape, off=(0,0), method="fft", mode="wrap", corner=False):
+	"""Resample the input map such that it covers the same area of the sky
+	with a different number of pixels given by oshape."""
+	# Construct the output shape and wcs
+	oshape = map.shape[:-2] + tuple(oshape)[-2:]
+	owcs   = wcsutils.scale(map.wcs, np.array(oshape[-2:],float)/map.shape[-2:], rowmajor=True, corner=corner)
+	off    = np.zeros(2)+off
+	# Apply phase shift to realign with pixel centers. This can be seen as a half pixel shift to
+	# the left in the original pixelization followed by a half pixel shift to the right in the new
+	# pixelization.
+	if not corner:
+		off -= 0.5 - 0.5*np.array(oshape[-2:],float)/map.shape[-2:] # in output units
+	if method == "fft":
+		omap  = zeros(oshape, owcs, map.dtype)
+		fimap = enfft.fft(map, axes=(-2,-1))
+		fomap = np.zeros(oshape, fimap.dtype)
+		# copy over all 4 quadrants. This would have been a single operation if the
+		# fourier center had been in the middle. This could be acieved using fftshift,
+		# but that would require two extra full-array shifts
+		cny, cnx = np.minimum(map.shape[-2:], oshape[-2:])
+		hny, hnx = cny//2, cnx//2
+		fomap[...,:hny,        :hnx       ] = fimap[...,:hny,        :hnx       ]
+		fomap[...,:hny,        -(cnx-hnx):] = fimap[...,:hny,        -(cnx-hnx):]
+		fomap[...,-(cny-hny):, :hnx       ] = fimap[...,-(cny-hny):, :hnx       ]
+		fomap[...,-(cny-hny):, -(cnx-hnx):] = fimap[...,-(cny-hny):, -(cnx-hnx):]
+		if np.any(off != 0):
+			fomap[:] = enfft.shift(fomap, off, axes=(-2,-1), nofft=True)
+		omap[:] = enfft.ifft(fomap, axes=(-2,-1)).real
+		# Normalize
+		omap /= map.shape[-2]*map.shape[-1]
+	elif method == "spline":
+		opix  = pixmap(oshape) - off[:,None,None]
+		ipix  = opix * (np.array(map.shape[-2:],float)/oshape[-2:])[:,None,None]
+		omap  = ndmap(map.at(ipix, unit="pix", mode=mode), owcs)
+	else:
+		raise ValueError("Invalid resample method '%s'" % method)
+	return omap
