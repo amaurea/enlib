@@ -1310,36 +1310,6 @@ def read_fits(fname, hdu=None, sel=None, box=None, pixbox=None, wrap="auto", mod
 	wrapper = fits_wrapper(hdu, wcs, threshold=sel_threshold)
 	return read_helper(wrapper, sel=sel, box=box, pixbox=pixbox, wrap=wrap, mode=mode)
 
-def read_fits_old(fname, hdu=None, sel=None, box=None, pixbox=None, wrap="auto", mode=None, sel_threshold=10e6, wcs=None):
-	"""Read an enmap from the specified fits file. By default,
-	the map and coordinate system will be read from HDU 0. Use
-	the hdu argument to change this. The map must be stored as
-	a fits image. If sel is specified, it should be a slice
-	that will be applied to the image before reading. This avoids
-	reading more of the image than necessary. Instead of sel,
-	a coordinate box [[yfrom,xfrom],[yto,xto]] can be specified."""
-	if hdu is None: hdu = 0
-	hdu  = astropy.io.fits.open(fname)[hdu]
-	ndim = len(hdu.shape)
-	if hdu.header["NAXIS"] < 2:
-		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
-	if wcs is None:
-		with warnings.catch_warnings():
-			wcs = wcsutils.WCS(hdu.header).sub(2)
-	(oshape, owcs), info = read_helper_old(hdu.shape, sel=sel, box=box, pixbox=pixbox, wrap=wrap, mode=mode, sel_threshold=10e6, wcs=wcs)
-	omap = None
-	# Loop through the discontinuous blocks
-	for isel, osel in info:
-		if hdu.size > sel_threshold:
-			isel1, isel2 = sliceutils.split_slice(isel, [len(isel)-1,1])
-			chunk = hdu.section[isel1][(Ellipsis,)+isel2]
-		else: chunk = hdu.data[isel]
-		if omap is None:
-			omap = zeros(chunk.shape[:-2]+oshape, owcs, chunk.dtype)
-		omap[osel] = chunk
-	omap = fix_endian(omap)
-	return omap
-
 def read_fits_geometry(fname, hdu=None):
 	"""Read an enmap wcs from the specified fits file. By default,
 	the map and coordinate system will be read from HDU 0. Use
@@ -1387,38 +1357,6 @@ def read_hdf(fname, hdu=None, sel=None, box=None, pixbox=None, wrap="auto", mode
 		wrapper = hdf_wrapper(data, wcs, threshold=sel_threshold)
 		return read_helper(wrapper, sel=sel, box=box, pixbox=pixbox, wrap=wrap, mode=mode)
 
-def read_hdf_old(fname, hdu=None, sel=None, box=None, pixbox=None, wrap="auto", mode=None, sel_threshold=10e6, wcs=None):
-	"""Read an enmap from the specified hdf file. Two formats
-	are supported. The old enmap format, which simply used
-	a bounding box to specify the coordinates, and the new
-	format, which uses WCS properties. The latter is used if
-	available. With the old format, plate carree projection
-	is assumed. Note: some of the old files have a slightly
-	buggy wcs, which can result in 1-pixel errors."""
-	import h5py
-	with h5py.File(fname,"r") as hfile:
-		data = hfile["data"]
-		hwcs = hfile["wcs"]
-		header = astropy.io.fits.Header()
-		for key in hwcs:
-			header[key] = hwcs[key].value
-		if wcs is None:
-			wcs = wcsutils.WCS(header).sub(2)
-		(oshape, owcs), info = read_helper_old(data.shape, sel=sel, box=box, pixbox=pixbox, wrap=wrap, mode=mode, sel_threshold=10e6, wcs=wcs)
-		omap = None
-		# Loop through the discontinuous blocks
-		for isel, osel in info:
-			if data.size > sel_threshold:
-				isel1, isel2 = sliceutils.split_slice(isel, [len(isel)-1,1])
-				chunk = data[isel1][(Ellipsis,)+isel2]
-			else: chunk = data[isel]
-			if omap is None:
-				omap = zeros(chunk.shape[:-2]+oshape, owcs, chunk.dtype)
-			omap[osel] = chunk
-		omap = fix_endian(omap)
-		return omap
-
-
 def read_hdf_geometry(fname):
 	"""Read an enmap wcs from the specified hdf file."""
 	import h5py
@@ -1438,44 +1376,6 @@ def read_helper(data, sel=None, box=None, pixbox=None, wrap="auto", mode=None, s
 	if sel    is not None: data = data[sel]
 	data = data[:] # Get rid of the wrapper if it still remains
 	return data
-
-def read_helper_old(shape, sel=None, box=None, pixbox=None, wrap="auto", mode=None, sel_threshold=10e6, wcs=None):
-	"""Helper function for map reading. Handles the slicing, sky-wrapping and capping, etc."""
-	# By popular demand we support several types of slicing, which gets a bit cumbersome.
-	# We will transform all of these into expanded slices
-	if sel is None: sel = (Ellipsis)
-	ndim = len(shape)
-	sel  = sliceutils.split_slice(sel, [ndim])[0]
-	sel += (slice(None),)*(ndim-len(sel))
-	# Ok, sel is now full-lenght, with a slice or number for each dimension.
-	# Separate out the pixel parts, which we will handle as piboxes
-	sel_pre, sel_pix = sliceutils.split_slice(sel, [ndim-2,2])
-	# Turn the sel_pix into a pbox, that can later be overridden
-	sel_pix = tuple([sliceutils.expand_slice(sel_pix[i], shape[-2+i]) for i in range(2)])
-	pbox = np.array([[s.start, s.stop, s.step] for s in sel_pix]).T
-	# We can now override using box and pixbox
-	if box is not None and pixbox is None:
-		# Box is a coordinate bounding box. It must be converted to pixels
-		pixbox = subinds(shape[-2:], wcs, box, mode=mode)
-	if pixbox is not None:
-		pbox = np.asarray(pixbox)
-	# Ok, we now have our slicing in a single, easy-to-work-with format.
-	oshape, owcs = slice_geometry(shape[-2:], wcs, (slice(*pbox[:,-2]),slice(*pbox[:,-1])), nowrap=True)
-	# Apply wrapping
-	nphi = utils.nint(360/np.abs(wcs.wcs.cdelt[0]))
-	# If our map is actually wider than our wrapping length, then wrapping doesn't
-	# make much sense. We can either just disable it, or generalize it to assume
-	# e.g. a spin-1/2 field. I do the latter here, by wrapping at the smallest multiple
-	# of nphi that's not smaller than the width of the map in pixels
-	nphi *= (nphi+shape[-1]-1)//nphi
-	if wrap is "auto": wrap = [0,nphi]
-	else: wrap = np.zeros(2,int)+wrap
-	info = []
-	for ibox, obox in utils.sbox_wrap(pbox.T, wrap=wrap, cap=shape[-2:]):
-		isel = utils.sbox2slice(ibox)[1:] # [1:] removes ellipsis
-		osel = utils.sbox2slice(obox)
-		info.append((sel_pre+isel,osel))
-	return (oshape, owcs), info
 
 # These wrapper classes are there to let us reuse the normal map
 # extract and submap operations on fits and hdf maps without needing
