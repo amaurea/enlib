@@ -49,6 +49,7 @@ class Tagdb:
 		if isinstance(ids, basestring):
 			ids = self.query(ids)
 		ids = np.asarray(ids)
+		if ids.size == 0: ids = np.zeros(0,int)
 		if issubclass(ids.dtype.type, np.integer):
 			# Fast integer slicing
 			return self.__class__(dslice(self.data, ids))
