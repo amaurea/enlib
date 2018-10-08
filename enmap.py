@@ -46,8 +46,6 @@ class ndmap(np.ndarray):
 	def __repr__(self):
 		return "ndmap(%s,%s)" % (np.asarray(self), wcsutils.describe(self.wcs))
 	def __str__(self): return repr(self)
-	def __getitem__(self, sel):
-		return np.ndarray.__getitem__(self, sel)
 	def __array_wrap__(self, arr, context=None):
 		if arr.ndim < 2: return arr
 		return ndmap(arr, self.wcs)
@@ -107,7 +105,7 @@ class ndmap(np.ndarray):
 		_, wcs = slice_geometry(self.shape[-2:], self.wcs, sel2)
 		return ndmap(np.ndarray.__getitem__(self, sel), wcs)
 	def __getslice__(self, a, b=None, c=None): return self[slice(a,b,c)]
-	def submap(self, box, mode=None):
+	def submap(self, box, mode=None, wrap="auto"):
 		"""Extract the part of the map inside the given coordinate box
 		box : array_like
 			The [[fromy,fromx],[toy,tox]] bounding box to select.
@@ -121,22 +119,41 @@ class ndmap(np.ndarray):
 			 "ceil":  both upper and lower bounds will be rounded up
 			 "inclusive": lower bounds are rounded down, and upper bounds up
 			 "exclusive": lower bounds are rounded up, and upper bounds down"""
-		ibox   = self.subinds(box, mode=mode, cap=False)
-		def helper(b):
-			if b[2] >= 0: return False, slice(b[0],b[1],b[2])
-			else:         return True,  slice(b[1]-b[2],b[0]-b[2],-b[2])
-		yflip, yslice = helper(ibox[:,0])
-		xflip, xslice = helper(ibox[:,1])
-		oshape, owcs = slice_geometry(self.shape, self.wcs, (yslice, xslice), nowrap=True)
-		omap = extract(self, oshape, owcs)
-		# Unflip if neccessary
-		if yflip: omap = omap[...,::-1,:]
-		if xflip: omap = omap[...,:,::-1]
-		return omap
+		return submap(self, box, mode=mode, wrap=wrap)
 	def subinds(self, box, mode=None, cap=True):
 		return subinds(self.shape, self.wcs, box=box, mode=mode, cap=cap)
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
+
+def submap(map, box, mode=None, wrap="auto", iwcs=None):
+	"""Extract the part of the map inside the given coordinate box
+	box : array_like
+		The [[fromy,fromx],[toy,tox]] bounding box to select.
+		The resulting map will have a bounding box as close
+		as possible to this, but will differ slightly due to
+		the finite pixel size.
+	mode : str
+		How to handle partially selected pixels:
+		 "round": round bounds using standard rules
+		 "floor": both upper and lower bounds will be rounded down
+		 "ceil":  both upper and lower bounds will be rounded up
+		 "inclusive": lower bounds are rounded down, and upper bounds up
+		 "exclusive": lower bounds are rounded up, and upper bounds down
+		The iwcs argument allows the wcs to be overriden. This is usually
+		not necessary."""
+	if iwcs is None: iwcs = map.wcs
+	ibox   = subinds(map.shape, iwcs, box, mode=mode, cap=False)
+	def helper(b):
+		if b[2] >= 0: return False, slice(b[0],b[1],b[2])
+		else:         return True,  slice(b[1]-b[2],b[0]-b[2],-b[2])
+	yflip, yslice = helper(ibox[:,0])
+	xflip, xslice = helper(ibox[:,1])
+	oshape, owcs = slice_geometry(map.shape, iwcs, (yslice, xslice), nowrap=True)
+	omap = extract(map, oshape, owcs, wrap=wrap, iwcs=iwcs)
+	# Unflip if neccessary
+	if yflip: omap = omap[...,::-1,:]
+	if xflip: omap = omap[...,:,::-1]
+	return omap
 
 def subinds(shape, wcs, box, mode=None, cap=True):
 	"""Helper function for submap. Translates the bounding
@@ -389,6 +406,7 @@ def extract_pixbox(map, pixbox, omap=None, wrap="auto", op=lambda a,b:b, cval=0,
 	sky. This is necessary to make things like fast thumbnail or tile extraction
 	at the edge of a (horizontally) fullsky map work."""
 	if iwcs is None: iwcs = map.wcs
+	pixbox = np.asarray(pixbox)
 	oshape, owcs = slice_geometry(map.shape, iwcs, (slice(*pixbox[:,-2]),slice(*pixbox[:,-1])), nowrap=True)
 	if omap is None:
 		omap = full(map.shape[:-2]+tuple(oshape[-2:]), owcs, cval, map.dtype)
@@ -1289,19 +1307,8 @@ def read_fits(fname, hdu=None, sel=None, box=None, pixbox=None, wrap="auto", mod
 	if wcs is None:
 		with warnings.catch_warnings():
 			wcs = wcsutils.WCS(hdu.header).sub(2)
-	(oshape, owcs), info = read_helper(hdu.shape, sel=sel, box=box, pixbox=pixbox, wrap=wrap, mode=mode, sel_threshold=10e6, wcs=wcs)
-	omap = None
-	# Loop through the discontinuous blocks
-	for isel, osel in info:
-		if hdu.size > sel_threshold:
-			isel1, isel2 = sliceutils.split_slice(isel, [len(isel)-1,1])
-			chunk = hdu.section[isel1][(Ellipsis,)+isel2]
-		else: chunk = hdu.data[isel]
-		if omap is None:
-			omap = zeros(chunk.shape[:-2]+oshape, owcs, chunk.dtype)
-		omap[osel] = chunk
-	omap = fix_endian(omap)
-	return omap
+	wrapper = fits_wrapper(hdu, wcs, threshold=sel_threshold)
+	return read_helper(wrapper, sel=sel, box=box, pixbox=pixbox, wrap=wrap, mode=mode)
 
 def read_fits_geometry(fname, hdu=None):
 	"""Read an enmap wcs from the specified fits file. By default,
@@ -1347,19 +1354,8 @@ def read_hdf(fname, hdu=None, sel=None, box=None, pixbox=None, wrap="auto", mode
 			header[key] = hwcs[key].value
 		if wcs is None:
 			wcs = wcsutils.WCS(header).sub(2)
-		(oshape, owcs), info = read_helper(data.shape, sel=sel, box=box, pixbox=pixbox, wrap=wrap, mode=mode, sel_threshold=10e6, wcs=wcs)
-		omap = None
-		# Loop through the discontinuous blocks
-		for isel, osel in info:
-			if data.size > sel_threshold:
-				isel1, isel2 = sliceutils.split_slice(isel, [len(isel)-1,1])
-				chunk = data[isel1][(Ellipsis,)+isel2]
-			else: chunk = data[isel]
-			if omap is None:
-				omap = zeros(chunk.shape[:-2]+oshape, owcs, chunk.dtype)
-			omap[osel] = chunk
-		omap = fix_endian(omap)
-		return omap
+		wrapper = hdf_wrapper(data, wcs, threshold=sel_threshold)
+		return read_helper(wrapper, sel=sel, box=box, pixbox=pixbox, wrap=wrap, mode=mode)
 
 def read_hdf_geometry(fname):
 	"""Read an enmap wcs from the specified hdf file."""
@@ -1373,43 +1369,55 @@ def read_hdf_geometry(fname):
 		shape = hfile["data"].shape
 	return shape, wcs
 
-def read_helper(shape, sel=None, box=None, pixbox=None, wrap="auto", mode=None, sel_threshold=10e6, wcs=None):
+def read_helper(data, sel=None, box=None, pixbox=None, wrap="auto", mode=None, sel_threshold=10e6):
 	"""Helper function for map reading. Handles the slicing, sky-wrapping and capping, etc."""
-	# By popular demand we support several types of slicing, which gets a bit cumbersome.
-	# We will transform all of these into expanded slices
-	if sel is None: sel = (Ellipsis)
-	ndim = len(shape)
-	sel  = sliceutils.split_slice(sel, [ndim])[0]
-	sel += (slice(None),)*(ndim-len(sel))
-	# Ok, sel is now full-lenght, with a slice or number for each dimension.
-	# Separate out the pixel parts, which we will handle as piboxes
-	sel_pre, sel_pix = sliceutils.split_slice(sel, [ndim-2,2])
-	# Turn the sel_pix into a pbox, that can later be overridden
-	sel_pix = tuple([sliceutils.expand_slice(sel_pix[i], shape[-2+i]) for i in range(2)])
-	pbox = np.array([[s.start, s.stop, s.step] for s in sel_pix]).T
-	# We can now override using box and pixbox
-	if box is not None and pixbox is None:
-		# Box is a coordinate bounding box. It must be converted to pixels
-		pixbox = subinds(shape[-2:], wcs, box, mode=mode)
-	if pixbox is not None:
-		pbox = np.asarray(pixbox)
-	# Ok, we now have our slicing in a single, easy-to-work-with format.
-	oshape, owcs = slice_geometry(shape[-2:], wcs, (slice(*pbox[:,-2]),slice(*pbox[:,-1])), nowrap=True)
-	# Apply wrapping
-	nphi = utils.nint(360/np.abs(wcs.wcs.cdelt[0]))
-	# If our map is actually wider than our wrapping length, then wrapping doesn't
-	# make much sense. We can either just disable it, or generalize it to assume
-	# e.g. a spin-1/2 field. I do the latter here, by wrapping at the smallest multiple
-	# of nphi that's not smaller than the width of the map in pixels
-	nphi *= (nphi+shape[-1]-1)//nphi
-	if wrap is "auto": wrap = [0,nphi]
-	else: wrap = np.zeros(2,int)+wrap
-	info = []
-	for ibox, obox in utils.sbox_wrap(pbox.T, wrap=wrap, cap=shape[-2:]):
-		isel = utils.sbox2slice(ibox)[1:] # [1:] removes ellipsis
-		osel = utils.sbox2slice(obox)
-		info.append((sel_pre+isel,osel))
-	return (oshape, owcs), info
+	if box    is not None: data = submap(data, box, wrap=wrap)
+	if pixbox is not None: data = extract_pixbox(data, pixbox, wrap=wrap)
+	if sel    is not None: data = data[sel]
+	data = data[:] # Get rid of the wrapper if it still remains
+	return data
+
+# These wrapper classes are there to let us reuse the normal map
+# extract and submap operations on fits and hdf maps without needing
+# to read in all the data.
+
+class fits_wrapper:
+	def __init__(self, hdu, wcs, threshold=1e7):
+		self.hdu       = hdu
+		self.wcs       = wcs
+		self.threshold = threshold
+		self.dtype     = fix_endian(hdu.section[(slice(0,1),)*hdu.header["NAXIS"]]).dtype
+	@property
+	def shape(self): return self.hdu.shape
+	def __getitem__(self, sel):
+		_, psel = sliceutils.split_slice(sel, [len(self.shape)-2,2])
+		if len(psel) > 2: raise IndexError("too many indices")
+		_, wcs = slice_geometry(self.shape[-2:], self.wcs, psel)
+		if self.hdu.size > self.threshold:
+			sel1, sel2 = sliceutils.split_slice(sel, [len(self.shape)-1,1])
+			res = self.hdu.section[sel1][(Ellipsis,)+sel2]
+		else: res = self.hdu.data[sel]
+		return ndmap(fix_endian(res), wcs)
+
+class hdf_wrapper:
+	def __init__(self, dset, wcs, threshold=1e7):
+		self.dset      = dset
+		self.wcs       = wcs
+		self.threshold = threshold
+	@property
+	def shape(self): return self.dset.shape
+	@property
+	def dtype(self): return self.dset.shape
+	def __getitem__(self, sel):
+		_, psel = sliceutils.split_slice(sel, [self.ndim-2,2])
+		if len(psel) > 2: raise IndexError("too many indices")
+		_, wcs = slice_geometry(self.shape[-2:], self.wcs, psel)
+		if self.dset.size > self.threshold:
+			sel1, sel2 = sliceutils.split_slice(sel, [len(self.shape)-1,1])
+			res = self.dset[sel1][(Ellipsis,)+sel2]
+		else:
+			res = self.dset.value[sel]
+		return ndmap(fix_endian(res), wcs)
 
 def fix_endian(map):
 	"""Make endianness of array map match the current machine.
@@ -1419,6 +1427,8 @@ def fix_endian(map):
 	return map
 
 def shift(map, off, inplace=False):
+	"""Cyclicly shift the pixels in map such that a pixel at
+	position (i,j) ends up at position (i+off[0],j+off[1])"""
 	if not inplace: map = map.copy()
 	off = np.atleast_1d(off)
 	for i, o in enumerate(off):
@@ -1430,3 +1440,41 @@ def fillbad(map, val=0, inplace=False):
 	if not inplace: map = map.copy()
 	map[~np.isfinite(map)] = val
 	return map
+
+def resample(map, oshape, off=(0,0), method="fft", mode="wrap", corner=False):
+	"""Resample the input map such that it covers the same area of the sky
+	with a different number of pixels given by oshape."""
+	# Construct the output shape and wcs
+	oshape = map.shape[:-2] + tuple(oshape)[-2:]
+	owcs   = wcsutils.scale(map.wcs, np.array(oshape[-2:],float)/map.shape[-2:], rowmajor=True, corner=corner)
+	off    = np.zeros(2)+off
+	# Apply phase shift to realign with pixel centers. This can be seen as a half pixel shift to
+	# the left in the original pixelization followed by a half pixel shift to the right in the new
+	# pixelization.
+	if not corner:
+		off -= 0.5 - 0.5*np.array(oshape[-2:],float)/map.shape[-2:] # in output units
+	if method == "fft":
+		omap  = zeros(oshape, owcs, map.dtype)
+		fimap = enfft.fft(map, axes=(-2,-1))
+		fomap = np.zeros(oshape, fimap.dtype)
+		# copy over all 4 quadrants. This would have been a single operation if the
+		# fourier center had been in the middle. This could be acieved using fftshift,
+		# but that would require two extra full-array shifts
+		cny, cnx = np.minimum(map.shape[-2:], oshape[-2:])
+		hny, hnx = cny//2, cnx//2
+		fomap[...,:hny,        :hnx       ] = fimap[...,:hny,        :hnx       ]
+		fomap[...,:hny,        -(cnx-hnx):] = fimap[...,:hny,        -(cnx-hnx):]
+		fomap[...,-(cny-hny):, :hnx       ] = fimap[...,-(cny-hny):, :hnx       ]
+		fomap[...,-(cny-hny):, -(cnx-hnx):] = fimap[...,-(cny-hny):, -(cnx-hnx):]
+		if np.any(off != 0):
+			fomap[:] = enfft.shift(fomap, off, axes=(-2,-1), nofft=True)
+		omap[:] = enfft.ifft(fomap, axes=(-2,-1)).real
+		# Normalize
+		omap /= map.shape[-2]*map.shape[-1]
+	elif method == "spline":
+		opix  = pixmap(oshape) - off[:,None,None]
+		ipix  = opix * (np.array(map.shape[-2:],float)/oshape[-2:])[:,None,None]
+		omap  = ndmap(map.at(ipix, unit="pix", mode=mode), owcs)
+	else:
+		raise ValueError("Invalid resample method '%s'" % method)
+	return omap

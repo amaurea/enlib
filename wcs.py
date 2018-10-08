@@ -82,16 +82,18 @@ def is_plain(wcs):
 	non-wrapping coordinates or some angular coordiante system."""
 	return wcs.wcs.ctype[0] == ""
 
-def scale(wcs, scale=1, rowmajor=False):
-	"""Scales the linear pixel sensity of a wcs by the given factor, which can be specified
+def scale(wcs, scale=1, rowmajor=False, corner=False):
+	"""Scales the linear pixel density of a wcs by the given factor, which can be specified
 	per axis. This is the same as dividing the pixel size by the same number."""
 	scale = np.zeros(2)+scale
 	if rowmajor: scale = scale[::-1]
 	wcs = wcs.deepcopy()
-	wcs.wcs.crpix -= 0.5
+	if not corner:
+		wcs.wcs.crpix -= 0.5
 	wcs.wcs.crpix *= scale
 	wcs.wcs.cdelt /= scale
-	wcs.wcs.crpix += 0.5
+	if not corner:
+		wcs.wcs.crpix += 0.5
 	return wcs
 
 # I need to update this to work better with full-sky stuff.
