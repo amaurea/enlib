@@ -69,16 +69,16 @@ class Tagdb:
 		except that , is treated as a lower-priority version of &."""
 		# Make a copy of self.data so we can't modify it without changing ourself
 		data = self.data.copy()
-		# First split off any sorting field or slice
-		if query is None: query = ""
-		toks = utils.split_outside(query,":")
-		query, rest = toks[0], ":".join(toks[1:])
 		# Hack: Support id fields as tags, even if they contain
 		# illegal characters..
 		t1 = time.time()
+		if query is None: query = ""
 		for id in data["id"]:
 			if id not in query: continue
 			query = re.sub(r"""(?<!['"])\b%s\b""" % id, "(id=='%s')" % id, query)
+		# Split off any sorting field or slice
+		toks = utils.split_outside(query,":")
+		query, rest = toks[0], ":".join(toks[1:])
 		# Split into ,-separated fields.
 		toks = utils.split_outside(query,",")
 		fields = []
