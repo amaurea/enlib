@@ -199,7 +199,7 @@ def define_arg_parser():
 	parser.add_argument("--min", type=str, help="The value at which the color bar starts. See --range.")
 	parser.add_argument("--max", type=str, help="The value at which the color bar ends. See --range.")
 	parser.add_argument("-q", "--quantile", type=float, default=0.01, help="Which quantile to use when automatically determining the color range. If specified, the color bar will go from [quant(q),quant(1-q)].")
-	parser.add_argument("-v", dest="verbosity", action="count", help="Verbose output. Specify multiple times to increase verbosity further.")
+	parser.add_argument("-v", dest="verbosity", action="count", default=0, help="Verbose output. Specify multiple times to increase verbosity further.")
 	parser.add_argument("-s", "-u", "--scale", "--upgrade", type=str, default="1", help="Upscale the image using nearest neighbor interpolation by this amount before plotting. For example, 2 would make the map twice as large in each direction, while 4,1 would make it 4 times as tall and leave the width unchanged.")
 	parser.add_argument("--verbosity", dest="verbosity", type=int, help="Specify verbosity directly as an integer.")
 	parser.add_argument("--method", default="auto", help="Which colorization implementation to use: auto, fortran or python.")
