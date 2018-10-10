@@ -11,14 +11,11 @@ class Tagdb:
 		"""Most basic constructor. Takes a dictionary
 		data[name][...,nid], which must contain the field "id"."""
 		if data is None:
-			self.data = {"id":np.zeros(0,dtype='S5'),"subids":np.zeros(0,dtype='S5')}
+			self.data = {"id":np.zeros(0,dtype='S5')}
 		else:
 			self.data = {key:np.array(val) for key,val in data.iteritems()}
 			assert "id" in self.data, "Id field missing"
 			if self.data["id"].size == 0: self.data["id"] = np.zeros(0,dtype='S5')
-		# Insert subids if missing
-		if "subids" not in self.data:
-			self.data["subids"] = np.zeros(len(self.data["id"]),dtype='S5')
 		# Inser default fields. These will always be present, but will be
 		for field_expr in default_fields:
 			if isinstance(field_expr, basestring): field_expr = (field_expr,)
@@ -40,8 +37,7 @@ class Tagdb:
 	def copy(self):
 		return copy.deepcopy(self)
 	@property
-	def ids(self):
-		return append_subs(self.data["id"], self.data["subids"])
+	def ids(self): return self.data["id"]
 	@property
 	def tags(self):
 		return sorted(self.data.keys())
@@ -53,18 +49,15 @@ class Tagdb:
 		if isinstance(ids, basestring):
 			ids = self.query(ids)
 		ids = np.asarray(ids)
+		if ids.size == 0: ids = np.zeros(0,int)
 		if issubclass(ids.dtype.type, np.integer):
 			# Fast integer slicing
 			return self.__class__(dslice(self.data, ids))
 		else:
 			# Slice by id
-			# Extract the subids
-			ids, subids = split_ids(ids)
 			# Restrict to the subset of these ids
 			inds = utils.find(self.ids, ids)
 			odata = dslice(self.data, inds)
-			# Update subids
-			odata["subids"] = np.array([merge_subid(a,b) for a, b in zip(odata["subids"], subids)])
 			res = self.copy()
 			res.data = odata
 			return res
@@ -76,28 +69,29 @@ class Tagdb:
 		except that , is treated as a lower-priority version of &."""
 		# Make a copy of self.data so we can't modify it without changing ourself
 		data = self.data.copy()
-		# First split off any sorting field or slice
-		if query is None: query = ""
-		toks = utils.split_outside(query,":")
-		query, rest = toks[0], ":".join(toks[1:])
 		# Hack: Support id fields as tags, even if they contain
 		# illegal characters..
 		t1 = time.time()
+		if query is None: query = ""
 		for id in data["id"]:
 			if id not in query: continue
 			query = re.sub(r"""(?<!['"])\b%s\b""" % id, "(id=='%s')" % id, query)
-		# Split into ,-separated fields. Fields starting with a "+"
-		# are taken to be tag markers, and are simply propagated to the
-		# resulting ids.
+		# Split off any sorting field or slice
+		toks = utils.split_outside(query,":")
+		query, rest = toks[0], ":".join(toks[1:])
+		# Split into ,-separated fields.
 		toks = utils.split_outside(query,",")
-		fields, subid = [], []
+		fields = []
 		override_ids = None
 		for tok in toks:
+			# We don't support subid tags any more. These were used to handle both
+			# frequency selection and arbitrary array subsets. We now handle frequency
+			# selection via normal tags, so translate subid tags to normal tags to
+			# let old selectors keep working. Arbitrary array subsets are no longer
+			# supported, sadly.
+			tok = tok.lstrip("+")
 			if len(tok) == 0: continue
-			if tok.startswith("+"):
-				# Tags starting with + will be interpreted as a subid specification
-				subid.append(tok[1:])
-			elif tok.startswith("/"):
+			if tok.startswith("/"):
 				# Tags starting with / will be interpreted as special query flags
 				if tok == "/all": apply_default_query = False
 				else: raise ValueError("Unknown query flag '%s'" % tok)
@@ -114,17 +108,12 @@ class Tagdb:
 					tok = "~file_contains('%s',id)" % tok[2:]
 				fields.append(tok)
 		if override_ids is not None:
-			# Append subids to our ids, and return immediately. All other fields
-			# and queries are ignored.
-			subs = np.array(",".join(subid))
-			subs = np.full(len(override_ids), subs, subs.dtype)
-			return append_subs(override_ids, subs)
+			return override_ids
 		# Apply our default queries here. These are things that we almost always
 		# want in our queries, and that it's tedious to have to specify manually
 		# each time. For example, this would be "selected" for act todinfo queries
 		if apply_default_query:
 			fields = fields + utils.split_outside(self.default_query,",")
-		subid = ",".join(subid)
 		# Now evaluate our fields one by one. This is done so that
 		# function fields can inspect the current state at that point
 		for field in fields:
@@ -151,10 +140,7 @@ class Tagdb:
 		inds = np.arange(len(data["id"]))
 		inds = eval("inds" + dsel)
 		data = dslice(data, inds)
-		# Build our subid extensions and append them to ids
-		subs = np.array([merge_subid(subid, sub) for sub in data["subids"]])
-		ids = append_subs(data["id"], subs)
-		return ids
+		return data["id"]
 	def __add__(self, other):
 		"""Produce a new tagdb which contains the union of the
 		tag info from each."""
@@ -229,11 +215,12 @@ def merge(tagdatas):
 	"""Merge two or more tagdbs into a total one, which will have the
 	union of the ids."""
 	# First get rid of empty inputs
-	tagdatas = [data for data in tagdatas if len(data["id"]) > 0]
+	tagdatas = [data.copy() for data in tagdatas if len(data["id"]) > 0]
 	# Generate the union of ids, and the index of each
 	# tagset into it.
 	tot_ids = utils.union([data["id"] for data in tagdatas])
 	inds = [utils.find(tot_ids, data["id"]) for data in tagdatas]
+	for data in tagdatas: data["id"] = data["id"].astype(tot_ids.dtype)
 	nid  = len(tot_ids)
 	data_tot = {}
 	for di, data in enumerate(tagdatas):

@@ -32,6 +32,8 @@ class ExecDB:
 		self.vars_code  = compile(self.vars_source, "<exec_db,vars_source>", "exec")
 	def __getitem__(self, id): return self.query(id)
 	def query(self, id):
+		if not isinstance(id, basestring):
+			return [self.query(i) for i in id]
 		globs, locs = {"id":id}, {}
 		exec(self.vars_code, {}, globs)
 		exec(self.db_code, globs, locs)
