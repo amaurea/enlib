@@ -794,16 +794,16 @@ def hwstack(mexp):
 	nr,nc,ny,nx = mexp.shape
 	return np.transpose(mexp,(0,2,1,3)).reshape(nr*ny,nc*nx)
 
-def show_img(imt, title, method="qt"):
-	if   method == "qt": show_img_qt5(img, title)
-	elif method == "wx": show_img_wx (img, title)
+def show_img(img, title, method="qt"):
+	if   method == "qt": show_img_qt(img, title)
+	elif method == "wx": show_img_wx(img, title)
 	else: raise ValueError
 
-def show_img_wx(img, title="plot"):
+def show_img_wx(img, title=None):
 	import wx
 	from PIL import Image
 	class Panel(wx.Panel):
-		def __init__(self, parent, id):
+		def __init__(self, parent, id, img):
 			wx.Panel.__init__(self, parent, id)
 			self.SetBackgroundColour("white")
 			# Make a non-transparend image with white background
@@ -819,18 +819,21 @@ def show_img_wx(img, title="plot"):
 			self.SetSizer(sizer)
 			sizer.Fit(parent)
 	app = wx.App(False)
-	frame = wx.Frame(None, -1, title, size=img.size)
-	Panel(frame,-1)
-	frame.Show(1)
+	frames = []
+	for img_, title_ in _show_img_helper(img, title):
+		frame = wx.Frame(None, -1, title_, size=img_.size)
+		Panel(frame,-1, img_)
+		frame.Show(1)
+		frames.append(frame)
 	app.MainLoop()
 
-def show_img_qt5(img, title="plot"):
+def show_img_qt(img, title=None):
 	from matplotlib.backends.backend_qt5 import QtCore, QtGui, QtWidgets
 	from PIL.ImageQt import ImageQt
 	import sys
 	# Set up window
 	class ImageWindow(QtWidgets.QMainWindow):
-		def __init__(self, img):
+		def __init__(self, img, title):
 			QtWidgets.QMainWindow.__init__(self)
 			self.setWindowTitle(title)
 			widget = QtWidgets.QWidget()
@@ -844,6 +847,23 @@ def show_img_qt5(img, title="plot"):
 			layout.addWidget(label)
 			self.resize(label.width(), label.height())
 	app    = QtWidgets.QApplication([])
-	window = ImageWindow(img)
-	window.show()
+	windows= []
+	for img_, title_ in _show_img_helper(img, title):
+		window = ImageWindow(img_, title_)
+		window.show()
+		windows.append(window)
 	app.exec_()
+
+def _show_img_helper(img, title=None):
+	res = []
+	if isinstance(img, list):
+		for i, im in enumerate(img):
+			if isinstance(title, list): tit = title[i]
+			else: tit = title
+			res += _show_img_helper(im, tit)
+		return res
+	else:
+		try:
+			return [(img.img, (title or img.name))]
+		except AttributeError:
+			return [(img, (title or "plot"))]
