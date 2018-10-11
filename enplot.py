@@ -794,7 +794,37 @@ def hwstack(mexp):
 	nr,nc,ny,nx = mexp.shape
 	return np.transpose(mexp,(0,2,1,3)).reshape(nr*ny,nc*nx)
 
-def show_img(img, title="plot"):
+def show_img(imt, title, method="qt"):
+	if   method == "qt": show_img_qt5(img, title)
+	elif method == "wx": show_img_wx (img, title)
+	else: raise ValueError
+
+def show_img_wx(img, title="plot"):
+	import wx
+	from PIL import Image
+	class Panel(wx.Panel):
+		def __init__(self, parent, id):
+			wx.Panel.__init__(self, parent, id)
+			self.SetBackgroundColour("white")
+			# Make a non-transparend image with white background
+			background = Image.new("RGB", img.size, (255,255,255))
+			background.paste(img, mask=img.split()[3])
+			wximg = wx.EmptyImage(*background.size)
+			wximg.SetData(background.convert('RGB').tobytes())
+			wxbmp = wx.BitmapFromImage(wximg)
+
+			sizer = wx.BoxSizer()
+			self.img_control = wx.StaticBitmap(self, -1, wxbmp, (0,0))
+			sizer.Add(self.img_control, 1, wx.EXPAND)
+			self.SetSizer(sizer)
+			sizer.Fit(parent)
+	app = wx.App(False)
+	frame = wx.Frame(None, -1, title, size=img.size)
+	Panel(frame,-1)
+	frame.Show(1)
+	app.MainLoop()
+
+def show_img_qt5(img, title="plot"):
 	from matplotlib.backends.backend_qt5 import QtCore, QtGui, QtWidgets
 	from PIL.ImageQt import ImageQt
 	import sys
