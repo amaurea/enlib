@@ -793,3 +793,27 @@ def hwexpand(mflat, nrow=-1, ncol=-1, transpose=False):
 def hwstack(mexp):
 	nr,nc,ny,nx = mexp.shape
 	return np.transpose(mexp,(0,2,1,3)).reshape(nr*ny,nc*nx)
+
+def show_img(img, title="plot"):
+	from matplotlib.backends.backend_qt5 import QtCore, QtGui, QtWidgets
+	from PIL.ImageQt import ImageQt
+	import sys
+	# Set up window
+	class ImageWindow(QtWidgets.QMainWindow):
+		def __init__(self, img):
+			QtWidgets.QMainWindow.__init__(self)
+			self.setWindowTitle(title)
+			widget = QtWidgets.QWidget()
+			self.setCentralWidget(widget)
+			layout = QtWidgets.QVBoxLayout(widget)
+			qimg   = QtGui.QImage(ImageQt(img))
+			pixmap = QtGui.QPixmap(qimg)
+			label = QtWidgets.QLabel()
+			label.setPixmap(pixmap)
+			label.adjustSize()
+			layout.addWidget(label)
+			self.resize(label.width(), label.height())
+	app    = QtWidgets.QApplication([])
+	window = ImageWindow(img)
+	window.show()
+	app.exec_()
