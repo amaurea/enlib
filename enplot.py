@@ -794,9 +794,9 @@ def hwstack(mexp):
 	nr,nc,ny,nx = mexp.shape
 	return np.transpose(mexp,(0,2,1,3)).reshape(nr*ny,nc*nx)
 
-def show_img(img, title, method="qt"):
-	if   method == "qt": show_img_qt(img, title)
-	elif method == "wx": show_img_wx(img, title)
+def show_img(img, title=None, method="wx"):
+	if   method == "qt": show_img_qt(img, title=title)
+	elif method == "wx": show_img_wx(img, title=title)
 	else: raise ValueError
 
 def show_img_wx(img, title=None):

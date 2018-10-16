@@ -443,7 +443,7 @@ def _arghelper(map, func, unit):
 	if unit == "coord": res = pix2sky(map.shape, map.wcs, res.T).T
 	return res
 
-def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False,iau=False):
+def rand_map(shape, wcs, cov, scalar=False, seed=None, pixel_units=False, iau=False, spin=[0,2]):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
 	the provided power spectrum. If cov.ndim is 4, 2D power is assumed else 1D
 	power is assumed. If pixel_units is True, the 2D power spectra is assumed
@@ -453,7 +453,7 @@ def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False,iau=Fals
 	if scalar:
 		return ifft(kmap).real
 	else:
-		return harm2map(kmap,iau=iau)
+		return harm2map(kmap, iau=iau, spin=spin)
 
 def rand_gauss(shape, wcs, dtype=None):
 	"""Generate a map with random gaussian noise in pixel space."""
@@ -651,27 +651,32 @@ def ifft(emap, omap=None, nthread=0, normalize=True):
 # T,E,B hamonic maps. They are not the most efficient way of doing this.
 # It would be better to precompute the rotation matrix and buffers, and
 # use real transforms.
-def map2harm(emap, nthread=0, normalize=True,iau=False):
+def map2harm(emap, nthread=0, normalize=True, iau=False, spin=[0,2]):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
 	emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
-	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap(),iau=iau)
-		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
+	if emap.ndim > 2:
+		rot, s0 = None, None
+		for s, i1, i2 in spin_helper(spin, emap.shape[-3]):
+			if s == 0:  continue
+			if s != s0: s0, rot = s, queb_rotmat(emap.lmap(), iau=iau, spin=s)
+			emap[...,i1:i2,:,:] = map_mul(rot, emap[...,i1:i2,:,:])
 	return emap
-def harm2map(emap, nthread=0, normalize=True,iau=False):
-	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap(), inverse=True,iau=iau)
-		emap = emap.copy()
-		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
+def harm2map(emap, nthread=0, normalize=True, iau=False, spin=[0,2]):
+	if emap.ndim > 2:
+		rot, s0 = None, None
+		for s, i1, i2 in spin_helper(spin, emap.shape[-3]):
+			if s == 0:  continue
+			if s != s0: s0, rot = s, queb_rotmat(emap.lmap(), iau=iau, spin=s, inverse=True)
+			emap[...,i1:i2,:,:] = map_mul(rot, emap[...,i1:i2,:,:])
 	return samewcs(ifft(emap,nthread=nthread,normalize=normalize), emap).real
 
-def queb_rotmat(lmap, inverse=False, iau=False):
+def queb_rotmat(lmap, inverse=False, iau=False, spin=2):
 	# atan2(x,y) instead of (y,x) because Qr points in the
 	# tangential direction, not radial. This matches flipperpol too.
 	# This corresponds to the Healpix convention. To get IAU,
 	# flip the sign of a.
 	sgn = -1 if iau else 1
-	a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
+	a    = sgn*spin*np.arctan2(-lmap[1], lmap[0])
 	c, s = np.cos(a), np.sin(a)
 	if inverse: s = -s
 	return samewcs(np.array([[c,-s],[s,c]]),lmap)
@@ -1478,3 +1483,15 @@ def resample(map, oshape, off=(0,0), method="fft", mode="wrap", corner=False):
 	else:
 		raise ValueError("Invalid resample method '%s'" % method)
 	return omap
+
+def spin_helper(spin, n):
+	spin  = np.array(spin).reshape(-1)
+	scomp = 1+(spin!=0)
+	ci, i1 = 0, 0
+	while True:
+		i2 = min(i1+scomp[ci],n)
+		if i2-i1 != scomp[ci]: raise IndexError("Unpaired component in spin transform")
+		yield spin[ci], i1, i2
+		if i2 == n: break
+		i1 = i2
+		ci = (ci+1)%len(spin)

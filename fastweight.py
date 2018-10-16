@@ -1,4 +1,5 @@
 """This module provides fast weightmap estimation based on a todinfo database."""
+from __future__ import print_function
 import numpy as np, os
 from . import utils, coordinates, enmap, bench, pmat
 
@@ -38,7 +39,7 @@ def fastweight(shape, wcs, db, weight="det", array_rad=0.7*utils.degree,
 		with bench.mark("add"):
 			add_weight(omap, pix_ranges, weights, nphi)
 		if verbose:
-			print "%4d %4d %7.4f %7.4f" % (chunk, comm.rank, bench.stats.get("get"), bench.stats.get("add"))
+			print("%4d %4d %7.4f %7.4f" % (chunk, comm.rank, bench.stats.get("get"), bench.stats.get("add")))
 	if comm:
 		omap = utils.allreduce(omap, comm)
 	# Change unit from seconds per pixel to seconds per square acmin
@@ -85,7 +86,7 @@ def get_pix_ranges(shape, wcs, horbox, daz, nt=4, ndet=1.0, site=None):
 	# Now interpolate to full resolution
 	y    = np.arange(utils.nint(ylow[0]),utils.nint(ylow[-1])+1)
 	if len(y) == 0:
-		print "Why is y empty?", naz, ylow[0], ylow[1]
+		print("Why is y empty?", naz, ylow[0], ylow[1])
 		return None, None
 	x1   = np.interp(y, ylow, x1low)
 	grad = np.interp(y, ylow, glow)
