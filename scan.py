@@ -44,7 +44,7 @@ of skipping samples here.
 # This module has become really crusty. It's time to redo this whole
 # system, especially considering the large overlap with Dataset.
 
-import numpy as np, enlib.slice, copy as cpy, h5py, os
+import numpy as np, copy as cpy, h5py, os
 from . import sampcut, nmat, config, resample, utils, bunch, fft
 
 class Scan:
@@ -95,15 +95,15 @@ class Scan:
 		assert isinstance(sampslice,slice), "Sample part of slice must be slice object"
 		res = cpy.deepcopy(self)
 		# These will be passed to fortran, so make them contiguous
-		res.boresight = np.ascontiguousarray(enlib.slice.slice_downgrade(res.boresight, sampslice, axis=0))
+		res.boresight = np.ascontiguousarray(utils.slice_downgrade(res.boresight, sampslice, axis=0))
 		res.offsets   = np.ascontiguousarray(res.offsets[detslice])
 		res.comps     = np.ascontiguousarray(res.comps[detslice])
 		res.dets      = res.dets[detslice]
-		res.hwp       = np.ascontiguousarray(enlib.slice.slice_downgrade(res.hwp, sampslice, axis=0))
-		res.hwp_phase = np.ascontiguousarray(enlib.slice.slice_downgrade(res.hwp_phase, sampslice, axis=0))
+		res.hwp       = np.ascontiguousarray(utils.slice_downgrade(res.hwp, sampslice, axis=0))
+		res.hwp_phase = np.ascontiguousarray(utils.slice_downgrade(res.hwp_phase, sampslice, axis=0))
 		try:
 			# The whole scan stuff is horrible and should be redesigned
-			res.dark_tod = np.ascontiguousarray(enlib.slice.slice_downgrade(res.dark_tod, sampslice, axis=1))
+			res.dark_tod = np.ascontiguousarray(utils.slice_downgrade(res.dark_tod, sampslice, axis=1))
 			res.dark_cut = res.dark_cut[sel]
 		except AttributeError as e: pass
 		try:
@@ -116,7 +116,7 @@ class Scan:
 		return res, detslice, sampslice
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
-		res._tod = np.ascontiguousarray(enlib.slice.slice_downgrade(res._tod[detslice], sampslice, axis=-1))
+		res._tod = np.ascontiguousarray(utils.slice_downgrade(res._tod[detslice], sampslice, axis=-1))
 		return res
 	def resample(self, mapping):
 		res = cpy.deepcopy(self)

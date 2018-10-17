@@ -34,7 +34,7 @@ The complication is that sends and receives have to happen at the same time.
 The easiest way to do this is via alltoallv, which requires the use of
 flattened arrays.
 """
-import numpy as np, copy, os, re, enlib.slice, operator
+import numpy as np, copy, os, re, operator
 from . import enmap, utils, zipper, mpi
 from astropy.wcs import WCS
 
@@ -125,7 +125,7 @@ class Dmap(object):
 		for t in self.tiles: t[:] = val
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts. We only handle non-pixel slices
-		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
+		sel1, sel2 = utils.split_slice(sel, [self.ndim-2,2])
 		if len(sel2) > 0:
 			raise NotImplementedError("Pixel slicing of dmaps not implemented")
 		geometry = self.geometry[sel1]
@@ -133,7 +133,7 @@ class Dmap(object):
 		return Dmap(geometry, tiles, copy=False)
 	def __setitem__(self, sel, val):
 		# Split sel into normal and wcs parts. We only handle non-pixel slices
-		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
+		sel1, sel2 = utils.split_slice(sel, [self.ndim-2,2])
 		if len(sel2) > 0:
 			raise NotImplementedError("Pixel slicing of dmaps not implemented")
 		try:
@@ -419,7 +419,7 @@ class DGeometry(object):
 		return [enmap.zeros(ws,ww,dtype=self.dtype) for ws,ww in self.work_geometry]
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
-		sel1, sel2 = enlib.slice.split_slice(sel, [self.ndim-2,2])
+		sel1, sel2 = utils.split_slice(sel, [self.ndim-2,2])
 		if len(sel2) > 0: raise NotImplementedError("Pixel slicing of dmap geometries not implemented")
 		res = self.copy()
 		res.pre= np.zeros(self.pre)[sel].shape

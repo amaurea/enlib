@@ -3,9 +3,10 @@ Individual experiments can inherit from this - other functions
 in enlib will work as long as this interface is followed.
 For performance and memory reasons, the noise matrix
 overwrites its input array."""
-import numpy as np, enlib.fft, copy, enlib.slice, enlib.array_ops, enlib.utils, h5py
+import numpy as np, copy, h5py
 import nmat_core_32, nmat_core_64
 from scipy.optimize import minimize
+from .. import utils, array_ops, fft
 
 def get_core(dtype):
 	if dtype == np.float32:
@@ -90,11 +91,11 @@ class NmatBinned(NoiseMatrix):
 		ticov /= np.sum(self.bins[:,1]-self.bins[:,0])
 		self.tdiag = np.diag(ticov)
 	def apply(self, tod):
-		ft = enlib.fft.rfft(tod)
+		ft = fft.rfft(tod)
 		fft_norm = tod.shape[1]
 		core = get_core(tod.dtype)
 		core.nmat_covs(ft.T, get_ibins(self.bins, tod.shape[1]).T, self.icovs.T/fft_norm)
-		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
+		fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
 	def white(self, tod):
 		tod *= self.tdiag[:,None]
@@ -110,8 +111,8 @@ class NmatBinned(NoiseMatrix):
 		bins, icovs = res.bins[mask], res.icovs[mask]
 		bins[-1,-1] = fmax
 		# Slice covs, not icovs
-		covs  = enlib.array_ops.eigpow(icovs, -1, axes=[-2,-1])[mask][:,detslice][:,:,detslice]
-		icovs = enlib.array_ops.eigpow(covs,  -1, axes=[-2,-1])
+		covs  = array_ops.eigpow(icovs, -1, axes=[-2,-1])[mask][:,detslice][:,:,detslice]
+		icovs = array_ops.eigpow(covs,  -1, axes=[-2,-1])
 		# Downsampling changes the noise per sample
 		return BinnedNmat(dets, bins, icovs*step)
 	def resample(self, mapping):
@@ -173,7 +174,7 @@ class NmatDetvecs(NmatBinned):
 	@property
 	def covs(self): return expand_detvecs(self.D, self.E, self.V, self.ebins)
 	def apply(self, tod, inverse=False):
-		ft = enlib.fft.rfft(tod)
+		ft = fft.rfft(tod)
 		# Unit of noise model we apply:
 		#  Assume we start from white noise with stddev s.
 		#  FFT giving sum of N random numbers with dev s per mode:
@@ -193,7 +194,7 @@ class NmatDetvecs(NmatBinned):
 		# rescale the noise when downsampling.
 		# FIXED: I now scale D and E when downsampling.
 		self.apply_ft(ft, tod.shape[-1], tod.dtype, inverse=inverse)
-		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
+		fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
 	def apply_ft(self, ft, nsamp, dtype, inverse=False):
 		fft_norm = nsamp
@@ -341,9 +342,9 @@ class NmatScaled(NoiseMatrix):
 		avg_iS2 = (np.sum(self.inv_scale**2 * bsize,1)/np.sum(bsize))
 		self.tdiag = self.nmat.tdiag * avg_iS2
 	def apply(self, tod):
-		ft = enlib.fft.rfft(tod)
+		ft = fft.rfft(tod)
 		self.apply_ft(ft, tod.nsamp, tod.dtype)
-		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
+		fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 		return tod
 	def apply_ft(self, ft, nsamp, dtype):
 		ibins= get_ibins(self.bins, nsamp)
@@ -404,9 +405,9 @@ class NmatScaled(NoiseMatrix):
 #		avg_ivar = np.sum(1/self.vars[:-1]*bsize[:,None],0)/np.sum(bsize)
 #		self.tdiag = self.nmat.tdiag * avg_ivar
 #	def apply(self, tod):
-#		ft = enlib.fft.rfft(tod)
+#		ft = fft.rfft(tod)
 #		self.apply_ft(ft, tod.nsamp, tod.dtype)
-#		enlib.fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
+#		fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
 #		return tod
 #	def apply_ft(self, ft, nsamp, dtype):
 #		ifreqs= get_ifreqs(self.freqs, nsamp)
@@ -536,22 +537,22 @@ def decomp_DVEV(cov, nmax=15, mineig=0, maxeval=0, tol=1e-2, _mode_ratios=False)
 		return decomp_DVEV(cov, nbig, mineig=0)
 	# We will work on the correlation matrix, as that gives all row and cols
 	# equal weight.
-	C, std = enlib.utils.cov2corr(cov)
-	Q = enlib.utils.eigsort(C, nmax=nmax, merged=True)
+	C, std = utils.cov2corr(cov)
+	Q = utils.eigsort(C, nmax=nmax, merged=True)
 	def dvev_chisq(x, shape, esc):
 		if np.any(~np.isfinite(x)): return np.inf
 		Q = x.reshape(shape)
 		D = np.diag(C)-np.einsum("ia,ia->i",Q,Q)
 		if np.any(D<=0): return np.inf
 		Ce = Q.dot(Q.T)
-		R = enlib.utils.nodiag(C-Ce)
+		R = utils.nodiag(C-Ce)
 		chi = np.sum(R**2)
 		esc(chi, x)
 		return np.sum(R**2)
 	def dvev_jac(x, shape, esc):
 		Q = x.reshape(shape)
 		Ce = Q.dot(Q.T)
-		R = enlib.utils.nodiag(C-Ce)
+		R = utils.nodiag(C-Ce)
 		dchi = -4*R.T.dot(Q)
 		esc()
 		return dchi.reshape(-1)
@@ -562,14 +563,14 @@ def decomp_DVEV(cov, nmax=15, mineig=0, maxeval=0, tol=1e-2, _mode_ratios=False)
 		Q = e.bval.reshape(Q.shape)
 	if _mode_ratios:
 		# Helper mode: Only return the relative contribution of each mode
-		e,v = enlib.utils.eigsort(Q.dot(Q.T), nmax=nmax)
+		e,v = utils.eigsort(Q.dot(Q.T), nmax=nmax)
 		d = np.diag(C)-np.einsum("ia,ia->i",Q,Q)
 		scale = max(np.max(e), np.sum(d**2))
 		return e/scale
 	# Rescale from corr to cov
 	Q *= std[:,None]
 	# And split into VEV
-	E, V = enlib.utils.eigsort(Q.dot(Q.T), nmax=nmax)
+	E, V = utils.eigsort(Q.dot(Q.T), nmax=nmax)
 	D  = np.diag(cov)-np.einsum("ia,a,ia->i",V,E,V)
 	return D,E,V
 
