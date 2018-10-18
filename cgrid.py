@@ -1,8 +1,8 @@
 """This module implements functions for drawing a coordinate grid and
 coordinate axes on an image, for example for use with enmap."""
-import numpy as np, time, os, enlib.wcs
+import numpy as np, time, os
 from PIL import Image, ImageDraw, ImageFont
-from . import utils, enmap
+from . import utils, enmap, wcsutils
 
 def calc_line_segs(pixs, steplim=10.0, extrapolate=2.0):
 	"""Given a sequence of points, split into subsequences
@@ -38,7 +38,7 @@ def calc_gridinfo(shape, wcs, steps=[2,2], nstep=[200,200], zenith=False):
 	nstep = np.zeros([2],dtype=int)+nstep
 
 	gridinfo = Gridinfo()
-	if enlib.wcs.is_plain(wcs):
+	if wcsutils.is_plain(wcs):
 		box = np.sort(enmap.box(shape, wcs),0)
 		start = np.floor(box[0]/steps)*steps
 		nline = np.floor(box[1]/steps)-np.floor(box[0]/steps)+1
@@ -55,7 +55,7 @@ def calc_gridinfo(shape, wcs, steps=[2,2], nstep=[200,200], zenith=False):
 	for phi in start[1] + np.arange(nline[1])*steps[1]:
 		# Loop over theta
 		pixs = np.array(wcs.wcs_world2pix(phi, np.linspace(box[0,0],box[1,0],nstep[0],endpoint=True), 0)).T
-		if not enlib.wcs.is_plain(wcs): phi = utils.rewind(phi, 0, 360)
+		if not wcsutils.is_plain(wcs): phi = utils.rewind(phi, 0, 360)
 		gridinfo.lon.append((phi,calc_line_segs(pixs)))
 	# Draw lines of latitude
 	for theta in start[0] + np.arange(nline[0])*steps[0]:

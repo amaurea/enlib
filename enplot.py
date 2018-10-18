@@ -1,6 +1,6 @@
 import numpy as np, argparse, time, sys, warnings, os, shlex, glob, PIL.Image, PIL.ImageDraw
 from scipy import ndimage
-from . import enmap, colorize, mpi, cgrid, utils, memory, bunch, wcs as enwcs
+from . import enmap, colorize, mpi, cgrid, utils, memory, bunch, wcsutils
 # Optional dependency array_ops needed for contour drawing
 try: from . import array_ops
 except ImportError: pass
@@ -291,7 +291,7 @@ def get_map(ifile, args, return_info=False, name=None):
 			slice = ""
 			if name is None: name = ".fits"
 		if args.fix_wcs:
-			m0.wcs = enwcs.fix_wcs(m0.wcs)
+			m0.wcs = wcsutils.fix_wcs(m0.wcs)
 		# Save the original map, so we can compare its wcs later
 		m  = m0
 		# Submap slicing currently has wrapping issues
@@ -658,7 +658,7 @@ def draw_annotations(map, annots, args):
 	font = None
 	font_size_prev = 0
 	def topix(pos_off):
-		unit = utils.degree if not enwcs.is_plain(map.wcs) else 1.0
+		unit = utils.degree if not wcsutils.is_plain(map.wcs) else 1.0
 		pix = map.sky2pix(np.array([float(w) for w in pos_off[:2]])*unit)
 		pix += np.array([float(w) for w in pos_off[2:]])
 		return pix[::-1].astype(int)

@@ -1,6 +1,6 @@
 import numpy as np, os, time, imp, copy, functools, sys
 from scipy import ndimage, optimize, interpolate, integrate, stats, special
-from . import enmap, retile, utils, bunch, cg, fft, powspec, array_ops, memory
+from . import enmap, retile, utils, bunch, cg, fft, powspec, array_ops, memory, wcsutils
 from astropy import table
 from astropy.io import fits
 #from matplotlib import pyplot
@@ -822,7 +822,7 @@ class Mapset:
 			# has the reference pixel placed sensibly. That's why we cal fix_wcs here.
 			if res.shape is None:
 				res.shape, res.wcs = enmap.slice_geometry(dataset.shape, dataset.wcs, (slice(pbox[0,0],pbox[1,0]),slice(pbox[0,1],pbox[1,1])), nowrap=True)
-				res.wcs   = enmap.enlib.wcs.fix_wcs(res.wcs)
+				res.wcs   = wcsutils.fix_wcs(res.wcs)
 				res.shape = (ncomp,)+res.shape[-2:]
 				res.ffpad = ffpad
 			dataset.pbox  = pbox

@@ -51,7 +51,6 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	amps = srcs[:,2:2+ncomp]
 	poss = srcs[:,:2].copy()
 	# Rewind positions to let us use flat-sky approximation for distance calculations
-	#wcs  = enmap.enlib.wcs.fix_wcs(wcs)
 	ref  = np.mean(enmap.box(shape, wcs, corner=False)[:,1])
 	poss[:,1] = utils.rewind(poss[:,1], ref)
 	beam = expand_beam(beam, nsigma, rmax)
