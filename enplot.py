@@ -87,7 +87,7 @@ def plot_iterator(*arglist, **kwargs):
 	.type: The type of the plot. Can be "pil" or "mpl". Usually "pil".
 	.img:  The plot image object, of the given .type.
 	.name: Suggested file name
-	These plots objects can be written to disk using write_plot.
+	These plots objects can be written to disk using enplot.write.
 	See the plot function documentation for a description of the arguments"""
 	# This allows us to pass in both command-line style plot specifications
 	# as well as python-style lists of enmaps and keyword arguments. The maps
@@ -196,7 +196,7 @@ def write(fname, plot):
 		# Allow writing a whole list of plots at once. In this case the fname is
 		# interpreted as a prefix
 		for p in plot:
-			write_plot(fname + p.name, p)
+			write(fname + p.name, p)
 	else:
 		try:
 			printer = plot.printer if "printer" in plot else noprint
