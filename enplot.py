@@ -30,7 +30,8 @@ noprint = Printer(0)
 
 def plot(*arglist, **args):
 	"""The main plotting function in this module. Plots the given maps/files,
-	writing the results to disk. This function has two equivalent interfaces:
+	returning them as a list of plots, one for each separate image. This
+	function has two equivalent interfaces:
 	1. A command-line like interface, where plotting options are specified with
 	strings like "-r 500:50 -m 0 -t 2".
 	2. A python-like interface, where plotting options are specified with
@@ -41,16 +42,18 @@ def plot(*arglist, **args):
 	file names, or as enmaps passed to the function. Here are some examples:
 	
 	plot(mapobj):
-	  Plots the given enmap object mapobj. Since no file name is
-	  specified, it will be written to the generic name "map.png"
-	  (or "map_0.png", "map_1.png", "map_2.png" if it is a TQU map)
+	  Plots the given enmap object mapobj. If mapobj is a scalar map,
+	  the a length-1 list containing a single plot will be returned.
+	  If mapobj is e.g. a 3-component TQU map, then a length-3 list
+	  of plots will be returned.
 	plot((mapobj,"foo")):
 	  If a tuple is given, the second element specifies the name tag to
-	  use. In this case the file will be written to "foo.png" if it is a
-	  scalar map, or "foo_0.png" etc. for a vector map.
+	  use. This tag will be used to populate the plot.name attribute
+	  for each output plot, which can be useful when plotting and writing
+	  the maps.
 	 plot("file.fits"):
-	  Reads a map from file.fits, and plots it. The result is written to
-	  "file.png" (or "file_0.png" etc)
+	  Reads a map from file.fits, and plots it. This sets the tag to "file",
+	  so that the result can easily be written to "file.png" (or "file_0.png" etc).
 	 plot(["a.fits","b.fits",(mapobj,"c"),(mapobj,"d.fits")])
 	  Reads a.fits and plots it to a.png, reads b.fits and plots it to b.png,
 	  plots the first mapobj to c.png and the second one to d.png (yes, the
@@ -67,16 +70,16 @@ def plot(*arglist, **args):
 	
 	Here is a list of the individual options plot recognizes. The short and long
 	ones are recognized when used in the argument string syntax, while the long
-	ones (with - replaced by _) also work as keyword arguments."""
-	for plot in plot_iterator(*arglist, **args):
-		write_plot(plot.name, plot)
+	ones (with - replaced by _) also work as keyword arguments.
 
-def get_plots(*arglist, **args):
-	"""Return a list of all the plots for all the input maps/files.
-	This is equivalent to collecting all the outputs of plot_iterator in
-	a list. If the number of files/maps to plot is large, then so will
-	this list be, with the corresponding memory requirements."""
+	See plot_iterator for an iterator version of this function.
+	"""
 	return list(plot_iterator(*arglist, **args))
+
+# Compatibility function
+def get_plots(*arglist, **args):
+	"""This function is identical to enplot.plot"""
+	return plot(*arglist, **args)
 
 def plot_iterator(*arglist, **kwargs):
 	"""Iterator that yields the plots for each input map/file. Each yield
@@ -121,8 +124,9 @@ def plot_iterator(*arglist, **kwargs):
 		elif isinstance(imap, tuple):
 			imap, iname = imap
 		else:
-			if len(imaps) == 1: iname = "map.fits"
-			else: iname = "map%0*d.fits" % (get_num_digits(len(imaps)), fi)
+			iname = ""
+			#if len(imaps) == 1: iname = "map.fits"
+			#else: iname = "map%0*d.fits" % (get_num_digits(len(imaps)), fi)
 		with printer.time("read %s" % iname, 3):
 			map, minfo = get_map(imap, args, return_info=True, name=iname)
 		with printer.time("ranges", 3):
@@ -178,17 +182,39 @@ def plot_iterator(*arglist, **kwargs):
 		printer.write("",    2, exact=True)
 		printer.write(iname, 1, exact=True)
 
-def write_plot(fname, plot):
+def write(fname, plot):
+	"""Write the given plot or plots to file. If plot is a single plot, then
+	it will simply be written to the specified filename. If plot is a list of
+	plots, then it fname will be interpreted as a prefix, and the plots will
+	be written to prefix + plot.name for each individual plot. If name was
+	specified during plotting, then plot.name will either be ".png" for scalar
+	maps or "_0.png", "_1.png", etc. for vector maps. It's also possible to pass in
+	plain images (either PIL or matplotlib), which will be written to the given
+	filename."""
 	"""Write the given plot to the specified file."""
-	printer = plot.printer if "printer" in plot else noprint
-	if plot.type == "pil":
-		with printer.time("write to %s" % fname, 3):
-			plot.img.save(fname)
-	elif plot.type == "mpl":
-		with printer.time("write to %s" % fname, 3):
-			plot.img.savefig(fname,bbox_inches="tight",dpi=plot.dpi)
+	if isinstance(plot, list):
+		# Allow writing a whole list of plots at once. In this case the fname is
+		# interpreted as a prefix
+		for p in plot:
+			write_plot(fname + p.name, p)
 	else:
-		raise ValueError("Unknown plot type '%s'" % plot.type)
+		try:
+			printer = plot.printer if "printer" in plot else noprint
+			if plot.type == "pil":
+				with printer.time("write to %s" % fname, 3):
+					plot.img.save(fname)
+			elif plot.type == "mpl":
+				with printer.time("write to %s" % fname, 3):
+					plot.img.savefig(fname,bbox_inches="tight",dpi=plot.dpi)
+			else:
+				raise ValueError("Unknown plot type '%s'" % plot.type)
+		except AttributeError:
+			# Apparently we don't have a plot object. Check if it's a plain image
+			try: plot.save(fname)
+			except AttributeError:
+				try: plot.savefig(fname,bbox_inches="tight",dpi=75)
+				except AttributeError:
+					raise ValueError("Error writing plot: The plot is not a recognized type")
 
 def define_arg_parser():
 	parser = argparse.ArgumentParser()
@@ -794,12 +820,72 @@ def hwstack(mexp):
 	nr,nc,ny,nx = mexp.shape
 	return np.transpose(mexp,(0,2,1,3)).reshape(nr*ny,nc*nx)
 
-def show_img(img, title=None, method="wx"):
-	if   method == "qt": show_img_qt(img, title=title)
-	elif method == "wx": show_img_wx(img, title=title)
-	else: raise ValueError
+def show(img, title=None, method="auto"):
+	if   method == "tk":      show_tk(img, title=title)
+	elif method == "qt":      show_qt(img, title=title)
+	elif method == "wx":      show_wx(img, title=title)
+	elif method == "ipython": show_ipython(img, title=title)
+	elif method == "auto":
+		# If matplotlib exists, use its perferences
+		#try:
+		#	import matplotlib
+		#	backend = matplotlib.get_backend().lower()
+		#	if    backend.startswith("tk"): return show_tk(img, title)
+		#	elif  backend.startswith("qt"): return show_qt(img, title)
+		#	elif  backend.startswith("wx"): return show_wx(img, title)
+		#	elif "ipykernel" in backend: return show_ipython(img, title)
+		#except ImportError: pass
+		# If we get to this point, matplotlib couldn't tell us what to
+		# do. Try them one by one in priority order
+		try:
+			# Only use ipython for graphical notebooks
+			if "ZMQ" in get_ipython().__class__.__name__:
+				return show_ipython(img, title=title)
+		except (ImportError, NameError): pass
+		try: return show_tk(img, title=title)
+		except ImportError: pass
+		try: return show_wx(img, title=title)
+		except ImportError: pass
+		try: return show_qt(img, title=title)
+		except ImportError: pass
+		# If we got here, nothing worked
+		raise ImportError("Could not find any working display backends for enplot.show")
 
-def show_img_wx(img, title=None):
+def show_ipython(img, title=None):
+	from IPython.core.display import display
+	for img_, title_ in _show_helper(img, title):
+		display(img_)
+
+def show_tk(img, title=None):
+	from six.moves import tkinter
+	from PIL import ImageTk
+	class Displayer:
+		def __init__(self):
+			self.root    = tkinter.Tk()
+			self.root.withdraw()
+			self.windows = []
+			self.nclosed = 0
+		def add_window(self, img, title):
+			window   = tkinter.Toplevel()
+			window.minsize(img.width, img.height)
+			window.title(title)
+			canvas = tkinter.Canvas(window, width=img.width, height=img.height)
+			canvas.pack()
+			canvas.configure(background="white")
+			photo  = ImageTk.PhotoImage(img)
+			sprite = canvas.create_image(0, 0, image=photo, anchor=tkinter.NW)
+			self.windows.append([window,canvas,photo,sprite])
+			def closer():
+				self.nclosed += 1
+				window.destroy()
+				if self.nclosed >= len(self.windows): self.root.destroy()
+			window.protocol("WM_DELETE_WINDOW", closer)
+	app = Displayer()
+	for img_, title_ in _show_helper(img, title):
+		app.add_window(img_, title_)
+	app.root.mainloop()
+
+def show_wx(img, title=None):
 	import wx
 	from PIL import Image
 	class Panel(wx.Panel):
@@ -820,14 +906,14 @@ def show_img_wx(img, title=None):
 			sizer.Fit(parent)
 	app = wx.App(False)
 	frames = []
-	for img_, title_ in _show_img_helper(img, title):
+	for img_, title_ in _show_helper(img, title):
 		frame = wx.Frame(None, -1, title_, size=img_.size)
 		Panel(frame,-1, img_)
 		frame.Show(1)
 		frames.append(frame)
 	app.MainLoop()
 
-def show_img_qt(img, title=None):
+def show_qt(img, title=None):
 	from matplotlib.backends.backend_qt5 import QtCore, QtGui, QtWidgets
 	from PIL.ImageQt import ImageQt
 	import sys
@@ -848,19 +934,19 @@ def show_img_qt(img, title=None):
 			self.resize(label.width(), label.height())
 	app    = QtWidgets.QApplication([])
 	windows= []
-	for img_, title_ in _show_img_helper(img, title):
+	for img_, title_ in _show_helper(img, title):
 		window = ImageWindow(img_, title_)
 		window.show()
 		windows.append(window)
 	app.exec_()
 
-def _show_img_helper(img, title=None):
+def _show_helper(img, title=None):
 	res = []
 	if isinstance(img, list):
 		for i, im in enumerate(img):
 			if isinstance(title, list): tit = title[i]
 			else: tit = title
-			res += _show_img_helper(im, tit)
+			res += _show_helper(im, tit)
 		return res
 	else:
 		try:
