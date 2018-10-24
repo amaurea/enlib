@@ -92,41 +92,6 @@ subroutine solve_masked(A, b)
 	end do
 end subroutine
 
-!subroutine condition_number_multi(A, nums)
-!	implicit none
-!	T(_), intent(in)  :: A(:,:,:)
-!	real(_), intent(inout) :: nums(:)
-!	real(_)              :: eigs(size(A,1)), badval, tmp(1), rwork(size(A,1)*3-2)
-!	T(_)              :: Acopy(size(A,1),size(A,2))
-!	T(_), allocatable :: work(:)
-!	integer(4) :: i, n, m, lwork, info
-!	n = size(A,3)
-!	m = size(A,1)
-!	call C##SY##ev('n', 'u', m, A(:,:,1), m, eigs, tmp, -1, R, info)
-!	lwork = int(tmp(1))
-!	! Generate +inf as badval, while hiding this from gfortran
-!	info   = 0
-!	badval = 1d0/info
-!	!$omp parallel private(i,Acopy,info,work,eigs)
-!	allocate(work(lwork))
-!	!$omp parallel do
-!	do i = 1, n
-!		if(all(A(:,:,i) == 0)) then
-!			nums(i) = badval
-!		else
-!			Acopy = A(:,:,i)
-!			call C##SY##ev('n', 'u', m, Acopy, m, eigs, work, lwork, R, info)
-!			if(info .ne. 0) then
-!				nums(i) = badval
-!			else
-!				nums(i) = maxval(eigs)/max(0,minval(eigs)) ! eigs(m)/eigs(1)
-!			end if
-!		end if
-!	end do
-!	deallocate(work)
-!	!$omp end parallel
-!end subroutine
-
 subroutine condition_number_multi(A, nums)
 	implicit none
 	T(_), intent(inout) :: A(:,:,:)
@@ -195,42 +160,44 @@ subroutine eigpow(A, pow, lim, lim0)
 	!$omp end parallel
 end subroutine
 
-subroutine svdpow(A, pow, lim, lim0)
-	implicit none
-	T(_), intent(inout) :: A(:,:,:)
-	real(_), intent(in) :: pow, lim, lim0
-	real(_) :: sigma(size(A,1)), rwork(size(A,1)*5), slim
-	T(_) :: uvecs(size(A,1),size(A,1)), vvecs(size(A,1),size(A,1)), tmp(1)
-	T(_), allocatable :: work(:)
-	integer(4) :: i, j, n, m, lwork, info
-	n = size(A,3)
-	m = size(A,1)
-	! Workspace query
-	call C##GE##svd('o', 'a', m, m, uvecs, m, sigma, uvecs, m, vvecs, m, tmp, -1, R, info)
-	lwork = int(tmp(1))
-	!$omp parallel private(work,i,uvecs,vvecs,info,sigma,j,rwork)
-	allocate(work(lwork))
-	!$omp do
-	do i = 1, n
-		uvecs = A(:,:,i)
-		call C##GE##svd('o', 'a', m, m, uvecs, m, sigma, uvecs, m, vvecs, m, work, lwork, R, info)
-		if(maxval(sigma) <= lim0) then
-			A(:,:,i) = 0
-		else
-			slim = lim*maxval(sigma)
-			do j = 1, m
-				if(sigma(j) < slim) then
-					uvecs(:,j) = 0
-				else
-					uvecs(:,j) = uvecs(:,j) * sigma(j)**pow
-				end if
-			end do
-			call C##gemm('n','n', m, m, m, ONE, uvecs, m, vvecs, m, ZERO, A(:,:,i), m)
-		end if
-	end do
-	deallocate(work)
-	!$omp end parallel
-end subroutine
+! This doesn't make sense
+
+!subroutine svdpow(A, pow, lim, lim0)
+!	implicit none
+!	T(_), intent(inout) :: A(:,:,:)
+!	real(_), intent(in) :: pow, lim, lim0
+!	real(_) :: sigma(size(A,1)), rwork(size(A,1)*5), slim
+!	T(_) :: uvecs(size(A,1),size(A,1)), vvecs(size(A,1),size(A,1)), tmp(1)
+!	T(_), allocatable :: work(:)
+!	integer(4) :: i, j, n, m, lwork, info
+!	n = size(A,3)
+!	m = size(A,1)
+!	! Workspace query
+!	call C##GE##svd('o', 'a', m, m, uvecs, m, sigma, uvecs, m, vvecs, m, tmp, -1, R, info)
+!	lwork = int(tmp(1))
+!	!$omp parallel private(work,i,uvecs,vvecs,info,sigma,j,rwork)
+!	allocate(work(lwork))
+!	!$omp do
+!	do i = 1, n
+!		uvecs = A(:,:,i)
+!		call C##GE##svd('o', 'a', m, m, uvecs, m, sigma, uvecs, m, vvecs, m, work, lwork, R, info)
+!		if(maxval(sigma) <= lim0) then
+!			A(:,:,i) = 0
+!		else
+!			slim = lim*maxval(sigma)
+!			do j = 1, m
+!				if(sigma(j) < slim) then
+!					uvecs(:,j) = 0
+!				else
+!					uvecs(:,j) = uvecs(:,j) * sigma(j)**pow
+!				end if
+!			end do
+!			call C##gemm('n','n', m, m, m, ONE, uvecs, m, vvecs, m, ZERO, A(:,:,i), m)
+!		end if
+!	end do
+!	deallocate(work)
+!	!$omp end parallel
+!end subroutine
 
 subroutine eigflip(A)
 	implicit none

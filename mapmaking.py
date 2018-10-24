@@ -415,7 +415,7 @@ class PreconDmapBinned:
 		calc_div_map(self.div, signal, signal_cut, scans, weights, noise=noise)
 		self.idiv = self.div.copy()
 		for dtile in self.idiv.tiles:
-			dtile[:] = array_ops.svdpow(dtile, -1, axes=[0,1], lim=config.get("eig_limit"))
+			dtile[:] = array_ops.eigpow(dtile, -1, axes=[0,1], lim=config.get("eig_limit"))
 		if hits:
 			# Build hitcount map too
 			self.hits = signal.area.copy()
