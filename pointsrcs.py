@@ -28,14 +28,14 @@ from . import utils, enmap, bench
 
 #### Map-space source simulation ###
 
-def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None, method="loop", mmul=1,
-		return_padded=False):
+def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None, method="loop", smul=1,
+		return_padded=False, pixwin=False):
 	"""Simulate a point source map in the geometry given by shape, wcs
 	for the given srcs[nsrc,{dec,ra,T...}], using the beam[{r,val},npoint],
 	which must be equispaced. If omap is specified, the sources will be
 	added to it in place. All angles are in radians. The beam is only evaluated up to
 	the point where it reaches exp(-0.5*nsigma**2) unless rmax is specified, in which
-	case this gives the maximum radius. mmul gives a factor to multiply the resulting
+	case this gives the maximum radius. smul gives a factor to multiply the resulting
 	source model by. This is mostly useful in conction with omap. method can be
 	"loop" or "vectorized", but "loop" is both faster and uses less memory, so there's
 	no point in using the latter.
@@ -69,9 +69,11 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	pixbox= np.array([[0,0],wmap.shape[-2:]],int)
 	nhit, cell_srcs = build_src_cells(pixbox, srcpix, cres)
 	posmap = wmap.posmap()
-	model = eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs)
+	model = eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=wmap.dtype)
+	del posmap
+	if pixwin: model = enmap.apply_window(model)
 	# Update our work map, through our view
-	if mmul != 1: model *= mmul
+	if smul != 1: model *= smul
 	wmap  += model
 	if not return_padded:
 		# Copy out
@@ -82,10 +84,10 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	else:
 		return wmap.reshape(ishape[:-2]+wmap.shape[-2:]), wslice
 
-def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs):
+def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.float64):
 	# Loop through each cell
 	ncy, ncx = nhit.shape
-	model = enmap.zeros(amps.shape[-1:]+posmap.shape[-2:], posmap.wcs, amps.dtype)
+	model = enmap.zeros(amps.shape[-1:]+posmap.shape[-2:], posmap.wcs, dtype)
 	for cy in range(ncy):
 		for cx in range(ncx):
 			nsrc = nhit[cy,cx]
@@ -203,7 +205,11 @@ def read_nemo(fname):
 	"""Reads the nemo ascii catalog format, and returns it as a recarray."""
 	idtype = [("name","2S64"),("ra","d"),("dec","d"),("snr","d"),("npix","i"),("detfrac","d"),("template","S32"),("glat","d"),("I","d"), ("dI","d")]
 	try: icat = np.loadtxt(fname, dtype=idtype)
-	except (ValueError, IndexError) as e: raise IOError(e.message)
+	except (ValueError, IndexError) as e:
+		idtype = [("name","2S64"),("ra","d"),("dec","d"),("snr","d"),("npix","i"),("template","S32"),("glat","d"),("I","d"), ("dI","d")]
+		try: icat = np.loadtxt(fname, dtype=idtype)
+		except (ValueError, IndexError) as e:
+			raise IOError(e.message)
 	odtype = [("name","S64"),("ra","d"),("dec","d"),("snr","d"),("I","d"),("dI","d"),("npix","i"),("template","S32"),("glat","d")]
 	ocat = np.zeros(len(icat), odtype).view(np.recarray)
 	ocat.name = np.char.add(*icat["name"].T)
@@ -219,9 +225,14 @@ def read_simple(fname):
 		except ValueError as e:
 			raise IOError(e.message)
 
-def read_fits(fname, hdu=1):
-	d = fits.open(fname)[hdu]
-	return d.data.view(np.recarray)
+def read_fits(fname, hdu=1, fix=True):
+	d = fits.open(fname)[hdu].data
+	if fix: d = translate_dtype_keys(d, {"RADeg":"ra","decDeg":"dec","deltaT_c":"I","err_deltaT_c":"dI"})
+	return d.view(np.recarray)
+
+def translate_dtype_keys(d, translation):
+	descr = [(name if name not in translation else translation[name], char) for (name, char) in d.dtype.descr]
+	return np.asarray(d, descr)
 
 def src2param(srcs):
 	"""Translate recarray srcs into the source fromat used for tod-level point source

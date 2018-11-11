@@ -98,7 +98,8 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 		if dets:
 			if dets.startswith("@"):
 				uids = [int(line.split()[0]) for line in open(dets[1:],"r")]
-				_,det_inds = utils.common_inds([uids,d.dets])
+				_, duids = actdata.split_detname(d.dets)
+				_,det_inds = utils.common_inds([uids,duids])
 				d = d[det_inds]
 			else:
 				d = eval("d[%s]" % dets)
