@@ -1874,4 +1874,79 @@ contains
 		end do
 	end subroutine
 
+	subroutine pmat_noise_rect(dir, tod, tmul, map, mmul, bore, det_offs, det_comps, box)
+		! Pmat for a flat, wrapping coordinate system
+		use omp_lib
+		implicit none
+		integer, intent(in)      :: dir
+		real(_), intent(inout)   :: tod(:,:), map(:,:,:)
+		real(_), intent(in)      :: tmul, mmul
+		real(8), intent(in)      :: bore(:,:), det_offs(:,:), det_comps(:,:), box(:,:)
+		real(_), allocatable     :: wmap(:,:,:)
+		real(8) :: pos(2), pixdens(2), p0(2)
+		real(_) :: v
+		integer :: di, si, ndet, nsamp, ai, nproc, ci, pix(2), mshape(2), y, x
+		nsamp = size(tod,1)
+		ndet  = size(tod,2)
+		p0    = box(:,1)
+		! mshape is ny,nx
+		mshape(1) = size(map,2)
+		mshape(2) = size(map,1)
+		pixdens = mshape/(box(:,2)-box(:,1))
+		if(dir > 0) then
+			!$omp parallel do private(di,si,pos,pix)
+			do di = 1, ndet
+				do si = 1, nsamp
+					pos = bore(1:2,si) + det_offs(1:2,di)
+					pix = modulo(nint((pos-p0)*pixdens), mshape)+1
+					tod(si,di) = tod(si,di)*tmul + sum(map(pix(2),pix(1),1:3)*det_comps(1:3,di))*mmul
+				end do
+			end do
+		else
+			allocate(wmap(size(map,1),size(map,2),size(map,3)))
+			nproc = omp_get_max_threads()
+			if(nproc == 1) then
+				wmap = 0
+				do di = 1, ndet
+					do si = 1, nsamp
+						pos = bore(1:2,si) + det_offs(1:2,di)
+						pix = modulo(nint((pos-p0)*pixdens), mshape)+1
+						wmap(pix(2),pix(1),1:3) = wmap(pix(2),pix(1),1:3) + tod(si,di)*det_comps(1:3,di)
+					end do
+				end do
+				map = map*mmul + wmap*tmul
+			else
+				!$omp parallel private(di,si,ci,pos,pix,v,y,x)
+				!$omp workshare
+				wmap = 0
+				!$omp end workshare
+				!$omp barrier
+				!$omp do
+				do di = 1, ndet
+					do si = 1, nsamp
+						pos = bore(1:2,si) + det_offs(1:2,di)
+						pix = modulo(nint((pos-p0)*pixdens), mshape)+1
+						do ci = 1, 3
+							v = tod(si,di)*det_comps(ci,di)
+							!$omp atomic
+							wmap(pix(2),pix(1),ci) = wmap(pix(2),pix(1),ci) + v
+							!$omp end atomic
+						end do
+					end do
+				end do
+				!$omp barrier
+				!$omp do collapse(3)
+				do ci = 1, size(map,3)
+					do y = 1, size(map,2)
+						do x = 1, size(map,1)
+							map(x,y,ci) = map(x,y,ci)*mmul + wmap(x,y,ci)*tmul
+						end do
+					end do
+				end do
+				!$omp end parallel
+			end if
+			deallocate(wmap)
+		end if
+	end subroutine
+
 end module

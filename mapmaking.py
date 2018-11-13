@@ -221,6 +221,38 @@ class SignalCut(Signal):
 		with h5py.File(oname, "w") as hfile:
 			hfile["data"] = m
 
+class SignalNoiseRect(Signal):
+	def __init__(self, scans, area, yspeed, yoffs, comm, cuts=None, name="noiserect", ofmt="{name}", output=True,
+			ext="fits", pmat_order=None, sys=None, nuisance=False, data=None, extra=[]):
+		Signal.__init__(self, name, ofmt, output, ext)
+		self.area = area
+		self.cuts = cuts
+		self.yspeed = yspeed
+		self.yoffs  = yoffs
+		self.dof  = zipper.ArrayZipper(area, comm=comm)
+		self.dtype= area.dtype
+		if data is not None:
+			self.data = data
+		else:
+			self.data = {}
+			for i, scan in enumerate(scans):
+				self.data[scan] = pmat.PmatNoiseRect(scan, area, yspeed, yoffs[i], extra=extra)
+	def forward(self, scan, tod, work):
+		if scan not in self.data: return
+		self.data[scan].forward(tod, work)
+	def backward(self, scan, tod, work):
+		if scan not in self.data: return
+		self.data[scan].backward(tod, work)
+	def finish(self, m, work):
+		self.dof.comm.Allreduce(work, m)
+	def zeros(self): return enmap.zeros(self.area.shape, self.area.wcs, self.area.dtype)
+	def write(self, prefix, tag, m):
+		if not self.output: return
+		oname = self.ofmt.format(name=self.name)
+		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
+		if self.dof.comm.rank == 0:
+			enmap.write_map(oname, m)
+
 class PhaseMap:
 	"""Helper class for SignalPhase. Represents a set of [...,ndet,naz] phase "maps",
 	one per scanning pattern."""
