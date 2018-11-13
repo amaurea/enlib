@@ -574,7 +574,7 @@ def build_interpol(transform, box, id="none", posunit=1.0, sys=None):
 	sys   = config.get("map_sys",      sys)
 	# We widen the bounding box slightly to avoid samples falling outside it
 	# due to rounding errors.
-	box = utils.widen_box(np.array(box), 1e-3)
+	box = utils.widen_box(np.array(box), 1e-3, relative=True)
 	box[:,1:] = utils.widen_box(box[:,1:], config.get("pmat_interpol_pad")*utils.arcmin, relative=False)
 	acc = config.get("pmat_accuracy")
 	ip_size = config.get("pmat_interpol_max_size")

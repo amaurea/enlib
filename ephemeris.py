@@ -10,7 +10,7 @@ def define_subsamples(t, dt=10):
 	t = np.asarray(t)
 	if t.ndim == 0: return np.array([t]), np.array([0])
 	if dt == 0: return t, np.arange(len(t))
-	box       = utils.widen_box([np.min(t),np.max(t)], 1e-2)
+	box       = utils.widen_box([np.min(t),np.max(t)], 1e-2, relative=True)
 	sub_nsamp = max(3,int((box[1]-box[0])/dt))
 	if sub_nsamp > len(t): return t, np.arange(len(t))
 	sub_t     = np.linspace(box[0], box[1], sub_nsamp, endpoint=True)

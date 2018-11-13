@@ -384,7 +384,7 @@ def interpol_pos(from_sys, to_sys, name_or_pos, mjd, site=default_site, dt=10):
 	each mjd. The mjds are assumed to be sampled densely enough that
 	interpolation will work. For ephemeris objects, positions are
 	computed in steps of 10 seconds by default (controlled by the dt argument)."""
-	box  = utils.widen_box([np.min(mjd),np.max(mjd)], 1e-2)
+	box  = utils.widen_box([np.min(mjd),np.max(mjd)], 1e-2, relative=True)
 	sub_nsamp = max(3,int((box[1]-box[0])*24.*3600/dt))
 	sub_mjd = np.linspace(box[0], box[1], sub_nsamp, endpoint=True)
 	if isinstance(name_or_pos, basestring):
