@@ -674,48 +674,45 @@ class PmatNoiseRect(PointingMatrix):
 	the sky drifts at a constant speed vertically. This fake telescope
 	turns around every time it hits the edge of the template, and signal
 	wraps around both top/bottom and left/right. The template is assumed to
-	be in completely flat coordinates."""
+	be in completely flat coordinates. The template should have a "plain"
+	wcs, and yspeed and yoff must be in units of degrees."""
 	def __init__(self, scan, template, yspeed, yoff, extra=[]):
-		# Find the azimuth scanning speed
+		# Find the azimuth scanning speed using low-res boresight
 		step= 1000
 		t, az, el = scan.boresight[::step].T
 		mean_el   = np.mean(el)
-		speed  = np.median(np.abs(az[1:]-az[:-1]))/step*np.cos(mean_el)
+		speed  = np.median(np.abs(az[1:]-az[:-1]))*scan.srate/step*np.cos(mean_el)
+		# we want degrees, not radians
+		speed  = speed/utils.degree
 		# Build our fake scanning pattern
 		box    = template.box()
 		height, width = box[1]-box[0]
 		period = 2*width/speed
-		x      = utils.triangle_wave(len(az), period)*width/2
+		t, az, el = scan.boresight.T
+		x      = utils.triangle_wave(t, period)*width/2
 		# Build our fake drift
-		y      = yoff + np.arange(len(az))*yspeed/scan.srate
+		y      = yoff + t*yspeed
 		self.bore = np.zeros([len(az),2])
-		self.bore[0] = y
-		self.bore[1] = x
+		self.bore[:,0] = y
+		self.bore[:,1] = x
 		# The only other thing we need from scan is the pointing offset.
-		# This must be transformed to boresight coordinates
-		off = scan.offsets[:,1:]
-		mid = np.mean(off,0)
-		off = coordinates.recenter(off.T[::-1], [mid[1],mid[0],0,0])
-		self.off = off
+		# First transform to boresight coordinates
+		off = scan.offsets[:,1:].T
+		off = coordinates.recenter((off.T+[0,mean_el]).T, [0,mean_el,0,0])
+		## Go to array-centered coordinates
+		#mid = np.mean(off,1)
+		#off = coordinates.recenter(off, [mid[0],mid[1],0,0])
+		self.off = off.T/utils.degree
+		self.comps = scan.comps
 		# Set up the parameters for the pixel transform
 		self.box   = box
-		self.shape = template.shape[-2:]
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""m -> tod"""
-		self.core.pmat_noise_rect
-
-
-		if times is None: times = np.zeros(5)
-		self.core.pmat_map_direct_grid(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
-				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
-				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+		core = get_core(tod.dtype)
+		core.pmat_noise_rect( 1, tod.T, tmul, m.T, mmul, self.bore.T, self.off.T, self.comps.T,
+				self.box.T)
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
-		if times is None: times = np.zeros(5)
-		self.core.pmat_map_direct_grid(-1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
-				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
-				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
-	def translate(self, bore=None, offs=None, comps=None):
-		"""Perform the coordinate transformation used in the pointing matrix without
-		actually projecting TOD values to a map."""
-		raise NotImplementedError
+		core = get_core(tod.dtype)
+		core.pmat_noise_rect(-1, tod.T, tmul, m.T, mmul, self.bore.T, self.off.T, self.comps.T,
+				self.box.T)
