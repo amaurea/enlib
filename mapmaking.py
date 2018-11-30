@@ -222,13 +222,14 @@ class SignalCut(Signal):
 			hfile["data"] = m
 
 class SignalNoiseRect(Signal):
-	def __init__(self, scans, area, yspeed, yoffs, comm, cuts=None, name="noiserect", ofmt="{name}", output=True,
+	def __init__(self, scans, area, yspeed, yoffs, comm, cuts=None, mode="keepaz", name="noiserect", ofmt="{name}", output=True,
 			ext="fits", pmat_order=None, sys=None, nuisance=False, data=None, extra=[]):
 		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
 		self.yspeed = yspeed
 		self.yoffs  = yoffs
+		self.mode   = mode
 		self.dof  = zipper.ArrayZipper(area, comm=comm)
 		self.dtype= area.dtype
 		if data is not None:
@@ -236,7 +237,7 @@ class SignalNoiseRect(Signal):
 		else:
 			self.data = {}
 			for i, scan in enumerate(scans):
-				self.data[scan] = pmat.PmatNoiseRect(scan, area, yspeed, yoffs[i], extra=extra)
+				self.data[scan] = pmat.PmatNoiseRect(scan, area, yspeed, yoffs[i], mode=mode, extra=extra)
 	def forward(self, scan, tod, work):
 		if scan not in self.data: return
 		self.data[scan].forward(tod, work)

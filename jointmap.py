@@ -58,8 +58,10 @@ def read_beam(params, nl=50000, workdir="."):
 		res   = np.zeros(nl)
 		fname = os.path.join(workdir, params[1])
 		bdata = np.loadtxt(fname)[:,1]
-		ndata = len(bdata)
-		res[:ndata] = np.log(bdata)
+		# we don't trust the beam after the point where it becomes negative
+		negs  = np.where(bdata<0)[0]
+		ndata = len(bdata) if len(negs) == 0 else negs[0]*9//10
+		res[:ndata] = np.log(bdata[:ndata])
 		# Fit power law to extend the beam beyond its end. That way we will have
 		# a well-defined value everywhere.
 		i1, i2 = ndata*18/20, ndata*19/20
@@ -945,7 +947,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		#enmap.write_map("test_ps_raw_%s.fits" % dataset.name, dset_ps)
 		# Smooth ps to reduce sample variance
 		dset_ps  = smooth_ps(dset_ps, ps_res, ndof=2*(nsplit-1))
-		print "dset_ps", np.sum(dset_ps), dataset.name
+		print "dset_ps**0.5", np.mean(dset_ps)**0.5, dataset.name
 		# Apply noise window correction if necessary:
 		noisewin = dataset.noise_window_params[0] if "noise_window_params" in dataset else "none"
 		if   noisewin == "none": pass
@@ -959,13 +961,14 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			# The map has been interpolated using something like bicubic interpolation,
 			# leading to an unknown but separable pixel window
 			ywin, xwin = estimate_separable_pixwin_from_normalized_ps(dset_ps[0])
-			print "ywin", utils.minmax(ywin), "xwin", utils.minmax(xwin), dataset.name
+			#print "ywin", utils.minmax(ywin), "xwin", utils.minmax(xwin), dataset.name
 			ref_area = (ywin[:,None] > 0.9)&(xwin[None,:] > 0.9)&(dset_ps[0]<2)
-			print "ref_ara", np.sum(ref_area), dataset.name
+			#print "ref_ara", np.sum(ref_area), dataset.name
 			if np.sum(ref_area) == 0: ref_area[:] = 1
 			dset_ps /= ywin[:,None]**2
 			dset_ps /= xwin[None,:]**2
-			dset_ps[:,(ywin[:,None]<0.25)|(xwin[None,:]<0.25)] = np.mean(dset_ps[:,ref_area],1)
+			fill_area = (ywin[:,None]<0.25)|(xwin[None,:]<0.25)
+			dset_ps[:,(ywin[:,None]<0.25)|(xwin[None,:]<0.25)] = np.mean(dset_ps[:,ref_area],1)[:,None]
 			# Store the separable window so it can be used for the beam too
 			dataset.ywin, dataset.xwin = ywin, xwin
 		else: raise ValueError("Noise window type '%s' not supported" % noisewin)

@@ -19,7 +19,7 @@ class default_site:
 	base_tilt =    0.0107693
 	base_az   = -114.9733961
 
-def transform(from_sys, to_sys, coords, time=55500, site=default_site, pol=None, mag=None, bore=None):
+def transform(from_sys, to_sys, coords, time=55500, site=None, pol=None, mag=None, bore=None):
 	"""Transforms coords[2,...] from system from_sys to system to_sys, where
 	systems can be "hor", "cel" or "gal". For transformations involving
 	"hor", the optional arguments time (in modified julian days) and site (which must
@@ -118,7 +118,7 @@ def transform_meta(transfun, coords, fields=["ang","mag"], offset=5e-7):
 		res.mag = (tri_area(diff).T/tri_area(offsets[1:]-offsets[0]).T).T
 	return res
 
-def transform_raw(from_sys, to_sys, coords, time=None, site=default_site, bore=None):
+def transform_raw(from_sys, to_sys, coords, time=None, site=None, bore=None):
 	"""Transforms coords[2,...] from system from_sys to system to_sys, where
 	systems can be "hor", "cel" or "gal". For transformations involving
 	"hor", the optional arguments time (in modified julian days) and site (which must
@@ -128,6 +128,7 @@ def transform_raw(from_sys, to_sys, coords, time=None, site=default_site, bore=N
 
 	coords and time will be broadcast such that the result has the same shape
 	as coords*time[None]."""
+	if site is None: site = default_site
 	# Prepare input and output arrays
 	if time is None:
 		coords = np.array(coords)[:2]
