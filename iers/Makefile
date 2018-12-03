@@ -21,7 +21,7 @@ finals.all:
 	#curl -k -o finals.all "https://datacenter.iers.org/eop/-/somos/5Rgv/latest/9"
 	#wget --no-check-certificate -O finals.all "https://datacenter.iers.org/eop/-/somos/5Rgv/latest/9"
 	# STUPID
-	wget --no-check-certificate -O finals.all https://datacenter.iers.org/data/latestVersion/13_FINALS.DAILY_IAU2000_V2013_0113.txt
+	wget --no-check-certificate -O finals.all https://datacenter.iers.org/data/latestVersion/9_FINALS.ALL_IAU2000_V2013_019.txt
 
 clean: tidy
 	rm -rf libiers.so _iers*.so iers.py *.pyc finals.all
