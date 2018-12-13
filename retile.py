@@ -242,7 +242,7 @@ def read_tileset_geometry(ipathfmt, itile1=(None,None), itile2=(None,None)):
 def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=False,
 		cache=None, slice=None, wrap=True):
 	"""Given a set of tiles on disk with locations ipathfmt % {"y":...,"x":...},
-	read the data corresponding to the pixel range opix[{from,to],{y,x}] in
+	read the data corresponding to the pixel range opix[{from,to},{y,x}] in
 	the full map."""
 	opix = np.asarray(opix)
 	# Find the range of input tiles
