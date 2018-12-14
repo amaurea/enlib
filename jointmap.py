@@ -350,7 +350,7 @@ def make_dummy_tile(shape, wcs, box, pad=0, dtype=np.float64):
 	shape2, wcs2 = enmap.slice_geometry(shape, wcs, (slice(pbox[0,0],pbox[1,0]),slice(pbox[0,1],pbox[1,1])), nowrap=True)
 	shape2 = shape[:-2]+tuple(pbox[1]-pbox[0])
 	map = enmap.zeros(shape2, wcs2, dtype)
-	div = enmap.zeros(shape2[-2:], wcs2, dtype)
+	div = enmap.zeros(shape2, wcs2, dtype)
 	return bunch.Bunch(map=map, div=div)
 
 def robust_ref(div,tol=1e-5):
@@ -358,13 +358,24 @@ def robust_ref(div,tol=1e-5):
 	ref = np.median(div[div>ref*tol])
 	return ref
 
-def add_missing_comps(map, ncomp, rms_factor=1e3):
+def add_missing_comps(map, ncomp, fill="random", rms_factor=1e3):
 	map  = map.preflat
 	if len(map) >= ncomp: return map[:ncomp]
 	omap = enmap.zeros((ncomp,)+map.shape[-2:], map.wcs, map.dtype)
 	omap[:len(map)] = map[:ncomp]
-	omap[len(map):] = np.random.standard_normal((ncomp-len(map),)+map.shape[-2:])*np.std(map)*rms_factor
+	if fill == "random":
+		omap[len(map):] = np.random.standard_normal((ncomp-len(map),)+map.shape[-2:])*np.std(map)*rms_factor
 	return omap
+
+def make_div_3d(div, ncomp_map, ncomp_target, polfactor=0.5):
+	if div.ndim == 2:
+		res = enmap.zeros((ncomp_target,)+div.shape[-2:], div.wcs, div.dtype)
+		res[0]           = div
+		res[1:ncomp_map] = div*polfactor
+		return res
+	elif div.ndim == 3: return div
+	elif div.ndim == 4: return enmap.samewcs(np.einsum("iiyx->iyx",div),div)
+	else: raise ValueError("Too many components in div")
 
 def common_geometry(geos, ncomp=None):
 	shapes = np.array([shape[-2:] for shape,wcs in geos])
@@ -377,7 +388,9 @@ def common_geometry(geos, ncomp=None):
 
 def filter_div(div):
 	"""Downweight very thin stripes in the div - they tend to be problematic single detectors"""
-	return enmap.samewcs(ndimage.minimum_filter(div, size=2), div)
+	res = div.copy()
+	for comp in res.preflat: comp[:] = ndimage.minimum_filter(comp, size=2)
+	return res
 
 dog = None
 class JointMapset:
@@ -437,7 +450,7 @@ class JointMapset:
 				split.data.div = filter_div(split.data.div)
 				split.data.map = np.maximum(-map_max, np.minimum(map_max, split.data.map))
 				# Expand map to ncomp components
-				split.data.map = add_missing_comps(split.data.map, ncomp)
+				split.data.map = add_missing_comps(split.data.map, ncomp, fill="random")
 				if dewindow:
 					split.data.map = enmap.apply_window(split.data.map, -1)
 				# Build apodization
@@ -841,7 +854,7 @@ class Mapset:
 				if verbose: print "Reading %s" % split.map
 				try:
 					map = read_map(split.map, pbox, name=os.path.basename(split.map), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
-					div = read_map(split.div, pbox, name=os.path.basename(split.div), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache).preflat[0]
+					div = read_map(split.div, pbox, name=os.path.basename(split.div), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
 				except IOError as e: continue
 				map *= dataset.gain
 				div *= dataset.gain**-2
@@ -867,8 +880,12 @@ def sanitize_maps(mapset, map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, a
 	for dataset in mapset.datasets:
 		for i, split in enumerate(dataset.splits):
 			if split.data is None: continue
-			split.ref_div = robust_ref(split.data.div)
+			# Expand div to be the same shape as map. This lets us track T and P noise separately,
+			# but we don't bother with cross-component correlations, which are usually not that
+			# important, and slow things down
+			split.data.div = make_div_3d(split.data.div, split.data.map.ndim, mapset.ncomp)
 			# Avoid single, crazy pixels
+			split.ref_div  = robust_ref(split.data.div)
 			split.data.div = np.minimum(split.data.div, split.ref_div*div_tol)
 			split.data.div = filter_div(split.data.div)
 			split.data.map = np.maximum(-map_max, np.minimum(map_max, split.data.map))
@@ -876,7 +893,7 @@ def sanitize_maps(mapset, map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, a
 				# Avoid areas too close to the edge of div
 				split.data.div *= ndimage.distance_transform_edt(split.data.div > 0) > crop_div_edge
 			# Expand map to ncomp components
-			split.data.map = add_missing_comps(split.data.map, mapset.ncomp)
+			split.data.map = add_missing_comps(split.data.map, mapset.ncomp, fill="random")
 			# Distrust very low hitcount regions
 			split.data.apod  = np.minimum(split.data.div/(split.ref_div*apod_val), 1.0)**apod_alpha
 			# Distrust regions very close to the edge of the hit area
@@ -905,7 +922,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			# Also form the pixel part of our noise model
 			split.data.H  = split.data.div**0.5
 		# Form the mean map for this dataset
-		dset_map[:,dset_div>0] /= dset_div[dset_div>0]
+		dset_map[dset_div>0] /= dset_div[dset_div>0]
 		#enmap.write_map("test_totmap.fits", dset_map)
 		# Then use it to build the diff maps and noise spectra
 		dset_ps = None
@@ -1292,7 +1309,7 @@ class Coadder:
 		self.ctype= np.result_type(self.dtype,0j)
 		self.npix = self.shape[-2]*self.shape[-1]
 		self.nmap = len(self.m)
-		self.tot_div = enmap.zeros(self.shape[-2:], self.wcs, self.dtype)
+		self.tot_div = enmap.zeros(self.shape, self.wcs, self.dtype)
 		for H in self.H: self.tot_div += H**2
 	def calc_rhs(self):
 		# Calc rhs = B'HCH m
