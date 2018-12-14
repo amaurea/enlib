@@ -694,10 +694,9 @@ class PmatNoiseRect(PointingMatrix):
 			x      = utils.triangle_wave(t, period)*width/2
 		elif mode == "keepaz":
 			t, az, el = scan.boresight.T
-			x = az/np.cos(mean_el)/utils.degree + yoff*77
-		elif mode == "leftright":
-			raise NotImplementedError("leftright mode not implemented yet in PmatNoiseRect")
+			x = az*np.cos(mean_el)/utils.degree + yoff*77
 		else: raise ValueError("Unrecognized mode in PmatNoiseRect: '%s'" % mode)
+		self.scandir = get_scan_dir(x)
 		# Build our fake drift
 		y      = yoff + t*yspeed
 		self.bore = np.zeros([len(az),2])
@@ -718,9 +717,9 @@ class PmatNoiseRect(PointingMatrix):
 		"""m -> tod"""
 		core = get_core(tod.dtype)
 		core.pmat_noise_rect( 1, tod.T, tmul, m.T, mmul, self.bore.T, self.off.T, self.comps.T,
-				self.box.T)
+				self.box.T, self.scandir)
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		core = get_core(tod.dtype)
 		core.pmat_noise_rect(-1, tod.T, tmul, m.T, mmul, self.bore.T, self.off.T, self.comps.T,
-				self.box.T)
+				self.box.T, self.scandir)
