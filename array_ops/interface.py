@@ -1,6 +1,6 @@
 import numpy as np
 from .. import utils
-import fortran_32, fortran_64, fortran_c64, fortran_c128
+from . import fortran_32, fortran_64, fortran_c64, fortran_c128
 
 def get_core(dtype):
 	if   dtype == np.float32:    return fortran_32.array_ops
