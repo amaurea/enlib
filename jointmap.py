@@ -821,7 +821,7 @@ class Mapset:
 			dataset.shape = shape
 			dataset.wcs   = wcs
 			dataset.beam  = read_beam(dataset.beam_params, workdir=cdir, nl=self.nl)
-			np.savetxt("beam_1d_%s.txt" % dataset.name, dataset.beam)
+			#np.savetxt("beam_1d_%s.txt" % dataset.name, dataset.beam)
 			dataset.box   = enmap.box(shape, wcs, corner=False)
 		self.datasets = datasets
 	def copy(self):
@@ -841,13 +841,9 @@ class Mapset:
 		res.ffpad, res.shape, res.wcs = None, None, None
 		res.ncomp, res.dtype = ncomp, dtype
 		for dataset in res.datasets:
-			print "box"
-			print box/utils.degree
 			# Find the pixel coordinates of our tile
 			pbox = np.sort(utils.nint(enmap.skybox2pixbox(dataset.shape, dataset.wcs, box)),0)
 			#pbox = calc_pbox(dataset.shape, dataset.wcs, box)
-			print "pbox"
-			print pbox
 			pbox[0] -= pad
 			pbox[1] += pad
 			# Determine the optimal fourier padding
@@ -868,11 +864,9 @@ class Mapset:
 			# Reading lots of uncessessary maps is slow. Should otpimize read_map.
 			# But as long as we are allowed to completely skip datasets (prune=True),
 			# we can just skip datasets that we know are empty.
-			print "pbox", dataset.name, prune
 			#print pbox, pbox_out_of_bounds(pbox, dataset.shape, dataset.wcs)
 			if pbox_out_of_bounds(pbox, dataset.shape, dataset.wcs) and prune:
 				continue
-			print "pbox accepted"
 
 			for si, split in enumerate(dataset.splits):
 				split.data = None
@@ -908,45 +902,28 @@ def sanitize_maps(mapset, map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, a
 			# Expand div to be the same shape as map. This lets us track T and P noise separately,
 			# but we don't bother with cross-component correlations, which are usually not that
 			# important, and slow things down
-			print "AA", np.sum(split.data.div), dataset.name
-			def debug_div(div): print div.preflat[0,::200,::200]**-0.5
-			print "A"
-			debug_div(split.data.div)
 			split.data.div = make_div_3d(split.data.div, len(split.data.map.preflat), mapset.ncomp)
-			print "B"
-			debug_div(split.data.div)
 			# Avoid single, crazy pixels
 			split.ref_div  = robust_ref(split.data.div)
-			print "ref", split.ref_div**-0.5
 			split.data.div = np.minimum(split.data.div, split.ref_div*div_tol)
-			print "C"
-			debug_div(split.data.div)
 			split.data.div = filter_div(split.data.div)
-			print "D"
-			debug_div(split.data.div)
 			split.data.map = np.maximum(-map_max, np.minimum(map_max, split.data.map))
 			if crop_div_edge:
 				# Avoid areas too close to the edge of div
-				split.data.div *= ndimage.distance_transform_edt(split.data.div > 0) > crop_div_edge
-			print "E"
-			debug_div(split.data.div)
+				split.data.div *= calc_dist(split.data.div > 0) > crop_div_edge
 			# Expand map to ncomp components
 			split.data.map = add_missing_comps(split.data.map, mapset.ncomp, fill="random")
 			# Distrust very low hitcount regions
 			split.data.apod  = np.minimum(split.data.div/(split.ref_div*apod_val), 1.0)**apod_alpha
-			print "moo", split.data.div[...,480,480], split.ref_div, apod_val, split.ref_div*apod_val
-			print "apod1", split.data.apod[...,480,480]
 			# Distrust regions very close to the edge of the hit area
 			mask = split.data.div > split.ref_div*1e-2
-			split.data.apod *= apod_mask_edge(split.data.div > split.ref_div*1e-2, apod_div_edge)
-			print "apod2", split.data.apod[...,480,480]
+			mask = shrink_mask_holes(mask, 10)
+			split.data.apod *= apod_mask_edge(mask, apod_div_edge)
 			# Make things more fourier-friendly
 			split.data.apod *= split.data.apod.apod(apod_edge)
-			print "apod3", split.data.apod[...,480,480]
+			#enmap.write_map("apod_%s_%d.fits" % (dataset.name, i), apod_mask_edge(mask, apod_div_edge))
 			# And apply it
 			split.data.div *= split.data.apod
-			print "F"
-			debug_div(split.data.div)
 		dataset.ref_div = np.sum([split.ref_div for split in dataset.splits if split.data is not None])
 	mapset.ref_div = np.sum([dataset.ref_div for dataset in mapset.datasets])
 	mapset.apod_edge = apod_edge
@@ -971,7 +948,9 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		#enmap.write_map("test_totmap.fits", dset_map)
 		# Then use it to build the diff maps and noise spectra
 		dset_ps = None
+		#print "A", dataset.name, len(dataset.splits)
 		for i, split in enumerate(dataset.splits):
+			#print "B", split.data is not None
 			if split.data is None: continue
 			#enmap.write_map("test_map_%s_%d.fits" % (dataset.name, i), split.data.map)
 			#enmap.write_map("test_div_%s_%d.fits" % (dataset.name, i), split.data.div)
@@ -992,12 +971,17 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			# What is the healthy area of wdiff? Wdiff should have variance
 			# 1 or above. This tells us how to upweight the power spectrum
 			# to take into account missing regions of the diff map.
+			# This breaks for datasets with a large pixel window. The pixel window
+			# has not yet been determined at this point, so we can't compensate for it
+			# here. That leaves us with e.g. planck having much lower pixel rms than
+			# its sensitivity would indicate. Instead we will use typical non-low values
+			# as reference.
 			ndown = 10
 			wvar  = enmap.downgrade(wdiff[0]**2,ndown)
-			goodfrac_var  = np.sum(wvar > 1e-3)/float(wvar.size)
+			ref   = robust_ref(wvar, tol=0.01)
+			goodfrac_var  = np.sum(wvar > ref*1e-2)/float(wvar.size)
 			goodfrac_apod = np.mean(split.data.apod)
 			goodfrac = min(goodfrac_var, goodfrac_apod)
-			#print("goodfrac", goodfrac)
 			if goodfrac < 0.1: continue
 			ps    = np.abs(map_fft(wdiff))**2
 			#enmap.write_map("test_ps_raw_%s_%d.fits" % (dataset.name, i), ps)
@@ -1030,9 +1014,9 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			# The map has been interpolated using something like bicubic interpolation,
 			# leading to an unknown but separable pixel window
 			ywin, xwin = estimate_separable_pixwin_from_normalized_ps(dset_ps[0])
-			print "ywin", utils.minmax(ywin), "xwin", utils.minmax(xwin), dataset.name
+			#print "ywin", utils.minmax(ywin), "xwin", utils.minmax(xwin), dataset.name
 			ref_area = (ywin[:,None] > 0.9)&(xwin[None,:] > 0.9)&(dset_ps[0]<2)
-			print "ref_ara", np.sum(ref_area), dataset.name
+			#print "ref_ara", np.sum(ref_area), dataset.name
 			if np.sum(ref_area) == 0: ref_area[:] = 1
 			dset_ps /= ywin[:,None]**2
 			dset_ps /= xwin[None,:]**2
@@ -1041,7 +1025,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			# Store the separable window so it can be used for the beam too
 			dataset.ywin, dataset.xwin = ywin, xwin
 		else: raise ValueError("Noise window type '%s' not supported" % noisewin)
-		enmap.write_map("test_ps_smooth_%s.fits" % dataset.name, dset_ps)
+		#enmap.write_map("test_ps_smooth_%s.fits" % dataset.name, dset_ps)
 		#print("mean_smooth_ps", np.median(dset_ps[0]))
 		# If we have invalid values, then this whole dataset should be skipped
 		if not np.all(np.isfinite(dset_ps)): continue
@@ -1052,7 +1036,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		dataset.splits = [split for split in dataset.splits if split.data is not None]
 	mapset.datasets = [dataset for dataset in mapset.datasets if len(dataset.splits) >= 2 and dataset.iN is not None]
 
-def setup_filter(mapset, mode="weight", filter_kxrad=20, filter_highpass=200, filter_kx_ymax_scale=1):
+def setup_filter(mapset, mode="weight", filter_kxrad=20, filter_highpass=200, filter_kx_ymax_scale=0.5):
 	# Add any fourier-space masks to this
 	ly, lx  = enmap.laxes(mapset.shape, mapset.wcs)
 	lr      = (ly[:,None]**2 + lx[None,:]**2)**0.5
@@ -1113,7 +1097,7 @@ def setup_beams(mapset):
 		param = (d.beam_params, d.pixel_window_params)
 		if param not in cache:
 			beam_2d = eval_beam(d.beam, mapset.l)
-			enmap.write_map("beam_2d_raw_%s.fits" % d.name, beam_2d)
+			#enmap.write_map("beam_2d_raw_%s.fits" % d.name, beam_2d)
 			# Apply pixel window
 			if d.pixel_window_params[0] == "native":
 				wy, wx = enmap.calc_window(beam_2d.shape)
@@ -1132,7 +1116,7 @@ def setup_beams(mapset):
 					print "the corresponding automatic spearable noise pixel window"
 					raise
 			else: raise ValueError("Unrecognized pixel window type '%s'" % (d.pixel_window_params[0]))
-			enmap.write_map("beam_2d_win_%s.fits" % d.name, beam_2d)
+			#enmap.write_map("beam_2d_win_%s.fits" % d.name, beam_2d)
 			cache[param] = beam_2d
 		d.beam_2d = cache[param]
 
@@ -1148,8 +1132,8 @@ def setup_target_beam(mapset, beam=None):
 		beam = mapset.datasets[0].beam_2d.copy()
 		for dataset in mapset.datasets[1:]:
 			beam = np.maximum(beam, dataset.beam_2d)
-	for dataset in mapset.datasets:
-		enmap.write_map("ratio_%s.fits" % dataset.name, dataset.beam_2d/beam)
+	#for dataset in mapset.datasets:
+	#	enmap.write_map("ratio_%s.fits" % dataset.name, dataset.beam_2d/beam)
 	mapset.target_beam = beam
 
 def setup_mask_common_lowres(mapset, mask):
@@ -1160,6 +1144,16 @@ def setup_mask_common_lowres(mapset, mask):
 		dataset.mask = mask_patch
 		for split in dataset.splits:
 			split.data.div *= 1-mask_patch
+
+def get_mask_insufficient(mapset):
+	"""Mask pixels that were only hit by insufficient datasets"""
+	div_good = mapset.datasets[0].splits[0].data.div*0
+	for dataset in mapset.datasets:
+		if dataset.insufficient: continue
+		for split in dataset.splits:
+			div_good += split.data.div
+	mask = div_good > 0
+	return mask
 
 class SignalFilter:
 	def __init__(self, mapset):
@@ -1266,7 +1260,7 @@ class SignalFilter:
 		apod   = (alpha*0+1).apod(self.mapset.apod_edge)
 		mask   = apod > 0.8
 		# I don't trust the edge
-		mask  &= ndimage.distance_transform_edt(self.tot_div > ref_val*0.01) > mask_pad
+		mask  &= calc_dist(self.tot_div > ref_val*0.01) > mask_pad
 		mask  &= np.any(B>0,0)
 		dmask  = enmap.downgrade(mask, downgrade) == 1
 		#Bs     = B[:,mask]
@@ -1364,10 +1358,10 @@ class Coadder:
 		self.H  = [split.data.H               for dataset in mapset.datasets for split in dataset.splits]
 		self.iN = [dataset.iN                 for dataset in mapset.datasets for split in dataset.splits]
 		self.B  = [dataset.beam_2d/mapset.target_beam for dataset in mapset.datasets for split in dataset.splits]
-		enmap.write_map("coadder_m.fits", enmap.samewcs(self.m, self.m[0]))
-		enmap.write_map("coadder_H.fits", enmap.samewcs(self.H, self.H[0]))
-		enmap.write_map("coadder_iN.fits", enmap.samewcs(self.iN, self.iN[0]))
-		enmap.write_map("coadder_B.fits", enmap.samewcs(self.B, self.B[0]))
+		#enmap.write_map("coadder_m.fits", enmap.samewcs(self.m, self.m[0]))
+		#enmap.write_map("coadder_H.fits", enmap.samewcs(self.H, self.H[0]))
+		#enmap.write_map("coadder_iN.fits", enmap.samewcs(self.iN, self.iN[0]))
+		#enmap.write_map("coadder_B.fits", enmap.samewcs(self.B, self.B[0]))
 		self.shape, self.wcs = mapset.shape, mapset.wcs
 		self.dtype= mapset.dtype
 		self.ctype= np.result_type(self.dtype,0j)
@@ -3534,7 +3528,6 @@ def pbox_out_of_bounds(pbox, shape, wcs):
 	"""Check if a pbox has zero overlap with the given geometry,
 	including the effect of angle wrapping."""
 	yr, xr = np.sort(pbox).T
-	print "poob yr", yr, "xr", xr, "shape", shape
 	# y is simple, since there is no wrapping there
 	if yr[0] >= shape[-2] or yr[1] < 0: return True
 	# Number of pixels around the sky
@@ -3543,7 +3536,6 @@ def pbox_out_of_bounds(pbox, shape, wcs):
 	xr2 = xr - xr[0]//nx+nx
 	# left-wrapping
 	xr1 = xr2 - nx
-	print "poob nx", nx, "xr1", xr1, "xr2", xr2
 	if not (xr1[0] >= shape[-1] or xr1[1] < 0): return False
 	if not (xr2[0] >= shape[-1] or xr2[1] < 0): return False
 	return True
@@ -3557,13 +3549,26 @@ def pbox_out_of_bounds(pbox, shape, wcs):
 #	if (xr[1] <= 0 or xr[0] >= shape[-1]) and (xw[1] <= 0 or xw[0] >= shape[-1]): return True
 #	return False
 
+def calc_dist(mask):
+	res   = enmap.samewcs(np.zeros(mask.shape, np.int32), mask)
+	fmask = mask.reshape((-1,)+mask.shape[-2:])
+	fres  = res.reshape((-1,)+res.shape[-2:])
+	for m, r in zip(fmask, fres):
+		if np.all(m!=0): r[:] = 0x7fffff
+		else: r[:] = ndimage.distance_transform_edt(m)
+	return res
+
 def apod_mask_edge(mask, n):
 	apod = enmap.zeros(mask.shape, mask.wcs, np.float32)
 	for i, m in enumerate(mask.preflat):
-		dist = ndimage.distance_transform_edt(m)/n
+		dist = calc_dist(m)/float(n)
 		x    = np.minimum(1,dist)
 		apod.preflat[i] = 0.5*(1-np.cos(np.pi*x))
 	return apod
+
+def shrink_mask(mask, n): return calc_dist(~mask)<=n
+def grow_mask(mask, n): return calc_dist(mask)>n
+def shrink_mask_holes(mask, n): return grow_mask(shrink_mask(mask,n),n)
 
 def write_catalogue(fname, cat, box=None):
 	hdu = fits.hdu.table.BinTableHDU(cat)
