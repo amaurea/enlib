@@ -58,8 +58,10 @@ def read_beam(params, nl=50000, workdir="."):
 		res   = np.zeros(nl)
 		fname = os.path.join(workdir, params[1])
 		bdata = np.loadtxt(fname)[:,1]
-		ndata = len(bdata)
-		res[:ndata] = np.log(bdata)
+		# we don't trust the beam after the point where it becomes negative
+		negs  = np.where(bdata<0)[0]
+		ndata = len(bdata) if len(negs) == 0 else negs[0]*9//10
+		res[:ndata] = np.log(bdata[:ndata])
 		# Fit power law to extend the beam beyond its end. That way we will have
 		# a well-defined value everywhere.
 		i1, i2 = ndata*18/20, ndata*19/20
@@ -348,7 +350,7 @@ def make_dummy_tile(shape, wcs, box, pad=0, dtype=np.float64):
 	shape2, wcs2 = enmap.slice_geometry(shape, wcs, (slice(pbox[0,0],pbox[1,0]),slice(pbox[0,1],pbox[1,1])), nowrap=True)
 	shape2 = shape[:-2]+tuple(pbox[1]-pbox[0])
 	map = enmap.zeros(shape2, wcs2, dtype)
-	div = enmap.zeros(shape2[-2:], wcs2, dtype)
+	div = enmap.zeros(shape2, wcs2, dtype)
 	return bunch.Bunch(map=map, div=div)
 
 def robust_ref(div,tol=1e-5):
@@ -356,13 +358,24 @@ def robust_ref(div,tol=1e-5):
 	ref = np.median(div[div>ref*tol])
 	return ref
 
-def add_missing_comps(map, ncomp, rms_factor=1e3):
+def add_missing_comps(map, ncomp, fill="random", rms_factor=1e3):
 	map  = map.preflat
 	if len(map) >= ncomp: return map[:ncomp]
 	omap = enmap.zeros((ncomp,)+map.shape[-2:], map.wcs, map.dtype)
 	omap[:len(map)] = map[:ncomp]
-	omap[len(map):] = np.random.standard_normal((ncomp-len(map),)+map.shape[-2:])*np.std(map)*rms_factor
+	if fill == "random":
+		omap[len(map):] = np.random.standard_normal((ncomp-len(map),)+map.shape[-2:])*np.std(map)*rms_factor
 	return omap
+
+def make_div_3d(div, ncomp_map, ncomp_target, polfactor=0.5):
+	if div.ndim == 2:
+		res = enmap.zeros((ncomp_target,)+div.shape[-2:], div.wcs, div.dtype)
+		res[0]           = div
+		res[1:ncomp_map] = div*polfactor
+		return res
+	elif div.ndim == 3: return div
+	elif div.ndim == 4: return enmap.samewcs(np.einsum("iiyx->iyx",div),div)
+	else: raise ValueError("Too many components in div")
 
 def common_geometry(geos, ncomp=None):
 	shapes = np.array([shape[-2:] for shape,wcs in geos])
@@ -375,7 +388,9 @@ def common_geometry(geos, ncomp=None):
 
 def filter_div(div):
 	"""Downweight very thin stripes in the div - they tend to be problematic single detectors"""
-	return enmap.samewcs(ndimage.minimum_filter(div, size=2), div)
+	res = div.copy()
+	for comp in res.preflat: comp[:] = ndimage.minimum_filter(comp, size=2)
+	return res
 
 dog = None
 class JointMapset:
@@ -435,7 +450,7 @@ class JointMapset:
 				split.data.div = filter_div(split.data.div)
 				split.data.map = np.maximum(-map_max, np.minimum(map_max, split.data.map))
 				# Expand map to ncomp components
-				split.data.map = add_missing_comps(split.data.map, ncomp)
+				split.data.map = add_missing_comps(split.data.map, ncomp, fill="random")
 				if dewindow:
 					split.data.map = enmap.apply_window(split.data.map, -1)
 				# Build apodization
@@ -839,7 +854,7 @@ class Mapset:
 				if verbose: print "Reading %s" % split.map
 				try:
 					map = read_map(split.map, pbox, name=os.path.basename(split.map), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
-					div = read_map(split.div, pbox, name=os.path.basename(split.div), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache).preflat[0]
+					div = read_map(split.div, pbox, name=os.path.basename(split.div), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
 				except IOError as e: continue
 				map *= dataset.gain
 				div *= dataset.gain**-2
@@ -865,8 +880,12 @@ def sanitize_maps(mapset, map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, a
 	for dataset in mapset.datasets:
 		for i, split in enumerate(dataset.splits):
 			if split.data is None: continue
-			split.ref_div = robust_ref(split.data.div)
+			# Expand div to be the same shape as map. This lets us track T and P noise separately,
+			# but we don't bother with cross-component correlations, which are usually not that
+			# important, and slow things down
+			split.data.div = make_div_3d(split.data.div, split.data.map.ndim, mapset.ncomp)
 			# Avoid single, crazy pixels
+			split.ref_div  = robust_ref(split.data.div)
 			split.data.div = np.minimum(split.data.div, split.ref_div*div_tol)
 			split.data.div = filter_div(split.data.div)
 			split.data.map = np.maximum(-map_max, np.minimum(map_max, split.data.map))
@@ -874,7 +893,7 @@ def sanitize_maps(mapset, map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, a
 				# Avoid areas too close to the edge of div
 				split.data.div *= ndimage.distance_transform_edt(split.data.div > 0) > crop_div_edge
 			# Expand map to ncomp components
-			split.data.map = add_missing_comps(split.data.map, mapset.ncomp)
+			split.data.map = add_missing_comps(split.data.map, mapset.ncomp, fill="random")
 			# Distrust very low hitcount regions
 			split.data.apod  = np.minimum(split.data.div/(split.ref_div*apod_val), 1.0)**apod_alpha
 			# Distrust regions very close to the edge of the hit area
@@ -903,7 +922,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			# Also form the pixel part of our noise model
 			split.data.H  = split.data.div**0.5
 		# Form the mean map for this dataset
-		dset_map[:,dset_div>0] /= dset_div[dset_div>0]
+		dset_map[dset_div>0] /= dset_div[dset_div>0]
 		#enmap.write_map("test_totmap.fits", dset_map)
 		# Then use it to build the diff maps and noise spectra
 		dset_ps = None
@@ -945,7 +964,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		#enmap.write_map("test_ps_raw_%s.fits" % dataset.name, dset_ps)
 		# Smooth ps to reduce sample variance
 		dset_ps  = smooth_ps(dset_ps, ps_res, ndof=2*(nsplit-1))
-		print "dset_ps", np.sum(dset_ps), dataset.name
+		print "dset_ps**0.5", np.mean(dset_ps)**0.5, dataset.name
 		# Apply noise window correction if necessary:
 		noisewin = dataset.noise_window_params[0] if "noise_window_params" in dataset else "none"
 		if   noisewin == "none": pass
@@ -959,13 +978,14 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			# The map has been interpolated using something like bicubic interpolation,
 			# leading to an unknown but separable pixel window
 			ywin, xwin = estimate_separable_pixwin_from_normalized_ps(dset_ps[0])
-			print "ywin", utils.minmax(ywin), "xwin", utils.minmax(xwin), dataset.name
+			#print "ywin", utils.minmax(ywin), "xwin", utils.minmax(xwin), dataset.name
 			ref_area = (ywin[:,None] > 0.9)&(xwin[None,:] > 0.9)&(dset_ps[0]<2)
-			print "ref_ara", np.sum(ref_area), dataset.name
+			#print "ref_ara", np.sum(ref_area), dataset.name
 			if np.sum(ref_area) == 0: ref_area[:] = 1
 			dset_ps /= ywin[:,None]**2
 			dset_ps /= xwin[None,:]**2
-			dset_ps[:,(ywin[:,None]<0.25)|(xwin[None,:]<0.25)] = np.mean(dset_ps[:,ref_area],1)
+			fill_area = (ywin[:,None]<0.25)|(xwin[None,:]<0.25)
+			dset_ps[:,(ywin[:,None]<0.25)|(xwin[None,:]<0.25)] = np.mean(dset_ps[:,ref_area],1)[:,None]
 			# Store the separable window so it can be used for the beam too
 			dataset.ywin, dataset.xwin = ywin, xwin
 		else: raise ValueError("Noise window type '%s' not supported" % noisewin)
@@ -1289,7 +1309,7 @@ class Coadder:
 		self.ctype= np.result_type(self.dtype,0j)
 		self.npix = self.shape[-2]*self.shape[-1]
 		self.nmap = len(self.m)
-		self.tot_div = enmap.zeros(self.shape[-2:], self.wcs, self.dtype)
+		self.tot_div = enmap.zeros(self.shape, self.wcs, self.dtype)
 		for H in self.H: self.tot_div += H**2
 	def calc_rhs(self):
 		# Calc rhs = B'HCH m

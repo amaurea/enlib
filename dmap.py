@@ -140,6 +140,7 @@ class Dmap(object):
 			for tile, vtile in zip(self.tiles, val.tiles): tile[sel] = vtile
 		except AttributeError:
 			for tile in self.tiles: tile[sel] = val
+	def __len__(self): return self.shape[0]
 	def __repr__(self):
 		return "Dmap(%s, rank %d/%d, tiles %d/%d %s)" % (str(self.geometry), self.geometry.comm.rank,
 			self.geometry.comm.size, self.geometry.nloc, self.geometry.ntile, str(self.geometry.loc_inds))

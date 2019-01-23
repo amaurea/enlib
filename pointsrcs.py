@@ -98,8 +98,7 @@ def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.flo
 			pixpos = posmap[:,y1:y2,x1:x2]
 			srcpos = poss[srcs].T # [2,nsrc]
 			srcamp = amps[srcs].T # [ncomp,nsrc]
-			diff   = pixpos[:,None,:,:]-srcpos[:,:,None,None]
-			r      = (diff[0]**2 + (diff[1]*np.cos(pixpos[0,None,:,:]))**2)**0.5
+			r      = utils.angdist(pixpos[::-1,None,:,:],srcpos[::-1,:,None,None])
 			bpix   = (r - beam[0,0])/(beam[0,1]-beam[0,0])
 			# Evaluate the beam at these locations
 			bval   = utils.interpol(beam[1], bpix[None], mode="constant", order=1) # [nsrc,ry,rx]
