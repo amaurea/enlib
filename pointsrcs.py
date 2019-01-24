@@ -28,18 +28,16 @@ from . import utils, enmap
 
 #### Map-space source simulation ###
 
-def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None, method="loop", smul=1,
-		return_padded=False, pixwin=False):
+def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None, smul=1,
+		return_padded=False, pixwin=False, op=np.add):
 	"""Simulate a point source map in the geometry given by shape, wcs
 	for the given srcs[nsrc,{dec,ra,T...}], using the beam[{r,val},npoint],
 	which must be equispaced. If omap is specified, the sources will be
 	added to it in place. All angles are in radians. The beam is only evaluated up to
 	the point where it reaches exp(-0.5*nsigma**2) unless rmax is specified, in which
 	case this gives the maximum radius. smul gives a factor to multiply the resulting
-	source model by. This is mostly useful in conction with omap. method can be
-	"loop" or "vectorized", but "loop" is both faster and uses less memory, so there's
-	no point in using the latter.
-	
+	source model by. This is mostly useful in conction with omap.
+
 	The source simulation is sped up by using a source lookup grid.
 	"""
 	if omap is None: omap = enmap.zeros(shape, wcs, dtype)
@@ -69,12 +67,12 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	pixbox= np.array([[0,0],wmap.shape[-2:]],int)
 	nhit, cell_srcs = build_src_cells(pixbox, srcpix, cres)
 	posmap = wmap.posmap()
-	model = eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=wmap.dtype)
+	model = eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=wmap.dtype, op=op)
 	del posmap
 	if pixwin: model = enmap.apply_window(model)
 	# Update our work map, through our view
 	if smul != 1: model *= smul
-	wmap  += model
+	wmap   = op(wmap, model, wmap)
 	if not return_padded:
 		# Copy out
 		omap[:] = wmap[wslice]
@@ -84,7 +82,7 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	else:
 		return wmap.reshape(ishape[:-2]+wmap.shape[-2:]), wslice
 
-def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.float64):
+def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.float64, op=np.add):
 	# Loop through each cell
 	ncy, ncx = nhit.shape
 	model = enmap.zeros(amps.shape[-1:]+posmap.shape[-2:], posmap.wcs, dtype)
@@ -103,8 +101,8 @@ def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.flo
 			# Evaluate the beam at these locations
 			bval   = utils.interpol(beam[1], bpix[None], mode="constant", order=1) # [nsrc,ry,rx]
 			cmodel = srcamp[:,:,None,None]*bval
-			cmodel = np.sum(cmodel,-3)
-			model[:,y1:y2,x1:x2] += cmodel
+			cmodel = op.reduce(cmodel,-3)
+			op(model[:,y1:y2,x1:x2], cmodel, model[:,y1:y2,x1:x2])
 	return model
 
 def expand_beam(beam, nsigma=5, rmax=None, nper=400):
