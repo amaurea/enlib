@@ -259,7 +259,7 @@ def euler_rot(euler_angles, coords, kind="zyz"):
 	M      = euler_mat(euler_angles, kind)
 	rect   = utils.ang2rect(co, False)
 	rect   = np.einsum("...ij,j...->i...",M,rect)
-	co     = utils.rect2ang(rect, False)
+	co     = utils.rect2ang(rect, zenith=False)
 	return co.reshape(coords.shape)
 
 def recenter(angs, center, restore=False):

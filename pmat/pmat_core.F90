@@ -1797,7 +1797,7 @@ contains
 		end if
 	end subroutine
 
-	subroutine pmat_plain(dir, map, tod, pix)
+	subroutine pmat_plain(dir, tod, map, pix)
 		use omp_lib
 		implicit none
 		integer, intent(in)    :: dir
@@ -1828,7 +1828,7 @@ contains
 				ipix = nint(pix(:,i))+1
 				ipix(1) = max(1,min(size(map,2),ipix(1)))
 				ipix(2) = max(1,min(size(map,1),ipix(2)))
-				wmap(ipix(2),ipix(1),:,id) = tod(i,:)
+				wmap(ipix(2),ipix(1),:,id) = wmap(ipix(2),ipix(1),:,id) + tod(i,:)
 			end do
 			!$omp end do
 			!$omp end parallel
@@ -1874,18 +1874,18 @@ contains
 		end do
 	end subroutine
 
-	subroutine pmat_noise_rect(dir, tod, tmul, map, mmul, bore, det_offs, det_comps, box)
+	subroutine pmat_noise_rect(dir, tod, tmul, map, mmul, bore, det_offs, det_comps, box, scandir)
 		! Pmat for a flat, wrapping coordinate system
 		use omp_lib
 		implicit none
-		integer, intent(in)      :: dir
+		integer, intent(in)      :: dir, scandir(:)
 		real(_), intent(inout)   :: tod(:,:), map(:,:,:)
 		real(_), intent(in)      :: tmul, mmul
 		real(8), intent(in)      :: bore(:,:), det_offs(:,:), det_comps(:,:), box(:,:)
 		real(_), allocatable     :: wmap(:,:,:)
 		real(8) :: pos(2), pixdens(2), p0(2)
 		real(_) :: v
-		integer :: di, si, ndet, nsamp, ai, nproc, ci, pix(2), mshape(2), y, x
+		integer :: di, si, ndet, nsamp, ai, nproc, ci, pix(2), mshape(2), y, x, o
 		nsamp = size(tod,1)
 		ndet  = size(tod,2)
 		p0    = box(:,1)
@@ -1894,12 +1894,13 @@ contains
 		mshape(2) = size(map,1)
 		pixdens = mshape/(box(:,2)-box(:,1))
 		if(dir > 0) then
-			!$omp parallel do private(di,si,pos,pix)
+			!$omp parallel do private(di,si,pos,pix,o)
 			do di = 1, ndet
 				do si = 1, nsamp
+					o = 0; if(size(map,3) >= 6) o = 3*scandir(si)
 					pos = bore(1:2,si) + det_offs(1:2,di)
 					pix = modulo(nint((pos-p0)*pixdens), mshape)+1
-					tod(si,di) = tod(si,di)*tmul + sum(map(pix(2),pix(1),1:3)*det_comps(1:3,di))*mmul
+					tod(si,di) = tod(si,di)*tmul + sum(map(pix(2),pix(1),1+o:3+o)*det_comps(1:3,di))*mmul
 				end do
 			end do
 		else
@@ -1909,14 +1910,15 @@ contains
 				wmap = 0
 				do di = 1, ndet
 					do si = 1, nsamp
+						o = 0; if(size(map,3) >= 6) o = 3*scandir(si)
 						pos = bore(1:2,si) + det_offs(1:2,di)
 						pix = modulo(nint((pos-p0)*pixdens), mshape)+1
-						wmap(pix(2),pix(1),1:3) = wmap(pix(2),pix(1),1:3) + tod(si,di)*det_comps(1:3,di)
+						wmap(pix(2),pix(1),1+o:3+o) = wmap(pix(2),pix(1),1+o:3+o) + tod(si,di)*det_comps(1:3,di)
 					end do
 				end do
 				map = map*mmul + wmap*tmul
 			else
-				!$omp parallel private(di,si,ci,pos,pix,v,y,x)
+				!$omp parallel private(di,si,ci,pos,pix,v,y,x,o)
 				!$omp workshare
 				wmap = 0
 				!$omp end workshare
@@ -1924,10 +1926,11 @@ contains
 				!$omp do
 				do di = 1, ndet
 					do si = 1, nsamp
+						o = 0; if(size(map,3) >= 6) o = 3*scandir(si)
 						pos = bore(1:2,si) + det_offs(1:2,di)
 						pix = modulo(nint((pos-p0)*pixdens), mshape)+1
-						do ci = 1, 3
-							v = tod(si,di)*det_comps(ci,di)
+						do ci = 1+o, 3+o
+							v = tod(si,di)*det_comps(ci-o,di)
 							!$omp atomic
 							wmap(pix(2),pix(1),ci) = wmap(pix(2),pix(1),ci) + v
 							!$omp end atomic

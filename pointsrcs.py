@@ -24,22 +24,20 @@ possible. Parametrizing them in a standard format may be difficult.
 """
 import numpy as np
 from astropy.io import fits
-from . import utils, enmap, bench
+from . import utils, enmap
 
 #### Map-space source simulation ###
 
-def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None, method="loop", smul=1,
-		return_padded=False, pixwin=False):
+def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None, smul=1,
+		return_padded=False, pixwin=False, op=np.add):
 	"""Simulate a point source map in the geometry given by shape, wcs
 	for the given srcs[nsrc,{dec,ra,T...}], using the beam[{r,val},npoint],
 	which must be equispaced. If omap is specified, the sources will be
 	added to it in place. All angles are in radians. The beam is only evaluated up to
 	the point where it reaches exp(-0.5*nsigma**2) unless rmax is specified, in which
 	case this gives the maximum radius. smul gives a factor to multiply the resulting
-	source model by. This is mostly useful in conction with omap. method can be
-	"loop" or "vectorized", but "loop" is both faster and uses less memory, so there's
-	no point in using the latter.
-	
+	source model by. This is mostly useful in conction with omap.
+
 	The source simulation is sped up by using a source lookup grid.
 	"""
 	if omap is None: omap = enmap.zeros(shape, wcs, dtype)
@@ -69,12 +67,12 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	pixbox= np.array([[0,0],wmap.shape[-2:]],int)
 	nhit, cell_srcs = build_src_cells(pixbox, srcpix, cres)
 	posmap = wmap.posmap()
-	model = eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=wmap.dtype)
+	model = eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=wmap.dtype, op=op)
 	del posmap
 	if pixwin: model = enmap.apply_window(model)
 	# Update our work map, through our view
 	if smul != 1: model *= smul
-	wmap  += model
+	wmap   = op(wmap, model, wmap)
 	if not return_padded:
 		# Copy out
 		omap[:] = wmap[wslice]
@@ -84,7 +82,7 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	else:
 		return wmap.reshape(ishape[:-2]+wmap.shape[-2:]), wslice
 
-def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.float64):
+def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.float64, op=np.add):
 	# Loop through each cell
 	ncy, ncx = nhit.shape
 	model = enmap.zeros(amps.shape[-1:]+posmap.shape[-2:], posmap.wcs, dtype)
@@ -103,8 +101,8 @@ def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.flo
 			# Evaluate the beam at these locations
 			bval   = utils.interpol(beam[1], bpix[None], mode="constant", order=1) # [nsrc,ry,rx]
 			cmodel = srcamp[:,:,None,None]*bval
-			cmodel = np.sum(cmodel,-3)
-			model[:,y1:y2,x1:x2] += cmodel
+			cmodel = op.reduce(cmodel,-3)
+			op(model[:,y1:y2,x1:x2], cmodel, model[:,y1:y2,x1:x2])
 	return model
 
 def expand_beam(beam, nsigma=5, rmax=None, nper=400):
@@ -247,116 +245,3 @@ def src2param(srcs):
 	params[:,6] = 1 # y-scaling
 	params[:,7] = 0 # angle
 	return params
-
-#def param2src(params):
-#	srcs = np.array(params)
-#	if srcs.ndim == 1: return param2src(srcs[None])[0]
-#	for src in srcs:
-#		sigma, phi = utils.expand_beam(src[5:8])
-#		src[5:7] = sigma
-#		src[7] = phi
-#	return srcs
-
-## All the complexity below has to do with supporting too many different
-## formats. We should standardize on a simpler format, and stick with it
-#
-#def read(fname, format="auto", exact=None, default_beam=1*utils.arcmin, amp_factor=None):
-#	"""Try to read a point source file in any format."""
-#	if format == "skn": return read_skn(fname, default_beam=default_beam)
-#	elif format == "rahul_marius": return read_rahul_marius(fname, exact=exact, default_beam=default_beam, amp_factor=amp_factor)
-#	elif format == "auto":
-#		try:
-#			return read_skn(fname, default_beam=default_beam)
-#		except (IOError, ValueError):
-#			return read_rahul_marius(fname, exact=exact, default_beam=default_beam, amp_factor=amp_factor)
-#	else:
-#		raise ValueError("Unrecognized format '%s'" % format)
-#
-#def write(fname, srcs, format="auto"):
-#	if format == "skn" or format == "auto":
-#		write_skn_standard(fname, srcs)
-#	else: ValueError("Unrecognized format '%s'" % format)
-#
-#def read_rahul_marius(fname, exact=None, default_beam=1*utils.arcmin, amp_factor=None):
-#	"""This format has no beam information, and lists only T amps in Jy/steradian.
-#	Beams will be set to a default 1', and the amps will be converted
-#	to amplitude."""
-#	vals = []
-#	if amp_factor is None: amp_factor = 1
-#	if exact is None: exact = False
-#	with open(fname, "r") as f:
-#		for line in f:
-#			line = line.strip()
-#			if len(line) == 0 or line[0] == '#': continue
-#			toks = line.split()
-#			if len(toks) != 10 and len(toks) != 13 and len(toks) != 15: raise IOError("File is not in rahul marius format")
-#			ra, dec = [float(toks[i]) for i in [2,3]]
-#			amp = np.array([float(toks[4]), 0, 0])
-#			if exact:
-#				has_exact = len(toks) > 10 and int(toks[10]) >= 0
-#				if not has_exact: continue
-#				ra_true, dec_true = float(toks[13]), float(toks[14])
-#				ra, dec = ra_true, dec_true
-#			vals.append([dec*utils.degree, ra*utils.degree]+list(amp*amp_factor)+[default_beam,default_beam,0])
-#	return np.array(vals)
-#
-#def read_rahul_marius_old(fname, exact=None, default_beam=1*utils.arcmin, amp_factor=1/395.11):
-#	return read_rahul_marius(fname, exact=None, default_beam=default_beam, amp_factor=amp_factor)
-#
-#def read_skn(fname, default_beam=1*utils.arcmin):
-#	tmp = np.loadtxt(fname,ndmin=2)
-#	if tmp.shape[1] == 5: return read_skn_posamp(fname, default_beam)
-#	elif tmp.shape[1] == 8: return read_skn_standard(fname)
-#	elif tmp.shape[1] == 25: return read_skn_full(fname)
-#	else: raise IOError("Unrecognized skn format")
-#
-#def read_skn_posamp(fname, default_beam=1*utils.arcmin):
-#	"""dec ra T Q U"""
-#	tmp = np.loadtxt(fname, ndmin=2)
-#	b   = np.full(len(tmp),default_beam)
-#	return np.concatenate([tmp[:,:2]*utils.degree,tmp[:,2:5],b[:,None],b[:,None],b[:,None]*0],1)
-#
-#def read_skn_standard(fname):
-#	"""dec ra T Q U bw bh phi"""
-#	tmp = np.loadtxt(fname, ndmin=2)
-#	return np.concatenate([tmp[:,:2]*utils.degree,tmp[:,2:5],
-#		tmp[:,5:7]*utils.arcmin*utils.fwhm, tmp[:,7:8]*utils.degree],1)
-#
-#def read_skn_full(fname):
-#	"""id rank S/N dec ddec ra dra T dT Q dQ U dU Tf dTf Qf dQf Uf dUf bw dbw bh dbh phi dphi"""
-#	tmp = np.loadtxt(fname, ndmin=2)
-#	return np.concatenate([tmp[:,3:7:2]*utils.degree, tmp[:,7:13:2],
-#		tmp[:,19:23:2]*utils.arcmin*utils.fwhm, tmp[:,23:25:2]*utils.degree],1)
-#
-#def write_skn_standard(fname, srcs):
-#	deg = utils.degree
-#	fwhm = utils.arcmin*utils.fwhm
-#	with open(fname, "w") as f:
-#		for src in srcs:
-#			f.write("%10.5f %10.5f %10.3f %10.3f %10.3f %7.4f %7.4f %7.2f\n" % (
-#				src[0]/deg, src[1]/deg, src[2], src[3], src[4],
-#				src[5]/fwhm, src[6]/fwhm, src[7]/deg))
-#
-#def parse_angle_sexa(s):
-#	"""Parse an angle in the form [+-]deg:min:sec"""
-#	sign = 1
-#	if s[0] == "-":
-#		s, sign = s[1:], -1
-#	return sign*np.sum([float(w)*60.0**(-i) for i,w in enumerate(s.split(":"))])
-
-#def src2param(srcs):
-#	"""For fast source model evaluation, it is useful to store the beam as an inverse
-#	covariance matrix."""
-#	params = np.array(srcs)
-#	if params.ndim == 1: return src2param(params[None])[0]
-#	params[:,5:8] = np.array([utils.compress_beam(b[:2],b[2]) for b in srcs[:,5:8]])
-#	return params
-#
-#def param2src(params):
-#	srcs = np.array(params)
-#	if srcs.ndim == 1: return param2src(srcs[None])[0]
-#	for src in srcs:
-#		sigma, phi = utils.expand_beam(src[5:8])
-#		src[5:7] = sigma
-#		src[7] = phi
-#	return srcs

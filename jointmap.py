@@ -218,7 +218,7 @@ def sz_2d_profile(shape, pixshape, pos=[0,0], fwhm=1.0, oversample=5, core=10, p
 		big_pos = (np.mgrid[:N[0],:N[1]] - i[:,None,None])*(np.array(pixshape)/oversample)[:,None,None]
 		big_rad = np.sum(big_pos**2,0)**0.5
 		big_map = sz_rad_projected_fast(big_rad, fwhm, fwhm_deriv=scale_deriv)
-		# Then downgrade. This is done to get the pixel window. We can just use
+		# Then downgrade. This is done to get the pixel window. We can't just use
 		# fourier method to get the pixel window here, as the signal is not band-limited
 		map   = enmap.downgrade(big_map, oversample)
 		return map
