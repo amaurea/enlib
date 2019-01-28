@@ -1797,7 +1797,7 @@ contains
 		end if
 	end subroutine
 
-	subroutine pmat_plain(dir, map, tod, pix)
+	subroutine pmat_plain(dir, tod, map, pix)
 		use omp_lib
 		implicit none
 		integer, intent(in)    :: dir
@@ -1828,7 +1828,7 @@ contains
 				ipix = nint(pix(:,i))+1
 				ipix(1) = max(1,min(size(map,2),ipix(1)))
 				ipix(2) = max(1,min(size(map,1),ipix(2)))
-				wmap(ipix(2),ipix(1),:,id) = tod(i,:)
+				wmap(ipix(2),ipix(1),:,id) = wmap(ipix(2),ipix(1),:,id) + tod(i,:)
 			end do
 			!$omp end do
 			!$omp end parallel
