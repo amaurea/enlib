@@ -1116,7 +1116,6 @@ class FilterDeprojectPhase:
 				mat.backward(arr, map)
 				hfile[name] = map
 
-
 		rhs = np.sum(Nt*tod,1)
 		div = np.sum(Nt*t,  1)
 		del Nt
@@ -1128,6 +1127,24 @@ class FilterDeprojectPhase:
 		1/0
 		if self.tmul != 1: tod *= self.tmul
 		tod -= t * amps[:,None]
+
+class FilterBroadenBeamHor:
+	def __init__(self, ibeam, obeam):
+		"""Apply a lowpass-filter to the TOD such that the the effective beam
+		size in the scanning direction increases from ibeam to obeam, both given
+		as standard deviations in arcmin."""
+		self.ibeam, self.obeam = ibeam, obeam
+	def __call__(self, scan, tod):
+		broaden_beam_hor(tod, scan, self.ibeam, self.obeam)
+
+def broaden_beam_hor(tod, scan, ibeam, obeam):
+	ft    = fft.rfft(tod)
+	k     = 2*np.pi*fft.rfftfreq(scan.nsamp, 1/scan.srate)
+	el    = np.mean(scan.box()[:,2])
+	skyspeed = scan.speed*np.cos(el)
+	sigma = (obeam**2-ibeam**2)**0.5
+	ft *= np.exp(-0.5*(sigma/skyspeed)**2*k**2)
+	fft.ifft(ft, tod, normalize=True)
 
 ###### Map filters ######
 

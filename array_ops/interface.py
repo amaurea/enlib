@@ -24,7 +24,7 @@ def ang2rect(a):
 def eigpow(A, pow, axes=[-2,-1], lim=None, lim0=None, copy=True, fallback="eigkill"):
 	core = get_core(A.dtype)
 	if lim  is None: lim  = 1e-6
-	if lim0 is None: lim0 = np.finfo(A.dtype).tiny**0.2
+	if lim0 is None: lim0 = np.finfo(A.dtype).tiny**0.5
 	if copy: A = A.copy()
 	with utils.flatview(A, axes=axes) as Af:
 		if   fallback == "eigkill":
