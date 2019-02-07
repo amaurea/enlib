@@ -85,7 +85,7 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 		try:
 			if not isinstance(filelist[ind],basestring): raise IOError
 			d = enscan.read_scan(filelist[ind])
-			actdata.read(filedb.data[filelist[ind]])
+			#actdata.read(filedb.data[filelist[ind]])
 		except IOError:
 			try:
 				entry = db[filelist[ind]]

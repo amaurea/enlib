@@ -3,21 +3,21 @@ When c is more developed, it might completely replace this
 module. For now, it is used as a part of the implementation."""
 import numpy as np
 import astropy.coordinates as c, astropy.units as u
-from .. import utils
+from .. import utils, bunch
 # Optional dependencies are imported in the functions that
 # use them. These include ephem, iers and pyfsla
 
-class default_site:
-	lat  = -22.9585
-	lon  = -67.7876
-	alt  = 5188.
-	T    = 273.15
-	P    = 550.
-	hum  = 0.2
-	freq = 150.
-	lapse= 0.0065
-	base_tilt =    0.0107693
-	base_az   = -114.9733961
+default_site = bunch.Bunch(
+	lat  = -22.9585,
+	lon  = -67.7876,
+	alt  = 5188.,
+	T    = 273.15,
+	P    = 550.,
+	hum  = 0.2,
+	freq = 150.,
+	lapse= 0.0065,
+	base_tilt =    0.0107693,
+	base_az   = -114.9733961)
 
 def transform(from_sys, to_sys, coords, time=55500, site=None, pol=None, mag=None, bore=None):
 	"""Transforms coords[2,...] from system from_sys to system to_sys, where

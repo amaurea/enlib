@@ -1250,6 +1250,9 @@ class Eqsys:
 					#tod -= np.copy(tod[:,0,None])
 					tod  = tod.astype(self.dtype)
 			else: tod = itod
+			#FIXME
+			tod = utils.deslope(tod)
+			#dump("dump_getsamples.hdf", tod)
 			#dump("dump_prefilter_mean.hdf", np.mean(tod,0))
 			#dump("dump_prefilter.hdf", tod[:4])
 			#dump("hwp.hdf", scan.hwp)
@@ -1257,21 +1260,27 @@ class Eqsys:
 			# Apply all filters (pickup filter, src subtraction, etc)
 			with bench.mark("b_filter"):
 				for filter in self.filters: filter(scan, tod)
+			#dump("dump_postfilter.hdf", tod)
 			#dump("dump_postfilter_mean.hdf", np.mean(tod,0))
 			#dump("dump_postfilter.hdf", tod[:4])
 			#1/0
 			# Apply the noise model (N")
 			with bench.mark("b_weight"):
 				for weight in self.weights: weight(scan, tod)
+			#dump("dump_postweight.hdf", tod)
 			#dump("dump_prenoise.hdf", tod[:32])
 			with bench.mark("b_N_build"):
 				scan.noise = scan.noise.update(tod, scan.srate)
 				#print "FIXME gapfill const after building noise model", scan.id, scan.cut.ndet, scan.cut.nsamp, tod.shape
 				#sampcut.gapfill_const(scan.cut, tod, 0.0, True)
+			#dump("dump_postupdate.hdf", tod)
 			with bench.mark("b_filter2"):
 				for filter in self.filters2: filter(scan, tod)
+			#dump("dump_prenoise.hdf", tod)
 			with bench.mark("b_N"):
 				scan.noise.apply(tod)
+			#dump("dump_postnoise.hdf", tod)
+			#1/0
 			with bench.mark("b_weight"):
 				for weight in self.weights[::-1]: weight(scan, tod)
 			# Project onto signals
