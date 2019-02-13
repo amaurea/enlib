@@ -69,7 +69,7 @@ class Scan:
 		self.mapping   = None
 		# Not part of the general interface
 		self._tod      = np.asfarray(tod)       # [ndet,nsamp]
-	def get_samples(self):
+	def get_samples(self, verbose=False):
 		return self._tod.copy()
 	@property
 	def nsamp(self): return self.boresight.shape[0]
@@ -141,9 +141,8 @@ class H5Scan(Scan):
 			for k in ["boresight","offsets","comps","sys","mjd0","dets"]:
 				setattr(self, k, hfile[k].value)
 			n = self.boresight.shape[0]
-			neach = hfile["cut/neach"].value
-			flat  = hfile["cut/flat"].value
-			self.cut  = sampcut.Sampcut(flat, utils.cumsum(neach, endpoint=True), n)
+			ranges, detmap, nsamp = [hfile["cut/%s" % name].value for name in ["ranges","detmap","nsamp"]]
+			self.cut  = sampcut.Sampcut(ranges, detmap, nsamp)
 			self.cut_noiseest = self.cut.copy()
 			self.noise= nmat.read_nmat(hfile, "noise")
 			self.site = bunch.Bunch({k:hfile["site/"+k].value for k in hfile["site"]})
@@ -153,7 +152,7 @@ class H5Scan(Scan):
 			self.sampslices = []
 			self.id = os.path.basename(fname)
 			self.entry = bunch.Bunch(id=self.id)
-	def get_samples(self):
+	def get_samples(self, verbose=False):
 		"""Return the actual detector samples. Slow! Data is read from disk,
 		so store the result if you need to reuse it."""
 		with h5py.File(self.fname, "r") as hfile:
@@ -177,11 +176,11 @@ def write_scan(fname, scan):
 	with h5py.File(fname, "w") as hfile:
 		for k in ["boresight","offsets","comps","sys","mjd0","dets"]:
 			hfile[k] = getattr(scan, k)
-		n, neach, flat = scan.cut.flatten()
-		# h5py has problems with zero size arrays
-		if flat.size == 0: flat = np.zeros([1,2],dtype=np.int32)
-		hfile["cut/neach"] = neach
-		hfile["cut/flat"]  = flat
+		ranges = scan.cut.ranges
+		if ranges.size == 0: ranges = np.zeros([1,2],dtype=np.int32)
+		hfile["cut/ranges"] = ranges
+		hfile["cut/detmap"] = scan.cut.detmap
+		hfile["cut/nsamp"]  = scan.cut.nsamp
 		nmat.write_nmat(hfile.create_group("noise"), scan.noise)
 		for k in scan.site:
 			hfile["site/"+k] = scan.site[k]
@@ -189,8 +188,6 @@ def write_scan(fname, scan):
 
 def read_scan(fname):
 	return H5Scan(fname)
-
-default_site = bunch.Bunch(lat=0,lon=0,alt=0,T=273,P=550,hum=0.2,freq=100)
 
 # In the current (ugly) architecture, this is the least painful place to put
 # HWP resampling.

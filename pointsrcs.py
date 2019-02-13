@@ -57,7 +57,8 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	# Pad our map by rmax, so we get the contribution from sources
 	# just ourside our area. We will later split our map into cells of size cres. Let's
 	# adjust the padding so we have a whole number of cells
-	cres = utils.nint(rmax/omap.pixshape())
+	minshape = np.min(omap[...,5:-5:10,5:-5:10].pixshapemap()/10,(-2,-1))
+	cres = np.maximum(1,utils.nint(rmax/minshape))
 	epix = cres-(omap.shape[-2:]+2*cres)%cres
 	padding = [cres,cres+epix]
 	wmap, wslice  = enmap.pad(omap, padding, return_slice=True)
