@@ -24,6 +24,7 @@ possible. Parametrizing them in a standard format may be difficult.
 """
 import numpy as np
 from astropy.io import fits
+from scipy import spatial
 from . import utils, enmap
 
 #### Map-space source simulation ###
@@ -183,6 +184,31 @@ def uncellify(cmap):
 	omap = utils.moveaxis(cmap, -2, -3)
 	omap = omap.reshape(omap.shape[:-4]+(omap.shape[-4]*omap.shape[-3],omap.shape[-2]*omap.shape[-1]))
 	return omap
+
+#### Cross-matching ####
+
+def crossmatch(srcs1, srcs2, tol=1*utils.arcmin, safety=4):
+	"""Cross-match two source catalogs based on position. Each
+	source in one catalog is associated with the closest source
+	in the other catalog, as long as the distance between them is
+	less than the tolerance. The catalogs must be [:,{ra,dec,...}]
+	in radians. Returns [nmatch,2], with the last index giving
+	the index in the first and second catalog for each match."""
+	pos1, pos2 = srcs1[:,:2], srcs2[:,:2]
+	tree1 = spatial.KDTree(pos1)
+	tree2 = spatial.KDTree(pos2)
+	groups = tree1.query_ball_tree(tree2, tol*safety)
+	matches = []
+	for gi, group in enumerate(groups):
+		if len(group) == 0: continue
+		# Get the true distance to each member in the group
+		group = np.array(group)
+		dists = utils.angdist(pos1[gi,:,None], pos2[group,:].T)
+		best  = np.argmin(dists)
+		if dists[best] > tol: continue
+		matches.append([gi, group[best]])
+	matches = np.array(matches)
+	return matches
 
 #### Source parameter I/O ####
 

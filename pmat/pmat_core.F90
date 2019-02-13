@@ -1472,7 +1472,7 @@ contains
 					! Linearly interpolate the beam value
 					brel = br*inv_bres+1
 					bind = floor(brel)
-					if(bind >= size(beam)-1) cycle
+					if(bind >= size(beam)) cycle
 					brel = brel-bind
 					bval = beam(bind)*(1-brel) + beam(bind+1)*brel
 					! And perform the actual projection

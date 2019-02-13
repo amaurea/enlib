@@ -1140,7 +1140,7 @@ class FilterBroadenBeamHor:
 def broaden_beam_hor(tod, scan, ibeam, obeam):
 	ft    = fft.rfft(tod)
 	k     = 2*np.pi*fft.rfftfreq(scan.nsamp, 1/scan.srate)
-	el    = np.mean(scan.box()[:,2])
+	el    = np.mean(scan.box[:,2])
 	skyspeed = scan.speed*np.cos(el)
 	sigma = (obeam**2-ibeam**2)**0.5
 	ft *= np.exp(-0.5*(sigma/skyspeed)**2*k**2)
