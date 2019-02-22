@@ -461,8 +461,8 @@ class Bufmap:
 		# Use dtype.name here to work around mpi4py's inability to handle
 		# numpy's several equivalent descriptions of the same dtype. This
 		# prevents errors like "KeyError '<f'"
-		source_buffer = np.zeros(self.buf_shape, source_data[0].dtype.name)
-		target_buffer = np.zeros(target_bufmap.buf_shape, target_data[0].dtype.name)
+		source_buffer = np.zeros(self.buf_shape, np.dtype(source_data[0].dtype).name)
+		target_buffer = np.zeros(target_bufmap.buf_shape, np.dtype(target_data[0].dtype).name)
 		self.data2buf(source_data, source_buffer)
 		self.buf2buf(source_buffer, target_bufmap, target_buffer, comm)
 		target_bufmap.buf2data(target_buffer, target_data)
@@ -485,7 +485,7 @@ def write_map(name, map, ext="fits", merged=True):
 		# in memory while writing. It is unclear how to avoid this
 		# without bypassing pyfits or becoming super-slow.
 		if map.comm.rank == 0:
-			canvas = enmap.zeros(map.shape, map.wcs, map.dtype.name)
+			canvas = enmap.zeros(map.shape, map.wcs, np.dtype(map.dtype).name)
 		else:
 			canvas = None
 		dmap2enmap(map, canvas)
@@ -566,7 +566,7 @@ def dmap2enmap(dmap, emap, root=0):
 		if dmap.comm.rank == root and id == root:
 			data = dmap.tiles[loc]
 		elif dmap.comm.rank == root:
-			data = np.zeros(dmap.pre+tuple(box[1]-box[0]), dtype=dmap.dtype.name)
+			data = np.zeros(dmap.pre+tuple(box[1]-box[0]), dtype=np.dtype(dmap.dtype).name)
 			dmap.comm.Recv(data, source=id, tag=loc)
 		elif dmap.comm.rank == id:
 			dmap.comm.Send(dmap.tiles[loc], dest=root, tag=loc)

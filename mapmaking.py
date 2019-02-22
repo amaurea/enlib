@@ -316,9 +316,12 @@ class SignalPhase(Signal):
 		self.cuts      = cuts
 		self.dtype     = areas.maps[0].dtype
 		self.data = {}
+		# Argh! I should hever have switched to string-based detector names!
+		def get_uids(detnames): return np.char.partition(detnames, "_")[:,2].astype(int)
 		# Set up the detector mapping for each scan
 		for pid, scan in zip(pids,scans):
-			inds = utils.find(areas.dets, scan.dets)
+			dets = get_uids(scan.dets)
+			inds = utils.find(areas.dets, dets)
 			mat  = pmat.PmatScan(scan, areas.maps[pid], inds)
 			self.data[scan] = [pid, mat]
 		self.dof = zipper.MultiZipper([
@@ -1069,8 +1072,11 @@ class FilterAddPhase:
 		for i,m in enumerate(self.phasemap.maps):
 			self.phasemap.maps[i] = m*mmul
 		self.data = {}
+		# Argh! I should hever have switched to string-based detector names!
+		def get_uids(detnames): return np.char.partition(detnames, "_")[:,2].astype(int)
 		for pid, scan in zip(pids, scans):
-			inds = utils.find(phasemap.dets, scan.dets)
+			dets = get_uids(scan.dets)
+			inds = utils.find(phasemap.dets, dets)
 			mat  = pmat.PmatScan(scan, phasemap.maps[pid], inds)
 			self.data[scan] = [pid, mat]
 	def __call__(self, scan, tod):
@@ -1140,7 +1146,7 @@ class FilterBroadenBeamHor:
 def broaden_beam_hor(tod, scan, ibeam, obeam):
 	ft    = fft.rfft(tod)
 	k     = 2*np.pi*fft.rfftfreq(scan.nsamp, 1/scan.srate)
-	el    = np.mean(scan.box()[:,2])
+	el    = np.mean(scan.box[:,2])
 	skyspeed = scan.speed*np.cos(el)
 	sigma = (obeam**2-ibeam**2)**0.5
 	ft *= np.exp(-0.5*(sigma/skyspeed)**2*k**2)
