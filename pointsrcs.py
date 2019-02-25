@@ -30,7 +30,7 @@ from . import utils, enmap
 #### Map-space source simulation ###
 
 def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None, smul=1,
-		return_padded=False, pixwin=False, op=np.add):
+		return_padded=False, pixwin=False, op=np.add, wrap="auto"):
 	"""Simulate a point source map in the geometry given by shape, wcs
 	for the given srcs[nsrc,{dec,ra,T...}], using the beam[{r,val},npoint],
 	which must be equispaced. If omap is specified, the sources will be
@@ -45,6 +45,8 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	ishape = omap.shape
 	omap   = omap.preflat
 	ncomp  = omap.shape[0]
+	# Set up wrapping
+	if wrap is "auto": wrap = [0, utils.nint(360./wcs.wcs.cdelt[0])]
 	# In keeping with the rest of the functions here, srcs is [nsrc,{dec,ra,T,Q,U}].
 	# The beam parameters are ignored - the beam argument is used instead
 	amps = srcs[:,2:2+ncomp]
@@ -67,7 +69,7 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	# Find out which sources matter for which cells
 	srcpix = wmap.sky2pix(poss.T).T
 	pixbox= np.array([[0,0],wmap.shape[-2:]],int)
-	nhit, cell_srcs = build_src_cells(pixbox, srcpix, cres)
+	nhit, cell_srcs = build_src_cells(pixbox, srcpix, cres, wrap=wrap)
 	posmap = wmap.posmap()
 	model = eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=wmap.dtype, op=op)
 	del posmap
@@ -122,7 +124,7 @@ def expand_beam(beam, nsigma=5, rmax=None, nper=400):
 def nsigma2rmax(beam, nsigma):
 	return beam[0,np.where(beam[1] >= np.exp(-0.5*nsigma**2))[0][-1]]
 
-def build_src_cells(cbox, srcpos, cres, unwind=False):
+def build_src_cells(cbox, srcpos, cres, unwind=False, wrap=None):
 	# srcpos is [nsrc,...,{dec,ra}]. Reshape to 3d to keep things simple.
 	# will reshape back when returning
 	cbox    = np.asarray(cbox)
@@ -136,14 +138,14 @@ def build_src_cells(cbox, srcpos, cres, unwind=False):
 		ref     = np.mean(cbox[:,1],0)
 		srcpos[:,...,1] = utils.rewind(srcpos[:,...,1], ref)
 	# How big must our cell hit array be?
-	nmax = max(1,np.max(build_src_cells_helper(cbox, cshape, cres, srcpos)))
-	ncell, cells = build_src_cells_helper(cbox, cshape, cres, srcpos, nmax)
+	nmax = max(1,np.max(build_src_cells_helper(cbox, cshape, cres, srcpos, wrap=wrap)))
+	ncell, cells = build_src_cells_helper(cbox, cshape, cres, srcpos, nmax, wrap=wrap)
 	# Reshape back to original shape
 	ncell = ncell.reshape(ishape[1:-1]+ncell.shape[1:])
 	cells = cells.reshape(ishape[1:-1]+cells.shape[1:])
 	return ncell, cells
 
-def build_src_cells_helper(cbox, cshape, cres, srcpos, nmax=0):
+def build_src_cells_helper(cbox, cshape, cres, srcpos, nmax=0, wrap=None):
 	# A cell is hit if it overlaps both horizontally and vertically
 	# with the point source +- cres
 	nsrc, nmid = srcpos.shape[:2]
@@ -152,21 +154,30 @@ def build_src_cells_helper(cbox, cshape, cres, srcpos, nmax=0):
 	if nmax > 0:
 		cells = np.zeros((nmid,)+cshape+(nmax,),np.int32)
 	c0 = cbox[0]; inv_dc = cshape/(cbox[1]-cbox[0]).astype(float)
+	# Set up wrapping. The woff variable will contain the set of coordinate offsets we will try
+	if wrap is None: wrap = [0,0]
+	woffs = []
+	for i, w in enumerate(wrap):
+		if w == 0: woffs.append([0])
+		else: woffs.append([-w,0,+w])
 	for si in range(nsrc):
 		for mi in range(nmid):
 			pos = srcpos[si,mi]
-			i1 = (pos[:2]-cres-c0)*inv_dc
-			i2 = (pos[:2]+cres-c0)*inv_dc+1 # +1 because this is a half-open interval
-			# Don't try to update out of bounds
-			i1 = np.maximum(i1.astype(int), 0)
-			i2 = np.minimum(i2.astype(int), np.array(cshape))
-			# Skip sources that don't hit our area at all
-			if np.any(i1 >= cshape) or np.any(i2 < 0): continue
-			for cy in range(i1[0],i2[0]):
-				for cx in range(i1[1],i2[1]):
-					if nmax > 0:
-						cells[mi,cy,cx,ncell[mi,cy,cx]] = si
-					ncell[mi,cy,cx] += 1
+			for woffy in woffs[0]:
+				for woffx in woffs[1]:
+					wpos = pos[:2] + np.array([woffy,woffx])
+					i1   = (wpos[:2]-cres-c0)*inv_dc
+					i2   = (wpos[:2]+cres-c0)*inv_dc+1 # +1 because this is a half-open interval
+					# Don't try to update out of bounds
+					i1 = np.maximum(i1.astype(int), 0)
+					i2 = np.minimum(i2.astype(int), np.array(cshape))
+					# Skip sources that don't hit our area at all
+					if np.any(i1 >= cshape) or np.any(i2 < 0): continue
+					for cy in range(i1[0],i2[0]):
+						for cx in range(i1[1],i2[1]):
+							if nmax > 0:
+								cells[mi,cy,cx,ncell[mi,cy,cx]] = si
+							ncell[mi,cy,cx] += 1
 	if nmax > 0: return ncell, cells
 	else: return ncell
 
