@@ -1,6 +1,6 @@
 import numpy as np, os, time, imp, copy, functools, sys
 from scipy import ndimage, optimize, interpolate, integrate, stats, special
-from . import enmap, retile, utils, bunch, cg, fft, powspec, array_ops, memory, wcsutils
+from . import enmap, retile, utils, bunch, cg, fft, powspec, array_ops, memory, wcsutils, bench
 from astropy import table
 from astropy.io import fits
 #from matplotlib import pyplot
@@ -291,7 +291,7 @@ log_smooth_corrections = [ 1.0, # dummy for 0 dof
  1.024864, 1.024259, 1.023663, 1.023195, 1.022640, 1.022130, 1.021648, 1.021144,
  1.020772]
 
-def smooth_ps(ps, res, alpha=4, log=True, ndof=2):
+def smooth_ps_grid(ps, res, alpha=4, log=False, ndof=2):
 	"""Smooth a 2d power spectrum to the target resolution in l"""
 	# First get our pixel size in l
 	lx, ly = enmap.laxes(ps.shape, ps.wcs)
@@ -308,6 +308,28 @@ def smooth_ps(ps, res, alpha=4, log=True, ndof=2):
 	ps    = enmap.ifft(fmap).real
 	if log: ps = np.exp(ps)*log_smooth_corrections[ndof]
 	return ps
+
+def smooth_radial(ps, res=2.0):
+	ly, lx = enmap.laxes(ps.shape, ps.wcs)
+	lr     = (ly[:,None]**2+lx[None,:]**2)**0.5
+	dl     = min(lr[0,1],lr[1,1])*res
+	bi     = np.floor(lr/dl).astype(int).reshape(-1)
+	hits   = np.bincount(bi)
+	ops    = ps*0
+	for i in range(len(ps.preflat)):
+		profile = np.bincount(bi, ps.preflat[i].reshape(-1))/hits
+		ops.preflat[i] = profile[bi].reshape(ps.preflat[i].shape)
+	return ops
+
+def smooth_ps_hybrid(ps, grid_res, rad_res=2.0):
+	"""Smooth spectrum by first building a radial profile, then
+	smoothing the residual after dividing that out. The residual
+	grid will have a resolution tuned to have 100 nper samples per
+	bin, where each fourier cell contributes ndof samples."""
+	ps_radial = np.maximum(smooth_radial(ps, res=rad_res),np.max(ps)*1e-14)
+	ps_resid  = smooth_ps_grid(ps/ps_radial, res=grid_res)
+	ps_smooth = ps_resid*ps_radial
+	return ps_smooth
 
 def read_map(fname, pbox, name=None, cache_dir=None, dtype=None, read_cache=False):
 	if os.path.isdir(fname):
@@ -613,7 +635,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		for ps in dset_ps.preflat:
 			if np.allclose(ps,0): ps[:] = 1e3
 		# Smooth ps to reduce sample variance
-		dset_ps  = smooth_ps(dset_ps, ps_res, ndof=2*(nsplit-1))
+		dset_ps  = smooth_ps_grid(dset_ps, ps_res, ndof=2*(nsplit-1), log=True)
 		# Apply noise window correction if necessary:
 		noisewin = dataset.noise_window_params[0] if "noise_window_params" in dataset else "none"
 		if   noisewin == "none": pass
@@ -703,9 +725,19 @@ def setup_profiles_helper(mapset, fun):
 			cache[d.freq] = [profile_1d,profile_2d]
 		d.signal_profile, d.signal_profile_2d = cache[d.freq]
 
+def calc_beam_area(beam_2d):
+	"""Compute the solid angle of an l-space 2d beam in steradians"""
+	# In real space this is sum(beam)/beam[0,0]*pix_area.
+	# beam[0,0] = mean(lbeam), and sum(beam) = lbeam[0,0]*npix.
+	# So the beam area should simply be lbeam[0,0]*npix/mean(lbeam)*pix_area,
+	# up to fourier normalization. In practice this works out to be
+	# area = lbeam[0,0]/mean(lbeam)*pix_area
+	return beam_2d[0,0]/np.mean(beam_2d)*beam_2d.pixsize()
+
 def setup_beams(mapset):
-	"""Set up the full beams with pixel windows for each dataset in the mapset"""
-	cache = {}
+	"""Set up the full beams with pixel windows for each dataset in the mapset,
+	and the corresponding beam areas."""
+	cache  = {}
 	for d in mapset.datasets:
 		param = (d.beam_params, d.pixel_window_params)
 		if param not in cache:
@@ -729,9 +761,11 @@ def setup_beams(mapset):
 					print "the corresponding automatic spearable noise pixel window"
 					raise
 			else: raise ValueError("Unrecognized pixel window type '%s'" % (d.pixel_window_params[0]))
+			beam_2d = enmap.ndmap(beam_2d, d.wcs)
+			area    = calc_beam_area(beam_2d)
 			#enmap.write_map("beam_2d_win_%s.fits" % d.name, beam_2d)
-			cache[param] = beam_2d
-		d.beam_2d = cache[param]
+			cache[param] = (beam_2d, area)
+		d.beam_2d, d.beam_area = cache[param]
 
 def setup_background_spectrum(mapset, spectrum=None):
 	# The background is shared between all datasets.
@@ -743,7 +777,9 @@ def setup_background_spectrum(mapset, spectrum=None):
 	else:
 		S = enmap.spec2flat(mapset.shape, mapset.wcs, spectrum)
 		R = enmap.queb_rotmat(enmap.lmap(mapset.shape, mapset.wcs), inverse=True)
-		S[...,1:3,:,:] = enmap.map_mul(R, S[...,1:3,:,:])
+		# Rotate from EB to QU
+		# Would be faster to do this in two operations, but it's just 2x2 matrices
+		S[1:3,1:3] = np.einsum("abyx,bcyx,dcyx->adyx", R, S[1:3,1:3], R)
 		mapset.S = enmap.ndmap(np.einsum("aayx->ayx",S),mapset.wcs)[:mapset.ncomp]
 	
 def setup_target_beam(mapset, beam=None):
@@ -758,7 +794,7 @@ def setup_target_beam(mapset, beam=None):
 	else:
 		beam = mapset.datasets[0].beam_2d.copy()
 		for dataset in mapset.datasets[1:]:
-			beam = np.maximum(beam, dataset.beam_2d)
+			beam[:] = np.maximum(beam, dataset.beam_2d)
 		mapset.target_beam_2d = beam
 
 def setup_mask_common_lowres(mapset, mask):
@@ -859,22 +895,24 @@ class SourceFitter:
 		self.ctype= np.result_type(self.dtype,0j)
 		self.npix = self.shape[-2]*self.shape[-1]
 		self.nmap = len(self.m)
-	def fit(self, cat=None, snlim=5):
+	def fit(self, cat=None, snlim=5, verbose=False):
 		if cat is None: cat = self.mapset.ptsrc_catalog
 		pix   = enmap.sky2pix(self.shape, self.wcs, np.array([cat.dec, cat.ra])).T
 		mask  = np.all(pix>=0,1)&np.all(pix<self.shape[-2:],1)&(cat.sn>snlim)
 		pix   = pix[mask]
-		for mi in range(self.nmap)[::-1]:
-			print "map ", self.names[mi]
-			amps, icovs = fit_sources(self.m[mi], self.H[mi], self.iN[mi], self.P[mi], pix, S=self.S)
+		nsrc  = len(pix)
+		amps  = np.zeros((self.nmap, self.mapset.ncomp, nsrc))
+		icovs = np.zeros((self.nmap, self.mapset.ncomp, nsrc, nsrc))
+		for mi in range(self.nmap):
+			if verbose: print "map ", self.names[mi]
+			amps[mi], icovs[mi] = fit_sources_groupwise(self.m[mi], self.H[mi], self.iN[mi], self.P[mi], pix, S=self.S, verbose=verbose)
+		return amps, icovs
 
-def fit_sources(map, H, iN, profile_2d, src_pix, S=None):
+def fit_sources_brute(map, H, iN, profile_2d, src_pix, S=None, verbose=False):
 	"""Given a map, noise model (H,iN), signal profile and source pixel positions
 	src_pix[:,2], perform a linear ML amplitude fit of all the sources jointly.
 	This can be expensive if there are too many sources present."""
-	# Build basis for each source
 	nsrc = len(src_pix)
-	print "Fit sources", nsrc, map.shape, H.shape, iN.shape, profile_2d.shape
 	B    = np.zeros((nsrc,)+profile_2d.shape, profile_2d.dtype)
 	for si, pix in enumerate(src_pix):
 		B[si] = fft.shift(profile_2d, pix)
@@ -892,22 +930,91 @@ def fit_sources(map, H, iN, profile_2d, src_pix, S=None):
 		# This amounts to pretending that the CMB power is modulated by the hitcounts the
 		# same way the sky map is. This is not perfect, but the same thing would have happened
 		# if we had measured N from the total signal+cmb map.
-		# FIXME: planck pol has weird N with strange unlocalized waves in it in real space.
-		# Try using smarter hybrid smoothing?
-		if S is None: ciNtot = ciN
-		else: ciNtot = 1/(1/ciN + S.preflat[comp]*np.mean(cH**2))
+		with utils.nowarn():
+			if S is None: ciNtot = ciN
+			else: ciNtot = 1/(1/ciN + S.preflat[comp]*np.mean(cH**2))
 		NB   = cH*map_ifft(ciNtot*map_fft(cH*B))
-		if comp == 1:
-			enmap.write_map("NB.fits", NB)
-			enmap.write_map("m.fits", cmap)
-			1/0
 		rhs  = np.einsum("ayx,yx->a", NB, cmap)
 		div  = np.einsum("ayx,byx->ab", B, NB)
 		mask = np.diag(div)>0
 		amps[comp,mask] = np.linalg.solve(div[mask,:][:,mask], rhs[mask])
 		icovs[comp]     = div
-		for i, (y,x) in enumerate(src_pix):
-			print "%3d %8.3f %8.3f %8.3f %8.2f %8.2f" % (i, y, x, amps[comp,i]*div[i,i]**0.5, amps[comp,i], div[i,i]**-0.5)
+		if verbose:
+			for i, (y,x) in enumerate(src_pix):
+				print "%3d %d %8.3f %8.3f %8.3f %8.2f %8.2f" % (i, comp, y, x, amps[comp,i]*div[i,i]**0.5, amps[comp,i], div[i,i]**-0.5)
+	return amps, icovs
+
+def sim_sources(profile_2d, src_pix, amps=1):
+	res   = profile_2d+0j
+	amps  = np.zeros(len(src_pix))+amps
+	fprof = fft.fft(profile_2d+0j, axes=[-2,-1])
+	for pix, amp in zip(src_pix, amps):
+		res += fft.shift(fprof, pix, nofft=True)*amp
+	res = enmap.samewcs(fft.ifft(res, axes=[-2,-1], normalize=True).real, profile_2d)
+	return res
+
+def fit_sources_groupwise(map, H, iN, profile_2d, src_pix, S=None, indep_tol=1e-2, indep_marg=4, verbose=False):
+	"""Given a map, noise model (H,iN), signal profile and source pixel positions
+	src_pix[:,2], perform a linear ML amplitude fit of all the sources jointly.
+	This can be expensive if there are too many sources present."""
+	nsrc  = len(src_pix)
+	ipix  = utils.nint(src_pix)
+	ncomp = len(map.preflat)
+	amps  = np.zeros((ncomp,nsrc))
+	icovs = np.zeros((ncomp,nsrc,nsrc))
+	for comp in range(ncomp):
+		cmap, cH, ciN = map.preflat[comp], H.preflat[comp], iN.preflat[comp]
+		with utils.nowarn():
+			if S is None: ciNtot = ciN
+			else: ciNtot = 1/(1/ciN + S.preflat[comp]*np.mean(cH**2))
+		# Split sources into dependent groups
+		prof  = map_ifft(map_fft(profile_2d)*ciNtot)
+		prof /= np.max(prof)
+		profs = sim_sources(prof, src_pix)
+		mask  = enmap.samewcs(ndimage.distance_transform_edt(np.abs(profs)<indep_tol)<=indep_marg,map)
+		labels, ngroup = ndimage.label(mask)
+		all_groups = np.arange(ngroup)+1
+		del prof, profs, mask
+		labels     = enmap.samewcs(labels, map)
+		src_label  = labels.at(src_pix.T, order=0, unit="pix")
+		# Find which sources go into which group. Some of the groups may have no
+		# sources in them due to "noise" in NB, but that's not a problem.
+		groups     = [list(np.where(src_label==gi)[0]) for gi in all_groups]
+		maxsize    = max([len(g) for g in groups])
+		if verbose: print "split %d sources into %d groups of max size %d" % (nsrc, ngroup, maxsize)
+		# Process the nth element of each group in parallel
+		Bs, NBs = enmap.zeros((2,maxsize,)+cmap.shape, cmap.wcs, cmap.dtype)
+		for i in range(maxsize):
+			sids = np.array([g[i] for g in groups if len(g) > i])
+			Bs[i]  = sim_sources(profile_2d, src_pix[sids])
+			NBs[i] = cH*map_ifft(ciNtot*map_fft(cH*Bs[i]))
+		# Then build the equation system for each group
+		wrhs = np.zeros([ngroup,maxsize])
+		wdiv = np.zeros([ngroup,maxsize,maxsize])
+		for i in range(maxsize):
+			wrhs[:,i] = ndimage.sum(NBs[i]*cmap, labels, all_groups)
+			for j in range(i, maxsize):
+				wdiv[:,i,j] = wdiv[:,j,i] = ndimage.sum(Bs[i]*NBs[j], labels, all_groups)
+		# Solve the system for each group
+		for gi, g in enumerate(groups):
+			n    = len(g)
+			if n == 0: continue
+			grhs = wrhs[gi,:n]
+			gdiv = wdiv[gi,:n,:n]
+			gamp = np.zeros(n)
+			mask = np.diag(gdiv)>0
+			# rare negative values on the diagonal can occur for sources that are mostly
+			# outside the area
+			gdiv[~mask][:,~mask] = 0
+			if np.sum(mask) > 0:
+				gamp[mask] = np.linalg.solve(gdiv[mask,:][:,mask], grhs[mask])
+			# Copy out to full system
+			amps[comp,g] = gamp
+			for si, src in enumerate(g):
+				icovs[comp,src,g] = gdiv[si]
+		if verbose:
+			for i, (y,x) in enumerate(src_pix):
+				print "%3d %d %8.3f %8.3f %8.3f %8.2f %8.2f" % (i, comp, y, x, amps[comp,i]*icovs[comp,i,i]**0.5, amps[comp,i], icovs[comp,i,i]**-0.5)
 	return amps, icovs
 
 class SignalFilter:
@@ -2310,11 +2417,14 @@ class SourceSZFinder3:
 			# flux = amp * pix_area. Except amp is in uK CMB temperature increment, while we
 			# want Jy.
 			#
-			# A blackbody has intensity I = 2hf**3/c**2/(exp(hf/kT)-1) = V/(exp(1/x)-1)
-			# with V = 2hf**3/c**2, x = kT/hf.
-			# dI/dx = V/(exp(1/x)-1)**2 * exp(1/x)/x^2
-			# which gives
-			# dI/dT = 2 h**3*f**5/(k**2*c**2) * (exp(1/x)-1)**-2 * exp(1/x) * T^-2
+			# A blackbody has intensity I = 2hf**3/c**2/(exp(hf/kT)-1) = V/(exp(x)-1)
+			# with V = 2hf**3/c**2, x = hf/kT.
+			# dI/dx = -V/(exp(x)-1)**2 * exp(x)
+			# dI/dT = dI/dx * dx/dT
+			#       = 2hf**3/c**2/(exp(x)-1)**2*exp(x) * hf/k / T**2
+			#       = 2*h**2*f**4/c**2/k/T**2 * exp(x)/(exp(x)-1)
+			#       = 2*x**4 * (h**-2*f**0/c**2*k**3*T**2) * exp(x)/(exp(x)-1)
+			#       = 2*x**4 * k**3*T**2/(h**2*c**2) * exp(x)/(exp(x)-1)
 			# With this, we get
 			# flux = amp * pix_area * dI/dT * uK/K * Jy/(W/m^2/Hz)
 			#
