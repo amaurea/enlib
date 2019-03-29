@@ -284,20 +284,10 @@ class PmatMapMultibeam(PointingMatrix):
 		tod *= tmul
 		if self.empty: return
 		core = get_core(tod.dtype)
-		#print "max m", np.max(m)
-		#print "max comp", np.max(np.abs(self.beam_comps))
-		#import h5py
-		#foo_before = tod[:5].copy()
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
-			#print "A", bi, boff, bcomp, mmul
 			core.pmat_map_direct_grid(1, tod.T, 1.0, m.T, mmul, 1, self.order, self.scan.boresight.T,
 					self.scan.hwp_phase.T, boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T,
 					self.pixbox.T, self.nphi, times)
-		#foo_after = tod[:5].copy()
-		#with h5py.File("test.hdf","w") as hfile:
-		#	hfile["before"] = foo_before
-		#	hfile["after"]  = foo_after
-		#1/0
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
@@ -528,7 +518,7 @@ class PmatPtsrc(PointingMatrix):
 		# Investigate the beam to find the max relevant radius
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
 		value_lim = np.exp(-0.5*sigma_lim**2)
-		rmax = np.where(scan.beam[1]>=value_lim)[0][-1]*scan.beam[0,1]
+		rmax = (np.where(scan.beam[1]>=value_lim)[0][-1]+1)*scan.beam[0,1]
 		rmul = max([utils.expand_beam(src[-3:])[0][0] for src in srcs.reshape(-1,srcs.shape[-1])])
 		rmax *= rmul
 

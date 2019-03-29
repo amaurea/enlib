@@ -1,8 +1,8 @@
-import numpy as np
-from scipy import ndimage, spatial
-from enlib import enmap, utils, bunch, mpi, fft
+import numpy as np, os
+from scipy import ndimage, spatial, integrate
+from enlib import enmap, utils, bunch, mpi, fft, bench
 
-cat_dtype = [("x","f"),("y","f"),("ra","f"),("dec","f"),("amp","f"),("damp","f"),("npix","f")]
+cat_dtype = [("ra","f"),("dec","f"),("amp","3f"),("damp","3f"),("flux","3f"),("dflux","3f"),("npix","f"),("status","i")]
 
 def get_beam(fname):
 	try:
@@ -19,11 +19,11 @@ def read_boxes_ds9(fname):
 		for line in ifile:
 			if line.startswith("box("):
 				toks = line[4:-1].split(",")
-				rac  = float(toks[0])*utils.degree
+				ra   = float(toks[0])*utils.degree
 				dec  = float(toks[1])*utils.degree
 				wra  = float(toks[2][:-1])*utils.arcsec
 				wdec = float(toks[3][:-1])*utils.arcsec
-				boxes.append([[dec-wdec/2,ra-wra/2],[dec+wdec/2,ra+wra/2]])
+				boxes.append([[dec-wdec/2,ra+wra/2],[dec+wdec/2,ra-wra/2]])
 	boxes = np.array(boxes)
 	return boxes
 
@@ -34,7 +34,7 @@ def read_boxes_txt(fname):
 	return boxes
 
 def get_regions(regfile, shape, wcs):
-	if regfile is None: regfile == "full"
+	if regfile is None: regfile = "full"
 	toks = regfile.split(":")
 	name, args = toks[0], toks[1:]
 	if name == "full":
@@ -44,6 +44,11 @@ def get_regions(regfile, shape, wcs):
 		tsize = int(args[0]) if len(args) >= 1 else 480
 		regions = [[[y,x],[y+tsize,x+tsize]] for y in range(0, shape[-2], tsize) for x in range(0, shape[-1], tsize)]
 		regions = np.array(regions)
+	elif name == "box":
+		# Specify boxes directly on the command line. Not the most elegant syntax
+		boxes   = np.array([float(w) for w in toks[1:5]]).reshape(-1,2,2)*utils.degree
+		regions = np.array([enmap.skybox2pixbox(shape, wcs, box) for box in boxes])
+		regions = np.round(regions).astype(int)
 	elif name == "adaptive":
 		# This one would use a low-res div and build regions with reasonably similar hitcounts
 		# without having them become too large, too small or too empty. This is a pretty difficult
@@ -51,8 +56,8 @@ def get_regions(regfile, shape, wcs):
 		raise NotImplementedError("Adaptive region splitting is not implemented yet")
 	elif os.path.isfile(regfile):
 		# Read explicit regions from file
-		try: boxes = read_boxes_txt(fname)
-		except ValueError: boxes = read_boxes_ds9(fname)
+		try: boxes = read_boxes_txt(regfile)
+		except ValueError: boxes = read_boxes_ds9(regfile)
 		# And turn them into pixel bounding boxes
 		regions = np.array([enmap.skybox2pixbox(shape, wcs, box) for box in boxes])
 		regions = np.round(regions).astype(int)
@@ -60,10 +65,20 @@ def get_regions(regfile, shape, wcs):
 		raise ValueError("Unrecognized region type '%s'" % regfile)
 	return regions
 
-def pad_region(region, pad):
+def pad_region(region, pad, fft=False):
 	region = np.array(region)
 	region[...,0,:] -= pad
 	region[...,1,:] += pad
+	if fft: region = pad_region_fft(region)
+	return region
+
+def pad_region_fft(region):
+	region = np.array(region)
+	ndim = region.shape[-1]
+	for rflat in region.reshape(-1,2,ndim):
+		for i in range(ndim):
+			size = rflat[1,i]-rflat[0,i]
+			rflat[1,i] = rflat[1,i] + fft.fft_len(size, "above") - size
 	return region
 
 def get_apod_holes(div, pixrad):
@@ -123,28 +138,42 @@ def measure_noise(noise_map, margin=15, apod=15, ps_res=200):
 	#enmap.write_map("ps2.fits", ps*0+np.fft.fftshift(ps))
 	return ps
 
-def build_filter(ps, beam):
+def planck_hack(ps2d, lcut=6000):
+	ops2d= ps2d.copy()
+	l    = ps2d.modlmap()
+	ref  = np.mean(ps2d[(l<lcut)&(l>lcut*0.9)])
+	ops2d[l>lcut] = ref
+	return ops2d
+
+def calc_2d_beam(beam1d, shape, wcs):
+	lmap   = enmap.modlmap(shape, wcs)
+	beam2d = enmap.ndmap(np.interp(lmap, np.arange(len(beam1d)), beam1d),wcs)
+	return beam2d
+
+def build_filter(ps, beam2d):
 	# Build our matched filter, assumping beam-shaped point sources
-	lmap   = ps.modlmap()
-	beam2d = np.interp(lmap, np.arange(len(beam)), beam)
 	filter = beam2d/ps
-	# Construct the
 	m  = enmap.ifft(beam2d+0j).real
 	m /= m[0,0]
 	norm = enmap.ifft(enmap.fft(m)*filter).real[0,0]
 	filter /= norm
-	return filter, beam2d
+	return filter
 
-def get_thumb(map, size):
+def get_thumb(map, size, normalize=False):
+	if normalize: map = map/map[...,0,0]
 	return enmap.shift(map, (size//2, size//2))[:size,:size]
 
-def get_template(filter, beam2d, size):
-	# Build the real-space template representing the
-	# response of the filter to a unit-amplitude point source
-	template  = enmap.ifft(filter*beam2d+0j).real
-	template /= np.max(template)
-	template  = get_thumb(template, size=size)
-	return template
+def calc_beam_transform_area(beam_2d, unit="phys"):
+	"""Compute the solid angle of an l-space 2d beam in steradians"""
+	area = beam_2d[0,0]/np.mean(beam_2d)
+	if   unit == "phys": area *= beam_2d.pixsize()
+	elif unit == "pix":  area *= 1
+	else: raise ValueError("Unrecognized unit '%s' in calc_beam_transform_area" % unit)
+	return area
+
+def calc_beam_profile_area(beam_profile):
+	r, b = beam_profile
+	return integrate.simps(2*np.pi*r*b,r)
 
 def fit_labeled_srcs(fmap, labels, inds, extended_threshold=1.1):
 	# Our normal fit is based on the center of mass. This is
@@ -194,7 +223,17 @@ def amax(arr, initial=None):
 		if initial is None: return np.max(arr)
 		else: return np.max(np.concatenate([arr.reshape(-1),[initial]]))
 
-def find_srcs(imap, idiv, beam, apod=15, snmin=3.5, npass=2, snblock=5, nblock=10,
+def build_prior(amps, damps, variability=1.0):
+	"""Take a set of previous source amplitudes amps +- damps and turn
+	them into a prior for a new fit. Variability controls how variable
+	the source is assumed to be, and effectively weakens the prior."""
+	n     = len(amps)
+	mask  = damps > 0
+	ivars = np.zeros(n)
+	ivars[mask] = 1/(damps[mask]**2 + (amps[mask]*variability)**2)
+	return amps, ivars
+
+def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=5, nblock=10,
 		ps_res=2000, pixwin=True, kernel=256, dump=None, verbose=False, apod_margin=10):
 	# Apodize a bit before any fourier space operations
 	apod_map = (idiv*0+1).apod(apod) * get_apod_holes(idiv,apod)
@@ -204,6 +243,8 @@ def find_srcs(imap, idiv, beam, apod=15, snmin=3.5, npass=2, snblock=5, nblock=1
 	# Whiten the map
 	wmap   = imap * idiv**0.5
 	adiv   = idiv * apod_map**2
+	beam2d = calc_2d_beam(beam, imap.shape, imap.wcs)
+	beam_area = calc_beam_transform_area(beam2d)
 	#print "max(imap)", np.max(imap)
 	#print "median(adiv)**-0.5", np.median(adiv)**-0.5
 	#print "max(wmap)", np.max(wmap), np.max(imap)/np.median(adiv)**-0.5
@@ -218,12 +259,12 @@ def find_srcs(imap, idiv, beam, apod=15, snmin=3.5, npass=2, snblock=5, nblock=1
 		# we only need a constant covariance model. If div has lots of structure
 		# on the scale of the signal we're looking for, then this could introduce
 		# false detections. Empirically this hasn't been a problem, though.
-		ps             = measure_noise(wnoise, apod, apod, ps_res=ps_res)
-		filter, beam2d = build_filter(ps, beam)
-		template       = get_template(filter, beam2d, size=kernel)
-		fmap           = enmap.ifft(filter*enmap.fft(wmap)).real   # filtered map
-		fnoise         = enmap.ifft(filter*enmap.fft(wnoise)).real # filtered noise
-		norm           = get_snmap_norm(fnoise*(apod_map==1))
+		ps       = measure_noise(wnoise, apod, apod, ps_res=ps_res)
+		filter   = build_filter(ps, beam2d)
+		template = get_thumb(enmap.ifft(filter*beam2d+0j).real, size=kernel, normalize=True)
+		fmap     = enmap.ifft(filter*enmap.fft(wmap)).real   # filtered map
+		fnoise   = enmap.ifft(filter*enmap.fft(wnoise)).real # filtered noise
+		norm     = get_snmap_norm(fnoise*(apod_map==1))
 		del wnoise
 		if dump:
 			enmap.write_map(dump + "wnoise_%02d.fits" % ipass, wnoise)
@@ -278,30 +319,37 @@ def find_srcs(imap, idiv, beam, apod=15, snmin=3.5, npass=2, snblock=5, nblock=1
 			# No point in continuing if we've already reached sn_lim < snmin. At this point
 			# we're just digging into the noise.
 		# Construct our output catalog format
-		for key in fits: fits[key] = np.concatenate(fits[key])
-		nsrc = len(fits.amp)
+		if len(fits.amp) > 0:
+			for key in fits: fits[key] = np.concatenate(fits[key])
+			nsrc = len(fits.amp)
+		else: nsrc = 0
 		cat = np.zeros(nsrc, cat_dtype).view(np.recarray)
 		if nsrc > 0:
 			rms = adiv.at(fits.pix.T, unit="pix", order=0)**-0.5
-			pos = wmap.pix2sky(fits.pix.T).T
-			cat.y,   cat.x  = fits.pix.T
 			cat.dec, cat.ra = wmap.pix2sky(fits.pix.T)
-			cat.amp  = fits.amp*rms
-			cat.damp = fits.damp*rms
+			cat.amp[:,0]  = fits.amp*rms
+			cat.damp[:,0] = fits.damp*rms
 			cat.npix = fits.npix
+			# Get fluxes. 1e9 is for GHz, 1e6 is for uK
+			fluxconv = utils.flux_factor(beam_area, freq*1e9)/1e6
+			cat.flux  = cat.amp *fluxconv
+			cat.dflux = cat.damp*fluxconv
 			# Order by S/N
-			cat = cat[np.argsort(cat.amp/cat.damp)[::-1]]
+			cat = cat[np.argsort(cat.amp[:,0]/cat.damp[:,0])[::-1]]
+			# Reject any sources that are in the apodization region
+			dist_from_apod = ndimage.distance_transform_edt(apod_map>=1)
+			ipix           = utils.nint(imap.sky2pix([cat.dec,cat.ra]))
+			untainted = dist_from_apod[tuple(ipix)] >= apod_margin
+			cat = cat[untainted]
 		del fits
-		# Reject any sources that are in the apodization region
-		dist_from_apod = ndimage.distance_transform_edt(apod_map>=1)
-		untainted = dist_from_apod[utils.nint(cat.y),utils.nint(cat.x)] >= apod_margin
-		cat = cat[untainted]
 		# Compute model and residual in real units
 		result.resid_snmap = fmap/norm
 		beam_thumb  = get_thumb(enmap.ifft(beam2d+0j).real, size=kernel)
 		beam_thumb /= np.max(beam_thumb)
-		pix                = np.array([cat.y, cat.x]).T
-		result.model       = calc_model(imap.shape, imap.wcs, pix, beam_thumb, cat.amp)
+		if nsrc > 0:
+			pix                = imap.sky2pix([cat.dec,cat.ra]).T
+			result.model       = calc_model(imap.shape, imap.wcs, pix, beam_thumb, cat.amp[:,0])
+		else: result.model = imap*0
 		result.resid       = imap - result.model
 		result.map         = imap
 		result.beam_thumb  = beam_thumb
@@ -310,168 +358,158 @@ def find_srcs(imap, idiv, beam, apod=15, snmin=3.5, npass=2, snblock=5, nblock=1
 		noise = result.resid
 	return result
 
-def fit_srcs(imap, idiv, icat, beam, apod=15, npass=2, indep_tol=1e-2, indep_marg=4,
-		ps_res=2000, pixwin=True, kernel=256, dump=None, verbose=False, apod_margin=10):
-	pass
-#	# Get the (fractional) pixel positions of each source
-#	src_pix  = imap.sky2pix([icat.dec, icat.ra]).T
-#	# Apodize a bit before any fourier space operations
-#	apod_map = (idiv*0+1).apod(apod) * get_apod_holes(idiv,apod)
-#	imap     = imap*apod_map
-#	# Deconvolve the pixel window from the beginning, so we don't have to worry about it
-#	if pixwin: imap = enmap.apply_window(imap,-1)
-#	# We will use a constant correlation model when doing these fits. This is
-#	# slightly different from the whiten+const-cov model used in find_srcs, since
-#	# it doesn't implicitly assume that the point source profile itself is modulated
-#	# by the hitcounts. We can afford that here because we know where the sources are.
-#	H      = idiv**0.5 * apod_map
-#	noise  = sim_initial_noise(idiv)
-#	for ipass in range(npass):
-#		# We model the map as d = Ba+N, where N" = HC"H. This gives us
-#		# a = (B'HC"HB)"B'HC"Hd. We can solve the full equation system brute
-#		# force if we can split the sources into independent groups. We find
-#		# these groups by approximating B'HC"HB as a pure fourier-space matrix
-#		# by replacing H with its mean. The resulting matrix A = BC"B * hmean**2
-#		# tells us the correlation length of the estimator in the map.
-#		# Place delta functions at each source location and multiply by
-#		# this matrix to see how much each source interfers with each other
-#		# source. The matched filter F from find_srcs happens to be A = F*B,
-#		# so reuse that.
-#		C      = measure_noise(H*noise, apod, apod, ps_res=ps_res)
-#		BiC, B = build_filter(C, beam)
-#		B_thumb = get_thumb(enmap.ifft(B+0j).real, size=kernel)
-#		B_thumb /= np.max(B_thumb)
-#		corrmap  = enmap.ifft(enmap.fft(calc_model(imap.shape, imap.wcs, src_pix, beam_thumb))*BiC).real
-#		del BiC
-#		iC = 1/C
-#		# sources are correlated if their correlation patterns overlap at more than indep_tol amplitude.
-#		# This could be done more cleanly by computing a correlation length and grouping using cKDTree.
-#		mask     = enmap.samewcs(ndimage.distance_transform_edt(np.abs(corrmap)<indep_tol)<=indep_marg,imap)
-#		labels, ngroup = ndimage.label(mask)
-#		all_groups     = np.arange(ngroup)+1
-#		del corrmap, mask
-#		labels     = enmap.samewcs(labels, imap)
-#		src_label  = labels.at(src_pix.T, order=0, unit="pix")
-#		# Find which sources go into which group. Some of the groups may have no
-#		# sources in them due to "noise" in NB, but that's not a problem.
-#		groups     = [list(np.where(src_label==gi)[0]) for gi in all_groups]
-#		maxsize    = max([len(g) for g in groups])
-#		if verbose: print "split %d sources into %d groups of max size %d" % (nsrc, ngroup, maxsize)
-#		# Process the nth element of each group in parallel
-#		# FIXME FIXME
-#		# In the worst case this could get very big. If all the sources touch each other,
-#		# then this will use 2*nsrc times the map size. I am worried that this could happen
-#		# for planck. In that case one would also end up interpreting all the planck cmb
-#		# as sources. To avoid this we need an idea of how strong each source is, so we
-#		# can leave the ones planck can't see at their act values.
-#		#
-#		# If find_srcs outputs fluxes too, then we can translate that to our beam and freq
-#		# and predict the S/N for each source. Then split them into a static and fit
-#		# group. Subtract the static group from the map. Then do the fitting for the
-#		# fit group. The static group can be recorded as 0 sigma in the output catalog.
-#
-#		Bs, NBs = enmap.zeros((2,maxsize,)+imap.shape, imap.wcs, imap.dtype)
-#		for i in range(maxsize):
-#			sids = np.array([g[i] for g in groups if len(g) > i])
-#			Bs[i]  = calc_model(imap.shape, imap.wcs, src_pix[sids], beam_thumb)
-#			NBs[i] = H*enmap.ifft(iC*enmap.fft(H*Bs[i])).real
-#		# Then build the equation system for each group
-#		wrhs = np.zeros([ngroup,maxsize])
-#		wdiv = np.zeros([ngroup,maxsize,maxsize])
-#		for i in range(maxsize):
-#			wrhs[:,i] = ndimage.sum(NBs[i]*imap, labels, all_groups)
-#			for j in range(i, maxsize):
-#				wdiv[:,i,j] = wdiv[:,j,i] = ndimage.sum(Bs[i]*NBs[j], labels, all_groups)
-#		# Solve the system for each group
-#		for gi, g in enumerate(groups):
-#			n    = len(g)
-#			if n == 0: continue
-#			grhs = wrhs[gi,:n]
-#			gdiv = wdiv[gi,:n,:n]
-#			gamp = np.zeros(n)
-#			mask = np.diag(gdiv)>0
-#			# rare negative values on the diagonal can occur for sources that are mostly
-#			# outside the area
-#			gdiv[~mask][:,~mask] = 0
-#			if np.sum(mask) > 0:
-#				gamp[mask] = np.linalg.solve(gdiv[mask,:][:,mask], grhs[mask])
-#			# Copy out to full system
-#			amps[comp,g] = gamp
-#			for si, src in enumerate(g):
-#				icovs[comp,src,g] = gdiv[si]
-#		if verbose:
-#			for i, (y,x) in enumerate(src_pix):
-#				print "%3d %d %8.3f %8.3f %8.3f %8.2f %8.2f" % (i, comp, y, x, amps[comp,i]*icovs[comp,i,i]**0.5, amps[comp,i], icovs[comp,i,i]**-0.5)
-#	return amps, icovs
-#
-#
-#
-#	# Whiten the map
-#	wmap   = imap * idiv**0.5
-#	adiv   = idiv * apod_map**2
-#	noise  = sim_initial_noise(idiv)
-#	for ipass in range(npass):
-#		wnoise = noise * adiv**0.5
-#		# We model the whitened map as having constant noise covariance. This will only
-#		# work if the map depth does not change too rapidly. Measure the cov.
-#		ps             = measure_noise(wnoise, apod, apod, ps_res=ps_res)
-#		# d = Ba + N. Here B is the set of beam profiles at each source position.
-#		# a = (B'N"B)"B'N"d
-#		# N"B and B are called filter and beam_2d below.
-#		# N"B sets the typical interference length for the sources. We can use this to
-#		# split them into independent groups
-#		filter, beam2d = build_filter(ps, beam)
-#		beam_thumb     = get_thumb(enmap.ifft(beam2d+0j).real, size=kernel)
-#		beam_thumb    /= np.max(beam_thumb)
-#		source_ringing = enmap.ifft(enmap.fft(calc_model(imap.shape, imap.wcs, pix, beam_thumb, 1.0))*filter).real
-#		# Sources are independent when their ringing patterns don't touch
-#		mask           = enmap.samewcs(ndimage.distance_transform_edt(np.abs(source_ringing)<indep_tol)<=indep_marg,imap)
-#		labels, ngroup = ndimage.label(mask)
-#		all_groups = np.arange(ngroup)+1
-#
-#
-#		fmap           = enmap.ifft(filter*enmap.fft(wmap)).real   # filtered map
-#		fnoise         = enmap.ifft(filter*enmap.fft(wnoise)).real # filtered noise
-#		norm           = get_snmap_norm(fnoise*(apod_map==1))
-#		del wnoise
-#		if dump:
-#			enmap.write_map(dump + "wnoise_%02d.fits" % ipass, wnoise)
-#			enmap.write_map(dump + "wmap_%02d.fits"   % ipass, wmap)
-#			enmap.write_map(dump + "fmap_%02d.fits"   % ipass, fmap)
-#			enmap.write_map(dump + "norm_%02d.fits"   % ipass, norm)
-#		result = bunch.Bunch(snmap=fmap/norm)
-#		fits   = bunch.Bunch(amp=[], damp=[], pix=[], npix=[])
-#		# We could fit all the sources in one go, but that could lead to
-#		# false positives from ringing around strong sources, or lead to
-#		# weaker sources being masked by strong ones. So we fit in blocks
-#		# of source strength.
-#		sn_lim = np.max(fmap/norm*(apod_map>0))/snblock
-#		for iblock in range(nblock):
-#			snmap   = fmap/norm
-#			if dump:
-#				wnmap.write_map(dump + "snmap_%02d_%02d.fits" % (ipass, iblock), snmap)
-#			# Find all significant candidates, even those below our current block cutoff.
-#			# We do this because we will later compute a weighted average position, and we
-#			# want to use more than just a few pixels near the peak for that average.
-#			matches = snmap >= snmin
-#			labels, nlabel = ndimage.label(matches)
-#			if nlabel == 0: break
-#			all_inds = np.arange(nlabel)
-#			sn       = ndimage.maximum(snmap, labels, all_inds+1)
-#			# Then apply the sn_lim cutoff. keep is the list of matches that were sufficiently
-#			# strong.
-#			keep     = np.where(sn >= sn_lim)[0]
-#			if len(keep) == 0: break
-#			# Measure the properties of the selected sources. This will be based on the
-#			# pixels that were > snmin.
-#			pix, amp = fit_labeled_srcs(fmap, labels, keep+1)
-#			damp     = norm.at(pix.T, unit="pix", order=0)
-#			npix     = ndimage.sum(matches, labels, keep+1)
-#			model    = calc_model(fmap.shape, fmap.wcs, pix, amp, template)
-#			# Subtract these sources from fmap in preparation for the next pass
+def measure_corrlen(tfun, tol=1e-2):
+	"""Given a transfer function (from a beam, for example) compute its correlation
+	length, which is defined at the distance in radians beyond which the correlation
+	function no longer exceeds tol relative to the peak value."""
+	corrfun  = enmap.ifft(tfun+0j).real
+	corrfun /= corrfun[0,0]
+	# Move the corrfun to the center of the area, and get distances from that point
+	refpix   = np.array(tfun.shape[-2:])//2
+	refpos   = corrfun.pix2sky(refpix)
+	corrfun  = enmap.shift(corrfun, refpix)
+	r        = corrfun.modrmap(ref=refpos)
+	# Find the highest radius where we're above the tolerance
+	corrlen  = np.max(r[np.abs(corrfun)>tol])
+	return corrlen
 
+def group_independent(pos, corrlen):
+	pos   = utils.rewind(pos)
+	n     = len(pos)
+	# Add angle wrapped version of the positions
+	wpos1 = pos.copy(); wpos1[:,1] -= 2*np.pi
+	wpos2 = pos.copy(); wpos2[:,1] += 2*np.pi
+	wpos  = np.concatenate([pos,wpos1,wpos2],0)
+	del wpos1, wpos2
+	# Apply cos dec scaling to make KDTree distance computation approximate
+	# angular distances
+	pos[:,1]  *= np.cos(pos[:,0])
+	wpos[:,1] *= np.cos(wpos[:,0])
+	# Find all points that are correlated with each point
+	tree  = spatial.cKDTree(pos)
+	wtree = spatial.cKDTree(wpos)
+	corr_groups= tree.query_ball_tree(wtree, corrlen)
+	# Normalize wrapped points
+	corr_groups= [set([i%n for i in g]) for g in corr_groups]
+	# Split into groups with the property that all the points in each group are indendent.
+	# This algorithm isn't that efficient, but the number of sources won't be *that* big
+	indep_groups = []
+	remainder    = set(range(n))
+	while len(remainder) > 0:
+		group = []
+		candidates = remainder.copy()
+		while len(candidates) > 0:
+			# Get an element from the candidates
+			elem = candidates.pop()
+			# Remove all points correlated with elem from candidates
+			candidates -= corr_groups[elem]
+			group.append(elem)
+		remainder -= set(group)
+		indep_groups.append(sorted(group))
+	# Turn all the sets into lists in groups, so our output is a bit cleaner
+	corr_groups = [list(g) for g in corr_groups]
+	return indep_groups, corr_groups
 
+# FIXME: Need to import the complicated pixel window stuff from jointmap to
+# be able to handle planck. This is duplicating jointmap quite a lot...
+# Is there a nice way to merge them? There are two main differences:
+# 1. diff-based vs. tot-based. Dory does not need diff-maps or background
+#    spectra, but instead needs to iterate to get the noise model right.
+# 2. arguments vs. data structures: jointmap has a mapdata structure which
+#    is initialized from a config file. Dory wants to be simpler. But it's
+#    starting to be quite a few things that need to be passed in:
+#    map, ivar, beam, freq and pixwin.
 
+def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
+		apod=15, npass=2, indep_tol=1e-2, ps_res=2000, pixwin=True, beam_tol=1e-4,
+		dump=None, verbose=False, apod_margin=10, hack=0, region=0):
+	# Get the (fractional) pixel positions of each source
+	src_pix  = imap.sky2pix(src_pos.T).T
+	# We will only fit sources that are inside our area, and which are not contaminated
+	# by apodization.
+	margin   = apod+apod_margin
+	fit_inds = np.all(src_pix >= margin, 1) & np.all(src_pix < np.array(imap.shape[-2:])-margin, 1)
+	src_pos, src_pix = src_pos[fit_inds], src_pix[fit_inds]
+	nsrc     = len(src_pos)
+	if len(src_pos) == 0:
+		return fit_inds, np.zeros([0]), np.zeros([0,0])
+	# Apodize a bit before any fourier space operations
+	apod_map = (idiv*0+1).apod(apod) * get_apod_holes(idiv,apod)
+	imap     = imap*apod_map
+	# We should either handle the polarization looping inside this function,
+	# or possibly always return something for all the input sources. As it is,
+	# we can have any logic here that would select different sources for different
+	# components.. Well, we could fix the calling function I guess..
+	# If the region isn't hit at all we can't build a noise model, nor is there
+	# anything to measure, so just bail out.
+	if np.sum(idiv*apod_map**2) == 0:
+		return fit_inds, np.zeros(nsrc), np.zeros([nsrc,nsrc])
+	# Deconvolve the pixel window from the beginning, so we don't have to worry about it
+	if pixwin: imap = enmap.apply_window(imap,-1)
+	beam2d    = calc_2d_beam(beam, imap.shape, imap.wcs)
+	# The enmap symmetric fourier space unit convention is not good for convolutions, so
+	# switch to the fft one.
+	def map_fft(m):  return enmap.fft(m, normalize=False)
+	def map_ifft(m): return enmap.ifft(m, normalize=False).real/m.npix
+	# Normalize beam so that its real space version has amplitude 1 (because we fit
+	# amplitudes instead of fluxes here)
+	beam2d    /= np.mean(beam2d)
+	kernel     = int(np.ceil(measure_corrlen(beam2d, beam_tol)/min(imap.pixshape())))
+	beam_thumb = get_thumb(map_ifft(beam2d+0j).real, size=kernel, normalize=True)
+	# We will use a constant correlation model when doing these fits. This is
+	# slightly different from the whiten+const-cov model used in find_srcs, since
+	# it doesn't implicitly assume that the point source profile itself is modulated
+	# by the hitcounts. We can afford that here because we know where the sources are.
+	H      = idiv**0.5 * apod_map
+	noise  = sim_initial_noise(idiv)
+	for ipass in range(npass):
+		C          = measure_noise(H*noise, apod, apod, ps_res=ps_res)
+		if hack: C = planck_hack(C, hack)
+		iC         = 1/C
+		# Build our equation right-hand side: rhs = B'HC"Hd
+		rhs_map  = map_ifft(beam2d*map_fft(H*map_ifft(iC*map_fft(H*imap))))
+		rhs      = rhs_map.at(src_pix.T, unit="pix", mask_nan=False)
+		# Then build our left-hand side A = B'HC"HB. We can do this efficiently
+		# by exploiting the fact that most sources are not correlated with each other.
+		corrlen  = measure_corrlen(beam2d**2*iC, indep_tol)
+		with bench.show("make groups"):
+			indep_groups, corr_groups = group_independent(src_pos, corrlen)
+		icov = np.zeros([nsrc,nsrc])
+		for gi, igroup in enumerate(indep_groups):
+			if verbose: print "fit region %2d pass %2d/%d group %d/%d" % (region, ipass+1,npass, gi+1, len(indep_groups))
+			with bench.show("calc_model"):
+				Bg       = calc_model(imap.shape, imap.wcs, src_pix[igroup], beam_thumb)
+			with bench.show("icov_map"):
+				icov_map = map_ifft(beam2d*map_fft(H*map_ifft(iC*map_fft(H*Bg))))
+			with bench.show("prefilter"):
+				utils.interpol_prefilter(icov_map, inplace=True)
+			with bench.show("grups"):
+				for gi, isrc in enumerate(igroup):
+					ineighs = corr_groups[isrc]
+					icov[isrc, ineighs] = icov_map.at(src_pix[ineighs].T, unit="pix", prefilter=False, mask_nan=False)
+		# Apply any prior
+		if prior is not None:
+			prior_amp, prior_ivar = prior
+			rhs  += prior_ivar[fit_inds]*prior_amp[fit_inds]
+			icov += np.diag(prior_ivar[fit_inds])
+		# Our equation system can be a bit asymmetrical. This is expected at some level
+		# due to the beam and correlation cutoffs, though I haven't confirmed that that's
+		# really what's going on here. For now we symmetrize and hope for the best.
+		icov  = 0.5*(icov+icov.T)
+		amp   = np.linalg.solve(icov, rhs)
+		damp  = np.diag(icov)**-0.5
+		#for i in range(len(amp)):
+		#	print "%9.4f %9.4f" % (amp[i]/1e3, damp[i]/1e3)
+		# Subtract this from the map to get a better noise estimate
+		model = calc_model(imap.shape, imap.wcs, src_pix, beam_thumb, amp)
+		noise = imap - model
+		#enmap.write_map("test_map_%02d_%d.fits" % (region, ipass), imap)
+		#enmap.write_map("test_model_%02d_%d.fits" % (region, ipass), model)
+		#enmap.write_map("test_resid_%02d_%d.fits" % (region, ipass), noise)
+	#1/0
+	# This function doesn't build a full catalog object. It just returns
+	# the amplitudes and their inverse covariance.
+	return fit_inds, amp, icov
 
 def prune_artifacts(result):
 	# Given a result struct from find_srcs, detect artifacts and remove them both from
@@ -484,32 +522,67 @@ def prune_artifacts(result):
 	good[all_arts] = False
 	result.cat = result.cat[good]
 	# Build new model
-	pix          = np.array([result.cat.y, result.cat.x]).T
-	result.model = calc_model(result.map.shape, result.map.wcs, pix, result.cat.amp, result.beam_thumb)
+	pix          = result.map.sky2pix([result.cat.dec, result.cat.ra]).T
+	result.model = calc_model(result.map.shape, result.map.wcs, pix, result.beam_thumb, result.cat.amp[:,0])
 	result.resid = result.map - result.model
 	return result
 
 def write_catalog(ofile, cat):
+	if ofile.endswith(".fits"): write_catalog_fits(ofile, cat)
+	else: write_catalog_txt (ofile, cat)
+
+def read_catalog(ifile):
+	if ifile.endswith(".fits"): return read_catalog_fits(ifile)
+	else: return read_catalog_txt(ifile)
+
+def write_catalog_txt(ofile, cat):
 	np.savetxt(ofile, np.array([
 		cat.ra/utils.degree,
 		cat.dec/utils.degree,
-		cat.amp/cat.damp,
-		cat.amp/1e3,
-		cat.damp/1e3,
-		cat.npix,
-	]).T, fmt="%9.4f %9.4f %8.3f %9.4f %9.4f %5d")
+		cat.amp[:,0]/cat.damp[:,0],
+		cat.amp[:,0]/1e3, cat.damp[:,0]/1e3,
+		cat.amp[:,1]/1e3, cat.damp[:,1]/1e3,
+		cat.amp[:,2]/1e3, cat.damp[:,2]/1e3,
+		cat.flux[:,0]*1e3, cat.dflux[:,0]*1e3,
+		cat.flux[:,1]*1e3, cat.dflux[:,1]*1e3,
+		cat.flux[:,2]*1e3, cat.dflux[:,2]*1e3,
+		cat.npix, cat.status,
+	]).T, fmt="%9.4f %9.4f %8.3f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %5d %2d",
+	header = "ra dec SNR Tamp dTamp Qamp dQamp Uamp dUamp Tflux dTflux Qflux dQflux Uflux dUflux npix status")
 
-def read_catalog(fname):
-	data = np.loadtxt(fname)
-	cat  = np.zeros(len(data), cat_dtype).view(np.recarray)
-	cat.ra,  cat.dec  = data[:,0:2].T*utils.degree
-	cat.amp, cat.damp = data[:,3:5].T*1e3
-	cat.npix = data[:,5]
+def write_catalog_fits(ofile, cat):
+	from astropy.io import fits
+	ocat = cat.copy()
+	for field in ["ra","dec"]:     ocat[field] /= utils.degree # angles in degrees
+	for field in ["amp","damp"]:   ocat[field] /= 1e3          # amplitudes in mK
+	for field in ["flux","dflux"]: ocat[field] *= 1e3          # fluxes in mJy
+	hdu = fits.hdu.table.BinTableHDU(ocat)
+	hdu.writeto(ofile, overwrite=True)
+
+def read_catalog_txt(ifile):
+	data = np.loadtxt(ifile).T
+	cat  = np.zeros(data.shape[1], cat_dtype).vew(np.recarray)
+	cat.ra, cat.dec = data[:,0:2].T*utils.degree
+	cat.amp  = data[3:9:2].T*1e3
+	cat.damp = data[4:9:2].T*1e3
+	cat.flux = data[9:15:2].T/1e3
+	cat.dflux= data[10:15:2].T/1e3
+	cat.npix = data[15]
+	cat.status = data[16]
+	return cat
+
+def read_catalog_fits(fname):
+	from astropy.io import fits
+	hdu = fits.open(fname)[1]
+	cat = np.asarray(hdu.data).view(np.recarray)
+	for field in ["ra","dec"]:     cat[field] *= utils.degree # angles in degrees
+	for field in ["amp","damp"]:   cat[field] *= 1e3          # amplitudes in mK
+	for field in ["flux","dflux"]: cat[field] /= 1e3          # fluxes in mJy
 	return cat
 
 def allgather_catalog(cat, comm):
 	# This is hacky. It only works if all the columns of cat are floats. Which they are.
-	# But it's still ugly. I wich mpi4py supported recarrays.
+	# But it's still ugly. I wish mpi4py supported recarrays.
 	def to_2d(arr): return arr if arr.ndim == 2 else arr[:,None]
 	fields = [to_2d(cat[key]) for key in cat.dtype.fields]
 	inds   = utils.cumsum([field.shape[1] for field in fields], endpoint=True)
@@ -537,7 +610,7 @@ def find_source_artifacts(cat, vlim=0.005, maxrad=80*utils.arcmin, jumprad=7*uti
 	"""
 	# Find X artifacts in the map by finding sources that are connected to a bright
 	# source by a series of jumps no longer than jumprad.
-	sn     = cat.amp/cat.damp
+	sn     = cat.amp[:,0]/cat.damp[:,0]
 	pos    = np.array([cat.ra,cat.dec]).T
 	cpos   = pos.copy(); cpos[:,0] *= np.cos(pos[:,1])
 	tree   = spatial.cKDTree(cpos)
@@ -608,42 +681,46 @@ def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25):
 			done[group[0]] = True
 			ocat.append(cat[group[0]])
 		else:
-			amps  = cat.amp[group]
+			amps  = cat.amp[group,0]
 			good  = np.where(amps >= np.max(amps)*(1-alim))[0]
+			# Nans could lead to us disqualifying all of them
+			if len(good) == 0: continue
 			gcat  = cat[group[good]]
 			entry = np.zeros([], cat.dtype)
-			def wmean(v, w): return np.sum(v*w)/np.sum(w)
+			def wmean(v, w): return (np.sum(v.T*w,-1)/np.sum(w,-1)).T
 			for key in cat.dtype.fields:
 				# Weighted mean in case one is more uncertain for some reason
-				entry[key] = wmean(gcat[key], gcat["damp"]**-2)
+				entry[key] = wmean(gcat[key], gcat["damp"][:,0]**-2)
 			# Set min uncertainty of inputs as the effective one. Could have
 			# also used np.mean(gcat.damp**-2)**-0.5, but I trust the least uncertain
 			# one more.
-			entry["damp"] = np.min(gcat["damp"])
+			entry["damp"] = np.min(gcat["damp"],0)
 			ocat.append(entry)
 			done[group] = True
 	ocat = np.array(ocat).view(np.recarray)
 	return ocat
 
-def build_merge_weight(shape):
+def build_merge_weight(shape, dtype=np.float64):
 	yoff = np.arange(shape[-2])*1.0-(shape[-2]-1.0)/2
 	xoff = np.arange(shape[-1])*1.0-(shape[-1]-1.0)/2
-	wy   = 1-yoff/np.max(yoff)
-	wx   = 1-xoff/np.max(xoff)
+	wy   = (1-yoff/np.max(yoff)).astype(dtype)
+	wx   = (1-xoff/np.max(xoff)).astype(dtype)
 	weights = wy[:,None]*wx[None,:]
 	return weights
 
-def merge_maps_onto(maplist, shape, wcs, comm, root=0, crop=0):
+def merge_maps_onto(maplist, shape, wcs, comm, root=0, crop=0, dtype=None):
+	if dtype is None: dtype = maplist[0].dtype
+	pre = tuple(shape[:-2])
 	# First crop the maps if necessary
 	if crop: maplist = [map[...,crop:-crop,crop:-crop] for map in maplist]
 	if comm.rank == root:
-		omap = enmap.zeros(shape, wcs)
-		odiv = enmap.zeros(shape, wcs)
+		omap = enmap.zeros(shape, wcs, dtype)
+		odiv = enmap.zeros(shape, wcs, dtype)
 		for ri in range(comm.size):
 			if comm.rank == ri:
 				# Handle self-to-self
 				for imap in maplist:
-					idiv = enmap.samewcs(build_merge_weight(imap.shape),imap)
+					idiv = enmap.samewcs(build_merge_weight(imap.shape, dtype),imap)
 					enmap.insert(omap, imap*idiv, op=np.add)
 					enmap.insert(odiv, idiv,      op=np.add)
 			else:
@@ -651,8 +728,8 @@ def merge_maps_onto(maplist, shape, wcs, comm, root=0, crop=0):
 				nmap = comm.recv(source=ri)
 				for i in range(nmap):
 					pbox = np.array(comm.recv(source=ri)).reshape(2,2)
-					imap = np.zeros(pbox[1]-pbox[0])
-					idiv = build_merge_weight(imap.shape)
+					imap = np.zeros(pre + tuple(pbox[1]-pbox[0]), dtype)
+					idiv = build_merge_weight(imap.shape, dtype)
 					comm.Recv(imap,   source=ri)
 					enmap.insert_at(omap, pbox, imap*idiv, op=np.add)
 					enmap.insert_at(odiv, pbox, idiv,      op=np.add)

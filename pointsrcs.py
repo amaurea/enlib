@@ -30,7 +30,7 @@ from . import utils, enmap
 #### Map-space source simulation ###
 
 def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None, smul=1,
-		return_padded=False, pixwin=False, op=np.add, wrap="auto"):
+		return_padded=False, pixwin=False, op=np.add, wrap="auto", verbose=False):
 	"""Simulate a point source map in the geometry given by shape, wcs
 	for the given srcs[nsrc,{dec,ra,T...}], using the beam[{r,val},npoint],
 	which must be equispaced. If omap is specified, the sources will be
@@ -71,7 +71,7 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	pixbox= np.array([[0,0],wmap.shape[-2:]],int)
 	nhit, cell_srcs = build_src_cells(pixbox, srcpix, cres, wrap=wrap)
 	posmap = wmap.posmap()
-	model = eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=wmap.dtype, op=op)
+	model = eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=wmap.dtype, op=op, verbose=verbose)
 	del posmap
 	if pixwin: model = enmap.apply_window(model)
 	# Update our work map, through our view
@@ -86,13 +86,14 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	else:
 		return wmap.reshape(ishape[:-2]+wmap.shape[-2:]), wslice
 
-def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.float64, op=np.add):
+def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.float64, op=np.add, verbose=False):
 	# Loop through each cell
 	ncy, ncx = nhit.shape
 	model = enmap.zeros(amps.shape[-1:]+posmap.shape[-2:], posmap.wcs, dtype)
 	for cy in range(ncy):
 		for cx in range(ncx):
 			nsrc = nhit[cy,cx]
+			if verbose: print "map cell %5d/%d with %5d srcs" % (cy*ncx+cx+1, ncy*ncx, nsrc)
 			if nsrc == 0: continue
 			srcs  = cell_srcs[cy,cx,:nsrc]
 			y1,y2 = (cy+0)*cres[0], (cy+1)*cres[0]
@@ -103,7 +104,7 @@ def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.flo
 			r      = utils.angdist(pixpos[::-1,None,:,:],srcpos[::-1,:,None,None])
 			bpix   = (r - beam[0,0])/(beam[0,1]-beam[0,0])
 			# Evaluate the beam at these locations
-			bval   = utils.interpol(beam[1], bpix[None], mode="constant", order=1) # [nsrc,ry,rx]
+			bval   = utils.interpol(beam[1], bpix[None], mode="constant", order=1, mask_nan=False) # [nsrc,ry,rx]
 			cmodel = srcamp[:,:,None,None]*bval
 			cmodel = op.reduce(cmodel,-3)
 			op(model[:,y1:y2,x1:x2], cmodel, model[:,y1:y2,x1:x2])
@@ -277,7 +278,7 @@ def src2param(srcs):
 	params[:,1] = srcs.ra  * utils.degree
 	params[:,2] = srcs.I
 	if "Q" in srcs.dtype.names: params[:,3] = srcs.Q
-	if "U" in srcs.dtype.names: params[:,4] = srcs.Q
+	if "U" in srcs.dtype.names: params[:,4] = srcs.U
 	# These are not used
 	params[:,5] = 1 # x-scaling
 	params[:,6] = 1 # y-scaling

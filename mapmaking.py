@@ -827,6 +827,9 @@ class PriorProjectOut:
 #     weighting. Moving all of these into the noise matrix would be very
 #     messy.
 
+class FilterNull:
+	def __call__(self, scan, tod): pass
+
 class FilterScale:
 	def __init__(self, scale): self.scale = scale
 	def __call__(self, scan, tod): tod *= self.scale

@@ -678,6 +678,7 @@ def setup_filter(mapset, mode="weight", filter_kxrad=20, filter_highpass=200, fi
 	if len(mapset.datasets) > 0:
 		bmin = np.min([beam_size(dataset.beam) for dataset in mapset.datasets])
 	for dataset in mapset.datasets:
+		dataset.filter = 1
 		if dataset.highpass:
 			kxmask   = butter(lx, filter_kxrad,   -5)
 			kxmask   = 1-(1-kxmask[None,:])*(np.abs(ly)<bmin*filter_kx_ymax_scale)[:,None]
@@ -686,8 +687,10 @@ def setup_filter(mapset, mode="weight", filter_kxrad=20, filter_highpass=200, fi
 			del kxmask, highpass
 		else:
 			filter   = 1
-		if mode != "filter": dataset.iN *= filter
-		dataset.filter = filter
+		if   mode == "weight": dataset.iN    *= filter
+		elif mode == "filter": dataset.filter = filter
+		elif mode == "none":   pass
+		else: raise ValueError("Unrecognized filter mode '%s'" % mode)
 	mapset.mode = mode
 
 def downweight_lowl(mapset, lknee, alpha, lim=1e-10):
@@ -788,7 +791,7 @@ def setup_target_beam(mapset, beam=None):
 	is missing, a beam that's the best of all inputs at all ls is constructed
 	(but this will often be fragile)."""
 	if beam is not None:
-		mapset.target_beam_2d = beam
+		mapset.target_beam_2d = eval_beam(beam, mapset.l)
 	elif mapset.target_beam is not None:
 		mapset.target_beam_2d = eval_beam(mapset.target_beam, mapset.l)
 	else:
@@ -825,6 +828,7 @@ class Coadder:
 		self.m  = [split.data.map             for dataset in mapset.datasets for split in dataset.splits]
 		self.H  = [split.data.H               for dataset in mapset.datasets for split in dataset.splits]
 		self.iN = [dataset.iN                 for dataset in mapset.datasets for split in dataset.splits]
+		self.F  = [dataset.filter             for dataset in mapset.datasets for split in dataset.splits]
 		self.B  = [dataset.beam_2d/mapset.target_beam_2d for dataset in mapset.datasets for split in dataset.splits]
 		#enmap.write_map("coadder_m.fits", enmap.samewcs(self.m, self.m[0]))
 		#enmap.write_map("coadder_H.fits", enmap.samewcs(self.H, self.H[0]))
@@ -841,7 +845,8 @@ class Coadder:
 		# Calc rhs = B'HCH m
 		rhs = enmap.zeros(self.shape, self.wcs, self.dtype)
 		for i in range(self.nmap):
-			rhs += map_ifft(self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*self.m[i]))))
+			m = map_ifft(self.F[i]*map_fft(self.m[i])) if np.any(self.F[i] != 1) else self.m[i]
+			rhs += map_ifft(self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*m))))
 		return rhs
 	def calc_coadd(self, rhs, maxiter=250, cg_tol=1e-4, verbose=False, dump_dir=None):
 		# solve (B'HCHB)x = rhs. For preconditioner, we will use the full-fourier approximation,
