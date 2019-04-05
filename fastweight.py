@@ -28,7 +28,7 @@ def fastweight(shape, wcs, db, weight="det", array_rad=0.7*utils.degree,
 		pix_ranges, weights = [], []
 		with bench.mark("get"):
 			for i in range(i1,i2):
-				ndet_eff = ndets[i] if weight == "det" else 1000.0
+				ndet_eff = ndets[i] if weight == "det" else 1.0
 				pr, w = get_pix_ranges(shape, wcs, box[:,:,i], daz, nt, ndet=ndet_eff, site=site)
 				if pr is None: continue
 				pix_ranges.append(pr)
