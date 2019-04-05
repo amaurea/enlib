@@ -86,7 +86,9 @@ class Scan:
 		return float(step)/utils.medmean(self.boresight[::step,0][1:]-self.boresight[::step,0][:-1])
 	@property
 	def hwp_active(self): return self.hwp is not None and np.any(self.hwp_phase[0] != 0)
-	def copy(self): return cpy.deepcopy(self)
+	def copy(self, shallow=False):
+		if shallow: return cpy.copy(self)
+		else:       return cpy.deepcopy(self)
 	def getitem_helper(self, sel):
 		if type(sel) != tuple: sel = (sel,)
 		assert len(sel) < 3, "Too many indices in slice"
