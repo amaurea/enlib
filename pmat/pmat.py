@@ -490,8 +490,8 @@ class pos2pix:
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)
 
-config.default("pmat_ptsrc_rsigma", 4.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
-config.default("pmat_ptsrc_cell_res", 5, "Cell size in arcmin to use for fast source lookup.")
+config.default("pmat_ptsrc_rsigma", 4.5, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
+config.default("pmat_ptsrc_cell_res", 10, "Cell size in arcmin to use for fast source lookup.")
 class PmatPtsrc(PointingMatrix):
 	def __init__(self, scan, srcs, sys=None, tmul=None, pmul=None):
 		# We support a srcs which is either [nsrc,nparam], [nsrc,ndir,nparam] or [nsrc,ndir,ndet,nparam], where
@@ -519,6 +519,7 @@ class PmatPtsrc(PointingMatrix):
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
 		value_lim = np.exp(-0.5*sigma_lim**2)
 		rmax = (np.where(scan.beam[1]>=value_lim)[0][-1]+1)*scan.beam[0,1]
+		# Apply any source-specific beam scaling
 		rmul = max([utils.expand_beam(src[-3:])[0][0] for src in srcs.reshape(-1,srcs.shape[-1])])
 		rmax *= rmul
 
