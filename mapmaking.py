@@ -550,7 +550,7 @@ class PreconMapTod:
 			scan.noise.E = np.minimum(scan.noise.E, noise_ref)
 			scan.noise.apply(tod, inverse=True)
 			for weight in self.weights[::-1]: weight(scan, tod)
-			sampcut.gapfill_const(scan.cut, tod)
+			sampcut.gapfill_const(scan.cut, tod, inplace=True)
 			self.signal.backward(scan, tod, omap)
 			self.signal.free()
 		m[:] = 0
@@ -629,7 +629,7 @@ def prec_div_helper(signal, scans, weights, iwork, owork, cuts=None, noise=True)
 			for weight in weights[::-1]: weight(scan, tod)
 		with bench.mark("div_PT_" + signal.name):
 			#signal_cut.backward(scan, tod, ojunk)
-			sampcut.gapfill_const(cuts[si], tod)
+			sampcut.gapfill_const(cuts[si], tod, inplace=True)
 			signal.backward(scan, tod, owork)
 		with bench.mark("div_Fr_" + signal.name):
 			signal.free()
@@ -664,7 +664,7 @@ def calc_crosslink_map(signal, scans, weights, cuts=None, noise=True):
 			for weight in weights: weight(scan, tod)
 		with bench.mark("cmap_PT_" + signal.name):
 			#signal_cut.backward(scan, tod, ojunk)
-			sampcut.gapfill_const(cuts[si], tod)
+			sampcut.gapfill_const(cuts[si], tod, inplace=True)
 			signal.backward(scan, tod, owork)
 		signal.free()
 		times = [bench.stats[s]["time"].last for s in ["cmap_white", "cmap_PT_" + signal.name]]
@@ -684,7 +684,7 @@ def calc_ptsrc_map(signal, scans, src_filters):
 			for src_filter in src_filters:
 				src_filter(scan, tod)
 		with bench.mark("srcmap_PT_" + signal.name):
-			sampcut.gapfill_const(scan.cut, tod)
+			sampcut.gapfill_const(scan.cut, tod, inplace=True)
 			signal.backward(scan, tod, owork)
 		signal.free()
 		times = [bench.stats[s]["time"].last for s in ["srcmap_srcs", "srcmap_PT_" + signal.name]]
@@ -731,7 +731,7 @@ def calc_icov_map(signal, scans, pos, weights):
 			scan.noise.apply(tod)
 			for weight in weights: weight(scan, tod)
 		with bench.mark("icov_PT_" + signal.name):
-			sampcut.gapfill_const(scan.cut, tod)
+			sampcut.gapfill_const(scan.cut, tod, inplace=True)
 			signal.backward(scan, tod, owork)
 		with bench.mark("icov_Fr_" + signal.name): signal.free()
 		times = [bench.stats[s]["time"].last for s in ["icov_P_" + signal.name, "icov_nmat", "icov_PT_" + signal.name]]
@@ -748,7 +748,7 @@ def calc_hits_map(hits, signal, scans, cuts=None):
 			signal.precompute(scan)
 		with bench.mark("hits_PT"):
 			tod = np.full((scan.ndet, scan.nsamp), 1, hits.dtype)
-			sampcut.gapfill_const(cuts[si], tod)
+			sampcut.gapfill_const(cuts[si], tod, inplace=True)
 			signal.backward(scan, tod, work)
 		with bench.mark("hits_Fr_" + signal.name):
 			signal.free()
@@ -1240,7 +1240,7 @@ class SourceHandler:
 		src_tod  = tod.copy()
 		scan.src_cut.insert_samples(src_tod, self.saved)
 		src_tod -= tod
-		sampcut.gapfill_const(scan.cut * ~scan.src_cut, src_tod, 0)
+		sampcut.gapfill_const(scan.cut * ~scan.src_cut, src_tod, 0, inplace=True)
 		# src_tod now contains a atm+cmb-cleaned version of the point source samples,
 		# and is zero outside the source cut. Accumulate it into a src_rhs per
 		# signal
