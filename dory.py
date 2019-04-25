@@ -45,7 +45,7 @@ def get_regions(regfile, shape, wcs):
 		regions = [[[y,x],[y+tsize,x+tsize]] for y in range(0, shape[-2], tsize) for x in range(0, shape[-1], tsize)]
 		regions = np.array(regions)
 	elif name == "box":
-		# Specify boxes directly on the command line. Not the most elegant syntax
+		# Specify boxes directly on the command line. Not the most elegant syntax. dec1:dec2:ra1:ra2
 		boxes   = np.array([float(w) for w in toks[1:5]]).reshape(-1,2,2)*utils.degree
 		regions = np.array([enmap.skybox2pixbox(shape, wcs, box) for box in boxes])
 		regions = np.round(regions).astype(int)
@@ -483,7 +483,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 				icov_map = map_ifft(beam2d*map_fft(H*map_ifft(iC*map_fft(H*Bg))))
 			with bench.show("prefilter"):
 				utils.interpol_prefilter(icov_map, inplace=True)
-			with bench.show("grups"):
+			with bench.show("groups"):
 				for gi, isrc in enumerate(igroup):
 					ineighs = corr_groups[isrc]
 					icov[isrc, ineighs] = icov_map.at(src_pix[ineighs].T, unit="pix", prefilter=False, mask_nan=False)
@@ -701,10 +701,12 @@ def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25):
 	return ocat
 
 def build_merge_weight(shape, dtype=np.float64):
-	yoff = np.arange(shape[-2])*1.0-(shape[-2]-1.0)/2
-	xoff = np.arange(shape[-1])*1.0-(shape[-1]-1.0)/2
-	wy   = (1-yoff/np.max(yoff)).astype(dtype)
-	wx   = (1-xoff/np.max(xoff)).astype(dtype)
+	ny, nx = shape[-2:]
+	cy, cx = (np.array(shape[-2:])-1)/2.0
+	yoff   = np.abs(np.arange(ny)-cy)
+	xoff   = np.abs(np.arange(nx)-cx)
+	wy     = (1-2*yoff/ny).astype(dtype)
+	wx     = (1-2*xoff/nx).astype(dtype)
 	weights = wy[:,None]*wx[None,:]
 	return weights
 
