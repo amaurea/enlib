@@ -220,13 +220,13 @@ class SignalDmapFast(SignalDmap):
 		mat.backward(tod, work[ind], self.pix, self.phase)
 
 class SignalCut(Signal):
-	def __init__(self, scans, dtype, comm, name="cut", ofmt="{name}_{rank:02}", output=False, cut_type=None):
+	def __init__(self, scans, dtype, comm, name="cut", ofmt="{name}_{rank:02}", output=False, cut_type=None, keep=False):
 		Signal.__init__(self, name, ofmt, output, ext="hdf")
 		self.data  = {}
 		self.dtype = dtype
 		cutrange = [0,0]
 		for scan in scans:
-			mat = pmat.PmatCut(scan, cut_type)
+			mat = pmat.PmatCut(scan, cut_type, keep)
 			cutrange = [cutrange[1], cutrange[1]+mat.njunk]
 			self.data[scan] = [mat, cutrange]
 		self.njunk = cutrange[1]
@@ -405,6 +405,40 @@ class SignalMapBuddies(SignalMap):
 	def get_nobuddy(self):
 		data = {k:v[0] for k,v in self.data.iteritems()}
 		return SignalMap(self.data.keys(), self.area, self.comm, cuts=self.cuts, output=False, data=data)
+
+# Special source handling v2:
+# Solve for the map and the local model errors around strong sources jointly. The
+# equation system will be degenerate, so the map will not contain a complete solution
+# in these regions. So before outputting, we need do do
+# tod = Pmap map + Psrcsamp srcssamps
+# totmap = map_white(tod)
+# So this requires a new signal that's very similar to our cut signal, as well as a
+# postprocessing operation that adds up the values in the src pixels.
+
+class SignalSrcSamp(SignalCut):
+	def __init__(self, scans, dtype, comm, srcs=None, tol=100, amplim=None, rel=False, name="srcsamp", ofmt="{name}_{rank:02}", output=False, cut_type="full"):
+		Signal.__init__(self, name, ofmt, output, ext="hdf")
+		self.data  = {}
+		self.dtype = dtype
+		cutrange = [0,0]
+		for scan in scans:
+			# Define our source samples
+			if srcs is None: srcs = scan.pointsrcs
+			srcparam = pointsrcs.src2param(srcs).astype(np.float64)
+			if amplim is not None:
+				srcparam = srcparam[srcparam[:,2]>amplim]
+			if rel: srcparam[:,2:5] /= srcparam[:,2,None]
+			psrc     = pmat.PmatPtsrc(scan, srcparam)
+			tod      = np.zeros((scan.ndet,scan.nsamp), np.float32)
+			psrc.forward(tod, srcparam)
+			mask     = tod > tol; del tod
+			src_cut  = sampcut.from_mask(mask); del mask
+			# Then set up our pointing matrix and DOF as usual
+			mat = pmat.PmatCut(scan, cut_type, keep=True, cut=src_cut)
+			cutrange = [cutrange[1], cutrange[1]+mat.njunk]
+			self.data[scan] = [mat, cutrange]
+		self.njunk = cutrange[1]
+		self.dof = zipper.ArrayZipper(np.zeros(self.njunk, self.dtype), shared=False, comm=comm)
 
 ######## Preconditioners ########
 # Preconditioners have a lot of overlap with Eqsys.A. That's not
@@ -948,6 +982,54 @@ class PostPickup:
 		self.ptp(omaps[1])
 		return omaps[1]
 
+class MultiPostInsertSrcSamp:
+	def __init__(self, scans, signal_srcsamp, signals, weights=[]):
+		self.scans = scans
+		self.signal_srcsamp = signal_srcsamp
+		self.signals        = signals
+		self.weights        = weights
+	def __call__(self, all_signals, all_maps):
+		# Find the index in all_maps corresponding to each of our own signals
+		signals = self.signals
+		inds  = [all_signals.index(signal) for signal in signals]
+		imaps = [all_maps[i] for i in inds]
+		omaps = [signal.zeros() for signal in signals]
+		iwork = [signal.prepare(map) for signal, map in zip(signals, imaps)]
+		owork = [signal.prepare(map) for signal, map in zip(signals, omaps)]
+		# And also find the "map" for our srcsamps
+		smap  = all_maps[all_signals.index(self.signal_srcsamp)]
+		swork = self.signal_srcsamp.prepare(smap)
+		for scan in self.scans:
+			# Project all our degrees degrees of freedom into the TOD
+			tod = np.zeros([scan.ndet, scan.nsamp], self.signal_srcsamp.dtype)
+			with bench.mark("srcins_P"):
+				for signal, work in zip(signals, iwork)[::-1]:
+					signal.forward(scan, tod, work)
+				# Add in our source samples, which is the whole point of this exercise
+				self.signal_srcsamp.forward(scan, tod, swork)
+			# Apply same weighting and cuts as in div, to be compatible with it
+			for weight in self.weights: weight(scan, tod)
+			with bench.mark("srcins_N"):
+				scan.noise.white(tod)
+			for weight in self.weights: weight(scan, tod)
+			with bench.mark("srcins_PT"):
+				sampcut.gapfill_const(scan.cut, tod, inplace=True)
+				# Project everything back into the degrees of freedom
+				for signal, work in zip(signals, owork):
+					signal.backward(scan, tod, work)
+			times = [bench.stats[s]["time"].last for s in ["srcins_P","srcins_N","srcins_PT"]]
+			L.debug("srcins P %5.3f N %5.3f P' %5.3f %s %4d" % (tuple(times)+(scan.id,scan.ndet)))
+		# Collect the results
+		for signal, map, work in zip(signals, omaps, owork):
+			signal.finish(map, work)
+		# Apply the preconditioners, which must be white noise ones for this to work!
+		for signal, map in zip(signals, omaps):
+			signal.precon(map)
+		# And copy over the result, since this is supposed to be an
+		# in-place operation
+		for i, ind in enumerate(inds):
+			all_maps[ind] = omaps[i]
+
 class FilterAddMap:
 	def __init__(self, scans, map, sys=None, mul=1, tmul=1, pmat_order=None):
 		self.map, self.sys, self.mul, self.tmul = map, sys, mul, tmul
@@ -1293,12 +1375,13 @@ class SourceHandler:
 ######## Equation system ########
 
 class Eqsys:
-	def __init__(self, scans, signals, filters=[], filters2=[], weights=[], dtype=np.float64, comm=None):
+	def __init__(self, scans, signals, filters=[], filters2=[], weights=[], multiposts=[], dtype=np.float64, comm=None):
 		self.scans   = scans
 		self.signals = signals
 		self.dtype   = dtype
 		self.filters = filters
 		self.filters2= filters2
+		self.multiposts= multiposts
 		self.weights = weights
 		self.dof     = zipper.MultiZipper([signal.dof for signal in signals], comm=comm)
 		self.b       = None
@@ -1432,6 +1515,8 @@ class Eqsys:
 			return self.dof.dot(a,b)
 	def postprocess(self, x):
 		maps = self.dof.unzip(x)
+		for multipost in self.multiposts:
+			multipost(self.signals, maps)
 		for i in range(len(self.signals)):
 			maps[i] = self.signals[i].postprocess(maps[i])
 		return self.dof.zip(maps)
