@@ -560,9 +560,9 @@ def write_catalog_fits(ofile, cat):
 	hdu.writeto(ofile, overwrite=True)
 
 def read_catalog_txt(ifile):
-	data = np.loadtxt(ifile).T
-	cat  = np.zeros(data.shape[1], cat_dtype).vew(np.recarray)
-	cat.ra, cat.dec = data[:,0:2].T*utils.degree
+	data = np.loadtxt(ifile, ndmin=2).T
+	cat  = np.zeros(data.shape[1], cat_dtype).view(np.recarray)
+	cat.ra, cat.dec = data[0:2]*utils.degree
 	cat.amp  = data[3:9:2].T*1e3
 	cat.damp = data[4:9:2].T*1e3
 	cat.flux = data[9:15:2].T/1e3

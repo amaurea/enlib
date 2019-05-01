@@ -141,11 +141,11 @@ def cg_test():
 	cg = CG(A, b, x0=np.array([2.,1.]))
 	while cg.err > 1e-4:
 		cg.step()
-		print cg.i, cg.err, cg.x
+		print(cg.i, cg.err, cg.x)
 def bcg_test():
 	def A(x): return np.array([[4,2],[1,3]],dtype=float).dot(x)
 	b = np.array([1.,2])
 	cg = BCG(A, b, x0=np.array([2.,1.]))
 	while cg.err > 1e-4:
 		cg.step()
-		print cg.i, cg.err, cg.x
+		print(cg.i, cg.err, cg.x)
