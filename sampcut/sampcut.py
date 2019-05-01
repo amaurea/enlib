@@ -252,7 +252,7 @@ def sum_samples(cut, tod):
 	get_core(tod.dtype).cut_sum(cut.ranges.T, cut.detmap, tod.T, vals)
 	return vals
 
-def gapfill_const(cut, tod, value, inplace=False):
+def gapfill_const(cut, tod, value=0, inplace=False):
 	"""Fill cut values in tod by the given value. Returns the result."""
 	if not inplace: tod = tod.copy()
 	ishape = tod.shape

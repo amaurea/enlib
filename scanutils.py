@@ -56,8 +56,12 @@ def distribute_scans(myinds, mycosts, myboxes, comm):
 		#hfile.close()
 		return myinds, mysubs, mybbox
 
-def get_scan_bounds(myscans):
-	return np.array([[np.min(scan.boresight[:,2:0:-1],0),np.max(scan.boresight[:,2:0:-1],0)] for scan in myscans])
+def get_scan_bounds(myscans, ref=0):
+	bounds = np.array([[np.min(scan.boresight[:,2:0:-1],0),np.max(scan.boresight[:,2:0:-1],0)] for scan in myscans])
+	# Resolve az wrap, assuming no scans crossing straight north or south. We also make
+	# this assumption in pmat_core. This could be generalized if necessary.
+	bounds[...,1] = utils.rewind(bounds[...,1], ref=ref)
+	return bounds
 
 def classify_scanning_patterns(myscans, tol=0.5*utils.degree, comm=None):
 	"""Classify scans into scanning patterns based on [az,el] bounds.

@@ -1101,8 +1101,10 @@ contains
 			! Full resolution cuts. All cut samples are stored.
 			if(dir < 0) then
 				junk = tod
-			elseif(dir > 0) then
+			elseif(dir == 1) then
 				tod = junk
+			elseif(dir >= 2) then
+				tod = tod + junk
 			end if
 			ol = n
 		case(2)
@@ -1115,15 +1117,19 @@ contains
 				ol = ol+1
 				if(dir < 0) then
 					junk(ol) = sum(tod((bi-1)*w+1:bi*w))
-				elseif(dir > 0) then
+				elseif(dir == 1) then
 					tod((bi-1)*w+1:bi*w) = junk(ol)
+				elseif(dir >= 2) then
+					tod((bi-1)*w+1:bi*w) = tod((bi-1)*w+1:bi*w) + junk(ol)
 				end if
 			end do
 			ol = ol+1
 			if(dir < 0) then
 				junk(ol) = sum(tod((bi-1)*w+1:n))
-			elseif(dir < 0) then
+			elseif(dir == 1) then
 				tod((bi-1)*w+1:n) = junk(ol)
+			elseif(dir >= 2) then
+				tod((bi-1)*w+1:n) = tod((bi-1)*w+1:n) + junk(ol)
 			end if
 		case(3)
 			! Exponential cuts. Full resolution near edges, low in the middle,
@@ -1139,8 +1145,10 @@ contains
 				ol = ol+1
 				if(dir < 0) then
 					junk(ol) = sum(tod(si:si+w-1))
-				elseif(dir > 0) then
+				elseif(dir == 1) then
 					tod(si:si+w-1) = junk(ol)
+				elseif(dir >= 2) then
+					tod(si:si+w-1) = tod(si:si+w-1) + junk(ol)
 				end if
 				si            = si+w
 				w             = w*2
@@ -1153,8 +1161,10 @@ contains
 				si3 = n-si2+1
 				if(dir < 0) then
 					junk(ol) = sum(tod(si3-w+1:si3))
-				elseif(dir > 0) then
+				elseif(dir == 1) then
 					tod(si3-w+1:si3) = junk(ol)
+				elseif(dir >= 2) then
+					tod(si3-w+1:si3) = tod(si3-w+1:si3) + junk(ol)
 				end if
 				si2           = si2+w
 				w             = w*2
@@ -1164,8 +1174,10 @@ contains
 			! Middle
 			if(dir < 0) then
 				junk(ol)   = sum(tod(si:si3))
-			elseif(dir > 0) then
+			elseif(dir == 1) then
 				tod(si:si3) = junk(ol)
+			elseif(dir >= 2) then
+				tod(si:si3) = tod(si:si3) + junk(ol)
 			end if
 		case(4)
 			! Legendre polynomial projection, taken from Jon. The odd determination of
@@ -1179,14 +1191,16 @@ contains
 			end select
 			!w = min(n,4+n/cuttype(2))
 			if(w <= 1) then
-				if(dir > 0) then
+				if(dir >= 2) then
+					tod = tod + junk(1)
+				elseif(dir == 1) then
 					tod = junk(1)
 				elseif(dir < 0) then
 					junk(1) = sum(tod)
 				end if
 				ol = 1
 			else
-				if(dir > 0) tod = 0
+				if(dir == 1) tod = 0
 				! This approach, with vectors for xv etc. Was several
 				! times faster than the scalar version due to greater
 				! parallelism.
@@ -1212,7 +1226,7 @@ contains
 		end select
 		! These samples have been handled, so remove them so that
 		! the map pmats do not use them again.
-		if(dir < 0 .and. cuttype(1) .ne. 0) tod = 0
+		if(dir .eq. -1 .and. cuttype(1) .ne. 0) tod = 0
 		if(present(olen)) olen = ol
 	end subroutine
 

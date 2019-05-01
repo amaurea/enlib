@@ -121,7 +121,7 @@ def trace_orbit(obj, mjd, tref, nsub=1, Psub=yr):
 	res.reshape((3,)+mjd.shape)
 	return res
 
-def make_object(a=1, e=0, inc=0, M=0, Omega=0, omega=0, epoch=36525):
+def make_object(a=1, e=0, inc=0, M=0, Omega=0, omega=0, epoch=36525, epoch_M=36525):
 	"""Construct a pyephem EllipticalBody with the given parameters."""
 	o = ephem.EllipticalBody()
 	o._a   = a
@@ -131,14 +131,28 @@ def make_object(a=1, e=0, inc=0, M=0, Omega=0, omega=0, epoch=36525):
 	o._om  = omega
 	o._M   = M
 	o._epoch = epoch
-	o._epoch_M = epoch
+	o._epoch_M = epoch_M
 	return o
 
 def read_object(fname):
+	try:
+		return read_object_xephem(fname)
+	except (IOError, ValueError) as e:
+		return read_object_simple(fname)
+
+def read_object_xephem(fname):
+	with open(fname, "r") as f:
+		for line in f:
+			if line.startswith("#"): continue
+			return ephem.readdb(line)
+	raise IOError("No xephem data in '%s'" % fname)
+
+def read_object_simple(fname):
 	"""Construct a pyephem EllipticalBody based on the key = value entries in
 	the given parameter file."""
 	o = make_object()
-	fields = [("a","_a"),("e","_e"),("inc","_inc"),("M","_M"),("Omega","_Om"),("omega","_om"),("epoch","_epoch"),("epoch","_epoch_M")]
+	o._epoch_M = 0
+	fields = [("a","_a"),("e","_e"),("inc","_inc"),("M","_M"),("Omega","_Om"),("omega","_om"),("epoch","_epoch"),("epoch_M","_epoch_M")]
 	with open(fname, "r") as f:
 		for line in f:
 			line = line.split("#")[0]
@@ -149,4 +163,9 @@ def read_object(fname):
 			for fname, oname in fields:
 				if toks[0] == fname:
 					setattr(o, oname, float(toks[2]))
+	if not o._epoch_M: o._epoch_M = o._epoch
 	return o
+
+def register_object(name, obj):
+	"""Register the given object in pyephem, so it appears like a predefined object"""
+	setattr(ephem, name, lambda: obj)

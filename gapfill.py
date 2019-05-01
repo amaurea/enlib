@@ -83,6 +83,26 @@ def gapfill_joneig(tod, cut, thresh=4, niter=4, nloop=4, inplace=False, gapfill=
 		tod += amps_tot.T.dot(basis)
 	return tod
 
+def gapfill_constrained(tod, cut, iN, mask_scale=1.0, lim=1e-4, maxiter=50, inplace=False, verbose=False):
+	from enlib import cg
+	iV = iN.ivar*mask_scale
+	def A(x):
+		x	 = x.reshape(tod.shape)
+		Ax	= iN.apply(x.copy())
+		Ax += sampcut.gapfill_const(cut, x*iV[:,None], 0, inplace=True)
+		return Ax.reshape(-1)
+	b	= sampcut.gapfill_const(cut, tod*iV[:,None], 0, inplace=True).reshape(-1)
+	x0 = sampcut.gapfill_linear(cut, tod).reshape(-1)
+	solver = cg.CG(A, b, x0)
+	del x0, b
+	while solver.i < maxiter and solver.err > lim:
+		solver.step()
+		if verbose:
+			print "%5d %15.7e" % (solver.i, solver.err)
+	if not inplace: tod = tod.copy()
+	cut.insert_samples(tod, cut.extract_samples(solver.x.reshape(tod.shape)))
+	return tod
+
 #def gapfill_values(arr, ranges, values, inplace=False):
 #	"""Return arr with the gaps filled with values copied from the corresponding
 #	locations in the given array."""

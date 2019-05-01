@@ -392,22 +392,23 @@ class PmatMoby(PointingMatrix):
 class PmatCut(PointingMatrix):
 	"""Implementation of cuts-as-extra-degrees-of-freedom for a single
 	scan."""
-	def __init__(self, scan, params=None):
+	def __init__(self, scan, params=None, keep=False, cut=None):
 		params = config.get("pmat_cut_type", params)
+		if cut is None: cut = scan.cut
 		# Extract the cut parameters. E.g. poly:foo_secs -> [4,foo_samps]
 		par  = np.array(self.parse_params(params, scan.srate))
 		# Meaning of cuts array: [:,{dets,offset,length,out_length,type,args..}]
-		self.cuts = np.zeros([scan.cut.nrange,5+len(par)],dtype=np.int32)
+		self.cuts = np.zeros([cut.nrange,5+len(par)],dtype=np.int32)
 		# Detector each cut belongs to
-		self.cuts[:,0] = np.concatenate([np.full(nr, i, np.int32) for i,nr in enumerate(scan.cut.nranges)])
+		self.cuts[:,0] = np.concatenate([np.full(nr, i, np.int32) for i,nr in enumerate(cut.nranges)])
 		# Start of each cut
-		self.cuts[:,1] = scan.cut.ranges[:,0]
+		self.cuts[:,1] = cut.ranges[:,0]
 		# Length of each cut
-		self.cuts[:,2] = scan.cut.ranges[:,1]-scan.cut.ranges[:,0]
+		self.cuts[:,2] = cut.ranges[:,1]-cut.ranges[:,0]
 		# Set up the parameter arguments
 		self.cuts[:,5:]= par[None,:]
 		assert np.all(self.cuts[:,2] > 0),  "Empty cut range detected in %s" % scan.id
-		assert np.all(self.cuts[:,1] >= 0) and np.all(scan.cut.ranges[:,1] <= scan.nsamp), "Out of bounds cut range detected in %s" % scan.id
+		assert np.all(self.cuts[:,1] >= 0) and np.all(cut.ranges[:,1] <= scan.nsamp), "Out of bounds cut range detected in %s" % scan.id
 		if self.cuts.size > 0:
 			get_core(np.float32).measure_cuts(self.cuts.T)
 		self.cuts[:,3] = utils.cumsum(self.cuts[:,4])
@@ -415,19 +416,22 @@ class PmatCut(PointingMatrix):
 		self.njunk  = np.sum(self.cuts[:,4])
 		self.params = params
 		self.scan = scan
+		self.keep = keep
 	def forward(self, tod, junk):
 		"""Project from the cut parameter (junk) space for this scan
 		to tod."""
+		dir = 2 if self.keep else 1
 		if self.cuts.size > 0:
-			get_core(tod.dtype).pmat_cut( 1, tod.T, junk, self.cuts.T)
+			get_core(tod.dtype).pmat_cut(dir, tod.T, junk, self.cuts.T)
 	def backward(self, tod, junk):
 		"""Project from tod to cut parameters (junk) for this scan.
 		This is meant to be called before the map projection, and
 		removes the cut samples from the tod at the same time,
 		replacing them with zeros. That way the map projection can
 		be done without needing to care about the cuts."""
+		dir = -2 if self.keep else -1
 		if self.cuts.size > 0:
-			get_core(tod.dtype).pmat_cut(-1, tod.T, junk, self.cuts.T)
+			get_core(tod.dtype).pmat_cut(dir, tod.T, junk, self.cuts.T)
 	def parse_params(self,params,srate):
 		toks = params.split(":")
 		kind = toks[0]
@@ -490,8 +494,8 @@ class pos2pix:
 		opix[3]  = np.sin(2*opos[2])
 		return opix.reshape((opix.shape[0],)+shape)
 
-config.default("pmat_ptsrc_rsigma", 4.0, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
-config.default("pmat_ptsrc_cell_res", 5, "Cell size in arcmin to use for fast source lookup.")
+config.default("pmat_ptsrc_rsigma", 4.5, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
+config.default("pmat_ptsrc_cell_res", 10, "Cell size in arcmin to use for fast source lookup.")
 class PmatPtsrc(PointingMatrix):
 	def __init__(self, scan, srcs, sys=None, tmul=None, pmul=None):
 		# We support a srcs which is either [nsrc,nparam], [nsrc,ndir,nparam] or [nsrc,ndir,ndet,nparam], where
@@ -519,6 +523,7 @@ class PmatPtsrc(PointingMatrix):
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
 		value_lim = np.exp(-0.5*sigma_lim**2)
 		rmax = (np.where(scan.beam[1]>=value_lim)[0][-1]+1)*scan.beam[0,1]
+		# Apply any source-specific beam scaling
 		rmul = max([utils.expand_beam(src[-3:])[0][0] for src in srcs.reshape(-1,srcs.shape[-1])])
 		rmax *= rmul
 
