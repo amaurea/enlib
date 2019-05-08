@@ -296,7 +296,7 @@ class PhaseMap:
 		self.dets    = dets
 		self.maps    = maps
 	@staticmethod
-	def read(dirname):
+	def read(dirname, rewind=False):
 		dets     = np.loadtxt(dirname + "/dets.txt").astype(int)
 		patterns = []
 		maps     = []
@@ -306,8 +306,15 @@ class PhaseMap:
 				if len(line) == 0 or line.startswith("#"): continue
 				toks = line.split()
 				dec, ra1, ra2 = [float(w)*utils.degree for w in toks[:3]]
+				map  = enmap.read_map(dirname + "/" + toks[3])
+				if rewind:
+					off  = utils.rewind(ra1)-ra1
+					ra1, ra2 = ra1+off, ra2+off
+					off2 = utils.rewind(map.wcs.wcs.crval[0], period=360)
+					map.wcs.wcs.crval[0] += off2
+					print("off1 %8.3f off2 %8.3f diff %8.3f" % (off1/utils.degree, off2, off1/utils.degree-off2))
 				patterns.append([[dec,ra1],[dec,ra2]])
-				maps.append(enmap.read_map(dirname + "/" + toks[3]))
+				maps.append(map)
 		return PhaseMap(patterns, dets, maps)
 	def write(self, dirname, fmt="{pid:02}_{az0:.0f}_{az1:.0f}_{el:.0f}"):
 		utils.mkdir(dirname)
