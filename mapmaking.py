@@ -310,9 +310,9 @@ class PhaseMap:
 				if rewind:
 					off  = utils.rewind(ra1)-ra1
 					ra1, ra2 = ra1+off, ra2+off
-					off2 = utils.rewind(map.wcs.wcs.crval[0], period=360)
+					off2 = utils.rewind(map.wcs.wcs.crval[0], period=360)-map.wcs.wcs.crval[0]
 					map.wcs.wcs.crval[0] += off2
-					print("off1 %8.3f off2 %8.3f diff %8.3f" % (off1/utils.degree, off2, off1/utils.degree-off2))
+					print("off1 %8.3f off2 %8.3f diff %8.3f" % (off/utils.degree, off2, off/utils.degree-off2))
 				patterns.append([[dec,ra1],[dec,ra2]])
 				maps.append(map)
 		return PhaseMap(patterns, dets, maps)
