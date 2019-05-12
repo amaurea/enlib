@@ -22,6 +22,7 @@ For a point source 1.shape would be a point. But clusters and
 nearby galaxies can have other shapes. In general many profiles are
 possible. Parametrizing them in a standard format may be difficult.
 """
+from __future__ import print_function, division
 import numpy as np
 from astropy.io import fits
 from scipy import spatial
@@ -93,7 +94,7 @@ def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.flo
 	for cy in range(ncy):
 		for cx in range(ncx):
 			nsrc = nhit[cy,cx]
-			if verbose: print "map cell %5d/%d with %5d srcs" % (cy*ncx+cx+1, ncy*ncx, nsrc)
+			if verbose: print("map cell %5d/%d with %5d srcs" % (cy*ncx+cx+1, ncy*ncx, nsrc))
 			if nsrc == 0: continue
 			srcs  = cell_srcs[cy,cx,:nsrc]
 			y1,y2 = (cy+0)*cres[0], (cy+1)*cres[0]
