@@ -276,7 +276,7 @@ def read_dory_txt(fname):
 		d = np.loadtxt(fname, usecols=[0,1,3,5,7], dtype=[("ra","d"),("dec","d"),("I","d"),("Q","d"),("U","d")]).view(np.recarray)
 		d.I *= 1e3; d.Q *= 1e3; d.U *= 1e3
 		return d
-	except ValueError as e:
+	except (ValueError, IndexError) as e:
 		raise IOError(e.message)
 
 def read_fits(fname, hdu=1, fix=True):
