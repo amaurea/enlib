@@ -510,15 +510,6 @@ class PmatPtsrc(PointingMatrix):
 		self.scan  = scan
 		maxcell    = 50 # max numer of sources per cell
 
-		## Compute parallax displacement if necessary. Why is this needed here?
-		## Won't point sources want to use the normal coordinate system?
-		#sundist = config.get("pmat_parallax_au")
-		#self.dpos = 0
-		#if sundist:
-		#	# Transformation to a sun-centered system
-		#	self.dpos = parallax.earth2sun_mixed(srcs.T[:2], sundist, self.scan.mjd0, diff=True).T
-		#srcs[...,:2] += self.dpos
-
 		# Investigate the beam to find the max relevant radius
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
 		value_lim = np.exp(-0.5*sigma_lim**2)
