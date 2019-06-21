@@ -305,15 +305,17 @@ class PhaseMap:
 				line = line.strip()
 				if len(line) == 0 or line.startswith("#"): continue
 				toks = line.split()
-				dec, ra1, ra2 = [float(w)*utils.degree for w in toks[:3]]
+				el, az1, az2 = [float(w)*utils.degree for w in toks[:3]]
 				map  = enmap.read_map(dirname + "/" + toks[3])
 				if rewind:
-					off  = utils.rewind(ra1)-ra1
-					ra1, ra2 = ra1+off, ra2+off
-					off2 = utils.rewind(map.wcs.wcs.crval[0], period=360)-map.wcs.wcs.crval[0]
-					map.wcs.wcs.crval[0] += off2
-					print("off1 %8.3f off2 %8.3f diff %8.3f" % (off/utils.degree, off2, off/utils.degree-off2))
-				patterns.append([[dec,ra1],[dec,ra2]])
+					off  = utils.rewind(az1)-az1
+					az1, az2 = az1+off, az2+off
+					maz  = map.pix2sky([0,0])[1]
+					off2 = utils.rewind(maz)-maz
+					map.wcs.wcs.crval[0] += off2/utils.degree
+					maz2 = map.pix2sky([0,0])[1]
+					print("pattern rewind off1 %8.3f off2 %8.3f diff %8.3f maz %8.3f maz2 %8.3f" % (off/utils.degree, off2/utils.degree, (off-off2)/utils.degree, maz/utils.degree, maz2/utils.degree))
+				patterns.append([[el,az1],[el,az2]])
 				maps.append(map)
 		return PhaseMap(patterns, dets, maps)
 	def write(self, dirname, fmt="{pid:02}_{az0:.0f}_{az1:.0f}_{el:.0f}"):

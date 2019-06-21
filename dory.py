@@ -45,7 +45,7 @@ def get_regions(regfile, shape, wcs):
 		regions = [[[y,x],[y+tsize,x+tsize]] for y in range(0, shape[-2], tsize) for x in range(0, shape[-1], tsize)]
 		regions = np.array(regions)
 	elif name == "box":
-		# Specify boxes directly on the command line. Not the most elegant syntax. dec1:dec2:ra1:ra2
+		# Specify boxes directly on the command line. Not the most elegant syntax. dec1:ra1:dec2:ra2
 		boxes   = np.array([float(w) for w in toks[1:5]]).reshape(-1,2,2)*utils.degree
 		regions = np.array([enmap.skybox2pixbox(shape, wcs, box) for box in boxes])
 		regions = np.round(regions).astype(int)
@@ -265,12 +265,12 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=5
 		fmap     = enmap.ifft(filter*enmap.fft(wmap)).real   # filtered map
 		fnoise   = enmap.ifft(filter*enmap.fft(wnoise)).real # filtered noise
 		norm     = get_snmap_norm(fnoise*(apod_map==1))
-		del wnoise
 		if dump:
 			enmap.write_map(dump + "wnoise_%02d.fits" % ipass, wnoise)
 			enmap.write_map(dump + "wmap_%02d.fits"   % ipass, wmap)
 			enmap.write_map(dump + "fmap_%02d.fits"   % ipass, fmap)
 			enmap.write_map(dump + "norm_%02d.fits"   % ipass, norm)
+		del wnoise
 		result = bunch.Bunch(snmap=fmap/norm)
 		fits   = bunch.Bunch(amp=[], damp=[], pix=[], npix=[])
 		# We could fit all the sources in one go, but that could lead to
@@ -281,7 +281,7 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=5
 		for iblock in range(nblock):
 			snmap   = fmap/norm
 			if dump:
-				wnmap.write_map(dump + "snmap_%02d_%02d.fits" % (ipass, iblock), snmap)
+				enmap.write_map(dump + "snmap_%02d_%02d.fits" % (ipass, iblock), snmap)
 			# Find all significant candidates, even those below our current block cutoff.
 			# We do this because we will later compute a weighted average position, and we
 			# want to use more than just a few pixels near the peak for that average.
@@ -342,6 +342,7 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=5
 			untainted = dist_from_apod[tuple(ipix)] >= apod_margin
 			cat = cat[untainted]
 		del fits
+		nsrc = len(cat)
 		# Compute model and residual in real units
 		result.resid_snmap = fmap/norm
 		beam_thumb  = get_thumb(enmap.ifft(beam2d+0j).real, size=kernel)
@@ -575,9 +576,9 @@ def read_catalog_fits(fname):
 	from astropy.io import fits
 	hdu = fits.open(fname)[1]
 	cat = np.asarray(hdu.data).view(np.recarray)
-	for field in ["ra","dec"]:     cat[field] *= utils.degree # angles in degrees
-	for field in ["amp","damp"]:   cat[field] *= 1e3          # amplitudes in mK
-	for field in ["flux","dflux"]: cat[field] /= 1e3          # fluxes in mJy
+	for field in ["ra","dec"]:     cat[field] *= utils.degree # deg -> rad
+	for field in ["amp","damp"]:   cat[field] *= 1e3          # mK  -> uK
+	for field in ["flux","dflux"]: cat[field] /= 1e3          # mJy -> Jy
 	return cat
 
 def allgather_catalog(cat, comm):
@@ -610,6 +611,7 @@ def find_source_artifacts(cat, vlim=0.005, maxrad=80*utils.arcmin, jumprad=7*uti
 	"""
 	# Find X artifacts in the map by finding sources that are connected to a bright
 	# source by a series of jumps no longer than jumprad.
+	if len(cat) == 0: return np.zeros([0],int), []
 	sn     = cat.amp[:,0]/cat.damp[:,0]
 	pos    = np.array([cat.ra,cat.dec]).T
 	cpos   = pos.copy(); cpos[:,0] *= np.cos(pos[:,1])
@@ -663,6 +665,7 @@ def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25):
 	differ by less than alim fractionally. Otherwise the strongest one is used. This is to prevent
 	a strong source from being averaged with its own artifacts. rlim should be adjusted
 	to fit the exerpiment beam. The default is appropriate for ACT."""
+	if len(cat) == 0: return cat
 	# Normalize positions first. This could miss some mergers on the edge.
 	cat    = cat.copy()
 	cat.ra = utils.rewind(cat.ra, 0)
