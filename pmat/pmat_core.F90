@@ -270,7 +270,7 @@ contains
 				p = nint(pix(:,si))
 				! Skip all out-of-bounds pixels. Accumulating them at the edge is useless
 				if(p(1) .eq. 0) then
-					if(tmul .ne. 0) tod(si) = tod(si)*tmul
+					tod(si) = tod(si)*tmul
 					cycle
 				end if
 				if(tmul .eq. 0) then

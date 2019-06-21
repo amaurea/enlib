@@ -1,6 +1,6 @@
-import numpy as np, os
+import numpy as np, os, time
 from scipy import ndimage, spatial, integrate
-from enlib import enmap, utils, bunch, mpi, fft, bench
+from enlib import enmap, utils, bunch, mpi, fft, bench, pointsrcs
 
 cat_dtype = [("ra","f"),("dec","f"),("amp","3f"),("damp","3f"),("flux","3f"),("dflux","3f"),("npix","f"),("status","i")]
 
@@ -41,8 +41,10 @@ def get_regions(regfile, shape, wcs):
 		# The simplest possible region, covering the whole patch
 		regions = np.array([[0,0],shape[-2:]])[None]
 	elif name == "tile":
-		tsize = int(args[0]) if len(args) >= 1 else 480
-		regions = [[[y,x],[y+tsize,x+tsize]] for y in range(0, shape[-2], tsize) for x in range(0, shape[-1], tsize)]
+		tsize = np.array([int(a) for a in args[:2]])
+		if   tsize.size == 0: tsize = np.array([480,480])
+		elif tsize.size == 1: tsize = np.array([tsize[0],tsize[0]])
+		regions = [[[y,x],[y+tsize[0],x+tsize[1]]] for y in range(0, shape[-2], tsize[0]) for x in range(0, shape[-1], tsize[1])]
 		regions = np.array(regions)
 	elif name == "box":
 		# Specify boxes directly on the command line. Not the most elegant syntax. dec1:ra1:dec2:ra2
@@ -181,6 +183,7 @@ def fit_labeled_srcs(fmap, labels, inds, extended_threshold=1.1):
 	# be pretty bad anyway.
 	pos_com = np.array(ndimage.center_of_mass(fmap, labels, inds))
 	amp_com = fmap.at(pos_com.T, unit="pix")
+	negative= amp_com < 0
 	# We compare these amplitudes with the maxima. Normally these
 	# will be very close. If they are significantly different, then
 	# this is probably an extended object. To allow the description
@@ -188,8 +191,13 @@ def fit_labeled_srcs(fmap, labels, inds, extended_threshold=1.1):
 	# the maximum positions and amplitudes here.
 	pos_max = np.array(ndimage.maximum_position(fmap, labels, inds))
 	amp_max = np.array(ndimage.maximum(fmap, labels, inds))
+	pos_min = np.array(ndimage.minimum_position(fmap, labels, inds))
+	amp_min = np.array(ndimage.minimum(fmap, labels, inds))
+	pos_ext = pos_max.copy(); pos_ext[negative] = pos_min[negative]
+	amp_ext = amp_max.copy(); amp_ext[negative] = amp_min[negative]
+
 	pos, amp = pos_com.copy(), amp_com.copy()
-	extended = amp_max > amp_com*extended_threshold
+	extended = np.abs(amp_ext) > np.abs(amp_com)*extended_threshold
 	pos[extended] = pos_max[extended]
 	amp[extended] = amp_max[extended]
 	return pos, amp
@@ -223,17 +231,18 @@ def amax(arr, initial=None):
 		if initial is None: return np.max(arr)
 		else: return np.max(np.concatenate([arr.reshape(-1),[initial]]))
 
-def build_prior(amps, damps, variability=1.0):
+def build_prior(amps, damps, variability=1.0, min_ivar=1e-10):
 	"""Take a set of previous source amplitudes amps +- damps and turn
 	them into a prior for a new fit. Variability controls how variable
 	the source is assumed to be, and effectively weakens the prior."""
 	n     = len(amps)
 	mask  = damps > 0
 	ivars = np.zeros(n)
-	ivars[mask] = 1/(damps[mask]**2 + (amps[mask]*variability)**2)
+	ivars[mask]  = 1/(damps[mask]**2 + (amps[mask]*variability)**2)
+	ivars[~mask] = min_ivar
 	return amps, ivars
 
-def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=5, nblock=10,
+def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=2.5, nblock=10,
 		ps_res=2000, pixwin=True, kernel=256, dump=None, verbose=False, apod_margin=10):
 	# Apodize a bit before any fourier space operations
 	apod_map = (idiv*0+1).apod(apod) * get_apod_holes(idiv,apod)
@@ -277,7 +286,7 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=5
 		# false positives from ringing around strong sources, or lead to
 		# weaker sources being masked by strong ones. So we fit in blocks
 		# of source strength.
-		sn_lim = np.max(fmap/norm*(apod_map>0))/snblock
+		sn_lim = np.max(np.abs(fmap/norm)*(apod_map>0))
 		for iblock in range(nblock):
 			snmap   = fmap/norm
 			if dump:
@@ -285,13 +294,22 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=5
 			# Find all significant candidates, even those below our current block cutoff.
 			# We do this because we will later compute a weighted average position, and we
 			# want to use more than just a few pixels near the peak for that average.
-			matches = snmap >= snmin
-			labels, nlabel = ndimage.label(matches)
+			# We want both negative and positive matches, but we want to keep them separate
+			# avoid averaging over positive and negative areas that are just next to each other.
+			matches_pos =  snmap >= snmin
+			matches_neg = -snmap >= snmin
+			labels_pos, nlabel_pos = ndimage.label(matches_pos)
+			labels_neg, nlabel_neg = ndimage.label(matches_neg)
+			# We know that pos and neg labels have no overlap, so this should be safe
+			matches= matches_pos+ matches_neg
+			labels = labels_pos + labels_neg + matches_neg*nlabel_pos
+			nlabel = nlabel_pos + nlabel_neg
+			del matches_pos, matches_neg, labels_pos, labels_neg
 			if nlabel == 0: break
 			all_inds = np.arange(nlabel)
-			sn       = ndimage.maximum(snmap, labels, all_inds+1)
-			# Then apply the sn_lim cutoff. keep is the list of matches that were sufficiently
-			# strong.
+			sn       = ndimage.maximum(np.abs(snmap), labels, all_inds+1)
+			# Only keep the strongest sources for now, and update sn_lim
+			sn_lim   = max(snmin, min(sn_lim, np.max(sn))/snblock)
 			keep     = np.where(sn >= sn_lim)[0]
 			if len(keep) == 0: break
 			# Measure the properties of the selected sources. This will be based on the
@@ -312,12 +330,9 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=5
 				counts= np.histogram(sns, edges)[0]
 				desc  = " ".join(["%d: %5d" % (e,c) for e,c in zip(edges[:-1],counts)])
 				print "pass %d block %2d sn: %s" % (ipass+1, iblock+1, desc)
-			# Update sn_lim. Will always decrease by at least snblock, but can go down faster
-			# if there aren't any intermediate sources.
-			if sn_lim <= snmin: break
-			sn_lim = min(sn_lim,np.max(sn))/snblock
 			# No point in continuing if we've already reached sn_lim < snmin. At this point
 			# we're just digging into the noise.
+			if sn_lim <= snmin: break
 		# Construct our output catalog format
 		if len(fits.amp) > 0:
 			for key in fits: fits[key] = np.concatenate(fits[key])
@@ -325,7 +340,7 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=5
 		else: nsrc = 0
 		cat = np.zeros(nsrc, cat_dtype).view(np.recarray)
 		if nsrc > 0:
-			rms = adiv.at(fits.pix.T, unit="pix", order=0)**-0.5
+			rms  = adiv.at(fits.pix.T, unit="pix", order=0)**-0.5
 			cat.dec, cat.ra = wmap.pix2sky(fits.pix.T)
 			cat.amp[:,0]  = fits.amp*rms
 			cat.damp[:,0] = fits.damp*rms
@@ -339,7 +354,7 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=5
 			# Reject any sources that are in the apodization region
 			dist_from_apod = ndimage.distance_transform_edt(apod_map>=1)
 			ipix           = utils.nint(imap.sky2pix([cat.dec,cat.ra]))
-			untainted = dist_from_apod[tuple(ipix)] >= apod_margin
+			untainted = (dist_from_apod[tuple(ipix)] >= apod_margin) & (np.isfinite(rms))
 			cat = cat[untainted]
 		del fits
 		nsrc = len(cat)
@@ -421,8 +436,8 @@ def group_independent(pos, corrlen):
 #    starting to be quite a few things that need to be passed in:
 #    map, ivar, beam, freq and pixwin.
 
-def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
-		apod=15, npass=2, indep_tol=1e-2, ps_res=2000, pixwin=True, beam_tol=1e-4,
+def fit_src_amps_old(imap, idiv, src_pos, beam, prior=None,
+		apod=15, npass=2, indep_tol=1e-5, ps_res=2000, pixwin=True, beam_tol=1e-5,
 		dump=None, verbose=False, apod_margin=10, hack=0, region=0):
 	# Get the (fractional) pixel positions of each source
 	src_pix  = imap.sky2pix(src_pos.T).T
@@ -473,18 +488,18 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		# Then build our left-hand side A = B'HC"HB. We can do this efficiently
 		# by exploiting the fact that most sources are not correlated with each other.
 		corrlen  = measure_corrlen(beam2d**2*iC, indep_tol)
-		with bench.show("make groups"):
+		with bench.mark("make groups"):
 			indep_groups, corr_groups = group_independent(src_pos, corrlen)
 		icov = np.zeros([nsrc,nsrc])
 		for gi, igroup in enumerate(indep_groups):
 			if verbose: print "fit region %2d pass %2d/%d group %d/%d" % (region, ipass+1,npass, gi+1, len(indep_groups))
-			with bench.show("calc_model"):
+			with bench.mark("calc_model"):
 				Bg       = calc_model(imap.shape, imap.wcs, src_pix[igroup], beam_thumb)
-			with bench.show("icov_map"):
+			with bench.mark("icov_map"):
 				icov_map = map_ifft(beam2d*map_fft(H*map_ifft(iC*map_fft(H*Bg))))
-			with bench.show("prefilter"):
+			with bench.mark("prefilter"):
 				utils.interpol_prefilter(icov_map, inplace=True)
-			with bench.show("groups"):
+			with bench.mark("groups"):
 				for gi, isrc in enumerate(igroup):
 					ineighs = corr_groups[isrc]
 					icov[isrc, ineighs] = icov_map.at(src_pix[ineighs].T, unit="pix", prefilter=False, mask_nan=False)
@@ -512,6 +527,321 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 	# the amplitudes and their inverse covariance.
 	return fit_inds, amp, icov
 
+def fit_src_amps_old2(imap, idiv, src_pos, beam, prior=None,
+		apod=15, npass=2, indep_tol=1e-5, ps_res=2000, pixwin=True, beam_tol=1e-4,
+		dump=None, verbose=False, apod_margin=10, hack=0, region=0):
+	# Like fit_src_amps, except that it does not use the flat sky approximation for the beam
+	# shape.
+	# Get the (fractional) pixel positions of each source
+	t1 = time.time()
+	src_pix  = imap.sky2pix(src_pos.T).T
+	# We will only fit sources that are inside our area, and which are not contaminated
+	# by apodization.
+	margin   = apod+apod_margin
+	fit_inds = np.all(src_pix >= margin, 1) & np.all(src_pix < np.array(imap.shape[-2:])-margin, 1)
+	src_pos, src_pix = src_pos[fit_inds], src_pix[fit_inds]
+	nsrc     = len(src_pos)
+	if len(src_pos) == 0:
+		return fit_inds, np.zeros([0]), np.zeros([0,0]), np.zeros(nsrc)
+	# Apodize a bit before any fourier space operations
+	apod_map = (idiv*0+1).apod(apod) * get_apod_holes(idiv,apod)
+	imap     = imap*apod_map
+	# We should either handle the polarization looping inside this function,
+	# or possibly always return something for all the input sources. As it is,
+	# we can have any logic here that would select different sources for different
+	# components.. Well, we could fix the calling function I guess..
+	# If the region isn't hit at all we can't build a noise model, nor is there
+	# anything to measure, so just bail out.
+	if np.sum(idiv*apod_map**2) == 0:
+		return fit_inds, np.zeros(nsrc), np.zeros([nsrc,nsrc]), np.zeros(nsrc)
+	# Deconvolve the pixel window from the beginning, so we don't have to worry about it
+	if pixwin: imap = enmap.apply_window(imap,-1)
+	beam_prof = get_beam_profile(beam)
+	beam2d    = calc_2d_beam(beam, imap.shape, imap.wcs)
+	beam2d   /= np.mean(beam2d) # normalize so that it corresponds to a profile starting at 1
+	# The enmap symmetric fourier space unit convention is not good for convolutions, so
+	# switch to the fft one.
+	def map_fft(m):  return enmap.fft(m, normalize=False)
+	def map_ifft(m): return enmap.ifft(m, normalize=False).real/m.npix
+	# We will use a constant correlation model when doing these fits. This is
+	# slightly different from the whiten+const-cov model used in find_srcs, since
+	# it doesn't implicitly assume that the point source profile itself is modulated
+	# by the hitcounts. We can afford that here because we know where the sources are.
+	H      = idiv**0.5 * apod_map
+	noise  = sim_initial_noise(idiv)
+	posmap_cache = [None]
+	src_basis = np.concatenate([src_pos, np.full(len(src_pos),1.0)[:,None]],-1)
+	t2 = time.time()
+	if verbose: print("%8.2f Prepare" % (t2-t1))
+	for ipass in range(npass):
+		# We will handle sources that are too far away to affect each other
+		# in parallel
+		C          = measure_noise(H*noise, apod, apod, ps_res=ps_res)
+		if hack: C = planck_hack(C, hack)
+		iC         = 1/C
+		enmap.write_map("test_iC.fits", iC)
+		corrlen  = measure_corrlen(beam2d**2*iC, indep_tol)
+
+
+		print("corrlen", corrlen)
+		with bench.mark("make groups"):
+			indep_groups, corr_groups = group_independent(src_pos, corrlen)
+		print "indep_groups"
+		print indep_groups
+		print "corr_groups"
+		print corr_groups
+		test_corr = np.zeros([nsrc,nsrc],int)
+		for sid, corr_ids in enumerate(corr_groups):
+			test_corr[sid,corr_ids] = 1
+		print "symm"
+		print test_corr-test_corr.T
+		for gi, igroup in enumerate(indep_groups):
+			print "consistency", gi, np.sum(test_corr[igroup][:,igroup])-len(igroup)
+
+		# Build a slice for each source. This is flat-sky.
+
+
+		# Build all the beam groups. We need them all in memory at the same time, it seems :/
+		group_info = []
+		src_info_map = {}
+		for gi, igroup in enumerate(indep_groups):
+			t1 = time.time()
+			# All members in igroup are independent from each other. We can therefore
+			# draw all their beams at the same time.
+			B = pointsrcs.sim_srcs(imap.shape, imap.wcs, src_basis[igroup], beam_prof, dtype=imap.dtype, pixwin=False, cache=posmap_cache)
+			# We want slices around each B. Could try to use the corrlength to get a pixel distance,
+			# but that would be flat sky, and also ignores diagonals. Will instead use ndimage.label,
+			# which is very fast. There are only two complications:
+			# 1. if two sources are a bit too close, then their beams might touch at some low level.
+			#    We will adjust the label threshold until that no longer happens.
+			# 2. The label ordering will be arbitrary, so record the label each source ends up with.
+			nlabel, tol = 0, beam_tol
+			while nlabel < len(igroup):
+				labels, nlabel = ndimage.label(B>tol)
+				tol *= 2
+			# To speed things up we want slices around each source
+			objects = ndimage.find_objects(labels)
+			#print("A", nlabel, len(objects), len(igroup))
+			group_info.append([B, labels, nlabel, objects])
+			for si, sid in enumerate(igroup):
+				pix = utils.nint(src_pix[sid])
+				li = labels[pix[0],pix[1]]
+				src_info_map[sid] = (gi, si, li)
+			t2 = time.time()
+			if verbose: print("%8.2f Build basis pass %d/%d group %d/%d" % (t2-t1, ipass+1, npass, gi+1, len(indep_groups)))
+		rhs  = np.zeros([nsrc])
+		icov = np.zeros([nsrc,nsrc])
+		# We can now build our rhs and icov
+		for gi, igroup in enumerate(indep_groups):
+			t1 = time.time()
+			# The RHS is B'N"d, where B' integrates over each beam.
+			B, labels, nlabel, objects = group_info[gi]
+			label_inds = [src_info_map[sid][2] for sid in igroup]
+			BNd = B*H*map_ifft(iC*map_fft(H*imap))
+			enmap.write_map("test_bnd_%02d_%02d.fits" % (ipass, gi), BNd)
+			rhs[igroup] = ndimage.sum(BNd, labels, label_inds)
+			# The icov is B'N"B
+			NB = H*map_ifft(iC*map_fft(H*B))
+			enmap.write_map("test_nb_%02d_%02d.fits" % (ipass, gi), NB)
+			# For each source, we want to loop through every source it
+			# is correlated with.
+			for si, sid in enumerate(igroup):
+				for sid2 in corr_groups[sid]:
+					gi2, si2, li2 = src_info_map[sid2]
+					B2, labels2, nlabel2, objects2 = group_info[gi2]
+					sel = objects2[li2-1]
+					icov[sid,sid2] = ndimage.sum(B2[sel]*NB[sel], labels2[sel], li2)
+			t2 = time.time()
+			if verbose: print("%8.2f Build eqsys pass %d/%d group %d/%d" % (t2-t1, ipass+1, npass, gi+1, len(indep_groups)))
+		t1 = time.time()
+		# Apply any prior
+		if prior is not None:
+			prior_amp, prior_ivar = prior
+			rhs  += prior_ivar[fit_inds]*prior_amp[fit_inds]
+			icov += np.diag(prior_ivar[fit_inds])
+		print "rhs"
+		np.savetxt("/dev/stdout", rhs, fmt="%8.3f")
+		print "icov"
+		np.savetxt("/dev/stdout", icov*1e3, fmt="%8.3f")
+		# Our equation system can be a bit asymmetrical. This is expected at some level
+		# due to the beam and correlation cutoffs, though I haven't confirmed that that's
+		# really what's going on here. For now we symmetrize and hope for the best.
+		icov  = 0.5*(icov+icov.T)
+		amp   = np.linalg.solve(icov, rhs)
+		damp  = np.diag(icov)**-0.5
+		# Subtract this from the map to get a better noise estimate
+		srcs  = np.concatenate([src_pos, amp[:,None]],-1)
+		model = pointsrcs.sim_srcs(imap.shape, imap.wcs, srcs, beam_prof, dtype=imap.dtype, pixwin=False, cache=posmap_cache)
+		local_amps = model.at(src_pix.T, unit="pix", order=1)
+		noise = imap - model
+		t2 = time.time()
+		if verbose: print("%8.2f Solve pass %d/%d" % (t2-t1, ipass+1, npass))
+		#enmap.write_map("test_map_%02d_%d.fits" % (region, ipass), imap)
+		#enmap.write_map("test_model_%02d_%d.fits" % (region, ipass), model)
+		#enmap.write_map("test_resid_%02d_%d.fits" % (region, ipass), noise)
+	# This function doesn't build a full catalog object. It just returns
+	# the amplitudes and their inverse covariance.
+	return fit_inds, amp, icov, local_amps
+
+def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
+		apod=15, npass=2, indep_tol=1e-4, ps_res=2000, pixwin=True, beam_tol=1e-4,
+		dump=None, verbose=False, apod_margin=10, hack=0, region=0):
+	# Get the (fractional) pixel positions of each source
+	t1 = time.time()
+	src_pix  = imap.sky2pix(src_pos.T).T
+	# We will only fit sources that are inside our area, and which are not contaminated
+	# by apodization.
+	margin   = apod+apod_margin
+	fit_inds = np.where(np.all(src_pix >= margin, 1) & np.all(src_pix < np.array(imap.shape[-2:])-margin, 1))[0]
+	src_pos, src_pix = src_pos[fit_inds], src_pix[fit_inds]
+	nsrc     = len(src_pos)
+	if len(src_pos) == 0:
+		return fit_inds, np.zeros([0]), np.zeros([0,0]), np.zeros(nsrc)
+	# Apodize a bit before any fourier space operations
+	apod_map = (idiv*0+1).apod(apod) * get_apod_holes(idiv,apod)
+	imap     = imap*apod_map
+	# We should either handle the polarization looping inside this function,
+	# or possibly always return something for all the input sources. As it is,
+	# we can have any logic here that would select different sources for different
+	# components.. Well, we could fix the calling function I guess..
+	# If the region isn't hit at all we can't build a noise model, nor is there
+	# anything to measure, so just bail out.
+	if np.sum(idiv*apod_map**2) == 0:
+		return fit_inds, np.zeros(nsrc), np.zeros([nsrc,nsrc]), np.zeros(nsrc)
+	# Deconvolve the pixel window from the beginning, so we don't have to worry about it
+	if pixwin: imap = enmap.apply_window(imap,-1)
+	beam_prof = get_beam_profile(beam)
+	# Find the distance at which point we have fallen to beam_tol
+	brad      = get_beam_rad(beam_prof, beam_tol)
+	# Build a beam for each source. This shouldn't be too expensive, as each only
+	# will cover the pixels necessary.
+	posmap    = imap.posmap()
+	pboxes    = enmap.neighborhood_pixboxes(imap.shape, imap.wcs, src_pos, brad)
+	Bs        = []
+	for sid, pbox in enumerate(pboxes):
+		pos  = posmap.extract_pixbox(pbox)
+		r    = utils.angdist(pos[::-1], src_pos[sid,::-1,None,None])
+		bpix = (r - beam_prof[0,0])/(beam_prof[0,1]-beam_prof[0,0])
+		bval = enmap.samewcs(utils.interpol(beam_prof[1], bpix[None], mode="constant", order=1, mask_nan=False), pos)
+		Bs.append(bval)
+		#enmap.write_map("test_Bs_%02d.fits" % (sid), Bs[-1])
+	# We only need these for the matched filter correlation length calculation later
+	beam2d    = calc_2d_beam(beam, imap.shape, imap.wcs)
+	beam2d   /= np.mean(beam2d) # normalize so that it corresponds to a profile starting at 1
+	# The enmap symmetric fourier space unit convention is not good for convolutions, so
+	# switch to the fft one.
+	def map_fft(m):  return enmap.fft(m, normalize=False)
+	def map_ifft(m): return enmap.ifft(m, normalize=False).real/m.npix
+	# We will use a constant correlation model when doing these fits. This is
+	# slightly different from the whiten+const-cov model used in find_srcs, since
+	# it doesn't implicitly assume that the point source profile itself is modulated
+	# by the hitcounts. We can afford that here because we know where the sources are.
+	H      = idiv**0.5 * apod_map
+	noise  = sim_initial_noise(idiv)
+	t2 = time.time()
+	if verbose: print("%8.2f Prepare" % (t2-t1))
+	for ipass in range(npass):
+		# Build the noise model based on the current noise map
+		C          = measure_noise(H*noise, apod, apod, ps_res=ps_res)
+		if hack: C = planck_hack(C, hack)
+		iC         = 1/C
+		#enmap.write_map("test_iC.fits", iC)
+		rhs  = np.zeros([nsrc])
+		icov = np.zeros([nsrc,nsrc])
+		# We can now build our rhs
+		t1 = time.time()
+		Nd = H*map_ifft(iC*map_fft(H*imap))
+		for sid in range(nsrc):
+			rhs[sid] = np.sum(Nd.extract_pixbox(pboxes[sid])*Bs[sid])
+		t2 = time.time()
+		if verbose: print("%8.2f Build rhs pass %d/%d" % (t2-t1, ipass+1, npass))
+		# Build the icov. I used to split over indep_groups, and then loop over
+		# each nearby source for each member, but this is flawed - it can't know
+		# which member in the current group is responsible for the response some
+		# source in the neighborhood sees.
+		#
+		# Instead we will use indep groups to efficiently compute NB for each source,
+		# and then loop over each source's neighborhood
+		corrlen  = measure_corrlen(beam2d**2*iC, indep_tol)
+		#print("corrlen", corrlen/utils.degree)
+		cboxes   = enmap.neighborhood_pixboxes(imap.shape, imap.wcs, src_pos, corrlen)
+		with bench.mark("make groups"):
+			# We don't want any part of another source's matched filter inside the
+			# region we're going to extract. 2**0.5 for diagonal, which is the worst
+			# case, and 2 because each source contributes its radius. Could avoid
+			# 2**0.5 with extra mask.
+			indep_groups, corr_groups = group_independent(src_pos, corrlen*2*2**0.5)
+		NBs = [None for i in range(nsrc)]
+		for gi, igroup in enumerate(indep_groups):
+			# Evaluate the covariance around every source in igroup in parallel
+			t1 = time.time()
+			NB = imap*0
+			for sid in igroup:
+				NB.insert(Bs[sid], op=np.add)
+			NB = H*map_ifft(iC*map_fft(H*NB))
+			for sid in igroup:
+				NBs[sid] = NB.extract_pixbox(cboxes[sid])
+				#enmap.write_map("test_NBs_%02d_%02d.fits" % (ipass, sid), NBs[sid])
+			t2 = time.time()
+			if verbose: print("%8.2f Build NBs pass %d/%d group %d/%d" % (t2-t1, ipass+1, npass, gi+1, len(indep_groups)))
+		t1 = time.time()
+		#js = [1,54,55,57,71]
+		for sid in range(nsrc):
+			#if sid in js:
+			#	enmap.write_map("test_NBs_%02d_%02d.fits" % (ipass, sid), NBs[sid])
+			for sid2 in corr_groups[sid]:
+				overlap = NBs[sid].extract(Bs[sid2].shape, Bs[sid2].wcs)
+				#if sid in js and sid2 in js:
+				#	enmap.write_map("test_overlap_%02d_%02d_%02d.fits" % (ipass, sid, sid2), overlap)
+				icov[sid,sid2] = np.sum(overlap*Bs[sid2])
+		t2 = time.time()
+		if verbose: print("%8.2f Build icov pass %d/%d" % (t2-t1, ipass+1, npass))
+		#print "rhs"
+		#np.savetxt("test_rhs_%02d.txt" % ipass, rhs, fmt="%6.3f")
+		#print "icov"
+		#np.savetxt("test_icov_%02d.txt" % ipass, icov*1e4, fmt="%6.3f")
+		#np.save("test_rhs1_%02d.npy" % ipass, rhs)
+		#np.save("test_icov1_%02d.npy" % ipass, icov)
+		# Apply any prior
+		if prior is not None:
+			prior_amp, prior_ivar = prior
+			rhs  += prior_ivar[fit_inds]*prior_amp[fit_inds]
+			icov += np.diag(prior_ivar[fit_inds])
+		#np.save("test_rhs2_%02d.npy" % ipass, rhs)
+		#np.save("test_icov2_%02d.npy" % ipass, icov)
+		# Our equation system can be a bit asymmetrical. This is expected at some level
+		# due to the beam and correlation cutoffs, though I haven't confirmed that that's
+		# really what's going on here. For now we symmetrize and hope for the best.
+		icov  = 0.5*(icov+icov.T)
+		amp   = np.linalg.solve(icov, rhs)
+		#np.save("test_rhs3_%02d.npy" % ipass, rhs)
+		#np.save("test_icov3_%02d.npy" % ipass, icov)
+		#np.save("test_amp3_%02d.npy" % ipass, amp)
+		#np.save("test_pos.npy", src_pos)
+		#print("amp %d" % ipass)
+		#print(np.sort(amp))
+		damp  = np.diag(icov)**-0.5
+		# Subtract this from the map to get a better noise estimate
+		model = imap*0
+		for sid in range(nsrc):
+			model.insert(Bs[sid]*amp[sid], op=np.add)
+		local_amps = model.at(src_pix.T, unit="pix", order=1)
+		noise = imap - model
+		t2 = time.time()
+		if verbose: print("%8.2f Solve pass %d/%d" % (t2-t1, ipass+1, npass))
+		#enmap.write_map("test_map_%02d_%d.fits" % (region, ipass), imap)
+		#enmap.write_map("test_model_%02d_%d.fits" % (region, ipass), model)
+		#enmap.write_map("test_resid_%02d_%d.fits" % (region, ipass), noise)
+	# Prune a bit further at the edge, since an artifact associated with a source just at the
+	# edge might have been included while the source itself was excluded, leading to the artifact
+	# trying to absorb all the source power.
+	margin += apod_margin
+	good    = np.all(src_pix >= margin, 1) & np.all(src_pix < np.array(imap.shape[-2:])-margin, 1)
+	fit_inds, amp, icov, local_amps = fit_inds[good], amp[good], icov[good][:,good], local_amps[good]
+	# This function doesn't build a full catalog object. It just returns
+	# the amplitudes and their inverse covariance.
+	return fit_inds, amp, icov, local_amps
+
 def prune_artifacts(result):
 	# Given a result struct from find_srcs, detect artifacts and remove them both from
 	# the catalog and the model and residual maps (but not from the snmap ones for now)
@@ -527,6 +857,22 @@ def prune_artifacts(result):
 	result.model = calc_model(result.map.shape, result.map.wcs, pix, result.beam_thumb, result.cat.amp[:,0])
 	result.resid = result.map - result.model
 	return result
+
+def prune_near_bright(cat, lim_bright=100, rlim=2*utils.arcmin):
+	snr    = np.abs(cat.flux[:,0]/cat.dflux[:,0])
+	bright = snr > lim_bright
+	cat.ra = utils.rewind(cat.ra, 0)
+	pos    = np.array([cat.ra*np.cos(cat.dec),cat.dec]).T
+	tree_all    = spatial.cKDTree(pos)
+	tree_bright = spatial.cKDTree(pos[bright])
+	groups      = tree_bright.query_ball_tree(tree_all, rlim)
+	rejected    = np.zeros(len(cat), bool)
+	for gi, group in enumerate(groups):
+		sns  = snr[group]
+		bad  = np.full(len(group), True, bool)
+		bad[np.argmax(sns)] = False
+		rejected[group] |= bad
+	return cat[~rejected]
 
 def write_catalog(ofile, cat):
 	if ofile.endswith(".fits"): write_catalog_fits(ofile, cat)
@@ -685,7 +1031,7 @@ def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25):
 			ocat.append(cat[group[0]])
 		else:
 			amps  = cat.amp[group,0]
-			good  = np.where(amps >= np.max(amps)*(1-alim))[0]
+			good  = np.where(np.abs(amps) >= np.max(np.abs(amps))*(1-alim))[0]
 			# Nans could lead to us disqualifying all of them
 			if len(good) == 0: continue
 			gcat  = cat[group[good]]
@@ -698,6 +1044,8 @@ def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25):
 			# also used np.mean(gcat.damp**-2)**-0.5, but I trust the least uncertain
 			# one more.
 			entry["damp"] = np.min(gcat["damp"],0)
+			# Handle the integer fields
+			entry["status"] = np.median(gcat["status"])
 			ocat.append(entry)
 			done[group] = True
 	ocat = np.array(ocat).view(np.recarray)
@@ -752,3 +1100,21 @@ def merge_maps_onto(maplist, shape, wcs, comm, root=0, crop=0, dtype=None):
 			comm.send(list(pbox.reshape(-1)), dest=root)
 			comm.Send(np.ascontiguousarray(imap), dest=root)
 		return None
+
+def get_beam_profile(beam, nsamp=10001, rmax=0, tol=1e-7):
+	# First do a low-res run to find rmax
+	if not rmax:
+		r0   = np.linspace(0, np.pi, nsamp)
+		br0  = utils.beam_transform_to_profile(beam, r0, normalize=True)
+		imax = min(len(r0)-1,np.where(br0 > tol)[0][-1]+1)
+		rmax = r0[imax]
+	# Then get the actual profile
+	r    = np.linspace(0, rmax, nsamp)
+	br   = utils.beam_transform_to_profile(beam, r, normalize=True)
+	B    = np.array([r,br])
+	return B
+
+def get_beam_rad(beam, lim=1e-4):
+	above = np.where(beam[1]>lim)[0]
+	i     = above[-1] if len(above) > 0 else -1
+	return beam[0,i]
