@@ -46,15 +46,15 @@ def distribute_scans(myinds, mycosts, myboxes, comm):
 		mybbox = [utils.bounding_box([all_boxes[i] for i in group]) for group in mygroups]
 		return myinds, mysubs, mybbox
 
-def distribute_scans2(inds, costs, boxes, comm):
+def distribute_scans2(inds, costs, comm, boxes=None):
 	"""Given the costs[nmyscan] and bounding boxes[nscan,2,2] of all scans,
 	compute a new scan distribution that distributes costs
 	relatively evenly while keeping all scans a task owns
 	in a local area of the sky. Returns the new myinds[nmyscan] (indices into
 	global scans array), mysubs[nmyscan] (workspace index for each of my new scans),
 	mybbox[nmyscan,2,2] (bounding boxes for the new scans)."""
-	if myboxes is None:
-		return all_inds[utils.equal_split(costs, comm.size)[comm.rank]]
+	if boxes is None:
+		return inds[utils.equal_split(costs, comm.size)[comm.rank]]
 	else:
 		# Avoid angle wraps. We assume that the boxes are all correctly wrapped
 		# individually.

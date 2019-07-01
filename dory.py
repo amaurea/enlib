@@ -1118,3 +1118,24 @@ def get_beam_rad(beam, lim=1e-4):
 	above = np.where(beam[1]>lim)[0]
 	i     = above[-1] if len(above) > 0 else -1
 	return beam[0,i]
+
+def split_sources(icat, nimage=4, dist=0.5*utils.arcmin, minflux=0.1):
+	bright = icat.flux[:,0] > minflux
+	print bright.shape, icat.shape
+	if np.sum(bright) == 0: return icat
+	cat_faint  = icat[~bright]
+	cat_bright = icat[bright]
+	ocat = [cat_bright, cat_faint]
+	for i in range(nimage):
+		ang  = 2*np.pi*i/nimage
+		ddec = np.sin(ang)*dist
+		dra  = np.cos(ang)*dist/np.cos(cat_bright.dec)
+		wcat = cat_bright.copy()
+		wcat.dec += ddec
+		wcat.ra  += dra
+		# The extra images should have zero amplitude prior, so they are only excited if needed
+		wcat.flux = 0
+		wcat.amp  = 0
+		ocat.append(wcat)
+	ocat = np.concatenate(ocat).view(np.recarray)
+	return ocat
