@@ -1,5 +1,5 @@
-all: iers coordinates sampcut array_ops pmat nmat ptsrc_data pyactgetdata sharp
-clean: clean_iers clean_coordinates clean_sampcut clean_array_ops clean_pmat clean_nmat clean_ptsrc_data clean_pyactgetdata clean_sharp
+all: iers coordinates sampcut array_ops pmat nmat ptsrc_data pyactgetdata sharp cython
+clean: clean_iers clean_coordinates clean_sampcut clean_array_ops clean_pmat clean_nmat clean_ptsrc_data clean_pyactgetdata clean_sharp clean_cython
 	rm -rf *.pyc
 
 sharp: foo
@@ -38,5 +38,9 @@ pyactgetdata: foo
 	make -C pyactgetdata
 clean_pyactgetdata:
 	make -C pyactgetdata clean
+cython: foo
+	make -C cython
+clean_cython:
+	make -C cython clean
 
 foo:
