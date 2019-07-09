@@ -93,12 +93,12 @@ class SignalMap(Signal):
 			self.data = data
 		else:
 			self.data = {scan: pmat.PmatMap(scan, area, order=pmat_order, sys=sys, extra=extra) for scan in scans}
-	def forward(self, scan, tod, work):
+	def forward(self, scan, tod, work, tmul=1, mmul=1):
 		if scan not in self.data: return
-		self.data[scan].forward(tod, work)
-	def backward(self, scan, tod, work):
+		self.data[scan].forward(tod, work, tmul=tmul, mmul=mmul)
+	def backward(self, scan, tod, work, tmul=1, mmul=1):
 		if scan not in self.data: return
-		self.data[scan].backward(tod, work)
+		self.data[scan].backward(tod, work, tmul=tmul, mmul=mmul)
 	def finish(self, m, work):
 		self.dof.comm.Allreduce(work, m)
 	def zeros(self, mat=False):
@@ -150,22 +150,22 @@ class SignalDmap(Signal):
 			data = {}
 			work = area.tile2work()
 			for scan, subind in zip(scans, subinds):
-				data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys, extra=extra), subind]
+				data[scan] = [pmat.PmatMap(scan, work.maps[subind], order=pmat_order, sys=sys, extra=extra), subind]
 		self.data = data
 	def prepare(self, m): return m.tile2work()
-	def forward(self, scan, tod, work):
+	def forward(self, scan, tod, work, tmul=1, mmul=1):
 		if scan not in self.data: return
 		mat, ind = self.data[scan]
-		mat.forward(tod, work[ind])
-	def backward(self, scan, tod, work):
+		mat.forward(tod, work.maps[ind], tmul=tmul, mmul=mmul)
+	def backward(self, scan, tod, work, tmul=1, mmul=1):
 		if scan not in self.data: return
 		mat, ind = self.data[scan]
-		mat.backward(tod, work[ind])
+		mat.backward(tod, work.maps[ind], tmul=tmul, mmul=mmul)
 	def finish(self, m, work):
 		m.work2tile(work)
 	def filter(self, work):
 		res = []
-		for w in work:
+		for w in work.maps:
 			for filter in self.filters:
 				w = filter(w)
 			res.append(w)
@@ -201,7 +201,7 @@ class SignalDmapFast(SignalDmap):
 			data = {}
 			work = area.tile2work()
 			for scan, subind in zip(scans, subinds):
-				data[scan] = [pmat.PmatMapFast(scan, work[subind], sys=sys, extra=extra), subind]
+				data[scan] = [pmat.PmatMapFast(scan, work.maps[subind], sys=sys, extra=extra), subind]
 		SignalDmap.__init__(self, scans, subinds, area, cuts=cuts, name=name, ofmt=ofmt,
 				output=output, ext=ext, sys=sys, nuisance=nuisance, data=data)
 	def precompute(self, scan):
@@ -213,11 +213,11 @@ class SignalDmapFast(SignalDmap):
 	def forward(self, scan, tod, work):
 		if scan not in self.data: return
 		mat, ind = self.data[scan]
-		mat.forward(tod, work[ind], self.pix, self.phase)
+		mat.forward(tod, work.maps[ind], self.pix, self.phase)
 	def backward(self, scan, tod, work):
 		if scan not in self.data: return
 		mat, ind = self.data[scan]
-		mat.backward(tod, work[ind], self.pix, self.phase)
+		mat.backward(tod, work.maps[ind], self.pix, self.phase)
 
 class SignalCut(Signal):
 	def __init__(self, scans, dtype, comm, name="cut", ofmt="{name}_{rank:02}", output=False, cut_type=None, keep=False):
@@ -296,7 +296,7 @@ class PhaseMap:
 		self.dets    = dets
 		self.maps    = maps
 	@staticmethod
-	def read(dirname):
+	def read(dirname, rewind=False):
 		dets     = np.loadtxt(dirname + "/dets.txt").astype(int)
 		patterns = []
 		maps     = []
@@ -305,9 +305,18 @@ class PhaseMap:
 				line = line.strip()
 				if len(line) == 0 or line.startswith("#"): continue
 				toks = line.split()
-				dec, ra1, ra2 = [float(w)*utils.degree for w in toks[:3]]
-				patterns.append([[dec,ra1],[dec,ra2]])
-				maps.append(enmap.read_map(dirname + "/" + toks[3]))
+				el, az1, az2 = [float(w)*utils.degree for w in toks[:3]]
+				map  = enmap.read_map(dirname + "/" + toks[3])
+				if rewind:
+					off  = utils.rewind(az1)-az1
+					az1, az2 = az1+off, az2+off
+					maz  = map.pix2sky([0,0])[1]
+					off2 = utils.rewind(maz)-maz
+					map.wcs.wcs.crval[0] += off2/utils.degree
+					maz2 = map.pix2sky([0,0])[1]
+					print("pattern rewind off1 %8.3f off2 %8.3f diff %8.3f maz %8.3f maz2 %8.3f" % (off/utils.degree, off2/utils.degree, (off-off2)/utils.degree, maz/utils.degree, maz2/utils.degree))
+				patterns.append([[el,az1],[el,az2]])
+				maps.append(map)
 		return PhaseMap(patterns, dets, maps)
 	def write(self, dirname, fmt="{pid:02}_{az0:.0f}_{az1:.0f}_{el:.0f}"):
 		utils.mkdir(dirname)

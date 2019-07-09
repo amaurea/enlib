@@ -31,9 +31,7 @@ def distribute_scans(myinds, mycosts, myboxes, comm):
 		myinds = all_inds[utils.equal_split(all_costs, comm.size)[comm.rank]]
 		return myinds
 	else:
-		#hfile = h5py.File("tmp%02d.hdf" % comm.rank, "w")
 		all_boxes = np.array(comm.allreduce(myboxes))
-		#hfile["all1"] = all_boxes/utils.degree
 		# Avoid angle wraps. We assume that the boxes are all correctly wrapped
 		# individually.
 		ras    = all_boxes[:,:,1]
@@ -41,19 +39,35 @@ def distribute_scans(myinds, mycosts, myboxes, comm):
 		rashift= ra_ref + (ras[:,0]-ra_ref+np.pi)%(2*np.pi) - np.pi - ras[:,0]
 		ras += rashift[:,None]
 		all_boxes[:,:,1] = ras
-		#hfile["all2"] = all_boxes/utils.degree
-		myinds_old = myinds
-		#hfile["myinds1"] = myinds
 		# Split into nearby scans
 		mygroups = dmap.split_boxes_rimwise(all_boxes, all_costs, comm.size)[comm.rank]
 		myinds = [all_inds[i] for group in mygroups for i in group]
-		#hfile["myinds2"] = myinds
 		mysubs = [gi for gi, group in enumerate(mygroups) for i in group]
-		#hfile["mysubs"] = mysubs
-		#hfile["myboxes"] = np.array([all_boxes[i] for i in mygroups[0]])/utils.degree
 		mybbox = [utils.bounding_box([all_boxes[i] for i in group]) for group in mygroups]
-		#hfile["mybbox"] = mybbox[0]/utils.degree
-		#hfile.close()
+		return myinds, mysubs, mybbox
+
+def distribute_scans2(inds, costs, comm, boxes=None):
+	"""Given the costs[nscan] and bounding boxes[nscan,2,2] of all scans,
+	compute a new scan distribution that distributes costs
+	relatively evenly while keeping all scans a task owns
+	in a local area of the sky. Returns the new myinds[nmyscan] (indices into
+	global scans array), mysubs[nmyscan] (workspace index for each of my new scans),
+	mybbox[nmyscan,2,2] (bounding boxes for the new scans)."""
+	if boxes is None:
+		return inds[utils.equal_split(costs, comm.size)[comm.rank]]
+	else:
+		# Avoid angle wraps. We assume that the boxes are all correctly wrapped
+		# individually.
+		ras    = boxes[:,:,1]
+		ra_ref = np.median(np.mean(ras,1))
+		rashift= ra_ref + (ras[:,0]-ra_ref+np.pi)%(2*np.pi) - np.pi - ras[:,0]
+		ras += rashift[:,None]
+		boxes[:,:,1] = ras
+		# Split into nearby scans
+		mygroups = dmap.split_boxes_rimwise(boxes, costs, comm.size)[comm.rank]
+		myinds = [inds[i] for group in mygroups for i in group]
+		mysubs = [gi for gi, group in enumerate(mygroups) for i in group]
+		mybbox = [utils.bounding_box([boxes[i] for i in group]) if len(group) > 0 else boxes[0] for group in mygroups]
 		return myinds, mysubs, mybbox
 
 def get_scan_bounds(myscans, ref=0):

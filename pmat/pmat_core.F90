@@ -182,6 +182,11 @@ contains
 		nwy = wbox(1,2)-wbox(1,1)
 		nwx = wbox(2,2)-wbox(2,1)
 		if (dir < 0) then
+			if(mmul .ne. 1) then
+				!$omp parallel workshare
+				map = map*mmul
+				!$omp end parallel workshare
+			end if
 			! tod2map, must copy out result from wmap. map is
 			! usually bigger than wmap, so optimize loop for it
 			!$omp parallel do private(iy,ix,ic,ox,oy)
@@ -189,7 +194,7 @@ contains
 				oy = max(1,min(size(map,2),iy+wbox(1,1)))
 				do ic = 1, size(map,3)
 					do ix = 1, nwx
-						map(xmap(ix),oy,ic) = map(xmap(ix),oy,ic)*mmul + wmap(ic,ix,iy)
+						map(xmap(ix),oy,ic) = map(xmap(ix),oy,ic) + wmap(ic,ix,iy)
 					end do
 				end do
 			end do
@@ -270,7 +275,7 @@ contains
 				p = nint(pix(:,si))
 				! Skip all out-of-bounds pixels. Accumulating them at the edge is useless
 				if(p(1) .eq. 0) then
-					if(tmul .ne. 0) tod(si) = tod(si)*tmul
+					tod(si) = tod(si)*tmul
 					cycle
 				end if
 				if(tmul .eq. 0) then

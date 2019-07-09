@@ -9,3 +9,4 @@ export F2PYCOMP    = gfortran
 export PYTHON      = python2
 export SED         = sed
 export CC          = gcc
+export CFLAGS      = -fopenmp -Ofast -fPIC -march=native -fdiagnostics-color=always -g

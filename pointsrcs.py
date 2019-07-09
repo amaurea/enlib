@@ -22,6 +22,7 @@ For a point source 1.shape would be a point. But clusters and
 nearby galaxies can have other shapes. In general many profiles are
 possible. Parametrizing them in a standard format may be difficult.
 """
+from __future__ import print_function, division
 import numpy as np
 from astropy.io import fits
 from scipy import spatial
@@ -30,7 +31,7 @@ from . import utils, enmap
 #### Map-space source simulation ###
 
 def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None, smul=1,
-		return_padded=False, pixwin=False, op=np.add, wrap="auto", verbose=False):
+		return_padded=False, pixwin=False, op=np.add, wrap="auto", verbose=False, cache=None):
 	"""Simulate a point source map in the geometry given by shape, wcs
 	for the given srcs[nsrc,{dec,ra,T...}], using the beam[{r,val},npoint],
 	which must be equispaced. If omap is specified, the sources will be
@@ -70,7 +71,10 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	srcpix = wmap.sky2pix(poss.T).T
 	pixbox= np.array([[0,0],wmap.shape[-2:]],int)
 	nhit, cell_srcs = build_src_cells(pixbox, srcpix, cres, wrap=wrap)
-	posmap = wmap.posmap()
+	# Optionally cache the posmap
+	if cache is None or cache[0] is None: posmap = wmap.posmap()
+	else: posmap = cache[0]
+	if cache is not None: cache[0] = posmap
 	model = eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=wmap.dtype, op=op, verbose=verbose)
 	del posmap
 	if pixwin: model = enmap.apply_window(model)
@@ -93,7 +97,7 @@ def eval_srcs_loop(posmap, poss, amps, beam, cres, nhit, cell_srcs, dtype=np.flo
 	for cy in range(ncy):
 		for cx in range(ncx):
 			nsrc = nhit[cy,cx]
-			if verbose: print "map cell %5d/%d with %5d srcs" % (cy*ncx+cx+1, ncy*ncx, nsrc)
+			if verbose: print("map cell %5d/%d with %5d srcs" % (cy*ncx+cx+1, ncy*ncx, nsrc))
 			if nsrc == 0: continue
 			srcs  = cell_srcs[cy,cx,:nsrc]
 			y1,y2 = (cy+0)*cres[0], (cy+1)*cres[0]
@@ -226,13 +230,15 @@ def crossmatch(srcs1, srcs2, tol=1*utils.arcmin, safety=4):
 #### Source parameter I/O ####
 
 def read(fname, format="auto"):
-	if format == "auto": formats = ["fits","nemo","simple"]
+	if format == "auto": formats = ["dory_fits","dory_txt","fits","nemo","simple"]
 	else:                formats = [format]
 	for f in formats:
 		try:
-			if   f == "fits":   return read_fits(fname)
-			elif f == "nemo":   return read_nemo(fname)
-			elif f == "simple": return read_simple(fname)
+			if   f == "dory_fits":return read_dory_fits(fname)
+			elif f == "dory_txt": return read_dory_txt(fname)
+			elif f == "fits":     return read_fits(fname)
+			elif f == "nemo":     return read_nemo(fname)
+			elif f == "simple":   return read_simple(fname)
 			else: raise ValueError("Unrecognized point source format '%s' for file '%s'" % (f, fname))
 		except (ValueError, IOError) as e: pass
 	raise IOError("Unable to read point source file '%s' with format '%s'" % (fname, f))
@@ -261,9 +267,26 @@ def read_simple(fname):
 		except ValueError as e:
 			raise IOError(e.message)
 
+def read_dory_fits(fname, hdu=1):
+	d = fits.open(fname)[hdu].data
+	ocat = np.zeros(len(d), dtype=[("ra","d"),("dec","d"),("I","d"),("Q","d"),("U","d")]).view(np.recarray)
+	ocat.ra  = d.ra
+	ocat.dec = d.dec
+	ocat.I, ocat.Q, ocat.U = d.amp.T*1e3
+	return ocat
+
+def read_dory_txt(fname):
+	try:
+		d = np.loadtxt(fname, usecols=[0,1,3,5,7], dtype=[("ra","d"),("dec","d"),("I","d"),("Q","d"),("U","d")]).view(np.recarray)
+		d.I *= 1e3; d.Q *= 1e3; d.U *= 1e3
+		return d
+	except (ValueError, IndexError) as e:
+		raise IOError(e.message)
+
 def read_fits(fname, hdu=1, fix=True):
 	d = fits.open(fname)[hdu].data
-	if fix: d = translate_dtype_keys(d, {"RADeg":"ra","decDeg":"dec","deltaT_c":"I","err_deltaT_c":"dI"})
+	if fix:
+		d = translate_dtype_keys(d, {"RADeg":"ra","decDeg":"dec","deltaT_c":"I","err_deltaT_c":"dI"})
 	return d.view(np.recarray)
 
 def translate_dtype_keys(d, translation):
