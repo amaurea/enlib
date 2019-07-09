@@ -79,11 +79,11 @@ class Dmap(object):
 	def work2tile(self, work):
 		"""Project from local workspaces into the distributed tiles. Multiple workspaces
 		may overlap with a single tile. The contribution from each workspace is summed."""
-		self.geometry.work_bufinfo.data2data(work, self.geometry.tile_bufinfo, self.tiles, self.comm)
+		self.geometry.work_bufinfo.data2data(work.maps, self.geometry.tile_bufinfo, self.tiles, self.comm)
 	def tile2work(self, work=None):
 		"""Project from tiles into the local workspaces."""
 		if work is None: work = self.geometry.build_work()
-		self.geometry.tile_bufinfo.data2data(self.tiles, self.geometry.work_bufinfo, work, self.comm)
+		self.geometry.tile_bufinfo.data2data(self.tiles, self.geometry.work_bufinfo, work.maps, self.comm)
 		return work
 	def copy(self):
 		return Dmap(self)
@@ -417,7 +417,7 @@ class DGeometry(object):
 		res.pre = pre
 		return res
 	def build_work(self):
-		return [enmap.zeros(ws,ww,dtype=self.dtype) for ws,ww in self.work_geometry]
+		return Workspace([enmap.zeros(ws,ww,dtype=self.dtype) for ws,ww in self.work_geometry])
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts.
 		sel1, sel2 = utils.split_slice(sel, [self.ndim-2,2])
@@ -425,6 +425,38 @@ class DGeometry(object):
 		res = self.copy()
 		res.pre= np.zeros(self.pre)[sel].shape
 		return res
+
+class Workspace:
+	def __init__(self, maps):
+		self.maps = maps
+	def copy(self): return Workspace([m.copy() for m in self.maps])
+	def __getitem__(self, i): return Workspace([m[i] for m in self.maps])
+	def __setitem__(self, i, maps):
+		if isinstance(maps, Workspace):
+			for mi, mo in zip(self.maps, maps):
+				mi[i] = mo
+		else:
+			for mi in self.maps:
+				mi[i] = maps
+	def _domath(self, other, op, inplace=False):
+		res = self if inplace else self.copy()
+		if isinstance(other, Workspace):
+			for mi, mo in zip(res.maps, other.maps):
+				mi[:] = op(mi, mo)
+		else:
+			for mi in res.maps:
+				mi[:] = op(mi, other)
+		return res
+	
+for opname in ["__add__", "__and__", "__div__", "__eq__", "__floordiv__",
+		"__ge__", "__gt__", "__le__", "__lshift__", "__lt__", "__mod__", "__mul__",
+		"__ne__", "__or__", "__pow__", "__rshift__", "__sub__", "__truediv__",
+		"__xor__"]:
+	setattr(Workspace, opname, makefun(opname, False))
+for opname in ["__iadd__", "__iand__", "__idiv__", "__ifloordiv__",
+		"__ilshift__", "__imod__", "__imul__", "__ior__", "__ipow__",
+		"__irshift__", "__isub__", "__itruediv__", "__ixor__"]:
+	setattr(Workspace, opname, makefun(opname, True))
 
 class Bufmap:
 	"""This class encapsulates the information needed to transer data
@@ -492,9 +524,10 @@ def write_map(name, map, ext="fits", merged=True):
 		if map.comm.rank == 0:
 			enmap.write_map(name, canvas)
 
-def read_map(name, bbpix=None, bbox=None, tshape=None, comm=None):
+def read_map(name, bbpix=None, bbox=None, tshape=None, comm=None, pixbox=None):
 	if comm is None: comm = mpi.COMM_WORLD
 	if os.path.isdir(name):
+		if pixbox is not None: raise NotImplementedError("dmap.read_map with a pixbox is not implemented for dmaps that are stored as tiles on disk")
 		# Find the number of tiles in the map
 		entries = os.listdir(name)
 		nrow, ncol = 0,0
@@ -524,7 +557,7 @@ def read_map(name, bbpix=None, bbox=None, tshape=None, comm=None):
 	else:
 		# Map is in a single file. Get map info
 		if comm.rank == 0:
-			canvas = enmap.read_map(name)
+			canvas = enmap.read_map(name, pixbox=pixbox)
 			shape = comm.bcast(canvas.shape)
 			wcs   = WCS(comm.bcast(canvas.wcs.to_header_string()))
 			dtype = comm.bcast(canvas.dtype)
@@ -667,6 +700,10 @@ def split_boxes_rimwise(boxes, weights, nsplit):
 	large holes in it, this should result in a somewhat even
 	distribution, but it is definitely not optimal.
 	"""
+	if len(boxes) < nsplit:
+		# If we have fewer tods than processes, just assign one to each, and give empty
+		# ones to the remainder
+		return [[[i]] for i in range(len(boxes))] + [[[]] for i in range(len(boxes),nsplit)]
 	weights = np.asarray(weights)
 	# Divide boxes into N groups with as equal weight as possible,
 	# and as small bbox as possible

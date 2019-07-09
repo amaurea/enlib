@@ -93,12 +93,12 @@ class SignalMap(Signal):
 			self.data = data
 		else:
 			self.data = {scan: pmat.PmatMap(scan, area, order=pmat_order, sys=sys, extra=extra) for scan in scans}
-	def forward(self, scan, tod, work):
+	def forward(self, scan, tod, work, tmul=1, mmul=1):
 		if scan not in self.data: return
-		self.data[scan].forward(tod, work)
-	def backward(self, scan, tod, work):
+		self.data[scan].forward(tod, work, tmul=tmul, mmul=mmul)
+	def backward(self, scan, tod, work, tmul=1, mmul=1):
 		if scan not in self.data: return
-		self.data[scan].backward(tod, work)
+		self.data[scan].backward(tod, work, tmul=tmul, mmul=mmul)
 	def finish(self, m, work):
 		self.dof.comm.Allreduce(work, m)
 	def zeros(self, mat=False):
@@ -150,22 +150,22 @@ class SignalDmap(Signal):
 			data = {}
 			work = area.tile2work()
 			for scan, subind in zip(scans, subinds):
-				data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys, extra=extra), subind]
+				data[scan] = [pmat.PmatMap(scan, work.maps[subind], order=pmat_order, sys=sys, extra=extra), subind]
 		self.data = data
 	def prepare(self, m): return m.tile2work()
-	def forward(self, scan, tod, work):
+	def forward(self, scan, tod, work, tmul=1, mmul=1):
 		if scan not in self.data: return
 		mat, ind = self.data[scan]
-		mat.forward(tod, work[ind])
-	def backward(self, scan, tod, work):
+		mat.forward(tod, work.maps[ind], tmul=tmul, mmul=mmul)
+	def backward(self, scan, tod, work, tmul=1, mmul=1):
 		if scan not in self.data: return
 		mat, ind = self.data[scan]
-		mat.backward(tod, work[ind])
+		mat.backward(tod, work.maps[ind], tmul=tmul, mmul=mmul)
 	def finish(self, m, work):
 		m.work2tile(work)
 	def filter(self, work):
 		res = []
-		for w in work:
+		for w in work.maps:
 			for filter in self.filters:
 				w = filter(w)
 			res.append(w)
@@ -201,7 +201,7 @@ class SignalDmapFast(SignalDmap):
 			data = {}
 			work = area.tile2work()
 			for scan, subind in zip(scans, subinds):
-				data[scan] = [pmat.PmatMapFast(scan, work[subind], sys=sys, extra=extra), subind]
+				data[scan] = [pmat.PmatMapFast(scan, work.maps[subind], sys=sys, extra=extra), subind]
 		SignalDmap.__init__(self, scans, subinds, area, cuts=cuts, name=name, ofmt=ofmt,
 				output=output, ext=ext, sys=sys, nuisance=nuisance, data=data)
 	def precompute(self, scan):
@@ -213,11 +213,11 @@ class SignalDmapFast(SignalDmap):
 	def forward(self, scan, tod, work):
 		if scan not in self.data: return
 		mat, ind = self.data[scan]
-		mat.forward(tod, work[ind], self.pix, self.phase)
+		mat.forward(tod, work.maps[ind], self.pix, self.phase)
 	def backward(self, scan, tod, work):
 		if scan not in self.data: return
 		mat, ind = self.data[scan]
-		mat.backward(tod, work[ind], self.pix, self.phase)
+		mat.backward(tod, work.maps[ind], self.pix, self.phase)
 
 class SignalCut(Signal):
 	def __init__(self, scans, dtype, comm, name="cut", ofmt="{name}_{rank:02}", output=False, cut_type=None, keep=False):

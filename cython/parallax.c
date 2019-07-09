@@ -77,16 +77,16 @@ void displace_map_blocks_avx_omp(float * imap, float * omap, int ny, int nx, dou
 							v21  = _mm256_loadu_ps (&imap[(y+yoffi+1)*nx+xpix]);
 							v22  = _mm256_loadu_ps (&imap[(y+yoffi+1)*nx+xpix+1]);
 							v2   = _mm256_fmadd_ps(v21, xr1, _mm256_mul_ps(v22,xr2));
-							vtot = _mm256_fmadd_ps(v1,  yr1,  _mm256_mul_ps(v2,yr2));
-							old  = _mm256_loadu_ps(&omap[y+nx+x1]);
+							vtot = _mm256_fmadd_ps(v1,  yr1, _mm256_mul_ps(v2,yr2));
+							old  = _mm256_loadu_ps(&omap[y*nx+x1]);
 							vtot = _mm256_add_ps(vtot, old);
 							_mm256_storeu_ps(&omap[y*nx+x1], vtot);
 							// odd rows
 							v11  = _mm256_loadu_ps (&imap[(y+yoffi+2)*nx+xpix]);
 							v12  = _mm256_loadu_ps (&imap[(y+yoffi+2)*nx+xpix+1]);
 							v1   = _mm256_fmadd_ps(v11, xr1, _mm256_mul_ps(v12,xr2));
-							vtot = _mm256_fmadd_ps(v2,yr1, _mm256_mul_ps(v1,yr2));
-							old  = _mm256_loadu_ps(&omap[(y+1)+nx+x1]);
+							vtot = _mm256_fmadd_ps(v2,  yr1, _mm256_mul_ps(v1,yr2));
+							old  = _mm256_loadu_ps(&omap[(y+1)*nx+x1]);
 							vtot = _mm256_add_ps(vtot, old);
 							_mm256_storeu_ps(&omap[(y+1)*nx+x1], vtot);
 						}

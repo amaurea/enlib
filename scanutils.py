@@ -47,7 +47,7 @@ def distribute_scans(myinds, mycosts, myboxes, comm):
 		return myinds, mysubs, mybbox
 
 def distribute_scans2(inds, costs, comm, boxes=None):
-	"""Given the costs[nmyscan] and bounding boxes[nscan,2,2] of all scans,
+	"""Given the costs[nscan] and bounding boxes[nscan,2,2] of all scans,
 	compute a new scan distribution that distributes costs
 	relatively evenly while keeping all scans a task owns
 	in a local area of the sky. Returns the new myinds[nmyscan] (indices into
@@ -67,7 +67,7 @@ def distribute_scans2(inds, costs, comm, boxes=None):
 		mygroups = dmap.split_boxes_rimwise(boxes, costs, comm.size)[comm.rank]
 		myinds = [inds[i] for group in mygroups for i in group]
 		mysubs = [gi for gi, group in enumerate(mygroups) for i in group]
-		mybbox = [utils.bounding_box([boxes[i] for i in group]) for group in mygroups]
+		mybbox = [utils.bounding_box([boxes[i] for i in group]) if len(group) > 0 else boxes[0] for group in mygroups]
 		return myinds, mysubs, mybbox
 
 def get_scan_bounds(myscans, ref=0):
