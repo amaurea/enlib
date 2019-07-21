@@ -6,11 +6,11 @@
 
 inline void displace_pos(double dec, double ra, double * earth_pos, double r, double dy, double dx, double * odec, double * ora)
 {
-	double cdec = cos(dec), sdec = sin(dec);
+	double cdec = cos(dec);
 	ra += dx/cdec; dec += dy;
 	double x = cdec*cos(ra)*r - earth_pos[0];
 	double y = cdec*sin(ra)*r - earth_pos[1];
-	double z = sdec        *r - earth_pos[2];
+	double z = sin(dec)    *r - earth_pos[2];
 	double r_hor = sqrt(x*x+y*y);
 	*odec = atan2(z,r_hor);
 	*ora  = atan2(y,x);
