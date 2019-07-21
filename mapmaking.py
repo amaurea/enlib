@@ -169,7 +169,7 @@ class SignalDmap(Signal):
 			for filter in self.filters:
 				w = filter(w)
 			res.append(w)
-		return res
+		return dmap.Workspace(res)
 	def zeros(self, mat=False):
 		geom = self.area.geometry
 		if mat:
