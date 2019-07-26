@@ -123,6 +123,32 @@ void displace_map_blocks_avx_omp(float * imap, float * omap, int ny, int nx, dou
 	}
 }
 
+void solve_plain(float * frhs, float * kmap, float * osigma, int ny, int nx, float klim) {
+	#pragma omp parallel for
+	for(int y = 0; y < ny; y++)
+	for(int x = 0; x < nx; x++) {
+		int i = y*nx+x;
+		if(kmap[i] > klim) osigma[i] = frhs[i]/sqrt(kmap[i]);
+		else               osigma[i] = 0;
+	}
+}
+
+void update_total_plain(float * sigma, float * sigma_max, float * param_max, int * hit_tot, int ny, int nx, float r, float vy, float vx) {
+	#pragma omp parallel for
+	for(int y = 0; y < ny; y++)
+	for(int x = 0; x < nx; x++) {
+		int i = y*nx+x;
+		if(sigma[i] > sigma_max[i]) {
+			sigma_max[i] = sigma[i];
+			param_max[i] = r;
+			param_max[i+ny*nx*1] = vy;
+			param_max[i+ny*nx*2] = vx;
+		}
+		if(sigma[i] != 0)
+			hit_tot[i]++;
+	}
+}
+
 #if 0
 
 // straightforward implementation

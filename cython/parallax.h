@@ -6,6 +6,9 @@ double displace_map_blocks_avx_omp(
 		// The sun-distance of the object (which determines the parallax displacement), and the orbital offset
 		double r, double dy, double dx);
 
+void solve_plain(float * frhs, float * kmap, float * osigma, int ny, int nx, float klim);
+void update_total_plain(float * sigma, float * sigma_max, float * param_max, int * hit_tot, int ny, int nx, float r, float vy, float vx);
+
 #if 0
 double displace_map2( float * imap, float * omap, int ny, int nx, double dec0, double ddec, double ra0, double dra, double * earth_pos, double r, double dy, double dx);
 double displace_map3( float * imap, float * omap, int ny, int nx, double dec0, double ddec, double ra0, double dra, double * earth_pos, double r, double dy, double dx);
