@@ -1,6 +1,9 @@
 #include <math.h>
 #include "immintrin.h"
 
+// I thought this was standard in math.h, but apparently it's optional
+#define M_PI 3.14159265358979323846
+
 inline void displace_pos(double dec, double ra, double * earth_pos, double r, double dy, double dx, double * odec, double * ora)
 {
 	double cdec = cos(dec);
