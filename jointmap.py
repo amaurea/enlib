@@ -332,14 +332,16 @@ def smooth_ps_hybrid(ps, grid_res, rad_res=2.0):
 	return ps_smooth
 
 def read_map(fname, pbox, name=None, cache_dir=None, dtype=None, read_cache=False):
-	if os.path.isdir(fname):
-		fname = fname + "/tile%(y)03d_%(x)03d.fits"
 	if read_cache:
 		map = enmap.read_map(cache_dir + "/" + name)
 		if dtype is not None: map = map.astype(dtype)
 	else:
-		map = retile.read_area(fname, pbox).astype(dtype)
-		if dtype is not None: map = map.astype(dtype)
+		if os.path.isdir(fname):
+			fname = fname + "/tile%(y)03d_%(x)03d.fits"
+			map = retile.read_area(fname, pbox)
+			if dtype is not None: map = map.astype(dtype)
+		else:
+			map = enmap.read_map(fname, pixbox=pbox)
 		if cache_dir is not None and name is not None:
 			enmap.write_map(cache_dir + "/" + name, map)
 	#if map.ndim == 3: map = map[:1]
@@ -780,6 +782,7 @@ def setup_background_spectrum(mapset, spectrum=None):
 	else:
 		S = enmap.spec2flat(mapset.shape, mapset.wcs, spectrum)
 		R = enmap.queb_rotmat(enmap.lmap(mapset.shape, mapset.wcs), inverse=True)
+		mapset.S_TEB = S
 		# Rotate from EB to QU
 		# Would be faster to do this in two operations, but it's just 2x2 matrices
 		S[1:3,1:3] = np.einsum("abyx,bcyx,dcyx->adyx", R, S[1:3,1:3], R)
@@ -820,6 +823,10 @@ def get_mask_insufficient(mapset):
 	return mask
 
 class Coadder:
+	"""Assuming a model d = Bm + n, solves the ML equation for m:
+		B'N"Bm = B'N"d, where N" = HCH. B is here the *relative* beam
+		B = B_obs/B_target, so that we end up with a map that's still
+		convolved by a beam. This avoids horribly blown up noise."""
 	def __init__(self, mapset):
 		self.mapset = mapset
 		for dataset in mapset.datasets:
@@ -848,7 +855,7 @@ class Coadder:
 			m = map_ifft(self.F[i]*map_fft(self.m[i])) if np.any(self.F[i] != 1) else self.m[i]
 			rhs += map_ifft(self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*m))))
 		return rhs
-	def calc_coadd(self, rhs, maxiter=250, cg_tol=1e-4, verbose=False, dump_dir=None):
+	def calc_map(self, rhs, maxiter=250, cg_tol=1e-4, verbose=False, dump_dir=None):
 		# solve (B'HCHB)x = rhs. For preconditioner, we will use the full-fourier approximation,
 		# so M = (B'Hmean C Hmean B)". The solution itself is done in fourier space, to save
 		# some ffts.
@@ -879,6 +886,102 @@ class Coadder:
 		if dump_dir is not None:
 			enmap.write_map(dump_dir + "/map_final.fits", map_ifft(unzip(solver.x)))
 		return map_ifft(unzip(solver.x))
+
+class Wiener:
+	"""Assuming a model d = Bm + n the ML estimator for m is B'N"Bm = B'N"d,
+	with map inverse covariance M" = B'N"B. The wiener filtered map q is given
+	by (S"+M")q = M"m, where S" is the signal inverse covariance matrix. Inserting
+	the expressions for M and m, we get (S"+B'N"B)q = B'N"d. Note that unlike in
+	the Coadder class, B should be the actual beam in this case, not a relative beam."""
+	def __init__(self, mapset):
+		self.mapset = mapset
+		for dataset in mapset.datasets:
+			print dataset.name
+		# Extract and flatten all our input maps
+		self.m  = [split.data.map   for dataset in mapset.datasets for split in dataset.splits]
+		self.H  = [split.data.H     for dataset in mapset.datasets for split in dataset.splits]
+		self.iN = [dataset.iN       for dataset in mapset.datasets for split in dataset.splits]
+		self.F  = [dataset.filter   for dataset in mapset.datasets for split in dataset.splits]
+		self.B  = [dataset.beam_2d  for dataset in mapset.datasets for split in dataset.splits]
+		self.shape, self.wcs = mapset.shape, mapset.wcs
+		self.dtype= mapset.dtype
+		self.ctype= np.result_type(self.dtype,0j)
+		self.npix = self.shape[-2]*self.shape[-1]
+		self.nmap = len(self.m)
+		# Build iS. We treat Q and U as independent, and apply the EE spectrum to both of
+		# them to avoid forcing in the E pattern in polarization.
+		iS   = enmap.zeros(self.shape, self.wcs, self.dtype)
+		mask = self.mapset.S_TEB[0,0] > np.max(self.mapset.S_TEB[0,0])*1e-10
+		iS[0,mask] = self.mapset.S_TEB[0,0,mask]**-1
+		if iS.shape[0] > 1:
+			iS[1:,mask] = self.mapset.S_TEB[1,1,mask]**-1
+		for i in range(iS.shape[0]): iS[i,~mask] = np.max(iS[i,mask])
+		self.iS = iS
+		del mask
+		# Not really necessary, but can be nice to have
+		self.tot_div = enmap.zeros(self.shape, self.wcs, self.dtype)
+		for H in self.H: self.tot_div += H**2
+	def calc_rhs(self):
+		# Calc rhs = B'HCH m
+		rhs = enmap.zeros(self.shape, self.wcs, self.dtype)
+		for i in range(self.nmap):
+			m = map_ifft(self.F[i]*map_fft(self.m[i])) if np.any(self.F[i] != 1) else self.m[i]
+			rhs += map_ifft(self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*m))))
+		return rhs
+	def calc_map(self, rhs, maxiter=250, cg_tol=1e-4, verbose=False, dump_dir=None):
+		# solve (S"+B'HCHB)x = rhs. For preconditioner, we will use the full-fourier approximation,
+		# so M = (S"+B'Hmean C Hmean B)". The solution itself is done in fourier space, to save
+		# some ffts.
+		def zip(map): return map.reshape(-1).view(self.dtype)
+		def unzip(x): return enmap.ndmap(x.view(self.ctype).reshape(self.shape), self.wcs)
+		def A(x):
+			fmap = unzip(x)
+			fres = enmap.zeros(self.shape, self.wcs, self.ctype)
+			for i in range(self.nmap):
+				fres += self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*map_ifft(self.B[i]*fmap))))
+			fres += self.iS*fmap
+			return zip(fres)
+		prec = enmap.zeros(self.shape, self.wcs, self.ctype)
+		for i in range(self.nmap):
+			Hmean = np.mean(self.H[i])
+			prec += Hmean**2*self.B[i]**2*self.iN[i]
+		#def saverad(fname, map):
+		#	res = radial(map)
+		#	np.savetxt(fname, res.T, fmt="%15.7e")
+		#enmap.write_map("test_iM.fits", prec.real)
+		#saverad("test_iM.txt", prec.real)
+		#enmap.write_map("test_iS.fits", self.iS.real)
+		#saverad("test_iS.txt", self.iS.real)
+		prec += self.iS
+		prec  = 1/prec
+		#enmap.write_map("prec.fits", prec.real)
+		#saverad("prec.txt", prec.real)
+		def M(x): return zip(prec*unzip(x))
+		solver = cg.CG(A, zip(map_fft(rhs)), M=M)
+		for i in range(maxiter):
+			t1 = time.time()
+			solver.step()
+			t2 = time.time()
+			if verbose:
+				print "%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1)
+			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + range(100,10000,100):
+				enmap.write_map(dump_dir + "/map_step%04d.fits" % solver.i, map_ifft(unzip(solver.x)))
+			if solver.err < cg_tol: break
+		if dump_dir is not None:
+			enmap.write_map(dump_dir + "/map_final.fits", map_ifft(unzip(solver.x)))
+		return map_ifft(unzip(solver.x))
+
+def radial(map, dl=None):
+	l   = map.modlmap()
+	if dl is None: dl = min(l[0,1],l[1,0])
+	pix = (l/dl).astype(int).reshape(-1)
+	hits= np.bincount(pix)
+	res = []
+	for i, m in enumerate(map.preflat):
+		res.append(np.bincount(pix, m.reshape(-1))/hits)
+	nl = len(res[0])
+	res = np.concatenate([np.arange(nl)[None]*dl,res],0)
+	return res
 
 class SourceFitter:
 	def __init__(self, mapset):
