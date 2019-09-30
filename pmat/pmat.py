@@ -497,12 +497,13 @@ class pos2pix:
 config.default("pmat_ptsrc_rsigma", 4.5, "Max number of standard deviations away from a point source to compute the beam profile. Larger values are slower but more accurate.")
 config.default("pmat_ptsrc_cell_res", 10, "Cell size in arcmin to use for fast source lookup.")
 class PmatPtsrc(PointingMatrix):
-	def __init__(self, scan, srcs, sys=None, tmul=None, pmul=None):
+	def __init__(self, scan, srcs, sys=None, tmul=None, pmul=None, beam=None, interpol_pad=None):
 		# We support a srcs which is either [nsrc,nparam], [nsrc,ndir,nparam] or [nsrc,ndir,ndet,nparam], where
 		# ndir is either 1 or 2 depending on whether one wants to separate different
 		# scanning directions.
 		srcs = np.array(srcs)
 		while srcs.ndim < 4: srcs = srcs[:,None]
+		if beam is None: beam = scan.beam
 		# srcs is [nsrc,ndir,ndet_or_1,{dec,ra,T,Q,U,ibeams}]
 		sys   = config.get("map_sys", sys)
 		cres  = config.get("pmat_ptsrc_cell_res")*utils.arcmin
@@ -513,14 +514,14 @@ class PmatPtsrc(PointingMatrix):
 		# Investigate the beam to find the max relevant radius
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
 		value_lim = np.exp(-0.5*sigma_lim**2)
-		rmax = (np.where(scan.beam[1]>=value_lim)[0][-1]+1)*scan.beam[0,1]
+		rmax = (np.where(beam[1]>=value_lim)[0][-1]+1)*beam[0,1]
 		# Apply any source-specific beam scaling
 		rmul = max([utils.expand_beam(src[-3:])[0][0] for src in srcs.reshape(-1,srcs.shape[-1])])
 		rmax *= rmul
 
 		# Build interpolator (dec,ra output ordering)
 		transform  = build_pos_transform(scan, sys=config.get("map_sys", sys))
-		ipol, obox, err = build_interpol(transform, scan.box, scan.id, posunit=0.5*utils.arcmin)
+		ipol, obox, err = build_interpol(transform, scan.box, scan.id, posunit=0.5*utils.arcmin, pad=interpol_pad)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, srcs.dtype)
 
 		self.cbox = obox[:,:2]
@@ -531,6 +532,7 @@ class PmatPtsrc(PointingMatrix):
 		self.tmul = 1 if tmul is None else tmul
 		self.pmul = 1 if pmul is None else pmul
 		self.err  = err
+		self.beam = beam
 	def apply(self, dir, tod, srcs, tmul=None, pmul=None):
 		if tmul is None: tmul = self.tmul
 		if pmul is None: pmul = self.pmul
@@ -543,7 +545,7 @@ class PmatPtsrc(PointingMatrix):
 		core.pmat_ptsrc(dir, tmul, pmul, tod.T, wsrcs.T,
 				self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T,
 				self.rbox.T, self.nbox.T, self.yvals.T,
-				self.scan.beam[1], self.scan.beam[0,-1], self.rmax,
+				self.beam[1], self.beam[0,-1], self.rmax,
 				self.cells.T, self.ncell.T, self.cbox.T)
 		# Copy out any amplitudes that may have changed
 		srcs[...,2:5] = wsrcs[...,2:5]
@@ -556,12 +558,12 @@ class PmatPtsrc(PointingMatrix):
 # Compatibility
 PmatPtsrc2 = PmatPtsrc
 
-def build_interpol(transform, box, id="none", posunit=1.0, sys=None):
+def build_interpol(transform, box, id="none", posunit=1.0, sys=None, pad=None):
 	sys   = config.get("map_sys",      sys)
 	# We widen the bounding box slightly to avoid samples falling outside it
 	# due to rounding errors.
 	box = utils.widen_box(np.array(box), 1e-3, relative=True)
-	box[:,1:] = utils.widen_box(box[:,1:], config.get("pmat_interpol_pad")*utils.arcmin, relative=False)
+	box[:,1:] = utils.widen_box(box[:,1:], config.get("pmat_interpol_pad", pad)*utils.arcmin, relative=False)
 	acc = config.get("pmat_accuracy")
 	ip_size = config.get("pmat_interpol_max_size")
 	ip_time = config.get("pmat_interpol_max_time")

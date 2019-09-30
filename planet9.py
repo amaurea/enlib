@@ -2,7 +2,7 @@ import numpy as np, time, os, sys, healpy
 from enlib import utils
 with utils.nowarn(): import h5py
 from scipy import ndimage, stats, spatial, integrate, optimize
-from enlib import enmap, utils, mpi, curvedsky, bunch, parallax, cython, ephemeris, statdist
+from enlib import enmap, utils, mpi, curvedsky, bunch, parallax, cython, ephemeris, statdist, interpol
 from enlib import nmat, pmat, sampcut, fft
 from pixell import sharp
 
@@ -35,6 +35,12 @@ def calc_beam_area(beam_profile):
 	r, b = beam_profile
 	return integrate.simps(2*np.pi*r*b,r)
 
+#def cut_source_groups(srcs, rlim=2*utils.arcmin):
+#	"""Handling very nearby point sources requires joint fitting, which is
+#	a bit involved, and heavy. Such nearby groups usually occur either as
+#	small residuals very close to very bright sources, or due to an extended
+#	shape of a source or some other reason for a poor fit. 
+
 def merge_nearby(srcs, rlim=2*utils.arcmin):
 	"""given source parameters which might contain duplicates, detect these duplicates
 	and merge them to produce a single catalog with no duplicates. sources are considered
@@ -44,6 +50,7 @@ def merge_nearby(srcs, rlim=2*utils.arcmin):
 	groups = tree.query_ball_tree(tree, rlim)
 	done   = np.zeros(len(srcs),bool)
 	ocat   = []
+	nmerged = []
 	for gi, group in enumerate(groups):
 		# remove everything that's done
 		group = np.array(group)
@@ -59,8 +66,10 @@ def merge_nearby(srcs, rlim=2*utils.arcmin):
 		osrc[2:] = gsrcs[best,2:]
 		done[group] = True
 		ocat.append(osrc)
+		nmerged.append(len(group))
 	ocat = np.array(ocat)
-	return ocat
+	nmerged = np.array(nmerged)
+	return ocat, nmerged
 
 def cut_bright_srcs(scan, srcs, alim_include=1e4, alim_size=10):
 	"""Cut sources in srcs that are brighter than alim in uK"""
@@ -74,6 +83,63 @@ def cut_bright_srcs(scan, srcs, alim_include=1e4, alim_size=10):
 	#scan.cut_noiseest *= cut
 	# Ensure that our bright sources get gapfilled before anything else
 	scan.d.cut_basic *= cut
+	return scan
+
+def cut_bright_srcs_daytime(scan, srcs, alim_include=1e4, alim_size=10, errbox=[[-1,-2],[1,4]], step=0.5):
+	"""Cut sources in srcs that are brighter than alim in uK. errbox is [[x1,y1],[x2,y2]] in arcminutes"""
+	# Daytime sometimes has nasty multi-modal beams which we can't model
+	# properly. To cut sources properly we need to cut the whole area that
+	# could be contaminated by the beam. We do this by repeating the night-time
+	# cut over a range pointing offsets corresponding the maximum extra size of
+	# the beam. These offset ranges are similar to those of the actual pointing offsets:
+	# About +- 1 arcmin in x and -1 to +3 arcmin in y.
+	srcs_cut = srcs[srcs[:,2]>alim_include]
+	if len(srcs) == 0: return scan
+	tod  = np.zeros((scan.ndet,scan.nsamp), np.float32)
+	maxerr = np.max(np.abs(errbox))
+	# Since building PmatPtsrc is slow, we build it once and reuse it with
+	# different pointing offsets by hackily modifying scan.offsets, which
+	# it depends on. Not very elegant.
+	psrc = pmat.PmatPtsrc(scan, srcs_cut, interpol_pad=maxerr, tmul=0)
+	(x1,y1),(x2,y2) = np.array(errbox)
+	el      = scan.boresight[0,2]
+	offsets = scan.offsets.copy()
+	raw_offs= coordinates.transform("tele","bore", (offsets[:,1:]+[0,el]).T, bore=[0,el,0,0]).T
+	nx = utils.nint((x2-x1)/float(step))+1
+	ny = utils.nint((y2-y1)/float(step))+1
+	for x in np.linspace(x1,x2,nx)*utils.arcmin:
+		for y in np.linspace(y1,y2,ny)*utils.arcmin:
+			scan.offsets[:,1:] = coordinates.transform("bore","tele", (raw_offs-[x,y]).T, bore=[0,el,0,0]).T - [0,el]
+			psrc.forward(tod, srcs)
+			cut  = sampcut.from_mask(tod > alim_size)
+			scan.cut *= cut
+			# Ensure that our bright sources get gapfilled before anything else
+			scan.d.cut_basic *= cut
+		scan.offsets = offsets
+		return scan
+
+def make_tophat_beam(r, npoint=1000):
+	"""Return a dummy beam that's 1 up to a radius of r, and then zero. Useful for
+	simulating top hat shaped sources or cutting sources up to a given radius. The beam
+	will be equispaced"""
+	beam    = np.zeros([2,npoint])
+	beam[0] = np.arange(npoint)*r/(npoint-2)
+	beam[1,:-1] = 1
+	beam[1,-1]  = 0
+	return beam
+
+def cut_srcs_rad(scan, srcs, r=4*utils.arcmin):
+	"""Cut all sources in srcs out to a radius of r, regardless of their amplitude"""
+	tod  = np.zeros((scan.ndet,scan.nsamp), np.float32)
+	beam = make_tophat_beam(r)
+	# Set the source amplitude to 1 in T, 0 in Q, U
+	srcs_uniform = srcs.copy()
+	srcs_uniform[:,2]   = 1
+	srcs_uniform[:,3:5] = 0
+	psrc = pmat.PmatPtsrc(scan, srcs_uniform, beam=beam)
+	psrc.forward(tod, srcs_uniform)
+	cut  = sampcut.from_mask(tod > 0.5)
+	scan.cut *= cut
 	return scan
 
 class NmatWindowed(nmat.NoiseMatrix):
@@ -310,7 +376,7 @@ def find_candidates(sigma, params, snmin=5, pad=0):
 	try: snmin = unpad(snmin, pad)
 	except: pass
 	labels, nlabel = ndimage.label(sigma >= snmin)
-	if nlabel < 1: return np.zeros([0,6])
+	if nlabel < 1: return np.zeros([0,8])
 	active = np.arange(1,nlabel+1)
 	pixs   = np.array(ndimage.maximum_position(sigma, labels, active)).T
 	sig    = sigma[pixs[0],pixs[1]]
@@ -384,7 +450,7 @@ def build_dist_map(sigma_max, mask=None, bsize=120, maskval=0):
 	bad    = (params[:,1] == 0)|(params[:,0]<0.5)
 	ngood  = len(params)-np.sum(bad)
 	if ngood == 0:
-		return snmin_guass.copy()
+		return sigma_max.copy()
 	refpar = np.median(params[~bad,:],0)
 	params[bad,:] = refpar
 	omap = enmap.zeros((2,)+sigma_max.shape[-2:], sigma_max.wcs, sigma_max.dtype)
@@ -397,6 +463,73 @@ def build_dist_map(sigma_max, mask=None, bsize=120, maskval=0):
 	return omap
 
 def unpad(map, pad): return map[...,pad:map.shape[-2]-pad,pad:map.shape[-1]-pad]
+
+class SplineEphem:
+	def __init__(self, mjd, ra, dec, r, name=None):
+		self.name = name
+		self.data = np.array([mjd,ra,dec,r],dtype=np.float)
+		# Check that the mjds are equi-spaced
+		dmjds = self.data[0,1:]-self.data[0,:-1]
+		self.mjd1, self.mjd2, self.dmjd = self.data[0,0], self.data[0,-1], dmjds[0]
+		assert np.all(np.abs(dmjds-self.dmjd)<1e-5), "mjd must be equi-spaced in SplineEphem"
+		# Build spline for each
+		self.spline = self.data[1:].copy()
+		interpol.spline_filter(self.spline, border="mirror", ndim=1)
+	@property
+	def nsamp(self): return self.spline.shape[-1]
+	def __call__(self, mjds):
+		mjds = np.asarray(mjds)
+		mjd1, mjd2 = utils.minmax(mjds)
+		assert mjd1 >= self.mjd1, "mjd %f is outside the validity range %f to %f" % (mjd1, self.mjd1, self.mjd2)
+		assert mjd2 <= self.mjd2, "mjd %f is outside the validity range %f to %f" % (mjd2, self.mjd1, self.mjd2)
+		pix  = (mjds-self.mjd1)/self.dmjd
+		return interpol.map_coordinates(self.spline, pix[None], border="mirror", prefilter=False)
+
+def get_asteroids(fname, names=None):
+	if fname is None: return None
+	asteroid_set = read_asteroids(fname)
+	if names is None: names = asteroid_set.keys()
+	elif isinstance(names, basestring): names = names.split(",")
+	asteroids = [asteroid_set[key] for key in names]
+	return asteroids
+
+def read_asteroids(fname):
+	res = bunch.Bunch()
+	with h5py.File(fname, "r") as hfile:
+		for key in hfile:
+			data = hfile[key][:].view(np.recarray)
+			res[key] = SplineEphem(data.mjd, data.ra*utils.degree, data.dec*utils.degree, data.r, name=key)
+	return res
+
+def build_asteroid_mask(shape, wcs, asteroids, mjds, r=3*utils.arcmin):
+	"""Build a mask with the geometry shape, wcs for the given list of EphemSplines "asteroids",
+	masking all pixels hit by any of the asteroids for the given set of mjds, up to a radius
+	of r"""
+	mask = enmap.zeros(shape, wcs, bool)
+	mjds = np.asarray(mjds)
+	for ai, ast in enumerate(asteroids):
+		a = ast(mjds)
+		poss   = ast(mjds)[1::-1].T
+		pboxes = enmap.neighborhood_pixboxes(shape, wcs, poss, r)
+		for i, pbox in enumerate(pboxes):
+			submap = mask.extract_pixbox(pbox)
+			submap = submap.modrmap(poss[i])<=r
+			mask.insert_at(pbox, submap, op=np.ndarray.__ior__)
+	return mask
+
+def cut_asteroids_scan(scan, asteroids, r=3*utils.arcmin):
+	"""Cut the the samples that come within a distance of r in radians
+	from the given asteroids. scan is modified in-place"""
+	from enact import cuts as actcuts
+	import time
+	for ai, asteroid in enumerate(asteroids):
+		apos  = asteroid(scan.mjd0)[:2]
+		bore  = scan.boresight.T.copy()
+		bore[0] = utils.mjd2ctime(scan.mjd0)+bore[0]
+		t1 = time.time()
+		scan.cut *= actcuts.avoidance_cut(bore, scan.offsets[:,1:], scan.site, apos, r)
+		t2 = time.time()
+	return scan
 
 ############################### old stuff - will be removed ################################
 

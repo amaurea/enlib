@@ -555,7 +555,8 @@ def read_map(name, bbpix=None, bbox=None, tshape=None, comm=None, pixbox=None):
 		for pos, tile in zip(map.loc_pos,map.tiles):
 			tile[:] = enmap.read_map(name+"/"+tfiles[pos[0]][pos[1]])
 	else:
-		# Map is in a single file. Get map info
+		# Map is in a single file. This is very memory-wasteful - 30 GB for an advact map
+		# Get map info
 		if comm.rank == 0:
 			canvas = enmap.read_map(name, pixbox=pixbox)
 			shape = comm.bcast(canvas.shape)

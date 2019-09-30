@@ -17,7 +17,7 @@ def read_geometry(fname):
 	else:
 		return enmap.read_map_geometry(fname)
 
-def read_beam(params, nl=50000, workdir=".", regularization="gauss", cutoff=0.1):
+def read_beam(params, nl=50000, workdir=".", regularization="ratio", cutoff=0.01):
 	l = np.arange(nl).astype(float)
 	if params[0] == "fwhm":
 		sigma = params[1]*utils.fwhm*utils.arcmin
@@ -29,14 +29,30 @@ def read_beam(params, nl=50000, workdir=".", regularization="gauss", cutoff=0.1)
 		# We want a normalized beam
 		bdata[~np.isfinite(bdata)] = 0
 		bdata /= np.max(bdata)
-		l      = np.arange(len(bdata))
+		l      = np.arange(len(bdata)).astype(float)
 		if regularization == "gauss":
 			low = np.where(bdata<cutoff)[0]
 			if len(low) > 0:
 				lcut = low[0]
 				bdata[:lcut+1] = np.log(bdata[:lcut+1])
 				bdata[lcut+1:] = l[lcut+1:]**2*bdata[lcut]/lcut**2
-				#print lcut, bdata[lcut-5:lcut+6]
+		elif regularization == "ratio":
+			# The purpose of this approach is to keep the *ratio* between
+			# beams constant after they leave the reliable area. This is useful
+			# because the bema ratio is what matters for the coadded solution, and
+			# we don't want to invent very high ratios in the area where the beam isn't
+			# well-defined in the first place. To keep the ratio fixed we must use the
+			# same function for all the beam continuations, though we can multiply
+			# that function by a per-beam constant. If we assume that most beams are
+			# approximately gaussian, then there is a single function that has these
+			# properties while matching both the slope and value at the cutoff point:
+			# g(l) = cutoff*(l/lc)**(2*log(cutoff)), where lc is the cutoff point.
+			low   = np.where(bdata<cutoff)[0]
+			if len(low) > 0:
+				lcut = low[0]
+				lv   = np.log(cutoff)
+				bdata[:lcut+1] = np.log(bdata[:lcut+1])
+				bdata[lcut+1:] = lv + (np.log(l[lcut+1:])-np.log(l[lcut]))*(2*lv)
 		else: raise ValueError("Unknown beam regularization '%s'" % regularization)
 		## we don't trust the beam after the point where it becomes negative
 		#negs  = np.where(bdata<=0)[0]
@@ -62,7 +78,7 @@ def beam_size(beam):
 	return np.where(beam > -1)[0][-1]
 
 def eval_beam(beam, l, raw=False):
-	res = utils.interpol(beam, l[None], order=1, mask_nan=False)
+	res = enmap.samewcs(utils.interpol(beam, l[None], order=1, mask_nan=False),l)
 	if not raw: res = np.exp(res)
 	return res
 
@@ -441,6 +457,8 @@ class Mapset:
 			for split in dataset.splits:
 				split.map = os.path.join(cdir, split.map)
 				split.div = os.path.join(cdir, split.div)
+			if "mask" in dataset:
+				dataset.mask = os.path.join(cdir, dataset.mask)
 		# Read the geometry from all the datasets. Also make paths relative to us instead
 		# of the config file
 		self.nl = 30000
@@ -455,6 +473,8 @@ class Mapset:
 		# Read the target beam, if any
 		if "target_beam" in config.__dict__.keys():
 			self.target_beam = read_beam(config.target_beam, workdir=cdir, nl=self.nl)
+		elif "get_target_beam" in config.__dict__.keys():
+			self.target_beam = read_beam(config.get_target_beam(datasets), workdir=cdir, nl=self.nl)
 		else: self.target_beam = None
 		# Read the source catalog, if any
 		if "ptsrc_catalog" in config.__dict__.keys():
@@ -505,6 +525,10 @@ class Mapset:
 			if pbox_out_of_bounds(pbox, dataset.shape, dataset.wcs) and prune:
 				continue
 
+			if "mask" in dataset:
+				mask = 1-read_map(dataset.mask, pbox, name=os.path.basename(dataset.mask), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
+			else: mask = None
+
 			for si, split in enumerate(dataset.splits):
 				split.data = None
 				if verbose: print "Reading %s" % split.map
@@ -517,6 +541,9 @@ class Mapset:
 				div[~np.isfinite(div)] = 0
 				map[~np.isfinite(map)] = 0
 				div[div<div_unhit] = 0
+				if mask is not None:
+					map *= mask
+					div *= mask
 				if np.all(div==0): continue
 				split.data = bunch.Bunch(map=map, div=div)
 				dataset.ngood += 1
@@ -766,7 +793,7 @@ def setup_beams(mapset):
 					print "the corresponding automatic spearable noise pixel window"
 					raise
 			else: raise ValueError("Unrecognized pixel window type '%s'" % (d.pixel_window_params[0]))
-			beam_2d = enmap.ndmap(beam_2d, d.wcs)
+			#beam_2d = enmap.ndmap(beam_2d, d.wcs)
 			area    = calc_beam_area(beam_2d)
 			#enmap.write_map("beam_2d_win_%s.fits" % d.name, beam_2d)
 			cache[param] = (beam_2d, area)
@@ -887,6 +914,20 @@ class Coadder:
 			enmap.write_map(dump_dir + "/map_final.fits", map_ifft(unzip(solver.x)))
 		return map_ifft(unzip(solver.x))
 
+def bin_1d(fmap, dl=None):
+	l = fmap.modlmap()
+	if dl is None: dl = min(l[0,1],l[1,0])
+	print("dl", dl, "maxl", np.max(l))
+	pix  = (l/dl).astype(int).reshape(-1)
+	hits = np.bincount(pix)
+	res = []
+	for fm in fmap.real.preflat:
+		res.append(np.bincount(pix, fm.reshape(-1))/hits)
+	res = np.array(res)
+	l1d = np.arange(len(hits))*dl
+	res = np.concatenate([l1d[None],res],0).T
+	return res
+
 class Wiener:
 	"""Assuming a model d = Bm + n the ML estimator for m is B'N"Bm = B'N"d,
 	with map inverse covariance M" = B'N"B. The wiener filtered map q is given
@@ -921,12 +962,27 @@ class Wiener:
 		# Not really necessary, but can be nice to have
 		self.tot_div = enmap.zeros(self.shape, self.wcs, self.dtype)
 		for H in self.H: self.tot_div += H**2
+
+		## dump the state, so we can debug it
+		#import h5py
+		#with h5py.File("dump.hdf","w") as hfile:
+		#	hfile["m"]  = np.array(self.m)
+		#	hfile["H"]  = np.array(self.H)
+		#	hfile["iN"] = np.array(self.iN)
+		#	hfile["B"]  = np.array(self.B)
+		#	hfile["iS"] = self.iS
+		#	hfile["S_TEB"] = self.mapset.S_TEB
+		#	header = self.m[0].wcs.to_header()
+		#	for key in header:
+		#		hfile["wcs/"+key] = header[key]
+		#1/0
+		#print("B")
+
 	def calc_rhs(self):
 		# Calc rhs = B'HCH m
 		rhs = enmap.zeros(self.shape, self.wcs, self.dtype)
 		for i in range(self.nmap):
-			m = map_ifft(self.F[i]*map_fft(self.m[i])) if np.any(self.F[i] != 1) else self.m[i]
-			rhs += map_ifft(self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*m))))
+			rhs += map_ifft(self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*self.m[i]))))
 		return rhs
 	def calc_map(self, rhs, maxiter=250, cg_tol=1e-4, verbose=False, dump_dir=None):
 		# solve (S"+B'HCHB)x = rhs. For preconditioner, we will use the full-fourier approximation,
@@ -941,19 +997,62 @@ class Wiener:
 				fres += self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*map_ifft(self.B[i]*fmap))))
 			fres += self.iS*fmap
 			return zip(fres)
-		prec = enmap.zeros(self.shape, self.wcs, self.ctype)
+		def iN(x):
+			fmap = unzip(x)
+			fres = enmap.zeros(self.shape, self.wcs, self.ctype)
+			for i in range(self.nmap):
+				fres += self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*map_ifft(self.B[i]*fmap))))
+			return zip(fres)
+		iN_approx = enmap.zeros(self.shape, self.wcs, self.ctype)
 		for i in range(self.nmap):
 			Hmean = np.mean(self.H[i])
-			prec += Hmean**2*self.B[i]**2*self.iN[i]
-		#def saverad(fname, map):
-		#	res = radial(map)
-		#	np.savetxt(fname, res.T, fmt="%15.7e")
-		#enmap.write_map("test_iM.fits", prec.real)
-		#saverad("test_iM.txt", prec.real)
-		#enmap.write_map("test_iS.fits", self.iS.real)
+			iN_approx += Hmean**2*self.B[i]**2*self.iN[i]
+		def saverad(fname, map):
+			res = radial(map)
+			np.savetxt(fname, res.T, fmt="%15.7e")
+
+		#print("There's a problem with the wiener filter - noise is getting through at degree scales when using act-only (e.g. s16 pa3 f150 alone. This does not happen when consistently using the fourier-diagonal approximation")
+		#1/0
+
+		#enmap.write_map("test_iM.fits", enmap.fftshift(iN_approx.real))
+		#saverad("test_iM.txt", iN_approx.real)
+		#enmap.write_map("test_iS.fits", enmap.fftshift(self.iS.real))
 		#saverad("test_iS.txt", self.iS.real)
-		prec += self.iS
-		prec  = 1/prec
+		prec = 1/(iN_approx + self.iS)
+		#saverad("test_iA.txt", prec.real)
+		#filt = prec*iN_approx
+		#saverad("test_F.txt", filt.real)
+		# 
+		#approx = map_ifft(prec*map_fft(rhs))
+		#enmap.write_map("approx.fits", approx)
+
+		#frhs_approx = enmap.zeros(self.shape, self.wcs, self.ctype)
+		#for i in range(self.nmap):
+		#	frhs_approx += self.B[i]*np.mean(self.H[i])**2*self.iN[i]*map_fft(self.m[i])
+		#rhs_approx = map_ifft(frhs_approx)
+		#enmap.write_map("test_rhs.fits", rhs)
+		#enmap.write_map("test_rhs_approx.fits", rhs_approx)
+		#approx2 = map_ifft(prec*frhs_approx)
+		#enmap.write_map("approx2.fits", approx2)
+
+
+		#moo1 = map_ifft(unzip(iN(zip(map_fft(self.m[0].astype(self.dtype))))))
+		#moo2 = map_ifft(iN_approx*map_fft(self.m[0].astype(self.dtype)))
+		#enmap.write_map("test_moo1.fits", moo1)
+		#enmap.write_map("test_moo2.fits", moo2)
+		#cow1 = map_ifft(prec*map_fft(moo1))
+		#cow2 = map_ifft(prec*map_fft(moo2))
+		#enmap.write_map("test_cow1.fits", cow1)
+		#enmap.write_map("test_cow2.fits", cow2)
+
+
+
+
+
+
+
+		#1/0
+
 		#enmap.write_map("prec.fits", prec.real)
 		#saverad("prec.txt", prec.real)
 		def M(x): return zip(prec*unzip(x))
