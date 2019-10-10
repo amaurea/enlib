@@ -1053,7 +1053,7 @@ class FilterAddDmap:
 		self.data = {}
 		work = dmap.tile2work()
 		for scan, subind in zip(scans, subinds):
-			self.data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys), work[subind]]
+			self.data[scan] = [pmat.PmatMap(scan, work.maps[subind], order=pmat_order, sys=sys), work.maps[subind]]
 	def __call__(self, scan, tod):
 		pmat, work = self.data[scan]
 		pmat.forward(tod, work, tmul=self.tmul, mmul=self.mul)
@@ -1082,8 +1082,8 @@ class FilterBuddyDmap:
 		self.data = {}
 		work = dmap.tile2work()
 		for scan, subind in zip(scans, subinds):
-			self.data[scan] = [pmat.PmatMapMultibeam(scan, work[subind], scan.buddy_offs,
-				scan.buddy_comps, order=pmat_order, sys=sys), work[subind]]
+			self.data[scan] = [pmat.PmatMapMultibeam(scan, work.maps[subind], scan.buddy_offs,
+				scan.buddy_comps, order=pmat_order, sys=sys), work.maps[subind]]
 	def __call__(self, scan, tod):
 		pmat, work = self.data[scan]
 		pmat.forward(tod, work, tmul=self.tmul, mmul=self.mul)
