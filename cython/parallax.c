@@ -1,6 +1,9 @@
 #include <math.h>
 #include "immintrin.h"
 
+// I thought this was standard in math.h, but apparently it's optional
+#define M_PI 3.14159265358979323846
+
 inline void displace_pos(double dec, double ra, double * earth_pos, double r, double dy, double dx, double * odec, double * ora)
 {
 	double cdec = cos(dec);
@@ -120,6 +123,33 @@ void displace_map_blocks_avx_omp(float * imap, float * omap, int ny, int nx, dou
 				}
 			}
 		}
+	}
+}
+
+void solve_plain(float * frhs, float * kmap, float * osigma, int ny, int nx, float klim) {
+	#pragma omp parallel for
+	for(int y = 0; y < ny; y++)
+	for(int x = 0; x < nx; x++) {
+		int i = y*nx+x;
+		if(kmap[i] > klim) osigma[i] = frhs[i]/sqrt(kmap[i]);
+		else               osigma[i] = 0;
+	}
+}
+
+void update_total_plain(float * sigma, float * sigma_max, float * param_max, int * hit_tot, float * kmap, int ny, int nx, float r, float vy, float vx) {
+	#pragma omp parallel for
+	for(int y = 0; y < ny; y++)
+	for(int x = 0; x < nx; x++) {
+		int i = y*nx+x;
+		if(sigma[i] > sigma_max[i]) {
+			sigma_max[i] = sigma[i];
+			param_max[i] = r;
+			param_max[i+ny*nx*1] = vy;
+			param_max[i+ny*nx*2] = vx;
+			param_max[i+ny*nx*3] = kmap[i];
+		}
+		if(sigma[i] != 0)
+			hit_tot[i]++;
 	}
 }
 

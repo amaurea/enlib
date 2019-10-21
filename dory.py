@@ -818,7 +818,7 @@ def find_source_artifacts(cat, vlim=0.005, maxrad=80*utils.arcmin, jumprad=7*uti
 		artifacts.append(list(tagged))
 	return owners, artifacts
 
-def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25):
+def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25, uncertainty="min"):
 	"""Given a point source catalog which might contain duplicates, detect these duplicates
 	and merge them to produce a single catalog with no duplicates. Sources are considered
 	duplicates if they are within rlim of each other. Merging uses averaging if the amplitudes
@@ -850,14 +850,24 @@ def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25):
 			if len(good) == 0: continue
 			gcat  = cat[group[good]]
 			entry = np.zeros([], cat.dtype)
-			def wmean(v, w): return (np.sum(v.T*w,-1)/np.sum(w,-1)).T
+			def wmean(v, w):
+				if np.any(~np.isfinite(v.T)) or np.any(~np.isfinite(w)):
+					print v, w, np.isfinite(v), np.isfinite(w)
+				return (np.sum(v.T*w.T,-1)/np.sum(w.T,-1)).T
+			def nonan(a): return np.where(np.isfinite(a),a,0)
 			for key in cat.dtype.fields:
 				# Weighted mean in case one is more uncertain for some reason
-				entry[key] = wmean(gcat[key], gcat["damp"][:,0]**-2)
+				if gcat[key].ndim == 2:
+					entry[key] = wmean(nonan(gcat[key]), nonan(gcat["damp"]**-2))
+				else:
+					entry[key] = wmean(nonan(gcat[key]), nonan(gcat["damp"][:,0]**-2))
 			# Set min uncertainty of inputs as the effective one. Could have
 			# also used np.mean(gcat.damp**-2)**-0.5, but I trust the least uncertain
 			# one more.
-			entry["damp"] = np.min(gcat["damp"],0)
+			if uncertainty == "min":
+				entry["damp"] = np.min(gcat["damp"],0)
+			else:
+				entry["damp"] = np.sum(nonan(gcat["damp"]**-2))**-0.5
 			# Handle the integer fields
 			entry["status"] = np.median(gcat["status"])
 			ocat.append(entry)
@@ -877,6 +887,7 @@ def build_merge_weight(shape, dtype=np.float64):
 
 def merge_maps_onto(maplist, shape, wcs, comm, root=0, crop=0, dtype=None):
 	if dtype is None: dtype = maplist[0].dtype
+	dtype = utils.fix_dtype_mpi4py(dtype)
 	pre = tuple(shape[:-2])
 	# First crop the maps if necessary
 	if crop: maplist = [map[...,crop:-crop,crop:-crop] for map in maplist]
@@ -920,7 +931,8 @@ def get_beam_profile(beam, nsamp=10001, rmax=0, tol=1e-7):
 	if not rmax:
 		r0   = np.linspace(0, np.pi, nsamp)
 		br0  = utils.beam_transform_to_profile(beam, r0, normalize=True)
-		imax = min(len(r0)-1,np.where(br0 > tol)[0][-1]+1)
+		above= np.where(br0 > tol)[0]
+		imax = min(len(r0)-1,above[-1]+1 if len(above)>0 else len(br0))
 		rmax = r0[imax]
 	# Then get the actual profile
 	r    = np.linspace(0, rmax, nsamp)
