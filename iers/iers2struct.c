@@ -18,13 +18,14 @@ char * addspaces(char * s, int * fieldwidths, int nfield)
 
 int main()
 {
-	int year, month, day, mjd, i, mjd0, n;
+	int year, month, day, mjd, i, mjd0, n, nentry;
 	double pm[2], epm[2], dUT, edUT, lod, elod, dPsi, edPsi, dEps, edEps, foo[7];
 	char ip[3];
 	char * line = NULL;
 	char * fixed = NULL;
 	int fieldwidths[] = {2,2,2,9,2,10,9,10,9,3,10,10,8,7,3,10,9,10,10,11,10,11,10,10};
 	size_t len;
+	nentry = 0;
 	printf("#include <stdlib.h>\n");
 	printf("#include <iers.h>\n");
 	printf("IERSInfo iers_info[] = {\n");
@@ -41,13 +42,18 @@ int main()
 		printf("	{%4d, %2d, %2d, %5d, '%c', %9.6f, %9.6f, %9.6lf, %9.6lf, '%c', %10.7lf, %10.7lf, %7.4lf, %7.4lf, '%c', %9.3lf, %9.3lf},\n",
 			year,month,day,mjd,ip[0],pm[0],epm[0],pm[1],epm[1],ip[1],dUT,edUT,lod,elod,ip[2],dPsi,edPsi,dEps,edEps);
 		if(i == 0) mjd0 = mjd;
+		nentry++;
 	}
 	printf("};\n");
 	printf("#define IERS_MJD0 %d\n", mjd0);
-	printf("#define IERS_N %d\n", i);
+	printf("#define IERS_N %d\n", nentry);
 	printf("IERSInfo * iers_lookup(double mjd) {\n");
 	printf("	int idx = (int)(mjd-IERS_MJD0);\n");
+	printf("	return iers_get(idx);\n");
+	printf("}\n");
+	printf("IERSInfo * iers_get(int idx) {\n");
 	printf("	return idx < 0 ? NULL : idx >= IERS_N ? NULL : &iers_info[idx];\n");
 	printf("}\n");
+	printf("int iers_n = IERS_N;\n");
 	return 0;
 }
