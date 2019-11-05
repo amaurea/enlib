@@ -1,6 +1,8 @@
 """Helper functions for pyephem."""
 import numpy as np, ephem, os
 from . import utils
+try: basestring
+except NameError: basestring = str
 
 yr = 365.2425
 def mjd2djd(mjd): return np.asarray(mjd) + 2400000.5 - 2415020

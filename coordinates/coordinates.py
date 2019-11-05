@@ -1,11 +1,13 @@
 """This module provides conversions between astronomical coordinate systems.
 When c is more developed, it might completely replace this
 module. For now, it is used as a part of the implementation."""
-import numpy as np
+import numpy as np, warnings
 import astropy.coordinates as c, astropy.units as u
-from .. import utils, bunch
+from .. import utils, bunch, config
 # Optional dependencies are imported in the functions that
 # use them. These include ephem, iers and pyfsla
+
+config.default("iers_fallback", "none", "How to handle missing iers data. 'none' raises an exception, 'nearest' issues a warning but uses the closest available data.")
 
 default_site = bunch.Bunch(
 	lat  = -22.9585,
@@ -190,12 +192,27 @@ def transform_astropy(from_sys, to_sys, coords):
 		getattr(getattr(coords, names[0]),unit.name),
 		getattr(getattr(coords, names[1]),unit.name)])
 
+def get_iers(t, fallback=None):
+	from .. import iers
+	fallback = config.get("iers_fallback", fallback)
+	info     = iers.lookup(t)
+	if info is not None: return info
+	# No data found for this time
+	if fallback == "none":
+		raise ValueError("No IERS Earth orientation data avialable for time %f and iers_fallback set to 'none'" % (t))
+	elif fallback == "nearest":
+		info1 = iers.get(0)
+		info2 = iers.get(iers.cvar.iers_n-1)
+		info  = info1 if t < info1.mjd else info2
+		warnings.warn("No IERS Earth orientation data available for given time. Falling back to nearest available")
+		return info
+	else: raise ValueError("Invalid iers_fallback '%s'" % str(fallback))
+
 def hor2cel(coord, time, site, copy=True):
 	from . import pyfsla
-	from enlib import iers
 	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]
-	info   = iers.lookup(trepr)
+	info   = get_iers(trepr)
 	ao = pyfsla.sla_aoppa(trepr, info.dUT, site.lon*utils.degree, site.lat*utils.degree, site.alt,
 		info.pmx*utils.arcsec, info.pmy*utils.arcsec, site.T, site.P, site.hum,
 		299792.458/site.freq, site.lapse)
@@ -206,11 +223,10 @@ def hor2cel(coord, time, site, copy=True):
 
 def cel2hor(coord, time, site, copy=True):
 	from . import pyfsla
-	from enlib import iers
 	# This is very slow for objects near the horizon!
 	coord  = np.array(coord, copy=copy)
 	trepr  = time[len(time)/2]
-	info   = iers.lookup(trepr)
+	info   = get_iers(trepr)
 	ao = pyfsla.sla_aoppa(trepr, info.dUT, site.lon*utils.degree, site.lat*utils.degree, site.alt,
 		info.pmx*utils.arcsec, info.pmy*utils.arcsec, site.T, site.P, site.hum,
 		299792.458/site.freq, site.lapse)
