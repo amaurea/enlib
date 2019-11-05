@@ -864,17 +864,23 @@ class Coadder:
 		self.iN = [dataset.iN                 for dataset in mapset.datasets for split in dataset.splits]
 		self.F  = [dataset.filter             for dataset in mapset.datasets for split in dataset.splits]
 		self.B  = [dataset.beam_2d/mapset.target_beam_2d for dataset in mapset.datasets for split in dataset.splits]
+		self.insufficient = [dataset.insufficient for dataset in mapset.datasets for split in dataset.splits]
 		#enmap.write_map("coadder_m.fits", enmap.samewcs(self.m, self.m[0]))
 		#enmap.write_map("coadder_H.fits", enmap.samewcs(self.H, self.H[0]))
 		#enmap.write_map("coadder_iN.fits", enmap.samewcs(self.iN, self.iN[0]))
 		#enmap.write_map("coadder_B.fits", enmap.samewcs(self.B, self.B[0]))
+		#for i in range(len(self.iN)):
+		#	W = self.B[i]*self.iN[i]*self.B[i]
+		#	np.savetxt("coadder_w_%02d.txt" % i, bin_1d(W))
 		self.shape, self.wcs = mapset.shape, mapset.wcs
 		self.dtype= mapset.dtype
 		self.ctype= np.result_type(self.dtype,0j)
 		self.npix = self.shape[-2]*self.shape[-1]
 		self.nmap = len(self.m)
 		self.tot_div = enmap.zeros(self.shape, self.wcs, self.dtype)
-		for H in self.H: self.tot_div += H**2
+		for H, insufficient in zip(self.H, self.insufficient):
+			if not insufficient:
+				self.tot_div += H**2
 	def calc_rhs(self):
 		# Calc rhs = B'HCH m
 		rhs = enmap.zeros(self.shape, self.wcs, self.dtype)
