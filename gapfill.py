@@ -1,6 +1,7 @@
 """This module provides functions for filling gaps in an array based on ranges or masks."""
-import numpy as np, utils
-from . import fft, config, resample, bench, sampcut
+from __future__ import division, print_function
+import numpy as np
+from . import fft, config, resample, bench, sampcut, utils
 
 config.default("gapfill", "linear", "TOD gapfill method. Can be 'copy' or 'linear'")
 config.default("gapfill_context", 10, "Samples of context to use for matching up edges of cuts.")
@@ -84,7 +85,7 @@ def gapfill_joneig(tod, cut, thresh=4, niter=4, nloop=4, inplace=False, gapfill=
 	return tod
 
 def gapfill_constrained(tod, cut, iN, mask_scale=1.0, lim=1e-4, maxiter=50, inplace=False, verbose=False):
-	from enlib import cg
+	from . import cg
 	iV = iN.ivar*mask_scale
 	def A(x):
 		x	 = x.reshape(tod.shape)
@@ -98,7 +99,7 @@ def gapfill_constrained(tod, cut, iN, mask_scale=1.0, lim=1e-4, maxiter=50, inpl
 	while solver.i < maxiter and solver.err > lim:
 		solver.step()
 		if verbose:
-			print "%5d %15.7e" % (solver.i, solver.err)
+			print("%5d %15.7e" % (solver.i, solver.err))
 	if not inplace: tod = tod.copy()
 	cut.insert_samples(tod, cut.extract_samples(solver.x.reshape(tod.shape)))
 	return tod

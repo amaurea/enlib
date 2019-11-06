@@ -1,11 +1,15 @@
 """This module provides conversions between astronomical coordinate systems.
 When c is more developed, it might completely replace this
 module. For now, it is used as a part of the implementation."""
+from __future__ import division, print_function
 import numpy as np, warnings
 import astropy.coordinates as c, astropy.units as u
 from .. import utils, bunch, config
 # Optional dependencies are imported in the functions that
 # use them. These include ephem, iers and pyfsla
+
+try: basestring
+except: basestring = str
 
 config.default("iers_fallback", "none", "How to handle missing iers data. 'none' raises an exception, 'nearest' issues a warning but uses the closest available data.")
 
@@ -211,7 +215,7 @@ def get_iers(t, fallback=None):
 def hor2cel(coord, time, site, copy=True):
 	from . import pyfsla
 	coord  = np.array(coord, copy=copy)
-	trepr  = time[len(time)/2]
+	trepr  = time[len(time)//2]
 	info   = get_iers(trepr)
 	ao = pyfsla.sla_aoppa(trepr, info.dUT, site.lon*utils.degree, site.lat*utils.degree, site.alt,
 		info.pmx*utils.arcsec, info.pmy*utils.arcsec, site.T, site.P, site.hum,
@@ -225,7 +229,7 @@ def cel2hor(coord, time, site, copy=True):
 	from . import pyfsla
 	# This is very slow for objects near the horizon!
 	coord  = np.array(coord, copy=copy)
-	trepr  = time[len(time)/2]
+	trepr  = time[len(time)//2]
 	info   = get_iers(trepr)
 	ao = pyfsla.sla_aoppa(trepr, info.dUT, site.lon*utils.degree, site.lat*utils.degree, site.alt,
 		info.pmx*utils.arcsec, info.pmy*utils.arcsec, site.T, site.P, site.hum,

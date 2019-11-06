@@ -1,3 +1,4 @@
+from __future__ import division, print_function
 import numpy as np, fortran_32, fortran_64
 from .. import fft, utils, coordinates
 
@@ -41,7 +42,7 @@ def measure_basis(tod, data):
 
 def build_noise_basis(data, nbasis, minorder=2):
 	nmax = np.max(data.ranges[:,1]-data.ranges[:,0])
-	nb = nbasis if nbasis >= 0 else max(minorder,(nmax-nbasis-1)/(-nbasis))
+	nb = nbasis if nbasis >= 0 else max(minorder,(nmax-nbasis-1)//(-nbasis))
 	Q = np.zeros((data.tod.size,max(1,nb)))
 	if nbasis == 0: return Q
 	lendb = {}
@@ -57,7 +58,7 @@ def build_noise_basis(data, nbasis, minorder=2):
 				Q[r[0]:r[1],:] = 0
 			else:
 				# Cap number of basis vectors to [minorder:n]
-				nvec = nbasis if nbasis >= 0 else min(n,max(minorder,(n-nbasis-1)/(-nbasis)))
+				nvec = nbasis if nbasis >= 0 else min(n,max(minorder,(n-nbasis-1)//(-nbasis)))
 				# Build the first nbasis chebyshev polynomials
 				V = fft.chebt(np.eye(n)[:nvec]).T
 				# We want QQ' = V(V'V)"V', so Q = V(V'V)**-0.5
@@ -77,7 +78,7 @@ def build_noise_basis_adaptive(data, nmin=2, nmax=20, lim=2):
 		ps = np.abs(np.fft.rfft(data.tod[r[0]:r[1]]))**2
 		if len(ps) < 2: nbad = 1
 		else:
-			ps /= np.median(ps[len(ps)/2:])
+			ps /= np.median(ps[len(ps)//2:])
 			nbad = np.where(ps<=lim)[0][0]
 		nvec = max(nmin,min(nbad, nmax))
 		# Build the first nbasis chebyshev polynomials

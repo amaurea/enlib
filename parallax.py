@@ -1,3 +1,4 @@
+from __future__ import division
 """This module provides functions for dealing with apparent parallax displacement
 in maps. This module works in equatorial coordinates."""
 import numpy as np

@@ -1,3 +1,4 @@
+from __future__ import division, print_function
 """This module handles deprojection of a set of arrays from another set of
 arrays. This is useful for cleaning TODs of unwanted signals, for example."""
 import numpy as np, scipy.signal
@@ -7,7 +8,7 @@ def estimate_white_noise(tod, nchunk=10, chunk_size=1000):
 	"""Robust time-domain estimation of white noise level."""
 	vs = []
 	for ci in range(nchunk):
-		i1 = ci*tod.shape[-1]/nchunk
+		i1 = ci*tod.shape[-1]//nchunk
 		i2 = i1+chunk_size
 		sub = tod[...,i1:i2]
 		if sub.shape[-1] < 2: continue
@@ -82,7 +83,6 @@ def fit_phase_flat(tods, az, daz=1*utils.arcmin, cuts=None, niter=None,
 	# Precompute div
 	pflat.backward(tods*0+weight[:,None], div, -1)
 	div[div==0] = 1
-	print np.mean(div)
 	for i in range(niter):
 		# Overall logic: gapfill -> bin -> subtract -> loop
 		if cuts is not None:
@@ -139,7 +139,7 @@ def smooth_basis_fourier(ftod, fbasis, bsize=100, mincorr=0.1,
 	passed in as the first argument."""
 	fbasis = fbasis.copy()
 	nbasis, nfreq = fbasis.shape
-	nbin  = int((nfreq+bsize-1)/bsize)
+	nbin  = int((nfreq+bsize-1)//bsize)
 	# Compute white noise level
 	wbasis = np.var(fbasis[:,nfreq/2:],1)
 	ngood = np.zeros(nbasis,dtype=int)

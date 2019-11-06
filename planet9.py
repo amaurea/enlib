@@ -1,10 +1,14 @@
+from __future__ import division, print_function
 import numpy as np, time, os, sys, healpy
-from enlib import utils
+from . import utils
 with utils.nowarn(): import h5py
 from scipy import ndimage, stats, spatial, integrate, optimize
-from enlib import enmap, utils, mpi, curvedsky, bunch, parallax, cython, ephemeris, statdist, interpol
-from enlib import nmat, pmat, sampcut, fft
+from . import enmap, utils, mpi, curvedsky, bunch, parallax, cython, ephemeris, statdist, interpol
+from . import nmat, pmat, sampcut, fft
 from pixell import sharp
+
+try: basestring
+except: basestring = str
 
 def displace_pos(pos, earth_pos, r, off):
 	dec, ra = np.array(pos)

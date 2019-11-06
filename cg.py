@@ -1,20 +1,10 @@
+from __future__ import division, print_function
+import numpy as np
 # Implementation of preconditioned conjugate gradients. More general than
 # the scipy version, in that it does not assume that it knows how to perform
 # the dot product. This makes it possible to use this for distributed x
 # vectors. It is pretty much a straight port of the fortran cg solver in
 # the quiet pipeline.
-
-# According to
-# http://etna.math.kent.edu/vol.13.2002/pp56-80.dir/pp56-80.pdf
-# the error (As the A-norm of the difference between the current
-# and true value) at step i can be approximated well as the sqrt of
-# sum(j=0:d-1) alpha(i+j)*rz(i+j) for large enough d, where 4 is
-# sufficient. This means that we can't estimtate the current error,
-# but we can estimate the error 4 steps in the past, which is good
-# enough.
-
-
-import numpy as np
 
 def default_M(x):     return np.copy(x)
 def default_dot(a,b): return a.dot(np.conj(b))

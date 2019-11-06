@@ -1,4 +1,5 @@
 """Helper functions for pyephem."""
+from __future__ import division, print_function
 import numpy as np, ephem, os
 from . import utils
 try: basestring

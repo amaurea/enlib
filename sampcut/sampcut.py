@@ -1,3 +1,4 @@
+from __future__ import division, print_function
 import numpy as np
 from . import fortran_32, fortran_64
 
@@ -191,7 +192,7 @@ class Sampcut:
 		icore.cut_union(res2.ranges.T, res2.detmap, res.ranges.T, res.detmap)
 		res.ranges = res.ranges[:res.detmap[-1]]
 		# Total number of samples also changes
-		res.nsamp = (sampslice[1]-sampslice[0]+sampslice[2]-np.sign(sampslice[2]))/sampslice[2]
+		res.nsamp = (sampslice[1]-sampslice[0]+sampslice[2]-np.sign(sampslice[2]))//sampslice[2]
 		return res
 	def __str__(self): return "Sampcut(ndet:%d,nsamp:%d,ncut:%d,cfrac:%.1f%%)" % (
 			self.ndet, self.nsamp, self.detmap[-1], 100.0*self.sum()/(self.ndet*self.nsamp))

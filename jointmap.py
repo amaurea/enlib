@@ -1,3 +1,4 @@
+from __future__ import division, print_function
 import numpy as np, os, time, imp, copy, functools, sys
 from scipy import ndimage, optimize, interpolate, integrate, stats, special
 from . import enmap, retile, utils, bunch, cg, fft, powspec, array_ops, memory, wcsutils, bench
@@ -272,7 +273,7 @@ def sz_map_profile(shape, wcs, fwhm=1.0):
 	"""Evaluate the 2d sz profile for the enmap with the given shape
 	and profile."""
 	pixshape = enmap.pixshape(shape, wcs)/utils.arcmin
-	pixshape[1] *= np.cos(enmap.pix2sky(shape, wcs, [shape[-2]/2,shape[-1]/2])[0])
+	pixshape[1] *= np.cos(enmap.pix2sky(shape, wcs, [shape[-2]//2,shape[-1]//2])[0])
 	res = sz_2d_profile(shape, pixshape, fwhm=fwhm, oversample=1, core=50, periodic=True)
 	# Shift center to top left corner
 	res = np.roll(np.roll(res, -(shape[-2]//2), -2), -(shape[-1]//2), -1)
@@ -377,7 +378,7 @@ def calc_pbox(shape, wcs, box, n=10):
 		[np.min(y),np.min(x)],
 		[np.max(y),np.max(x)]])
 	xm1 = np.mean(pbox[:,1])
-	xm2 = utils.rewind(xm1, shape[-1]/2, nphi)
+	xm2 = utils.rewind(xm1, shape[-1]//2, nphi)
 	pbox[:,1] += xm2-xm1
 	pbox = utils.nint(pbox)
 	return pbox
@@ -531,7 +532,7 @@ class Mapset:
 
 			for si, split in enumerate(dataset.splits):
 				split.data = None
-				if verbose: print "Reading %s" % split.map
+				if verbose: print("Reading %s" % split.map)
 				try:
 					map = read_map(split.map, pbox, name=os.path.basename(split.map), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
 					div = read_map(split.div, pbox, name=os.path.basename(split.div), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
@@ -789,8 +790,8 @@ def setup_beams(mapset):
 					beam_2d *= d.ywin[:,None]
 					beam_2d *= d.xwin[None,:]
 				except AttributeError:
-					print "Automatic separable pixel window can only be used together with"
-					print "the corresponding automatic spearable noise pixel window"
+					print("Automatic separable pixel window can only be used together with")
+					print("the corresponding automatic spearable noise pixel window")
 					raise
 			else: raise ValueError("Unrecognized pixel window type '%s'" % (d.pixel_window_params[0]))
 			#beam_2d = enmap.ndmap(beam_2d, d.wcs)
@@ -857,7 +858,7 @@ class Coadder:
 	def __init__(self, mapset):
 		self.mapset = mapset
 		for dataset in mapset.datasets:
-			print dataset.name
+			print(dataset.name)
 		# Extract and flatten all our input maps
 		self.m  = [split.data.map             for dataset in mapset.datasets for split in dataset.splits]
 		self.H  = [split.data.H               for dataset in mapset.datasets for split in dataset.splits]
@@ -912,7 +913,7 @@ class Coadder:
 			solver.step()
 			t2 = time.time()
 			if verbose:
-				print "%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1)
+				print("%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1))
 			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + range(100,10000,100):
 				enmap.write_map(dump_dir + "/map_step%04d.fits" % solver.i, map_ifft(unzip(solver.x)))
 			if solver.err < cg_tol: break
@@ -943,7 +944,7 @@ class Wiener:
 	def __init__(self, mapset):
 		self.mapset = mapset
 		for dataset in mapset.datasets:
-			print dataset.name
+			print(dataset.name)
 		# Extract and flatten all our input maps
 		self.m  = [split.data.map   for dataset in mapset.datasets for split in dataset.splits]
 		self.H  = [split.data.H     for dataset in mapset.datasets for split in dataset.splits]
@@ -1068,7 +1069,7 @@ class Wiener:
 			solver.step()
 			t2 = time.time()
 			if verbose:
-				print "%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1)
+				print("%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1))
 			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + range(100,10000,100):
 				enmap.write_map(dump_dir + "/map_step%04d.fits" % solver.i, map_ifft(unzip(solver.x)))
 			if solver.err < cg_tol: break
@@ -1117,7 +1118,7 @@ class SourceFitter:
 		amps  = np.zeros((self.nmap, self.mapset.ncomp, nsrc))
 		icovs = np.zeros((self.nmap, self.mapset.ncomp, nsrc, nsrc))
 		for mi in range(self.nmap):
-			if verbose: print "map ", self.names[mi]
+			if verbose: print("map ", self.names[mi])
 			amps[mi], icovs[mi] = fit_sources_groupwise(self.m[mi], self.H[mi], self.iN[mi], self.P[mi], pix, S=self.S, verbose=verbose)
 		return amps, icovs
 
@@ -1154,7 +1155,7 @@ def fit_sources_brute(map, H, iN, profile_2d, src_pix, S=None, verbose=False):
 		icovs[comp]     = div
 		if verbose:
 			for i, (y,x) in enumerate(src_pix):
-				print "%3d %d %8.3f %8.3f %8.3f %8.2f %8.2f" % (i, comp, y, x, amps[comp,i]*div[i,i]**0.5, amps[comp,i], div[i,i]**-0.5)
+				print("%3d %d %8.3f %8.3f %8.3f %8.2f %8.2f" % (i, comp, y, x, amps[comp,i]*div[i,i]**0.5, amps[comp,i], div[i,i]**-0.5))
 	return amps, icovs
 
 def sim_sources(profile_2d, src_pix, amps=1):
@@ -1194,7 +1195,7 @@ def fit_sources_groupwise(map, H, iN, profile_2d, src_pix, S=None, indep_tol=1e-
 		# sources in them due to "noise" in NB, but that's not a problem.
 		groups     = [list(np.where(src_label==gi)[0]) for gi in all_groups]
 		maxsize    = max([len(g) for g in groups])
-		if verbose: print "split %d sources into %d groups of max size %d" % (nsrc, ngroup, maxsize)
+		if verbose: print("split %d sources into %d groups of max size %d" % (nsrc, ngroup, maxsize))
 		# Process the nth element of each group in parallel
 		Bs, NBs = enmap.zeros((2,maxsize,)+cmap.shape, cmap.wcs, cmap.dtype)
 		for i in range(maxsize):
@@ -1227,7 +1228,7 @@ def fit_sources_groupwise(map, H, iN, profile_2d, src_pix, S=None, indep_tol=1e-
 				icovs[comp,src,g] = gdiv[si]
 		if verbose:
 			for i, (y,x) in enumerate(src_pix):
-				print "%3d %d %8.3f %8.3f %8.3f %8.2f %8.2f" % (i, comp, y, x, amps[comp,i]*icovs[comp,i,i]**0.5, amps[comp,i], icovs[comp,i,i]**-0.5)
+				print("%3d %d %8.3f %8.3f %8.3f %8.2f %8.2f" % (i, comp, y, x, amps[comp,i]*icovs[comp,i,i]**0.5, amps[comp,i], icovs[comp,i,i]**-0.5))
 	return amps, icovs
 
 class SignalFilter:
@@ -1302,7 +1303,7 @@ class SignalFilter:
 			solver.step()
 			t2 = time.time()
 			if verbose:
-				print "%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1)
+				print("%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1))
 			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + range(100,10000,100):
 				for j,m in enumerate(unzip(solver.x)):
 					enmap.write_map(dump_dir + "/step%04d_mu%04d.fits" % (solver.i,j), map_ifft(m))
@@ -1402,7 +1403,7 @@ class SignalFilter:
 			# shows the CMB-relevant signal. To see what would happen
 			# to a, the signal we actually care about, we should use
 			# P instead
-			print i, self.Q[i][0,0]
+			print(i, self.Q[i][0,0])
 			sumPHCH += self.Q[i]*self.B[i]*Hmean[i]**2*self.iN[i]*self.Q[i][0,0]
 			sumHCHB += self.B[i]*Hmean[i]**2*self.iN[i]*self.Q[i][0,0]
 			core  += Hmean[i]**2*self.iN[i]*self.B[i]**2
@@ -2522,7 +2523,7 @@ class SourceSZFinder3:
 		self.ignore_mean = ignore_mean
 		# This is used for the model subtraction
 		self.pixshape = enmap.pixshape(mapset.shape, mapset.wcs)/utils.arcmin
-		self.pixshape[1] *= np.cos(enmap.pix2sky(mapset.shape, mapset.wcs, [mapset.shape[-2]/2,mapset.shape[-1]/2])[0])
+		self.pixshape[1] *= np.cos(enmap.pix2sky(mapset.shape, mapset.wcs, [mapset.shape[-2]//2,mapset.shape[-1]//2])[0])
 		# min H level to avoid degenerate matrices
 		self.h_tol = 1e-5
 		self.h_min = 1e-10
@@ -2552,7 +2553,7 @@ class SourceSZFinder3:
 		if npass is None: npass = self.npass
 		others = None
 		for it in range(npass):
-			if verbosity >= 1: print "Pass %d" % (it+1)
+			if verbosity >= 1: print("Pass %d" % (it+1))
 			# We gradually restrict our edge as we iterate to reduce the effect of ringing
 			# from objects that are just ourside our edge, and hence can't be properly subtracted
 			cands, snmaps = self.find_candidates(self.snmin, maps=True, verbosity=verbosity, others=others, edge=self.mapset.apod_edge*it)
@@ -2655,11 +2656,11 @@ class SourceSZFinder3:
 			c.npix = cand.npix
 			t4 = time.time()
 			if verbosity >= 2:
-				print "%3d %4.1f %4.1f %s" % (ci+1, t2-t1, t3-t2, format_catalogue(c)),
+				print("%3d %4.1f %4.1f %s" % (ci+1, t2-t1, t3-t2, format_catalogue(c)),end=" ")
 				sys.stdout.flush()
 		t5 = time.time()
 		if verbosity >= 1:
-			print "Measured %2d objects in %5.1f s" % (len(cands), t5-t0)
+			print("Measured %2d objects in %5.1f s" % (len(cands), t5-t0))
 		# And return lots of useful stuff
 		res = bunch.Bunch(catalogue = cat, model = model, model_full=model_full)
 		return res
@@ -2721,12 +2722,12 @@ class SourceSZFinder3:
 		filter = SignalFilter(self.mapset)
 		rhs    = filter.calc_rhs()
 		mu     = filter.calc_mu(rhs, verbose=verbosity >= 3)
-		print "find candidates"
+		print("find candidates")
 		#enmap.write_map("test_mu.fits", map_ifft(enmap.enmap(mu, mu[0].wcs)))
 		#1/0
 		for name in self.signals:
 			submaps = []
-			print name
+			print(name)
 			if name == "ptsrc":
 				setup_profiles_ptsrc(self.mapset)
 				alpha  = filter.calc_alpha(mu)
@@ -2735,11 +2736,11 @@ class SourceSZFinder3:
 			elif name == "sz":
 				snmap = None
 				for si, scale in enumerate(self.scales):
-					print scale
+					print(scale)
 					setup_profiles_sz(self.mapset, scale)
-					print "calc alpha"
+					print("calc alpha")
 					alpha  = filter.calc_alpha(mu)
-					print "calc_dalpha"
+					print("calc_dalpha")
 					dalpha = filter.calc_dalpha_empirical(alpha)
 					snmap_1scale = div_nonan(alpha, dalpha)
 					if snmap is None: snmap = snmap_1scale
@@ -2758,7 +2759,7 @@ class SourceSZFinder3:
 			cands = prune_candidates(cands, others=others, verbose=verbosity>=2)
 		t2 = time.time()
 		if verbosity >= 1:
-			print "Found %3d candidates in %5.1f s" % (len(cands),t2-t1)
+			print("Found %3d candidates in %5.1f s" % (len(cands),t2-t1))
 		if maps: return cands, snmaps
 		else:    return cands
 	@staticmethod
@@ -2793,7 +2794,7 @@ class PtsrcLikelihood3:
 		self.nx   = 2
 		self.nlin = np.max(self.groups)+1
 		# Our position prior, in pixels
-		self.rmax = rmax if rmax is not None else min(*shape)/2
+		self.rmax = rmax if rmax is not None else min(*shape)//2
 		self.scale= np.array([1]*self.nx)
 		# Optimization
 		self.cache = {}
@@ -2886,7 +2887,7 @@ class PtsrcLikelihood3:
 			info = self.calc_log_posterior(x)
 			t2 = time.time()
 			if verbose:
-				print "%3d %5.2f %9.3f %s" % (self.n, t2-t1, info.logL, self.format_sample(info))
+				print("%3d %5.2f %9.3f %s" % (self.n, t2-t1, info.logL, self.format_sample(info)))
 				sys.stdout.flush()
 			return info.logL
 		x, logP, _, nit, nfun, warn = optimize.fmin_powell(f, x0, disp=False, full_output=True)
@@ -2954,7 +2955,7 @@ class PtsrcLikelihood3:
 					next_vals[wi]   = cand_val
 				x, v = next_points[wi], next_vals[wi]
 				if verbose:
-					print "%3d %d %s" % (si, wi, self.format_sample(v))
+					print("%3d %d %s" % (si, wi, self.format_sample(v)))
 					sys.stdout.flush()
 				# Accumulate statistics if we're done with burnin
 				if si >= 0:
@@ -3033,7 +3034,7 @@ class SZLikelihood3(PtsrcLikelihood3):
 		self.smin  = smin if smin is not None else 0.2
 		# Needed for sz P evaluation
 		self.pixshape = enmap.pixshape(shape, wcs)/utils.arcmin
-		self.pixshape[1] *= np.cos(enmap.pix2sky(shape, wcs, [shape[-2]/2,shape[-1]/2])[0])
+		self.pixshape[1] *= np.cos(enmap.pix2sky(shape, wcs, [shape[-2]//2,shape[-1]//2])[0])
 	def calc_initial_value(self):
 		return np.array([0.0,0.0,1.0])
 	def calc_log_prior(self, x, ahat, A):
@@ -3363,9 +3364,9 @@ def prune_candidates(cands, others=None, scale=2.0, xmax=7, tol=0.1, verbose=Fal
 		if verbose:
 			j = np.argmax(leaks)
 			cand, ocan = cands[i], ocands[j]
-			print "%3d %5s %8.3f %8.3f %8.3f  leak %8.3f %3d %5s %8.3f %8.3f %8.3f" % (
+			print("%3d %5s %8.3f %8.3f %8.3f  leak %8.3f %3d %5s %8.3f %8.3f %8.3f" % (
 					i, cand.type, cand.sn, cand.pos[0]/utils.degree, cand.pos[1]/utils.degree, leaks[j],
-					j, ocan.type, ocan.sn, ocan.pos[0]/utils.degree, ocan.pos[1]/utils.degree)
+					j, ocan.type, ocan.sn, ocan.pos[0]/utils.degree, ocan.pos[1]/utils.degree))
 	# Get rid of any prepended candidates
 	ocands = ocands[nother:]
 	return ocands

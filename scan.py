@@ -44,6 +44,7 @@ of skipping samples here.
 # This module has become really crusty. It's time to redo this whole
 # system, especially considering the large overlap with Dataset.
 
+from __future__ import division, print_function
 import numpy as np, copy as cpy, h5py, os
 from . import sampcut, nmat, config, resample, utils, bunch, fft
 
@@ -82,7 +83,7 @@ class Scan:
 		return np.array([np.min(self.boresight,0)+np.min(self.offsets,0),np.max(self.boresight,0)+np.max(self.offsets,0)])
 	@property
 	def srate(self):
-		step = self.boresight.shape[0]/100
+		step = self.boresight.shape[0]//100
 		return float(step)/utils.medmean(self.boresight[::step,0][1:]-self.boresight[::step,0][:-1])
 	@property
 	def hwp_active(self): return self.hwp is not None and np.any(self.hwp_phase[0] != 0)

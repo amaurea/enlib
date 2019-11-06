@@ -1,3 +1,4 @@
+from __future__ import division
 """This module provids a simple logging/output interface."""
 import time
 from logging import *

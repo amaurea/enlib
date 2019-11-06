@@ -1,5 +1,9 @@
+from __future__ import division, print_function
 import numpy as np, h5py
 from . import rangelist, sampcut, utils
+
+try: basestring
+except: basestring = str
 
 # Flagranges implement the new cuts format,
 # where samples are tagged with flags instead
@@ -87,7 +91,7 @@ class Flagrange:
 			if inverse: flag = flag[1:]
 			try:
 				i    = self.flag_names.index(flag)
-				byte = i/8
+				byte = i//8
 				bit  = 1<<(i%8)
 				if not inverse: pos[byte] |= bit
 				else:           neg[byte] |= bit
@@ -163,7 +167,7 @@ class Flagrange:
 		res.flag_stack    = np.concatenate(flag_stack)
 		res.index_stack   = np.concatenate(index_stack)
 		res.stack_bounds  = np.array(stack_bounds)
-		res.nsamp         = (stop-start)/step
+		res.nsamp         = (stop-start)//step
 		# This won't work when reversing, but then
 		# sample offset doesn't make any sense for reversed arrays
 		res.sample_offset = self.sample_offset + start
@@ -174,7 +178,7 @@ class Flagrange:
 		for di in range(self.ndet):
 			s1,s2 = self.stack_bounds[di:di+2]
 			for fi in range(self.nflag):
-				byte = fi/8
+				byte = fi//8
 				bit  = 1<<(fi%8)
 				counts[di,fi] = np.sum(self.flag_stack[s1:s2,byte]&bit>0)
 		if not perdet: counts = np.sum(counts,0)
@@ -186,7 +190,7 @@ class Flagrange:
 			inds  = self.index_stack[s1:s2]
 			lens  = np.concatenate([inds[1:]-inds[:-1],[self.nsamp-inds[-1]]])
 			for fi in range(self.nflag):
-				byte = fi/8
+				byte = fi//8
 				bit  = 1<<(fi%8)
 				mask = self.flag_stack[s1:s2,byte]&bit>0
 				counts[di,fi] = np.sum(lens*mask)

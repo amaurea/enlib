@@ -1,3 +1,4 @@
+from __future__ import division, print_function
 import numpy as np, glob, re, sys, os
 from . import utils, enmap, bunch
 
@@ -54,8 +55,8 @@ def combine_tiles(ipathfmt, opathfmt, combine=2, downsample=2,
 	# Read the first tile to get its size information
 	ibase = enmap.read_map(ipathfmt % {"y":itile1[0],"x":itile1[1]})*0
 	# Find the set of output tiles we need to consider
-	otile1 = itile1/combine
-	otile2 = (itile2-1)/combine+1
+	otile1 = itile1//combine
+	otile2 = (itile2-1)//combine+1
 	# And loop over them
 	oyx = [(oy,ox) for oy in range(otile1[0],otile2[0]) for ox in range(otile1[1],otile2[1])]
 	for i in range(rank, len(oyx), size):
@@ -96,7 +97,7 @@ def combine_tiles(ipathfmt, opathfmt, combine=2, downsample=2,
 		otname = opathfmt % {"y": oy, "x": ox}
 		utils.mkdir(os.path.dirname(otname))
 		enmap.write_map(otname, omap)
-		if verbose: print otname
+		if verbose: print(otname)
 
 def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		otileoff=(0,0), otilenum=(None,None), ocorner=(-np.pi/2,-np.pi),
@@ -127,13 +128,13 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 	itilesize = ibase.shape[-2:]
 	ixres = ibase.wcs.wcs.cdelt[0]
 	nphi  = utils.nint(360/np.abs(ixres))
-	ntile_wrap = nphi/otilesize[1]
+	ntile_wrap = nphi//otilesize[1]
 	# Find the pixel position of our output corners according to the wcs.
 	# This is the last place we need to do a coordinate transformation.
 	# All the rest can be done in pure pixel logic.
 	pixoff = np.round(ibase.sky2pix(ocorner)).astype(int)
 	# Find the range of output tiles
-	def pix2otile(pix, ioff, osize): return (pix-ioff)/osize
+	def pix2otile(pix, ioff, osize): return (pix-ioff)//osize
 	otile1 = pix2otile(itile1*itilesize,   pixoff, otilesize)
 	otile2 = pix2otile(itile2*itilesize-1, pixoff, otilesize)
 	otile1, otile2 = np.minimum(otile1,otile2), np.maximum(otile1,otile2)
@@ -156,7 +157,7 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		oname = opathfmt % {"y":otile[0]+otileoff[0],"x":x}
 		utils.mkdir(os.path.dirname(oname))
 		enmap.write_map(oname, omap)
-		if verbose: print oname
+		if verbose: print(oname)
 
 def read_monolithic(idir, verbose=True, slice=None, dtype=None):
 	# Find the range of input tiles
@@ -181,7 +182,7 @@ def read_monolithic(idir, verbose=True, slice=None, dtype=None):
 			oy = ty - itile1[0]
 			ox = tx - itile1[1]
 			omap[...,oy*wy:(oy+1)*wy,ox*wx:(ox+1)*wx] = m
-			if verbose: print ipathfmt % {"y":ty,"x":tx}
+			if verbose: print(ipathfmt % {"y":ty,"x":tx})
 	return omap
 
 def monolithic(idir, ofile, verbose=True, slice=None, dtype=None):
@@ -262,8 +263,8 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 	omap  = enmap.zeros(geo.shape[:-2]+tuple(osize), geo.wcs, geo.dtype)
 	# Find out which input tiles overlap with this output tile.
 	# Our tile stretches from opix1:opix2 relative to the global input pixels
-	it1 = opix[0]/isize
-	it2 = (opix[1]-1)/isize+1
+	it1 = opix[0]//isize
+	it2 = (opix[1]-1)//isize+1
 	noverlap = 0
 	for ity in range(it1[0],it2[0]):
 		if ity < itile1[0] or ity >= itile2[0]: continue
@@ -287,7 +288,7 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 			else: imap = cache[1]
 			if cache is not None:
 				cache[0], cache[1] = iname, imap
-			if verbose: print iname
+			if verbose: print(iname)
 			# Edge input tiles may be smaller than the standard
 			# size.
 			ysub = isize[0]-imap.shape[-2]
@@ -336,7 +337,7 @@ def retile_iterator(ipathfmt, otilesize=None, pixoff=(0,0), margin=0,
 	geo = read_tileset_geometry(ipathfmt, itile1, itile2)
 	if otilesize is None: otilesize = geo.tshape
 	otilesize = np.array(otilesize)
-	notile = (np.array(geo.shape[-2:])-pixoff+otilesize-1)/otilesize
+	notile = (np.array(geo.shape[-2:])-pixoff+otilesize-1)//otilesize
 	tyx = [(y,x) for y in range(notile[0]) for x in range(notile[1])]
 	for i in range(rank, len(tyx), nproc):
 		tpos = tyx[i]

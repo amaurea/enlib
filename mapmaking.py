@@ -36,14 +36,15 @@
 # signal_map   = SignalMap(..., cut=signal_cut)
 # signal_phase = SignalPhase(..., cut=signal_cut)
 # signals = [signal_cut, signal_map, signal_phase]
-import numpy as np, h5py, zipper, logging, gc
-from . import enmap, dmap, array_ops, pmat, utils, todfilter, pointsrcs
+from __future__ import division, print_function
+import numpy as np, h5py, logging, gc
+from . import enmap, dmap, array_ops, pmat, utils, todfilter, pointsrcs, zipper
 from . import config, nmat, bench, gapfill, mpi, sampcut, fft
 from .cg import CG
 L = logging.getLogger(__name__)
 
 def dump(fname, d):
-	print "dumping " + fname
+	print("dumping " + fname)
 	with h5py.File(fname, "w") as hfile:
 		hfile["data"] = d
 
@@ -1154,7 +1155,7 @@ class FilterDedark:
 	def __init__(self, fit_highpass=0.1):
 		self.fit_highpass = fit_highpass
 	def __call__(self, scan, tod):
-		nmode = int(tod.shape[-1]/2*self.fit_highpass/scan.srate)
+		nmode = int(tod.shape[-1]//2*self.fit_highpass/scan.srate)
 		todfilter.deproject_vecs_smooth(tod, scan.dark_tod, nmode=nmode, inplace=True, cuts=scan.cut)
 
 class FilterPhaseBlockwise:
@@ -1201,7 +1202,7 @@ class FilterAddPhase:
 
 class FilterDeprojectPhase:
 	def __init__(self, scans, phasemap, pids, perdet=False, mmul=1, tmul=1):
-		print "Warning: FilterDeprojectPhase gives nonsensical fits due to ignoring template noise"
+		print("Warning: FilterDeprojectPhase gives nonsensical fits due to ignoring template noise")
 		self.phasemap = phasemap
 		self.perdet   = perdet
 		self.mmul     = mmul
@@ -1216,7 +1217,7 @@ class FilterDeprojectPhase:
 		def weight(a):
 			fa = fft.rfft(a)
 			fa[...,:2000] = 0
-			fa[...,fa.shape[-1]/4:] = 0
+			fa[...,fa.shape[-1]//4:] = 0
 			fft.irfft(fa,a, normalize=True)
 		t  = tod*0
 		mat.forward(t, self.phasemap.maps[pid])
@@ -1244,7 +1245,7 @@ class FilterDeprojectPhase:
 			rhs = np.sum(rhs)[None]
 			div = np.sum(div)[None]
 		amps = rhs/div * self.mmul
-		print np.sort(amps)[::10]
+		print(np.sort(amps)[::10])
 		1/0
 		if self.tmul != 1: tod *= self.tmul
 		tod -= t * amps[:,None]
@@ -1416,7 +1417,7 @@ class Eqsys:
 					with bench.mark("A_P_" + signal.name):
 						signal.forward(scan, tod, work)
 			if debug_file is not None and si == 0:
-				print "Eqsys A dumping debug"
+				print("Eqsys A dumping debug")
 				with h5py.File(debug_file,"w") as hfile:
 					hfile["tod"]  = tod[:16]
 					hfile["mask"] = scan.cut[:16].to_mask()
@@ -1544,7 +1545,7 @@ class Eqsys:
 			ovec = self.A(ivec)
 			res[i] = ovec[inds]
 			if self.dof.comm.rank == 0:
-				print "----", np.sum(ovec), ind
+				print("----", np.sum(ovec), ind)
 				np.savetxt("/dev/stdout", res[:i+1,:i+1], fmt="%11.4e")
 	def calc_A(self):
 		n = self.dof.n

@@ -1,3 +1,4 @@
+from __future__ import division, print_function
 """This module deals with the representation of degrees of freedom for
 solving equations etc. In python these are often most naturally described
 as several distinct objects, each with some of the degrees of freedom,
@@ -54,7 +55,7 @@ class DOF:
 		# Set up our communicator if necessary
 		comm_needed = any([info.distributed for info in self.info])
 		if comm_needed and comm is None:
-			from enlib import mpi
+			from . import mpi
 			comm = mpi.COMM_WORLD
 		self.comm = comm
 	def zip(self, *args):

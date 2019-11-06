@@ -1,5 +1,6 @@
+from __future__ import division, print_function
 import numpy as np, time, argparse
-from enlib import enmap, utils
+from . import enmap, utils
 import cy_parallax
 
 parser = argparse.ArgumentParser()

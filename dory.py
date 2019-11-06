@@ -1,7 +1,7 @@
 from __future__ import division, print_function
 import numpy as np, os, time, sys
 from scipy import ndimage, spatial, integrate
-from enlib import enmap, utils, bunch, mpi, fft, bench, pointsrcs
+from . import enmap, utils, bunch, mpi, fft, bench, pointsrcs
 
 cat_dtype = [("ra","f"),("dec","f"),("amp","3f"),("damp","3f"),("flux","3f"),("dflux","3f"),("npix","f"),("status","i")]
 
@@ -852,7 +852,7 @@ def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25, uncertainty="min"):
 			entry = np.zeros([], cat.dtype)
 			def wmean(v, w):
 				if np.any(~np.isfinite(v.T)) or np.any(~np.isfinite(w)):
-					print v, w, np.isfinite(v), np.isfinite(w)
+					print(v, w, np.isfinite(v), np.isfinite(w))
 				return (np.sum(v.T*w.T,-1)/np.sum(w.T,-1)).T
 			def nonan(a): return np.where(np.isfinite(a),a,0)
 			for key in cat.dtype.fields:

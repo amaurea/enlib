@@ -3,8 +3,12 @@ with a set of ids, and then select ids based on those tags and values.
 For example query("deep56,night,ar2,in(bounds,Moon)") woult return a
 set of ids with the tags deep56, night and ar2, and where th Moon[2]
 array is in the polygon specified by the bounds [:,2] array."""
+from __future__ import division, print_function
 import re, numpy as np, h5py, shlex, copy, warnings, time, os
 from . import utils
+
+try: basestring
+except: basestring = str
 
 class Tagdb:
 	def __init__(self, data=None, sort="id", default_fields=[], default_query=""):

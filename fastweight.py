@@ -1,5 +1,5 @@
 """This module provides fast weightmap estimation based on a todinfo database."""
-from __future__ import print_function
+from __future__ import division, print_function
 import numpy as np, os
 from . import utils, coordinates, enmap, bench, pmat
 
@@ -18,7 +18,7 @@ def fastweight(shape, wcs, db, weight="det", array_rad=0.7*utils.degree,
 	# Sky horizontal period in pixels
 	nphi = np.abs(utils.nint(360/wcs.wcs.cdelt[0]))
 	# Loop through chunks
-	nchunk= (ntod+chunk_size-1)/chunk_size
+	nchunk= (ntod+chunk_size-1)//chunk_size
 	if comm: rank, size = comm.rank, comm.size
 	else:    rank, size = 0, 1
 	for chunk in range(rank, nchunk, size):
@@ -131,7 +131,7 @@ def smooth_tophat(map, rad):
 	# Will use flat sky approximation here. It's not a good approximation for
 	# our big maps, but this doesn't need to be accurate anyway
 	ny,nx = map.shape[-2:]
-	refy, refx = ny/2,nx/2
+	refy, refx = ny//2,nx//2
 	pos   = map.posmap()
 	pos[0] -= pos[0,refy,refx]
 	pos[1] -= pos[1,refy,refx]

@@ -1,3 +1,4 @@
+from __future__ import division, print_function
 import numpy as np, time, h5py
 from scipy import signal
 from . import config, fft, utils, gapfill, todops, pmat
@@ -59,7 +60,7 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 			try:
 				amps = np.linalg.solve(B.dot(B.T),B.dot(d.T))
 			except np.linalg.LinAlgError as e:
-				print "LinAlgError in todfilter. Skipping"
+				print("LinAlgError in todfilter. Skipping")
 				continue
 		else:
 			w = weights.reshape(-1,weights.shape[-1])
@@ -68,7 +69,7 @@ def filter_poly_jon(tod, az, weights=None, naz=None, nt=None, niter=None, cuts=N
 				try:
 					amps[:,di] = np.linalg.solve((B*w[di]).dot(B.T),B.dot(w[di]*d[di]))
 				except np.linalg.LinAlgError as e:
-					print "LinAlgError in todfilter di %d. Skipping" % di
+					print("LinAlgError in todfilter di %d. Skipping" % di)
 					continue
 		# Subtract the best fit, but skip some basis functions if requested
 		if tsign < 0: amps[:nt] = 0

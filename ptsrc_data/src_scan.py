@@ -1,6 +1,7 @@
 """This module deals with a Scan variant for point source analysis.
 It is not a subclass of Scan as it makes incompatible assumptions,
 and things are stored more explicitly."""
+from __future__ import division, print_function
 import numpy as np, h5py
 
 # This compressed format is quite complicated, but is basically a
@@ -18,13 +19,6 @@ import numpy as np, h5py
 # point is the celestial pointing of each sample. This presents
 # a problem if we switch to focalplane coordinates, as we then
 # would need separate pointing for each source.
-
-
-# What would be an appropriate data structure for focaplane coordinate
-# analysis?
-#
-#
-#
 
 class SrcScan:
 	def __init__(self, tod, point, phase, ranges, rangesets, offsets, ivars, dets, rbox=None, nbox=None, ys=None, point_offset=None):

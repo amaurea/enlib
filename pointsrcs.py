@@ -22,7 +22,7 @@ For a point source 1.shape would be a point. But clusters and
 nearby galaxies can have other shapes. In general many profiles are
 possible. Parametrizing them in a standard format may be difficult.
 """
-from __future__ import print_function, division
+from __future__ import division, print_function
 import numpy as np
 from astropy.io import fits
 from scipy import spatial
@@ -66,7 +66,7 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	padding = [cres,cres+epix]
 	wmap, wslice  = enmap.pad(omap, padding, return_slice=True)
 	# Overall we will have this many grid cells
-	cshape = wmap.shape[-2:]/cres
+	cshape = wmap.shape[-2:]//cres
 	# Find out which sources matter for which cells
 	srcpix = wmap.sky2pix(poss.T).T
 	pixbox= np.array([[0,0],wmap.shape[-2:]],int)
@@ -191,7 +191,7 @@ def cellify(map, res):
 	reshaped into a cell grid [...,ncelly,ncellx,ry,rx]. The map will be
 	truncated if necessary"""
 	res    = np.array(res,int)
-	cshape = map.shape[-2:]/res
+	cshape = map.shape[-2:]//res
 	omap   = map[...,:cshape[0]*res[0],:cshape[1]*res[1]]
 	omap   = omap.reshape(omap.shape[:-2]+(cshape[0],res[0],cshape[1],res[1]))
 	omap   = utils.moveaxis(omap, -3, -2)
@@ -251,7 +251,7 @@ def read_nemo(fname):
 		idtype = [("name","2S64"),("ra","d"),("dec","d"),("snr","d"),("npix","i"),("template","S32"),("glat","d"),("I","d"), ("dI","d")]
 		try: icat = np.loadtxt(fname, dtype=idtype)
 		except (ValueError, IndexError) as e:
-			raise IOError(e.message)
+			raise IOError(e.args[0])
 	odtype = [("name","S64"),("ra","d"),("dec","d"),("snr","d"),("I","d"),("dI","d"),("npix","i"),("template","S32"),("glat","d")]
 	ocat = np.zeros(len(icat), odtype).view(np.recarray)
 	ocat.name = np.char.add(*icat["name"].T)
@@ -265,7 +265,7 @@ def read_simple(fname):
 		try:
 			return np.loadtxt(fname, dtype=[("ra","d"),("dec","d"),("I","d")], usecols=range(3), ndmin=1).view(np.recarray)
 		except ValueError as e:
-			raise IOError(e.message)
+			raise IOError(e.args[0])
 
 def read_dory_fits(fname, hdu=1):
 	d = fits.open(fname)[hdu].data
@@ -281,7 +281,7 @@ def read_dory_txt(fname):
 		d.I *= 1e3; d.Q *= 1e3; d.U *= 1e3
 		return d
 	except (ValueError, IndexError) as e:
-		raise IOError(e.message)
+		raise IOError(e.args[0])
 
 def read_fits(fname, hdu=1, fix=True):
 	d = fits.open(fname)[hdu].data

@@ -4,9 +4,12 @@ in enlib will work as long as this interface is followed.
 For performance and memory reasons, the noise matrix
 overwrites its input array."""
 import numpy as np, copy, h5py
-import nmat_core_32, nmat_core_64
 from scipy.optimize import minimize
 from .. import utils, array_ops, fft
+from  . import nmat_core_32, nmat_core_64
+
+try: basestring
+except: basestring = str
 
 def get_core(dtype):
 	if dtype == np.float32:
@@ -595,13 +598,13 @@ def apply_window(tod, width, inverse=False):
 	core.apply_window(tod.T, -width if inverse else width)
 
 def get_ibins(bins, n):
-	nf = n/2+1
+	nf = n//2+1
 	ibins = (bins*nf/bins[-1,-1]).astype(np.int32)
 	ibins[-1,-1] = nf
 	return ibins
 
 def get_ifreqs(freqs, n):
-	nf = n/2+1
+	nf = n//2+1
 	res = (freqs*nf/freqs[-1]).astype(np.int32)
 	res[-1] = nf
 	return res

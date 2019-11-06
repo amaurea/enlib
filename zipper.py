@@ -1,3 +1,4 @@
+from __future__ import division
 """This module provides functions for flattening (zipping) and unflattening (unzipping)
 arrays or objects into one-dimensional numpy arrays. It is similar to pickle, but
 faster and less general. It is intended as a more general replacement of degrees_of_freedom.py."""
@@ -29,7 +30,7 @@ class SingleZipper:
 
 def getcomm(comm, shared):
 	if comm is not None or shared: return comm
-	from enlib import mpi
+	from . import mpi
 	return mpi.COMM_WORLD
 
 class ArrayZipper(SingleZipper):

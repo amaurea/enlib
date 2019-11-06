@@ -1,1 +1,2 @@
-from pyactgetdata import *
+from .pyactgetdata import *
+

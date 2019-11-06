@@ -1,6 +1,7 @@
 """This module provides classes for representing ranges of true and false values,
 providing both a mask-like (numpy bool array) and list of from:to interface.
 It also provides a convenience class for handling multiple of these range lists."""
+from __future__ import division, print_function
 import numpy as np
 from .utils import mask2range, cumsum, range_union, range_normalize, expand_slice, split_slice
 
@@ -32,14 +33,14 @@ class Rangelist:
 			if len(self.ranges) == 0:
 				# Can't just return self here, as I did, because .n needs to be updated even if
 				# ranges is empty.
-				return Rangelist(self.ranges, (sel.stop-sel.start)/sel.step)
+				return Rangelist(self.ranges, (sel.stop-sel.start)//sel.step)
 			if (sel.stop-sel.start)*sel.step < 0: return Rangelist(np.zeros([0,2],dtype=int),0)
 			if sel.step > 0:
 				res = slice_helper(self.ranges, sel)
-				return Rangelist(res,(sel.stop-sel.start)/sel.step)
+				return Rangelist(res,(sel.stop-sel.start)//sel.step)
 			else:
 				res = slice_helper(self.n-self.ranges[::-1,::-1], slice(sel.stop+1, sel.start+1, -sel.step))
-				return  Rangelist(res, (sel.stop-sel.start)/sel.step)
+				return  Rangelist(res, (sel.stop-sel.start)//sel.step)
 		else:
 			# Assume number
 			i = np.searchsorted(self.ranges[:,0], sel, side="right")
@@ -214,10 +215,10 @@ def slice_helper(ranges, sel):
 	# Prioritize in-range vs. out-range when reducing resolution.
 	# This means that we round the lower bounds down and the upper
 	# bounds up.
-	res[:,0] /= sel.step
-	res[:,1] = (res[:,1]+sel.step-1)/sel.step
+	res[:,0] //= sel.step
+	res[:,1] = (res[:,1]+sel.step-1)//sel.step
 	# However, avoid rounding beyond the new edge of the TOD
-	n_new = (sel.stop-sel.start)/sel.step
+	n_new = (sel.stop-sel.start)//sel.step
 	res[:,1] = np.minimum(res[:,1],n_new)
 	# Normalize ranges, merging overlapping ones
 	res = range_union(res)

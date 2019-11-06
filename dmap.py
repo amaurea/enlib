@@ -34,6 +34,7 @@ The complication is that sends and receives have to happen at the same time.
 The easiest way to do this is via alltoallv, which requires the use of
 flattened arrays.
 """
+from __future__ import division, print_function
 import numpy as np, copy, os, re, operator
 from . import enmap, utils, zipper, mpi
 from astropy.wcs import WCS
@@ -170,6 +171,12 @@ class Dmap(object):
 		return res
 	def write(self, name, ext="fits", merged=True):
 		write_map(name, self, ext=ext, merged=merged)
+	
+# Python 2/3 compatibility
+try:
+	_, divop, idivop = operator.__div__, "__div__", "__idiv__"
+except AttributeError:
+	divop, idivop = "__floordiv__", "__ifloordiv__"
 
 # Add some math operators
 def makefun(key, inplace):
@@ -177,12 +184,12 @@ def makefun(key, inplace):
 	def fun(a,b): return a._domath(b, op, inplace=inplace)
 	return fun
 
-for opname in ["__add__", "__and__", "__div__", "__eq__", "__floordiv__",
+for opname in ["__add__", "__and__", divop, "__eq__", "__floordiv__",
 		"__ge__", "__gt__", "__le__", "__lshift__", "__lt__", "__mod__", "__mul__",
 		"__ne__", "__or__", "__pow__", "__rshift__", "__sub__", "__truediv__",
 		"__xor__"]:
 	setattr(Dmap, opname, makefun(opname, False))
-for opname in ["__iadd__", "__iand__", "__idiv__", "__ifloordiv__",
+for opname in ["__iadd__", "__iand__", idivop, "__ifloordiv__",
 		"__ilshift__", "__imod__", "__imul__", "__ior__", "__ipow__",
 		"__irshift__", "__isub__", "__itruediv__", "__ixor__"]:
 	setattr(Dmap, opname, makefun(opname, True))
@@ -293,7 +300,7 @@ class DGeometry(object):
 			bshape = tbox.shape[:2]
 			tbox   = tbox.reshape(-1,2,2)
 			ntile  = len(tbox)
-			tile_indices = np.array([np.arange(ntile)/bshape[1],np.arange(ntile)%bshape[1]]).T
+			tile_indices = np.array([np.arange(ntile)//bshape[1],np.arange(ntile)%bshape[1]]).T
 			# 4. Define tile ownership.
 			# a) For each task compute the overlap of each tile with its workspaces, and
 			#    concatenate across tasks to form a [nworktot,ntile] array.
@@ -447,13 +454,13 @@ class Workspace:
 			for mi in res.maps:
 				mi[:] = op(mi, other)
 		return res
-	
-for opname in ["__add__", "__and__", "__div__", "__eq__", "__floordiv__",
+
+for opname in ["__add__", "__and__", divop, "__eq__", "__floordiv__",
 		"__ge__", "__gt__", "__le__", "__lshift__", "__lt__", "__mod__", "__mul__",
 		"__ne__", "__or__", "__pow__", "__rshift__", "__sub__", "__truediv__",
 		"__xor__"]:
 	setattr(Workspace, opname, makefun(opname, False))
-for opname in ["__iadd__", "__iand__", "__idiv__", "__ifloordiv__",
+for opname in ["__iadd__", "__iand__", idivop, "__ifloordiv__",
 		"__ilshift__", "__imod__", "__imul__", "__ior__", "__ipow__",
 		"__irshift__", "__isub__", "__itruediv__", "__ixor__"]:
 	setattr(Workspace, opname, makefun(opname, True))
@@ -501,9 +508,9 @@ class Bufmap:
 	def slice_helper(self, newlen, oldlen):
 		"""Returns a new Bufmap with buffer slices scaled by newlen/oldlen.
 		This is used for defining slice operations."""
-		buf_info  = tuple(np.array(self.buf_info)*newlen/oldlen)
-		buf_shape = self.buf_shape*newlen/oldlen
-		data_info = [(ind,dslice,slice(bslice.start*newlen/oldlen,bslice.stop*newlen/oldlen)) for ind,dslice,bslice in self.data_info]
+		buf_info  = tuple(np.array(self.buf_info)*newlen//oldlen)
+		buf_shape = self.buf_shape*newlen//oldlen
+		data_info = [(ind,dslice,slice(bslice.start*newlen//oldlen,bslice.stop*newlen//oldlen)) for ind,dslice,bslice in self.data_info]
 		return Bufmap(data_info, buf_info, buf_shape)
 
 def write_map(name, map, ext="fits", merged=True):
@@ -651,7 +658,7 @@ def build_tiles(shape, tshape):
 	"""Given a bounding shape and the target shape of each tile, returns
 	an [ty,tx,{from,to},{y,x}] array containing the bounds of each tile."""
 	sa, ta = np.array(shape[-2:]), np.array(tshape)
-	ntile = (sa+ta-1)/ta
+	ntile = (sa+ta-1)//ta
 	tbox  = np.zeros(tuple(ntile)+(2,2),dtype=int)
 	y = np.minimum(sa[0],np.arange(ntile[0]+1)*ta[0])
 	x = np.minimum(sa[1],np.arange(ntile[1]+1)*ta[1])

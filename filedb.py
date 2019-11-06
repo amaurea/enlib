@@ -1,3 +1,4 @@
+from __future__ import division
 """This module provides access to the location of a set of related files.
 After initialization, it can be queried given an "id", and responds with
 an object containing the paths to all the files corresponding to that "id".

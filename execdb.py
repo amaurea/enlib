@@ -1,4 +1,8 @@
+from __future__ import division
 from . import bunch
+
+try: basestring
+except: basestring = str
 
 class ExecDB:
 	"""ExecDB is a flexible way of mapping from dataset ids to

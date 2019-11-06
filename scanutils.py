@@ -1,7 +1,11 @@
+from __future__ import division, print_function
 import numpy as np, logging, h5py, sys
 from . import scan as enscan, errors, utils, coordinates, dmap
 from enact import actdata, filedb
 L = logging.getLogger(__name__)
+
+try: basestring
+except: basestring = str
 
 def calc_sky_bbox_scan(scan, osys, nsamp=100):
 	"""Compute the bounding box of the scan in the osys coordinate system.
@@ -111,7 +115,7 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 				if d.ndet == 0 or d.nsamp == 0:
 					raise errors.DataMissing("Tod contains no valid data")
 			except errors.DataMissing as e:
-				if not quiet: L.debug("Skipped %s (%s)" % (str(filelist[ind]), e.message))
+				if not quiet: L.debug("Skipped %s (%s)" % (str(filelist[ind]), e.args[0]))
 				continue
 		if dets:
 			if dets.startswith("@"):

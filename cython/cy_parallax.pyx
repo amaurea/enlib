@@ -1,5 +1,5 @@
 import cython, numpy as np
-from enlib import enmap, utils
+from .. import enmap, utils
 from scipy import ndimage
 
 __version__ = 1.0

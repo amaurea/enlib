@@ -63,6 +63,7 @@ config.save is particularly useful for recording the exact parmaeters
 your program was run with together with its output, so that the output
 can be easily interpreted later."""
 
+from __future__ import division, print_function
 import argparse, os, textwrap, ast
 from collections import OrderedDict
 
