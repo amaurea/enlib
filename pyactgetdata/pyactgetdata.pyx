@@ -15,6 +15,18 @@ typemap = {
 	"d":np.float64
 }
 
+def encode(s):
+	if isinstance(s, unicode):
+		return s.encode("utf8")
+	else:
+		return s
+
+def decode(s):
+	if str is unicode:
+		return (<bytes>s).decode("utf8")
+	else:
+		return s
+
 # Basic passthrough first
 cdef class dirfile:
 	"""This class is a wrapper for the ACTpolDirfile class."""
@@ -25,11 +37,12 @@ cdef class dirfile:
 		"""Construdt a dirfile object by opening the specified file fname"""
 		self.dfile = NULL
 		self.fieldinfo = None
-		self._fname = None
 		if fname is not None: self.open(fname)
 	def open(self, fname):
 		if self.is_open(): self.close()
-		self.dfile = cactgetdata.ACTpolDirfile_open(fname)
+		tmp = encode(fname)
+		cdef char * cfname = tmp
+		self.dfile = cactgetdata.ACTpolDirfile_open(cfname)
 		self._fname = fname
 		if self.dfile is NULL:
 			raise IOError("Error opening dirfile '%s'" % fname)
@@ -52,7 +65,7 @@ cdef class dirfile:
 	def fname(self):
 		return self._fname
 	def category(self, field): return self.fieldinfo[field][0]
-	def native_type(self, field): return chr(self.fieldinfo[field][1])
+	def native_type(self, field): return self.fieldinfo[field][1]
 	def _list_(self):
 		cdef int i, n, status
 		cdef char * category
@@ -64,27 +77,30 @@ cdef class dirfile:
 		for i in range(n):
 			status = cactgetdata.GetEntryInfo(self.dfile.format, i, &category, &field, &type)
 			if not status: raise IOError("Error accessing field %d/%d" % (i,n))
-			res[field] = (category, type)
+			res[decode(field)] = (decode(category), chr(type))
 		return res
 	@cython.boundscheck(False)
-	def getdata(self, char * field, type=None):
+	def getdata(self, field, type=None):
 		if not self.is_open(): raise IOError("Dfile is not open")
-		exists = cactgetdata.ACTpolDirfile_has_channel(self.dfile, field)
+		tmp = encode(field)
+		cdef char * cfield = tmp
+		exists = cactgetdata.ACTpolDirfile_has_channel(self.dfile, cfield)
 		if not exists: raise IOError("Field %s does not exist" % field)
 		if type is None: type = self.native_type(field)
 		dtype = typemap[type]()
-		cdef char * ctype = type
 		cdef int nsamp
 		cdef np.npy_intp size, i
+		tmp2 = encode(type)
+		cdef char ctype = tmp2[0]
 		# This sadly involves a copy, but avoiding that did not work
-		cdef uint8_t * data = <uint8_t*>cactgetdata.ACTpolDirfile_read_channel(ctype[0], self.dfile, field, &nsamp)
+		cdef uint8_t * data = <uint8_t*>cactgetdata.ACTpolDirfile_read_channel(ctype, self.dfile, cfield, &nsamp)
 		size = nsamp*dtype.nbytes
 		cdef np.ndarray[np.uint8_t,ndim=1] res = np.empty([size],dtype=np.uint8)
 		for i in range(size): res[i] = data[i]
 		free(data)
-		return res.view(typemap[ctype])
+		return res.view(typemap[type])
 	@cython.boundscheck(False)
-	def getdata_multi(self, field_list, field_type=None, nthread=0):
+	def getdata_multi(self, field_list, field_type=None, int nthread=0):
 		"""Parallel version of getdata. field_list is a list of field names, all of
 		which must have the same length and type as the output_array's last dimension.
 		output_array is a 2d array [len(field_list),nsamp] that the data read will
@@ -99,8 +115,6 @@ cdef class dirfile:
 		# Collect information needed to build the output array. The type is simple
 		if field_type is None: field_type = self.native_type(field)
 		dtype = typemap[field_type]()
-		cdef char * tmp = field_type
-		cdef char ctype = tmp[0]
 		# Read the first field to get the length
 		first_row = self.getdata(field_list[0], field_type)
 		cdef int nsamp = first_row.size
@@ -113,7 +127,10 @@ cdef class dirfile:
 		for i in range(nfield): rows[i] = <void*>&arr[i,0]
 		# And a C list of field names
 		cdef char ** cnames = <char**> malloc(nfield*sizeof(char*))
-		for i in range(nfield): cnames[i] = field_list[i]
+		tmps = [encode(entry) for entry in field_list]
+		for i in range(nfield): cnames[i] = tmps[i]
+		tmp = encode(field_type)
+		cdef char ctype = tmp[0]
 		# We are now ready to read the data
 		cactgetdata.read_channels_into_omp(nfield, nthread, ctype, nbyte, self.dfile, cnames, rows)
 		# And return
@@ -124,3 +141,4 @@ cdef class dirfile:
 		return self
 	def __exit__(self, type, value, traceback):
 		self.close()
+

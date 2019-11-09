@@ -104,7 +104,7 @@ class DataField:
 			if self.sample_index is not None: dims[self.sample_index] = "s:"+dims[self.sample_index]
 		except AttributeError:
 			# No shape. But may still be slicable object. Construct less informative version
-			nmax = max(self.det_index, self.sample_index)
+			nmax = old_max(self.det_index, self.sample_index)
 			if nmax is None: return ""
 			else:
 				dims = [":" for i in range(nmax+1)]
@@ -155,6 +155,10 @@ class DataSet:
 		else:
 			self.__dict__[name] = value
 	def __getattr__(self, name):
+		# Members with names like __getattr__ could override class behavior, which
+		# is confusing. This should also resolve an issue with copy.copy, where getattr
+		# is called before __init__
+		if name.startswith("__"): raise AttributeError(name)
 		if name in self.__dict__["datafields"].keys():
 			return self.__dict__["datafields"][name].data
 		raise AttributeError
@@ -231,3 +235,9 @@ def detector_union(datasets):
 				force_contiguous=fields[0].force_contiguous, stacker=fields[0].stacker)
 		ofields.append(field)
 	return DataSet(ofields)
+
+def old_max(*args):
+	"""This funciton recreates the behavior of python2's max, before python3 nerfed it"""
+	args = [a for a in args if a is not None]
+	if len(args) == 0: return None
+	else: return max(*args)

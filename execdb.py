@@ -1,4 +1,5 @@
 from __future__ import division
+from io import open
 from . import bunch
 
 try: basestring
@@ -54,11 +55,11 @@ def read_data(file_or_fname=None, data=None, default=None):
 	from either a file or the provided data argument"""
 	if data is not None: return data
 	if file_or_fname is None: return default
-	if isinstance(file_or_fname, file):
-		return file.read()
-	else:
+	if isinstance(file_or_fname, basestring):
 		with open(file_or_fname) as f:
 			return f.read()
+	else:
+		return file.read()
 
 def recursive_format(data, formats):
 	"""Expand all strings contained in dicts, lists or tuples in data

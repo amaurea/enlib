@@ -1013,7 +1013,7 @@ class MultiPostInsertSrcSamp:
 			# Project all our degrees degrees of freedom into the TOD
 			tod = np.zeros([scan.ndet, scan.nsamp], self.signal_srcsamp.dtype)
 			with bench.mark("srcins_P"):
-				for signal, work in zip(signals, iwork)[::-1]:
+				for signal, work in list(zip(signals, iwork))[::-1]:
 					signal.forward(scan, tod, work)
 				# Add in our source samples, which is the whole point of this exercise
 				self.signal_srcsamp.forward(scan, tod, swork)
@@ -1411,7 +1411,7 @@ class Eqsys:
 			# Project each signal onto the TOD (P) in reverse order. This is done
 			# so that the cuts can override the other signals.
 			with bench.mark("A_P"):
-				for signal, work in zip(self.signals, iwork)[::-1]:
+				for signal, work in list(zip(self.signals, iwork))[::-1]:
 					with bench.mark("A_Pr_" + signal.name):
 						signal.precompute(scan)
 					with bench.mark("A_P_" + signal.name):

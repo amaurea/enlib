@@ -357,9 +357,9 @@ def read_flagrange(hfile, group=None):
 		hfile["flag_stack"].value,
 		hfile["stack_bounds"].value,
 		dets = hfile["det_uid"].value,
-		flag_names = hfile["flag_names"].value,
+		flag_names = utils.decode_array_if_necessary(hfile["flag_names"].value),
 		derived_masks = hfile["derived_masks"].value,
-		derived_names = hfile["derived_names"].value,
+		derived_names = utils.decode_array_if_necessary(hfile["derived_names"].value),
 		sample_offset = sample_offset,
 	)
 
