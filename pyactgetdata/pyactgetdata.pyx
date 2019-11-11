@@ -27,6 +27,10 @@ def decode(s):
 	else:
 		return s
 
+def tochar(s):
+	try: return ord(s)
+	except TypeError: return s
+
 # Basic passthrough first
 cdef class dirfile:
 	"""This class is a wrapper for the ACTpolDirfile class."""
@@ -91,7 +95,7 @@ cdef class dirfile:
 		cdef int nsamp
 		cdef np.npy_intp size, i
 		tmp2 = encode(type)
-		cdef char ctype = tmp2[0]
+		cdef char ctype = tochar(tmp2[0])
 		# This sadly involves a copy, but avoiding that did not work
 		cdef uint8_t * data = <uint8_t*>cactgetdata.ACTpolDirfile_read_channel(ctype, self.dfile, cfield, &nsamp)
 		size = nsamp*dtype.nbytes
@@ -130,7 +134,7 @@ cdef class dirfile:
 		tmps = [encode(entry) for entry in field_list]
 		for i in range(nfield): cnames[i] = tmps[i]
 		tmp = encode(field_type)
-		cdef char ctype = tmp[0]
+		cdef char ctype = tochar(tmp[0])
 		# We are now ready to read the data
 		cactgetdata.read_channels_into_omp(nfield, nthread, ctype, nbyte, self.dfile, cnames, rows)
 		# And return
