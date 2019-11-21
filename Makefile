@@ -1,5 +1,5 @@
-all: iers coordinates sampcut array_ops pmat nmat ptsrc_data pyactgetdata cython
-clean: clean_iers clean_coordinates clean_sampcut clean_array_ops clean_pmat clean_nmat clean_ptsrc_data clean_pyactgetdata clean_cython
+all: iers coordinates sampcut array_ops pmat nmat ptsrc_data pyactgetdata # cython
+clean: clean_iers clean_coordinates clean_sampcut clean_array_ops clean_pmat clean_nmat clean_ptsrc_data clean_pyactgetdata # clean_cython
 	rm -rf *.pyc
 
 iers: foo
