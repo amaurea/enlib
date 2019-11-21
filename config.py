@@ -82,9 +82,10 @@ def init(config_file=None):
 	it if necessary. It also updates the file, adding any new parameters
 	that were missing."""
 	if config_file is None:
-		config_file = "$HOME/.enkirc"
-	if not config_file: return
-	config_file = os.path.expandvars(config_file)
+		if "ENKIRC" in os.environ:
+			config_file = os.environ["ENKIRC"]
+		else:
+			config_file = os.path.expandvars("$HOME/.enkirc")
 	try:
 		load(config_file)
 	except IOError: pass
