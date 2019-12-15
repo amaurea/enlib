@@ -47,7 +47,7 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	omap   = omap.preflat
 	ncomp  = omap.shape[0]
 	# Set up wrapping
-	if wrap is "auto": wrap = [0, utils.nint(360./wcs.wcs.cdelt[0])]
+	if wrap == "auto": wrap = [0, utils.nint(360./wcs.wcs.cdelt[0])]
 	# In keeping with the rest of the functions here, srcs is [nsrc,{dec,ra,T,Q,U}].
 	# The beam parameters are ignored - the beam argument is used instead
 	amps = srcs[:,2:2+ncomp]

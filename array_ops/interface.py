@@ -85,6 +85,10 @@ def find_contours(imap, vals, omap=None):
 	core.find_contours(imap.T, vals, omap.T)
 	return omap
 
+def maxbin(map, inds, vals):
+	core = get_core(imap.dtype)
+	core.maxbin(map, inds, vals)
+
 def wrap_mm_m(name, vec2mat=False):
 	"""Wrap a fortran subroutine which takes (n,n,m),(n,k,m) and overwrites
 	its second argument to a python function where the "n" axes can be

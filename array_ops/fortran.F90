@@ -362,4 +362,16 @@ subroutine find_contours(imap, vals, omap)
 	end do
 end subroutine
 
+subroutine maxbin(map, inds, vals)
+	implicit none
+	real(_), intent(inout) :: map(:)
+	real(_), intent(in)    :: vals(:)
+	integer, intent(in)    :: inds(:)
+	integer :: i, j
+	do i = 1, size(inds)
+		j = inds(i)
+		if(vals(i) > map(j)) map(j) = vals(i)
+	end do
+end subroutine
+
 end module
