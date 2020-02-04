@@ -164,7 +164,7 @@ def build_filter(ps, beam2d):
 
 def get_thumb(map, size, normalize=False):
 	if normalize: map = map/map[...,0,0]
-	return enmap.shift(map, (size//2, size//2))[:size,:size]
+	return enmap.shift(map, (size//2, size//2), keepwcs=True)[:size,:size]
 
 def calc_beam_transform_area(beam_2d, unit="phys"):
 	"""Compute the solid angle of an l-space 2d beam in steradians"""
@@ -331,6 +331,7 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=2
 				counts= np.histogram(sns, edges)[0]
 				desc  = " ".join(["%d: %5d" % (e,c) for e,c in zip(edges[:-1],counts)])
 				print("pass %d block %2d sn: %s" % (ipass+1, iblock+1, desc))
+				sys.stdout.flush()
 			# No point in continuing if we've already reached sn_lim < snmin. At this point
 			# we're just digging into the noise.
 			if sn_lim <= snmin: break
@@ -384,7 +385,7 @@ def measure_corrlen(tfun, tol=1e-2):
 	# Move the corrfun to the center of the area, and get distances from that point
 	refpix   = np.array(tfun.shape[-2:])//2
 	refpos   = corrfun.pix2sky(refpix)
-	corrfun  = enmap.shift(corrfun, refpix)
+	corrfun  = enmap.shift(corrfun, refpix, keepwcs=True)
 	r        = corrfun.modrmap(ref=refpos)
 	# Find the highest radius where we're above the tolerance
 	corrlen  = np.max(r[np.abs(corrfun)>tol])
@@ -873,6 +874,31 @@ def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25, uncertainty="min"):
 			ocat.append(entry)
 			done[group] = True
 	ocat = np.array(ocat).view(np.recarray)
+	return ocat
+
+def remove_duplicates_chain(cat, rlim=1*utils.arcmin):
+	"""Given a point source catalog which might contain duplicates, detect and remove
+	these douplicates, returning a deduplicated catalog. Unlike merge_duplicates, this continues
+	in a chain, so that neighbors of a duplicate also are considered duplicates. No averaging
+	is done - the strongest source in each group is used.
+	rlim should be adjusted to fit the exerpiment beam. The default is appropriate for ACT."""
+	if len(cat) == 0: return cat
+	# Sort the catalog by S/N
+	sn     = np.abs(cat.amp[:,0]/cat.damp[:,0])
+	cat    = cat[np.argsort(sn)[::-1]].copy()
+	pos    = utils.ang2rect([cat.ra, cat.dec]).T
+	tree   = spatial.cKDTree(pos)
+	owner  = np.full(len(cat),-1,int)
+	groups = tree.query_ball_tree(tree, rlim)
+	for gi, group in enumerate(groups):
+		# Set ourself as owner we we don't have one. Otherwise get the id of our
+		# owner's owner
+		if owner[gi] < 0: owner[gi] = gi
+		else: gi = owner[gi]
+		# Mark all members as owned
+		for id in group: owner[id] = gi
+	# Remove everything that's owned by someone else
+	ocat = cat[owner==np.arange(len(cat))]
 	return ocat
 
 def build_merge_weight(shape, dtype=np.float64):
