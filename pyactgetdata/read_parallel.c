@@ -1,6 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
-#include <actpol/dirfile.h>
+#include <actgetdata/dirfile.h>
 #include <omp.h>
 
 void ** read_channels_omp(int nchannel, int nthread, char * typechars, ACTpolDirfile *dirfile, char ** channelnames, int * nsamples)
