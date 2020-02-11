@@ -48,6 +48,8 @@ def dump(fname, d):
 	with h5py.File(fname, "w") as hfile:
 		hfile["data"] = d
 
+config.default("debug_raw",False,"moo")
+
 ######## Signals ########
 
 class Signal:
@@ -1466,6 +1468,35 @@ class Eqsys:
 			# Get the actual TOD samples (d)
 			if itod is None:
 				with bench.mark("b_read"):
+					#if config.get("debug_raw"):
+					#	from enact import actscan
+					#	if self.dof.comm.rank == 0: print("debug_raw", self.filters[:-1])
+					#	# Super-hacky. Read off input map at full resolution
+					#	adder = self.filters[0]
+					#	scan_full = actscan.ACTScan(scan.entry, d=scan.d)
+					#	scan_full = scan_full[utils.find(scan_full.dets, scan.dets)]
+					#	padd  = pmat.PmatMap(scan_full, adder.map, sys=adder.sys)
+					#	tod   = np.zeros([scan.d.ndet, scan.d.nsamp],self.dtype)
+					#	padd.forward(tod, adder.map, tmul=adder.tmul, mmul=adder.mul)
+					#	# Deslope, but remember the slope
+					#	slope = tod.copy(); tod = utils.deslope(tod); slope -= tod
+					#	from enact import filters
+					#	# Apply the time constant, MCE filter and gain to go to raw units
+					#	ft     = fft.rfft(tod)
+					#	freqs  = np.linspace(0, scan_full.srate/2, ft.shape[-1])
+					#	butter = filters.mce_filter(freqs, scan_full.d.mce_fsamp, scan_full.d.mce_params)
+					#	ft *= butter
+					#	for di in range(len(ft)):
+					#		ft[di] *= filters.tconst_filter(freqs, scan_full.d.tau[di])
+					#	fft.irfft(ft, tod, normalize=True)
+					#	# Add back the slope
+					#	tod += slope
+					#	del slope
+					#	# And unapply the gain
+					#	tod /= (scan_full.d.gain[:,None]*8)
+					#	tod  = (tod*128).astype(np.int32)
+					#	tod  = scan.get_samples(verbose=False, debug_inject=tod)
+					#else:
 					tod  = scan.get_samples(verbose=False)
 					#tod -= np.copy(tod[:,0,None])
 					tod  = tod.astype(self.dtype)
@@ -1478,8 +1509,9 @@ class Eqsys:
 			#dump("hwp.hdf", scan.hwp)
 			#1/0
 			# Apply all filters (pickup filter, src subtraction, etc)
-			with bench.mark("b_filter"):
-				for filter in self.filters: filter(scan, tod)
+			if not config.get("debug_raw"):
+				with bench.mark("b_filter"):
+					for filter in self.filters: filter(scan, tod)
 			#dump("dump_postfilter.hdf", tod)
 			#dump("dump_postfilter_mean.hdf", np.mean(tod,0))
 			#dump("dump_postfilter.hdf", tod[:4])

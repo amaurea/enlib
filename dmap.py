@@ -39,6 +39,9 @@ import numpy as np, copy, os, re, operator
 from . import enmap, utils, zipper, mpi
 from astropy.wcs import WCS
 
+try: xrange
+except: xrange = range
+
 def empty(geometry):
 	"""Return an empty Dmap with the specified geometry."""
 	return Dmap(geometry)

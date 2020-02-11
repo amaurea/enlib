@@ -914,7 +914,7 @@ class Coadder:
 			t2 = time.time()
 			if verbose:
 				print("%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1))
-			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + range(100,10000,100):
+			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + list(range(100,10000,100)):
 				enmap.write_map(dump_dir + "/map_step%04d.fits" % solver.i, map_ifft(unzip(solver.x)))
 			if solver.err < cg_tol: break
 		if dump_dir is not None:
@@ -1070,7 +1070,7 @@ class Wiener:
 			t2 = time.time()
 			if verbose:
 				print("%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1))
-			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + range(100,10000,100):
+			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + list(range(100,10000,100)):
 				enmap.write_map(dump_dir + "/map_step%04d.fits" % solver.i, map_ifft(unzip(solver.x)))
 			if solver.err < cg_tol: break
 		if dump_dir is not None:
@@ -1304,7 +1304,7 @@ class SignalFilter:
 			t2 = time.time()
 			if verbose:
 				print("%5d %15.7e %5.2f" % (solver.i, solver.err, t2-t1))
-			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + range(100,10000,100):
+			if dump_dir is not None and solver.i in [1,2,5,10,20,50] + list(range(100,10000,100)):
 				for j,m in enumerate(unzip(solver.x)):
 					enmap.write_map(dump_dir + "/step%04d_mu%04d.fits" % (solver.i,j), map_ifft(m))
 			if solver.err < cg_tol: break
