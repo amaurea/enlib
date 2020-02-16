@@ -369,7 +369,7 @@ subroutine maxbin(map, inds, vals)
 	integer, intent(in)    :: inds(:)
 	integer :: i, j
 	do i = 1, size(inds)
-		j = inds(i)
+		j = inds(i)+1
 		if(vals(i) > map(j)) map(j) = vals(i)
 	end do
 end subroutine

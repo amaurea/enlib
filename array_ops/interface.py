@@ -86,7 +86,7 @@ def find_contours(imap, vals, omap=None):
 	return omap
 
 def maxbin(map, inds, vals):
-	core = get_core(imap.dtype)
+	core = get_core(map.dtype)
 	core.maxbin(map, inds, vals)
 
 def wrap_mm_m(name, vec2mat=False):

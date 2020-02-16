@@ -240,7 +240,7 @@ def read(fname, format="auto"):
 			elif f == "nemo":     return read_nemo(fname)
 			elif f == "simple":   return read_simple(fname)
 			else: raise ValueError("Unrecognized point source format '%s' for file '%s'" % (f, fname))
-		except (ValueError, IOError) as e: pass
+		except (ValueError, IOError, OSError) as e: pass
 	raise IOError("Unable to read point source file '%s' with format '%s'" % (fname, f))
 
 def read_nemo(fname):

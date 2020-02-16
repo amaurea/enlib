@@ -88,11 +88,11 @@ def init(config_file=None):
 			config_file = os.path.expandvars("$HOME/.enkirc")
 	try:
 		load(config_file)
-	except IOError: pass
+	except (IOError, OSError): pass
 	try:
 		#save(config_file)
 		pass
-	except IOError: pass
+	except (IOError, OSError): pass
 
 def to_str():
 	"""Return a string representation of the configuration in a format that can
