@@ -23,7 +23,10 @@ def encode(s):
 
 def decode(s):
 	if str is unicode:
-		return (<bytes>s).decode("utf8")
+		try:
+			return (<bytes>s).decode("utf8")
+		except UnicodeDecodeError as e:
+			return str(s)
 	else:
 		return s
 

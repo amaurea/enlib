@@ -1,9 +1,11 @@
 export LAPACK_LINK = -L$(MKLROOT)/lib/intel64 -lmkl_rt -lpthread -lm
 export OMP_LINK    = -liomp5
 export FFLAGS      = -qopenmp -Ofast -fPIC -xhost -nofor-main # -vec-report -opt-report
-#export FFLAGS      = -O0 -traceback -check bounds -g -fPIC -xhost -nofor-main # -vec-report -opt-report
 export FSAFE       = -qopenmp -O3 -fPIC -xhost
 export CFLAGS      = -qopenmp -lgomp -fPIC -Ofast
+#export FFLAGS      = -O0 -traceback -check bounds -g -fPIC -xhost -nofor-main # -vec-report -opt-report
+#export FSAFE       = -O0 -traceback -check bounds -g -fPIC -xhost
+#export CFLAGS      = -O0 -fPIC -g
 export FC          = ifort
 export F2PY        = f2py
 export F2PYCOMP    = intelem
