@@ -901,6 +901,24 @@ def remove_duplicates_chain(cat, rlim=1*utils.arcmin):
 	ocat = cat[owner==np.arange(len(cat))]
 	return ocat
 
+def eval_flux_at_srcs(cat, beam_profile, tol=1e-5, verbose=False):
+	"""Get the contribution from all sources at the location of each source"""
+	flux  = np.zeros(len(cat))
+	r, br = beam_profile
+	rmax  = r[br>tol][-1]
+	pos   = utils.ang2rect([cat.ra, cat.dec]).T
+	tree  = spatial.cKDTree(pos)
+	groups= tree.query_ball_tree(tree, rmax)
+	for gi, group in enumerate(groups):
+		if verbose: sys.stderr.write("\r%5d/%d %3d%%" % (gi+1, len(cat), 100.0*(gi+1)/len(cat)))
+		# Get our distance to everybody in our group. The tree
+		# should already know this, but I don't think we can get at it
+		dists = utils.vec_angdist(pos[group], pos[None,gi], axis=1)
+		vals  = np.interp(dists, r, br)*cat.flux[gi,0]
+		flux[group] += vals
+	if verbose: sys.stderr.write("\n")
+	return flux
+
 def build_merge_weight(shape, dtype=np.float64):
 	ny, nx = shape[-2:]
 	cy, cx = (np.array(shape[-2:])-1)/2.0
