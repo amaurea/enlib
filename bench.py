@@ -23,6 +23,8 @@ last value for the execution time for category "foo", for example.
 import time, numpy as np
 from collections import defaultdict
 from . import memory
+try: clockfun = time.clock
+except: clockfun = time.process_time
 
 class Value:
 	def __init__(self, n=0, v=0, vv=0):
@@ -104,11 +106,11 @@ class mark:
 		self.name = name
 	def __enter__(self):
 		self.time1  = time.time()
-		self.clock1 = time.clock()
+		self.clock1 = clockfun()
 		self.mem1   = memory.current()
 	def __exit__(self, type, value, traceback):
 		self.time2  = time.time()
-		self.clock2 = time.clock()
+		self.clock2 = clockfun()
 		self.mem2   = memory.current()
 		stats.add(self.name, self.time2 -self.time1, self.clock2-self.clock1, self.mem1, self.mem2-self.mem1)
 
@@ -118,11 +120,11 @@ class show:
 		self.display = display
 	def __enter__(self):
 		self.time1  = time.time()
-		self.clock1 = time.clock()
+		self.clock1 = clockfun()
 		self.mem1   = memory.current()
 	def __exit__(self, type, value, traceback):
 		self.time2  = time.time()
-		self.clock2 = time.clock()
+		self.clock2 = clockfun()
 		self.mem2   = memory.current()
 		self.memmax = memory.max()
 		if self.display:
