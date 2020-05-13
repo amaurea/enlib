@@ -578,8 +578,7 @@ class Mapset:
 				try:
 					map = read_map(split.map, pbox, name=os.path.basename(split.map), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
 					div = read_map(split.div, pbox, name=os.path.basename(split.div), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
-				except IOError as e:
-					continue
+				except (IOError, OSError) as e: continue
 				map *= dataset.gain
 				div *= dataset.gain**-2
 				div[~np.isfinite(div)] = 0

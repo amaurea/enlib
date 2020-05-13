@@ -151,7 +151,7 @@ def retile(ipathfmt, opathfmt, itile1=(None,None), itile2=(None,None),
 		# output tiles and input tiles may increase in opposite directions
 		opix1, opix2 = np.minimum(opix1,opix2), np.maximum(opix1,opix2)
 		try: omap = read_area(ipathfmt, [opix1,opix2],itile1=itile1, itile2=itile2,cache=cache, slice=slice)
-		except IOError: continue
+		except (IOError, OSError): continue
 		x = otile[1]+otileoff[1]
 		if wrap: x %= ntile_wrap
 		oname = opathfmt % {"y":otile[0]+otileoff[0],"x":x}

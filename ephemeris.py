@@ -140,7 +140,7 @@ def make_object(a=1, e=0, inc=0, M=0, Omega=0, omega=0, epoch=36525, epoch_M=365
 def read_object(fname):
 	try:
 		return read_object_xephem(fname)
-	except (IOError, ValueError) as e:
+	except (IOError, OSError, ValueError) as e:
 		return read_object_simple(fname)
 
 def read_object_xephem(fname):

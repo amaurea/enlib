@@ -47,7 +47,7 @@ def sim_srcs(shape, wcs, srcs, beam, omap=None, dtype=None, nsigma=5, rmax=None,
 	omap   = omap.preflat
 	ncomp  = omap.shape[0]
 	# Set up wrapping
-	if wrap is "auto": wrap = [0, utils.nint(360./wcs.wcs.cdelt[0])]
+	if wrap == "auto": wrap = [0, utils.nint(360./wcs.wcs.cdelt[0])]
 	# In keeping with the rest of the functions here, srcs is [nsrc,{dec,ra,T,Q,U}].
 	# The beam parameters are ignored - the beam argument is used instead
 	amps = srcs[:,2:2+ncomp]
@@ -241,7 +241,7 @@ def read(fname, format="auto"):
 			elif f == "nemo":     return read_nemo(fname)
 			elif f == "simple":   return read_simple(fname)
 			else: raise ValueError("Unrecognized point source format '%s' for file '%s'" % (f, fname))
-		except (ValueError, IOError) as e: pass
+		except (ValueError, IOError, OSError) as e: pass
 	raise IOError("Unable to read point source file '%s' with format '%s'" % (fname, f))
 
 def read_nemo(fname):
