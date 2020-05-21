@@ -428,7 +428,7 @@ class SignalMapBuddies(SignalMap):
 # postprocessing operation that adds up the values in the src pixels.
 
 class SignalSrcSamp(SignalCut):
-	def __init__(self, scans, dtype, comm, srcs=None, tol=100, amplim=None, rel=False, name="srcsamp", ofmt="{name}_{rank:02}", output=False, cut_type="full"):
+	def __init__(self, scans, dtype, comm, srcs=None, tol=100, amplim=None, rel=False, src_mask=None, name="srcsamp", ofmt="{name}_{rank:02}", output=False, cut_type="full"):
 		Signal.__init__(self, name, ofmt, output, ext="hdf")
 		self.data  = {}
 		self.dtype = dtype
@@ -441,9 +441,15 @@ class SignalSrcSamp(SignalCut):
 				srcparam = srcparam[srcparam[:,2]>amplim]
 			if rel: srcparam[:,2:5] /= srcparam[:,2,None]
 			psrc     = pmat.PmatPtsrc(scan, srcparam)
+			mask	 = np.zeros([scan.ndet,scan.nsamp], bool)
 			tod      = np.zeros((scan.ndet,scan.nsamp), np.float32)
-			psrc.forward(tod, srcparam)
-			mask     = tod > tol; del tod
+			psrc.forward(tod, srcparam, tmul=0)
+			mask    |= tod > tol
+			if src_mask is not None:
+				pmap  = pmat.PmatMap(scan, src_mask)
+				pmap.forward(tod, src_mask, tmul=0)
+				mask |= tod > 0.5
+			del tod
 			src_cut  = sampcut.from_mask(mask); del mask
 			# Then set up our pointing matrix and DOF as usual
 			mat = pmat.PmatCut(scan, cut_type, keep=True, cut=src_cut)
