@@ -3473,7 +3473,7 @@ def log_prob_gauss_positive_single(x, nmax=10):
 	rest = 1.
 	fact = 1.
 	div  = 1.
-	for n in xrange(1, nmax):
+	for n in range(1, nmax):
 		fact *= -(2*n-1)
 		div  *= x**2
 		rest += fact/div

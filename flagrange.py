@@ -353,13 +353,13 @@ def read_flagrange(hfile, group=None):
 	if "sample_offset" in attrs: sample_offset = attrs["sample_offset"]
 	return Flagrange(
 		nsamp,
-		hfile["index_stack"].value,
-		hfile["flag_stack"].value,
-		hfile["stack_bounds"].value,
-		dets = hfile["det_uid"].value,
-		flag_names = utils.decode_array_if_necessary(hfile["flag_names"].value),
-		derived_masks = hfile["derived_masks"].value,
-		derived_names = utils.decode_array_if_necessary(hfile["derived_names"].value),
+		hfile["index_stack"][()],
+		hfile["flag_stack"][()],
+		hfile["stack_bounds"][()],
+		dets = hfile["det_uid"][()],
+		flag_names = utils.decode_array_if_necessary(hfile["flag_names"][()]),
+		derived_masks = hfile["derived_masks"][()],
+		derived_names = utils.decode_array_if_necessary(hfile["derived_names"][()]),
 		sample_offset = sample_offset,
 	)
 
@@ -372,11 +372,11 @@ def write_flagrange(hfile, frange, group=None):
 		write_flagrange(g, frange)
 	else:
 		hfile["det_uid"]      = frange.dets
-		hfile["flag_names"]   = frange.flag_names
+		hfile["flag_names"]   = utils.encode_array_if_necessary(frange.flag_names)
 		hfile["stack_bounds"] = frange.stack_bounds
 		hfile["flag_stack"]   = frange.flag_stack
 		hfile["index_stack"]  = frange.index_stack
-		hfile["derived_names"]= frange.derived_names
+		hfile["derived_names"]= utils.encode_array_if_necessary(frange.derived_names)
 		hfile["derived_masks"]= frange.derived_masks
 		hfile.attrs["sample_offset"]= frange.sample_offset
 		hfile.attrs["sample_count"] = frange.nsamp

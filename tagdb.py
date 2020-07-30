@@ -180,7 +180,7 @@ class Tagdb:
 		data = {}
 		with h5py.File(fname, "r") as hfile:
 			for key in hfile:
-				data[key] = utils.decode_array_if_necessary(hfile[key].value)
+				data[key] = utils.decode_array_if_necessary(hfile[key][()])
 		return cls(data)
 	def write(self, fname, type=None):
 		"""Write a Tagdb in either the hdf or text format. This is
@@ -195,7 +195,7 @@ class Tagdb:
 		"""Write a Tagdb to an hdf file."""
 		with h5py.File(fname, "w") as hfile:
 			for key in self.data:
-				hfile[key] = self.data[key]
+				hfile[key] = utils.encode_array_if_necessary(self.data[key])
 
 def dslice(data, inds):
 	return {key:val[...,inds] for key, val in data.items()}

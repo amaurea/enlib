@@ -1178,10 +1178,8 @@ class FilterGapfill:
 	def __init__(self, basic=False):
 		self.basic = basic
 	def __call__(self, scan, tod):
-		if self.basic and "cut_basic" in scan:
-			gapfill.gapfill(tod, scan.cut_basic, inplace=True)
-		else:
-			gapfill.gapfill(tod, scan.cut, inplace=True)
+		if self.basic: gapfill.gapfill(tod, scan.cut_basic, inplace=True)
+		else:          gapfill.gapfill(tod, scan.cut, inplace=True)
 
 class FilterAddPhase:
 	def __init__(self, scans, phasemap, pids, mmul=1, tmul=1):
