@@ -24,9 +24,11 @@ def read_beam(params, nl=50000, workdir=".", regularization="ratio", cutoff=0.01
 		sigma = params[1]*utils.fwhm*utils.arcmin
 		res = -0.5*l**2*sigma**2
 	elif params[0] == "transfun":
-		res   = np.zeros(nl)
 		fname = os.path.join(workdir, params[1])
-		bdata = np.loadtxt(fname)[:,1]
+		bdata = np.zeros(nl)
+		tmp   = np.loadtxt(fname)[:,1]
+		bdata[:len(tmp)] = tmp[:nl]
+		del tmp
 		# We want a normalized beam
 		bdata[~np.isfinite(bdata)] = 0
 		bdata /= np.max(bdata)
@@ -420,6 +422,33 @@ def make_div_3d(div, ncomp_map, ncomp_target, polfactor=0.5):
 	elif div.ndim == 4: return enmap.samewcs(np.einsum("iiyx->iyx",div),div)
 	else: raise ValueError("Too many components in div")
 
+def detrend_map(map, div, edge=60, tol=1e-3, nstep=30):
+	#print("Fixme detrend")
+	#enmap.write_map("detrend_before.fits", map)
+	hit  = div.preflat[0]>0
+	bhit = hit.copy()
+	bhit[0,:] = 0; bhit[-1,:] = 0; bhit[:,0] = 0; bhit[:,-1] = 0
+	weight = bhit*(np.maximum(0,(1-ndimage.distance_transform_edt(hit)/edge))) + tol
+	del bhit
+	l  = map.modlmap()
+	iN = (1 + ( (l+0.5)/1000 )**-3.5)**-1
+	def A(x):
+		imap = weight*0+x.reshape(map.shape)
+		omap = weight*imap + enmap.ifft(iN*enmap.fft(imap)).real
+		return omap.reshape(-1)
+	def M(x):
+		imap = weight*0+x.reshape(map.shape)
+		omap = enmap.ifft(1/iN*enmap.fft(imap)).real
+		return omap.reshape(-1)
+	rhs = map*weight
+	solver = cg.CG(A, rhs.reshape(-1).copy(), M=M)
+	for i in range(nstep):
+		solver.step()
+	#enmap.write_map("detrend_model.fits", enmap.samewcs(solver.x.reshape(map.shape),map))
+	omap = (div>0)*(map-solver.x.reshape(map.shape))
+	#enmap.write_map("detrend_after.fits", omap)
+	return omap
+
 def common_geometry(geos, ncomp=None):
 	shapes = np.array([shape[-2:] for shape,wcs in geos])
 	assert np.all(shapes == shapes[0]), "Inconsistent map shapes"
@@ -435,22 +464,35 @@ def filter_div(div):
 	for comp in res.preflat: comp[:] = ndimage.minimum_filter(comp, size=2)
 	return res
 
+def select_datasets(datasets, sel):
+	all_tags = set()
+	for dataset in datasets:
+		all_tags |= dataset.tags
+	flags = {flag: np.array([flag in dataset.tags for dataset in datasets],bool) for flag in all_tags}
+	# Extract the relevant datasets
+	if sel is not None:
+		sel     = "&".join(["(" + w + ")" for w in utils.split_outside(sel, ",")])
+		selinds = np.where(eval(sel, flags))[0]
+		datasets = [datasets[i] for i in selinds]
+	return datasets
+
 class Mapset:
 	def __init__(self, config, sel=None):
 		self.config = config
 		self.select(sel)
 	def select(self, sel):
 		config   = self.config
-		all_tags = set()
-		for dataset in config.datasets:
-			all_tags |= dataset.tags
-		flags = {flag: np.array([flag in dataset.tags for dataset in config.datasets],bool) for flag in all_tags}
-		# Extract the relevant datasets
-		datasets = config.datasets
-		if sel is not None:
-			sel     = "&".join(["(" + w + ")" for w in utils.split_outside(sel, ",")])
-			selinds = np.where(eval(sel, flags))[0]
-			datasets = [datasets[i] for i in selinds]
+		datasets = select_datasets(config.datasets, sel)
+		#all_tags = set()
+		#for dataset in config.datasets:
+		#	all_tags |= dataset.tags
+		#flags = {flag: np.array([flag in dataset.tags for dataset in config.datasets],bool) for flag in all_tags}
+		## Extract the relevant datasets
+		#datasets = config.datasets
+		#if sel is not None:
+		#	sel     = "&".join(["(" + w + ")" for w in utils.split_outside(sel, ",")])
+		#	selinds = np.where(eval(sel, flags))[0]
+		#	datasets = [datasets[i] for i in selinds]
 		# Make all paths relative to us instead of the config file
 		cdir = os.path.dirname(config.path)
 		# In tiled input format, all input maps have the same geometry
@@ -558,7 +600,7 @@ class Mapset:
 		# read anything useful. If so res.datasets can be empty, or invididual datasets' ngood may be 0
 		return res
 
-def sanitize_maps(mapset, map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, apod_edge=60, apod_div_edge=60, crop_div_edge=0):
+def sanitize_maps(mapset, map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, apod_edge=60, apod_div_edge=60, crop_div_edge=0, detrend=True):
 	"""Get rid of extreme values in maps and divs, and further downweights the the edges and
 	faint regions of div."""
 	for dataset in mapset.datasets:
@@ -573,9 +615,15 @@ def sanitize_maps(mapset, map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, a
 			split.data.div = np.minimum(split.data.div, split.ref_div*div_tol)
 			split.data.div = filter_div(split.data.div)
 			split.data.map = np.maximum(-map_max, np.minimum(map_max, split.data.map))
+			if dataset.highpass and detrend:
+				# This uses an area 60 pixels wide around the edge of the div as a context to solve
+				# for a smooth background behavior, and then subtracts it. This will bias the the edge
+				# power low, but mostly towards the outer parts of the reference region, which is strongly
+				# apodized anyway.
+				split.data.map  = detrend_map(split.data.map, split.data.div, edge=apod_div_edge)
 			if crop_div_edge:
 				# Avoid areas too close to the edge of div
-				split.data.div *= calc_dist(split.data.div > 0) > crop_div_edge
+				split.data.div *= calc_dist(split.data.div > 0) > 60
 			# Expand map to ncomp components
 			split.data.map = add_missing_comps(split.data.map, mapset.ncomp, fill="random")
 			# Distrust very low hitcount regions
@@ -666,6 +714,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			if np.allclose(ps,0): ps[:] = 1e3
 		# Smooth ps to reduce sample variance
 		dset_ps  = smooth_ps_grid(dset_ps, ps_res, ndof=2*(nsplit-1), log=True)
+		#enmap.write_map("test_ps_smooth_%s.fits" % dataset.name, dset_ps)
 		# Apply noise window correction if necessary:
 		noisewin = dataset.noise_window_params[0] if "noise_window_params" in dataset else "none"
 		if   noisewin == "none": pass
@@ -676,6 +725,47 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			refval = np.mean(dset_ps[:,(mapset.l>=lref)&(mapset.l<lmax)],1)
 			dset_ps[:,mapset.l>=lmax] = refval[:,None]
 		elif noisewin == "separable":
+			# Read y and x windows from disk
+			fname = os.path.join(os.path.dirname(mapset.config.path), dataset.noise_window_params[1])
+			l, ywin, xwin = np.loadtxt(fname, usecols=(0,1,2)).T
+			ly, lx = enmap.laxes(mapset.shape, mapset.wcs)
+			ywin = np.maximum(np.interp(np.abs(ly), l, ywin), 1e-4)
+			xwin = np.maximum(np.interp(np.abs(lx), l, xwin), 1e-4)
+			mask = (ywin[:,None] > 0.9)&(xwin[None,:] > 0.9)
+			ref_val = np.median(dset_ps[0,mask])
+			dset_ps /= ywin[:,None]**2
+			dset_ps /= xwin[None,:]**2
+			# We don't trust our ability to properly deconvolve the noise in the areas where the
+			# pixel window is too small
+			dset_ps[:,(ywin[:,None]<0.25)|(xwin[None,:]<0.25)] = ref_val
+			# HACK: avoid devonvolving too much by putting very low values in the beam.
+			# To do this we force ywin and xwin to be 1 when they get small, but instead
+			# greatly reduce the weight of the dataset by also setting dset_ps to a high
+			# value here
+			ymask = ywin<0.7
+			xmask = xwin<0.7
+			ywin[ymask] = 1
+			xwin[xmask] = 1
+			dset_ps[:,ymask[:,None]|xmask[None,:]] = 100
+			# Fill the low parts with a representative value to avoid dividing by too small numbers
+			# dset_ps looks OK at this point. It never gets very small.
+			# The windows do get small, though, which means that the beam will
+			# get small at high l. With mbac-only we would end up over-deconvolving,
+			# but with another dataset present that should not happen. However, when I
+			# teste with mbac + s17 I still got over-ceconvolution. The edge of the s17
+			# region also looked weird. Those areas were all noisy and a bit blue even
+			# in s17+planck-only, though. It looks like mbac reduced the noise at lower l
+			# without reducing it at high l, making it bluer, which would make sense.
+			#
+			# The old version ended up estimating ywin and xwin = 1 everywhere, leading to
+			# no deconvolution, but the incorrect result.
+			#enmap.write_map("new_dset_ps.fits", dset_ps)
+			#np.savetxt("new_ywin.txt", ywin)
+			#np.savetxt("new_xwin.txt", xwin)
+			#1/0
+			# Store the separable window so it can be used for the beam too
+			dataset.ywin, dataset.xwin = ywin, xwin
+		elif noisewin == "separable_old":
 			# The map has been interpolated using something like bicubic interpolation,
 			# leading to an unknown but separable pixel window
 			ywin, xwin = estimate_separable_pixwin_from_normalized_ps(dset_ps[0])
@@ -687,10 +777,14 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			dset_ps /= xwin[None,:]**2
 			fill_area = (ywin[:,None]<0.25)|(xwin[None,:]<0.25)
 			dset_ps[:,(ywin[:,None]<0.25)|(xwin[None,:]<0.25)] = np.mean(dset_ps[:,ref_area],1)[:,None]
+			#enmap.write_map("old_dset_ps.fits", dset_ps)
+			#np.savetxt("old_ywin.txt", ywin)
+			#np.savetxt("old_xwin.txt", xwin)
+			#1/0
 			# Store the separable window so it can be used for the beam too
 			dataset.ywin, dataset.xwin = ywin, xwin
 		else: raise ValueError("Noise window type '%s' not supported" % noisewin)
-		#enmap.write_map("test_ps_smooth_%s.fits" % dataset.name, dset_ps)
+		#enmap.write_map("test_ps_smooth2_%s.fits" % dataset.name, dset_ps)
 		#print("mean_smooth_ps", np.median(dset_ps[0]))
 		# If we have invalid values, then this whole dataset should be skipped
 		if not np.all(np.isfinite(dset_ps)): continue
@@ -866,6 +960,8 @@ class Coadder:
 		self.F  = [dataset.filter             for dataset in mapset.datasets for split in dataset.splits]
 		self.B  = [dataset.beam_2d/mapset.target_beam_2d for dataset in mapset.datasets for split in dataset.splits]
 		self.insufficient = [dataset.insufficient for dataset in mapset.datasets for split in dataset.splits]
+		# For debug stuff
+		self.names = ["%s_set%d" % (dataset.name, i) for dataset in mapset.datasets for i, split in enumerate(dataset.splits)]
 		#enmap.write_map("coadder_m.fits", enmap.samewcs(self.m, self.m[0]))
 		#enmap.write_map("coadder_H.fits", enmap.samewcs(self.H, self.H[0]))
 		#enmap.write_map("coadder_iN.fits", enmap.samewcs(self.iN, self.iN[0]))
@@ -920,6 +1016,28 @@ class Coadder:
 		if dump_dir is not None:
 			enmap.write_map(dump_dir + "/map_final.fits", map_ifft(unzip(solver.x)))
 		return map_ifft(unzip(solver.x))
+	def calc_debug_weights(self):
+		# Assume isotropic, uniform noise, and return l[nbin], weights[nmap,ncomp,nbin]
+		# Use self.names to get the name of each map
+		pre = enmap.zeros((self.nmap,)+self.shape, self.wcs, self.dtype)
+		div = pre[0]*0
+		for i in range(self.nmap):
+			# W = (B'HCHB)"B'HCH
+			H2mean = np.mean(self.H[i]**2,(-2,-1))
+			pre[i] = H2mean[:,None,None]*self.iN[i]*self.B[i]
+			div   += H2mean[:,None,None]*self.iN[i]*self.B[i]**2
+		weight_2d = pre/div
+		weight_1d, ls = weight_2d.lbin()
+		return ls, weight_1d
+	def calc_debug_noise(self):
+		# Assume isotropic, uniform noise, and return l[nbin], Nl[nmap,ncomp,nbin]
+		iNs   = enmap.zeros((self.nmap,)+self.shape, self.wcs, self.dtype)
+		for i in range(self.nmap):
+			# W = (B'HCHB)"B'HCH
+			H2mean  = np.mean(self.H[i]**2,(-2,-1))
+			iNs[i] += H2mean[:,None,None]*self.iN[i]*self.B[i]**2
+		iNs_1d, ls = iNs.lbin()
+		return ls, iNs_1d
 
 def bin_1d(fmap, dl=None):
 	l = fmap.modlmap()
@@ -3532,11 +3650,11 @@ def numerical_derivative(f, x, step=1e-8):
 # But we also need the derivative of the gauss positive with respect to the covariance.
 # This is really nasty.
 
-def calc_dist(decra1, decra2):
-	diff     = decra1 - decra2
-	diff[1] *= np.cos(0.5*(decra1[0]+decra2[0]))
-	dist     = np.sum(diff**2,0)**0.5
-	return dist
+#def calc_dist(decra1, decra2):
+#	diff     = decra1 - decra2
+#	diff[1] *= np.cos(0.5*(decra1[0]+decra2[0]))
+#	dist     = np.sum(diff**2,0)**0.5
+#	return dist
 
 def soft_prior(v, vmax, dv=0.01, deriv=False):
 	with utils.nowarn():

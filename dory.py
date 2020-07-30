@@ -68,6 +68,32 @@ def get_regions(regfile, shape, wcs):
 		raise ValueError("Unrecognized region type '%s'" % regfile)
 	return regions
 
+def split_regions(regions, size):
+	"""Split regions into the maximum number of subregions such that each region
+	is at least size pixels"""
+	oregions = []
+	for ((y1,x1),(y2,x2)) in regions:
+		sy, sx = size, size
+		h, w = (y2-y1), (x2-x1)
+		# If regions are too short/thin make them taller/wider to compensate
+		if h < sy and w < sx:
+			oregions.append([[y1,x1],[y2,x2]])
+		if   h < sy: sx = (sx*sy)//h
+		elif w < sx: sy = (sy*sx)//w
+		# We want even splits
+		ny = (h+sy)//sy
+		nx = (w+sx)//sx
+		# Do the actual splitting
+		for by in range(ny):
+			oy1 = y1 + by*h//ny
+			oy2 = y1 + (by+1)*h//ny
+			for bx in range(nx):
+				ox1 = x1 + bx*w//nx
+				ox2 = x1 + (bx+1)*w//nx
+				#print("h: %d w: %d sy: %d sx: %d th: %d tw: %d" % (h,w,sy,sx,oy2-oy1, ox2-ox1))
+				oregions.append([[oy1,ox1],[oy2,ox2]])
+	return np.array(oregions).astype(int)
+
 def pad_region(region, pad, fft=False):
 	region = np.array(region)
 	region[...,0,:] -= pad
@@ -237,6 +263,8 @@ def build_prior(amps, damps, variability=1.0, min_ivar=1e-10):
 	them into a prior for a new fit. Variability controls how variable
 	the source is assumed to be, and effectively weakens the prior."""
 	n     = len(amps)
+	amps[~np.isfinite(amps)] = 0
+	damps[~np.isfinite(damps)] = 0
 	mask  = damps > 0
 	ivars = np.zeros(n)
 	ivars[mask]  = 1/(damps[mask]**2 + (amps[mask]*variability)**2)
@@ -878,7 +906,7 @@ def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25, uncertainty="min"):
 
 def remove_duplicates_chain(cat, rlim=1*utils.arcmin):
 	"""Given a point source catalog which might contain duplicates, detect and remove
-	these douplicates, returning a deduplicated catalog. Unlike merge_duplicates, this continues
+	these duplicates, returning a deduplicated catalog. Unlike merge_duplicates, this continues
 	in a chain, so that neighbors of a duplicate also are considered duplicates. No averaging
 	is done - the strongest source in each group is used.
 	rlim should be adjusted to fit the exerpiment beam. The default is appropriate for ACT."""
