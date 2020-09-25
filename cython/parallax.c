@@ -136,7 +136,7 @@ void solve_plain(float * frhs, float * kmap, float * osigma, int ny, int nx, flo
 	}
 }
 
-void update_total_plain(float * sigma, float * sigma_max, float * param_max, int * hit_tot, float * kmap, int ny, int nx, float r, float vy, float vx) {
+void update_total_plain(float * sigma, float * sigma_max, float * param_max, int * hit_tot, float * frhs, float * kmap, int ny, int nx, float r, float vy, float vx) {
 	#pragma omp parallel for
 	for(int y = 0; y < ny; y++)
 	for(int x = 0; x < nx; x++) {
@@ -146,7 +146,8 @@ void update_total_plain(float * sigma, float * sigma_max, float * param_max, int
 			param_max[i] = r;
 			param_max[i+ny*nx*1] = vy;
 			param_max[i+ny*nx*2] = vx;
-			param_max[i+ny*nx*3] = kmap[i];
+			param_max[i+ny*nx*3] = frhs[i];
+			param_max[i+ny*nx*4] = kmap[i];
 		}
 		if(sigma[i] != 0)
 			hit_tot[i]++;
