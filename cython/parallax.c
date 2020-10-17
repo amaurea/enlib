@@ -4,6 +4,11 @@
 // I thought this was standard in math.h, but apparently it's optional
 #define M_PI 3.14159265358979323846
 
+// This takes us from sun-centered coodinates at the reference time to
+// normal celestial coordinates. That might seem the wrong way to go
+// when stacking, but the stacking part below starts from the output map
+// pixels (which should be sun-centered) and needs to find the input map pixels
+// (which are normal coordinates), so this works.
 inline void displace_pos(double dec, double ra, double * earth_pos, double r, double dy, double dx, double * odec, double * ora)
 {
 	double cdec = cos(dec);
