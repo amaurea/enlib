@@ -38,7 +38,7 @@ inline void displace_pos(double dec, double ra, double * earth_pos, double r, do
 #define bgroup 2
 void displace_map_blocks_avx_omp(float * imap, float * omap, int ny, int nx, double dec0, double ddec, double ra0, double dra, double * earth_pos, double r, double dy, double dx) {
 	int btot = bs*bgroup;
-	int nphi = abs((int)round(2*M_PI/dra));
+	int nphi = (int)fabs(round(2*M_PI/dra));
 	// Loop over groups of 8x8 blocks
 	#pragma omp parallel for
 	for(int gy1 = 0; gy1 < ny; gy1+=btot) {
@@ -156,6 +156,19 @@ void update_total_plain(float * sigma, float * sigma_max, float * param_max, int
 		}
 		if(sigma[i] != 0)
 			hit_tot[i]++;
+	}
+}
+
+void merge_param_maps_plain(float * params_in, float * sigma, float * params_max, float * sigma_max, int ny, int nx, int np) {
+	#pragma omp parallel for
+	for(int y = 0; y < ny; y++)
+	for(int x = 0; x < nx; x++) {
+		int i = y*nx+x;
+		if(sigma[i] > sigma_max[i]) {
+			sigma_max[i] = sigma[i];
+			for(int j = 0; j < np; j++)
+				params_max[ny*nx*j+i] = params_in[ny*nx+j+i];
+		}
 	}
 }
 

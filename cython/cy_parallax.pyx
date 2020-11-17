@@ -8,6 +8,7 @@ cdef extern from "parallax.h":
 	void displace_map_blocks_avx_omp(float * imap, float * omap, int ny, int nx, double dec0, double ddec, double ra0, double dra, double * earth_pos, double r, double dy, double dx)
 	void solve_plain(float * frhs, float * kmap, float * osigma, int ny, int nx, float klim)
 	void update_total_plain(float * sigma, float * sigma_max, float * param_max, int * hit_tot, float * frhs, float * kmap, int ny, int nx, float r, float vy, float vx)
+	void merge_param_maps_plain(float * params_in, float * sigma, float * params_max, float * sigma_max, int ny, int nx, int np)
 	#void displace_map2(float * imap, float * omap, int ny, int nx, double dec0, double ddec, double ra0, double dra, double * earth_pos, double r, double dy, double dx)
 	#void displace_map3(float * imap, float * omap, int ny, int nx, double dec0, double ddec, double ra0, double dra, double * earth_pos, double r, double dy, double dx)
 	#void displace_map4(float * imap, float * omap, int ny, int nx, double dec0, double ddec, double ra0, double dra, double * earth_pos, double r, double dy, double dx)
@@ -84,3 +85,10 @@ def update_total(sigma, sigma_max, param_max, hit_tot, frhs, kmap, r, vy, vx):
 	cdef float[::1] kmap_      = kmap.reshape(-1)
 	cdef int[::1]   hit_tot_ = hit_tot.reshape(-1)
 	update_total_plain(&sigma_[0], &sigma_max_[0], &param_max_[0], &hit_tot_[0], &frhs_[0], &kmap_[0], sigma.shape[0], sigma.shape[1], r, vy, vx)
+
+def merge_param_maps(params_in, sigma, params_max, sigma_max):
+	cdef float[::1] params_in_ = params_in.reshape(-1)
+	cdef float[::1] sigma_     = sigma.reshape(-1)
+	cdef float[::1] params_max_= params_max.reshape(-1)
+	cdef float[::1] sigma_max_ = sigma_max.reshape(-1)
+	merge_param_maps_plain(&params_in_[0], &sigma_[0], &params_max_[0], &sigma_max_[0], params_in.shape[1], params_in.shape[2], params_in.shape[0]);

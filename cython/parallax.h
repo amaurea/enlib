@@ -8,6 +8,7 @@ double displace_map_blocks_avx_omp(
 
 void solve_plain(float * frhs, float * kmap, float * osigma, int ny, int nx, float klim);
 void update_total_plain(float * sigma, float * sigma_max, float * param_max, int * hit_tot, float * frhs, float * kmap, int ny, int nx, float r, float vy, float vx);
+void merge_param_maps_plain(float * params_in, float * sigma, float * params_max, float * sigma_max, int ny, int nx, int np);
 
 #if 0
 double displace_map2( float * imap, float * omap, int ny, int nx, double dec0, double ddec, double ra0, double dra, double * earth_pos, double r, double dy, double dx);
