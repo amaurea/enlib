@@ -11,4 +11,4 @@ typedef struct {
 
 IERSInfo * iers_lookup(double mjd);
 IERSInfo * iers_get(int i);
-int iers_n;
+extern int iers_n;
