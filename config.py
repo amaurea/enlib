@@ -78,7 +78,7 @@ parameters = OrderedDict()
 
 def init(config_file=None):
 	"""Initialize the module. This reads configuration parameters
-	frmo the specified file ($HOME/.enlibrc by default), creating
+	frmo the specified file ($HOME/.enkirc by default), creating
 	it if necessary. It also updates the file, adding any new parameters
 	that were missing."""
 	if config_file is None:
