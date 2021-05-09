@@ -304,6 +304,13 @@ def read_area(ipathfmt, opix, itile1=(None,None), itile2=(None,None), verbose=Fa
 	omap.wcs.wcs.crpix -= opix[0,::-1]
 	return omap
 
+def read_geometry(ipathfmt, shape, wcs, itile1=(None,None), itile2=(None,None), verbose=False):
+	# Get the pixbox of shape, wcs in terms of the full map represented by the ipathfmt tiles
+	geo    = read_tileset_geometry(ipathfmt, itile1, itile2)
+	pixbox = enmap.pixbox_of(geo.wcs, shape, wcs)
+	# And read
+	return read_area(ipathfmt, pixbox, itile1=itile1, itile2=itile2, verbose=verbose)
+
 def read_retile(ipathfmt, tpos, otilesize=None, pixoff=(0,0), margin=0,
 		itile1=(None,None), itile2=(None,None), verbose=False):
 	"""Read a single tile from the tiling at ipathfmt % {"y":tpos[0],"x":tpos[1]},

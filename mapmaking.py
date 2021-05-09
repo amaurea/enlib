@@ -1516,6 +1516,16 @@ class Eqsys:
 			if not config.get("debug_raw"):
 				with bench.mark("b_filter"):
 					for filter in self.filters: filter(scan, tod)
+
+			#print(tod.shape)
+			#with h5py.File("moo_enki.hdf", "w") as hfile:
+			#	hfile["dets"] = np.char.encode(scan.dets)
+			#	hfile["t"] = utils.mjd2ctime(scan.mjd0 + scan.boresight[:,0]/3600/24)
+			#	hfile["az"] = scan.boresight[:,1]
+			#	hfile["el"] = scan.boresight[:,2]
+			#dump("dump_postfilter.hdf", tod)
+			#1/0
+
 			#dump("dump_postfilter.hdf", tod)
 			#dump("dump_postfilter_mean.hdf", np.mean(tod,0))
 			#dump("dump_postfilter.hdf", tod[:4])

@@ -136,20 +136,14 @@ def transform_raw(from_sys, to_sys, coords, time=None, site=None, bore=None):
 	as coords*time[None]."""
 	if site is None: site = default_site
 	# Prepare input and output arrays
-	if time is None:
-		coords = np.array(coords)[:2]
-	else:
-		time   = np.asarray(time)
-		coords = np.asarray(coords)
-		# Broadasting. A bit complicated because we want to handle
-		# both time needing to broadcast and coords needing to
-		time   = time + np.zeros(coords[0].shape,time.dtype)
-		coords = (coords.T + np.zeros(time.shape,coords.dtype)[None].T).T
+	coords, time, bore = utils.broadcast_arrays(coords, time, bore, npre=[1,0,1])
 	# flatten, so the rest of the code can assume that coordinates are [2,N]
 	# and time is [N]
 	oshape = coords.shape
-	coords= np.ascontiguousarray(coords.reshape(2,-1))
+	coords = np.require(coords.reshape(2,-1), requirements=['C','W'])
 	if time is not None: time = time.reshape(-1)
+	if bore is not None:
+		bore = bore.reshape(bore.shape[0],-1)
 	# Perform the actual coordinate transformation. There are three classes of
 	# transformations here:
 	# 1. To/from object-centered coordinates
@@ -282,30 +276,91 @@ def euler_rot(euler_angles, coords, kind="zyz"):
 	co     = utils.rect2ang(rect, zenith=False)
 	return co.reshape(coords.shape)
 
-def recenter(angs, center, restore=False):
-	"""Recenter coordinates "angs" (as ra,dec) on the location given by "center",
-	such that center moves to the north pole."""
-	# Performs the rotation E(0,-theta,-phi). Originally did
-	# E(phi,-theta,-phi), but that is wrong (at least for our
-	# purposes), as it does not preserve the relative orientation
-	# between the boresight and the sun. For example, if the boresight
-	# is at the same elevation as the sun but 10 degrees higher in az,
-	# then it shouldn't matter what az actually is, but with the previous
-	# method it would.
-	#
-	# Now supports specifying where to recenter by specifying center as
-	# lon_from,lat_from,lon_to,lat_to
-	if len(center) == 4: ra0, dec0, ra1, dec1 = center
-	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], center[0]*0, center[1]*0+np.pi/2
-	if restore: ra1 += ra0
-	return euler_rot([ra1,dec0-dec1,-ra0], angs, kind="zyz")
+#def matmul(*mats):
+#	res = mats[0]
+#	for M in mats[1:]:
+#		res = np.einsum("...ab,...bc->...ac", res, M)
+#	return res
+
+def rotmat_recenter(cfrom, cto, cup=None):
+	"""Build a coordinate transformation matrix M[...,3,3] that
+	takes the point cfrom[{ra,dec},...] to the new position cto[{ra,dec},...].
+	cup[{ra,dec},...] controls the orientation of the new coordinate system:
+	After the rotation, cup will be directly polewards from cto.
+	cfrom, cto and cup must have broadcastable shapes"""
+	# Normalize shapes
+	arrays = [cfrom,cto] if cup is None else [cfrom,cto,cup]
+	arrays = np.broadcast_arrays(*arrays)
+	ishape = arrays[0].shape[1:]
+	arrays = [a.reshape(2,-1) for a in arrays]
+	cfrom, cto = arrays[:2]
+	if cup is not None:
+		cup = np.array(arrays[2])
+		# 1. Rotate cfrom[ra] to 0:
+		R     = utils.rotmatrix(-cfrom[0], "z")
+		cup[0] -= cfrom[0]
+		# 2. Rotate cfrom[dec] to the pole
+		Rtmp  = utils.rotmatrix(cfrom[1]-np.pi/2, "y")
+		R     = np.matmul(Rtmp, R)
+		cup = utils.rect2ang(np.einsum("...ij,j...->i...", Rtmp, utils.ang2rect(cup)))
+		# 3. Rotate cup[ra] to pi. This does not affect cfrom, since it's currenlty at the pole
+		R     = np.matmul(utils.rotmatrix(np.pi-cup[0], "z"), R)
+		# 4. Rotate cfrom to its target declination and RA
+		R     = np.matmul(utils.rotmatrix(np.pi/2-cto[1], "y"), R)
+		R     = np.matmul(utils.rotmatrix(cto[0], "z"), R)
+	else:
+		R     = euler_mat([cto[0], cfrom[1]-cto[1], -cfrom[0]], "zyz")
+	# Restore shape
+	R     = R.reshape(ishape + (3,3))
+	return R
+
+def rotmat_decenter(cfrom, cto, cup):
+	return np.einsum("...ab->...ba", rotmat_recenter(cfrom, cto, cup))
+
+def apply_rotmat(M, coords):
+	"""Multiply coords[{ra,dec},...] with cartesian rotation matrix M[...,3,3]"""
+	return utils.rect2ang(np.einsum("...ij,j...->i...", M, utils.ang2rect(coords)))
+
+#def recenter(angs, center, restore=False):
+#	"""Recenter coordinates "angs" (as ra,dec) on the location given by "center",
+#	such that center moves to the north pole."""
+#	# Performs the rotation E(0,-theta,-phi). Originally did
+#	# E(phi,-theta,-phi), but that is wrong (at least for our
+#	# purposes), as it does not preserve the relative orientation
+#	# between the boresight and the sun. For example, if the boresight
+#	# is at the same elevation as the sun but 10 degrees higher in az,
+#	# then it shouldn't matter what az actually is, but with the previous
+#	# method it would.
+#	#
+#	# Now supports specifying where to recenter by specifying center as
+#	# lon_from,lat_from,lon_to,lat_to
+#	if len(center) == 4: ra0, dec0, ra1, dec1 = center
+#	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], center[0]*0, center[1]*0+np.pi/2
+#	if restore: ra1 += ra0
+#	return euler_rot([ra1,dec0-dec1,-ra0], angs, kind="zyz")
+
+def recenter(angs, center, restore=False, inverse=False):
+	"""Recenter coordinates "angs" (as ra,dec) on the location given by "center" """
+	center = np.array(center)
+	cfrom  = center[:2]
+	zero   = cfrom[0]*0
+	cto    = center[2:4] if len(center) >= 4 else np.array([zero, zero+np.pi/2])
+	cup    = center[4:6] if len(center) >= 6 else None
+	if restore: cto[0] += cfrom[0] # what was this again?
+	M = rotmat_recenter(cfrom, cto, cup)
+	if inverse: M = np.einsum("...ab->...ba", M)
+	return apply_rotmat(M, angs)
+
+#def decenter(angs, center, restore=False):
+#	"""Inverse operation of recenter."""
+#	if len(center) == 4: ra0, dec0, ra1, dec1 = center
+#	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], center[0]*0, center[1]*0+np.pi/2
+#	if restore: ra1 += ra0
+#	return euler_rot([ra0,dec1-dec0,-ra1],  angs, kind="zyz")
 
 def decenter(angs, center, restore=False):
-	"""Inverse operation of recenter."""
-	if len(center) == 4: ra0, dec0, ra1, dec1 = center
-	elif len(center) == 2: ra0, dec0, ra1, dec1 = center[0], center[1], center[0]*0, center[1]*0+np.pi/2
-	if restore: ra1 += ra0
-	return euler_rot([ra0,dec1-dec0,-ra1],  angs, kind="zyz")
+	"""Recenter coordinates "angs" (as ra,dec) on the location given by "center" """
+	return recenter(angs, center, restore=restore, inverse=True)
 
 def nohor(sys): return sys if sys not in ["altaz","tele","bore"] else "icrs"
 def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,basestring) else sys

@@ -167,7 +167,7 @@ void merge_param_maps_plain(float * params_in, float * sigma, float * params_max
 		if(sigma[i] > sigma_max[i]) {
 			sigma_max[i] = sigma[i];
 			for(int j = 0; j < np; j++)
-				params_max[ny*nx*j+i] = params_in[ny*nx+j+i];
+				params_max[ny*nx*j+i] = params_in[ny*nx*j+i];
 		}
 	}
 }

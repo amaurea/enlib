@@ -2,6 +2,7 @@ from __future__ import division, print_function
 import numpy as np, logging, h5py, sys
 from . import scan as enscan, errors, utils, coordinates, dmap
 from enact import actdata, filedb
+from scipy import ndimage
 L = logging.getLogger(__name__)
 
 try: basestring
@@ -144,6 +145,8 @@ def read_scans(filelist, inds, reader, db=None, dets=None, quiet=False, downsamp
 	return myinds, myscans
 
 def get_tod_groups(ids, samelen=True):
+	"""Given a set of ids. Return a list of groups of ids. Each croup consists of
+	ids that cover the same time period with a different array."""
 	times = np.array([float(id[:id.index(".")]) for id in ids])
 	labels = utils.label_unique(times, rtol=0, atol=10)
 	nlabel = np.max(labels)+1
@@ -157,3 +160,59 @@ def get_tod_groups(ids, samelen=True):
 		nsub = np.max(np.bincount(labels))
 		groups = [g for g in groups if len(g) == nsub]
 	return groups
+
+def find_scan_periods(db, ttol=60, atol=1*utils.degree):
+	"""Given a scan db, return the set of contiguous scanning periods in the form
+	[:,{ctime_from,ctime_to}]."""
+	atol = atol/utils.degree
+	info = np.array([filedb.scans.data[a] for a in ["baz", "bel", "waz", "wel", "t", "dur"]]).T
+	# Get rid of nan entries
+	bad  = np.any(~np.isfinite(info),1)
+	info = info[~bad]
+	t1   = info[:,-2] - info[:,-1]/2
+	info = info[np.argsort(t1)]
+	# Start, end
+	t1   = info[:,-2] - info[:,-1]/2
+	t2   = t1 + info[:,-1]
+	# How to find jumps:
+	# 1. It's a jump if the scanning changes
+	# 2. It's also a jump if a the interval between tod-ends and tod-starts becomes too big
+	changes    = np.abs(info[1:,:4]-info[:-1,:4])
+	jumps      = np.any(changes > atol,1)
+	jumps      = np.concatenate([[0], jumps]) # from diff-inds to normal inds
+	# Time in the middle of each gap
+	gap_times = np.mean(find_period_gaps(np.array([t1,t2]).T, ttol=ttol),1)
+	gap_inds  = np.searchsorted(t1, gap_times)
+	jumps[gap_inds] = True
+	# raw:  aaaabbbbcccc
+	# diff: 00010001000
+	# 0pre: 000010001000
+	# cum:  000011112222
+	labels  = np.cumsum(jumps)
+	linds   = np.arange(np.max(labels)+1)
+	t1s     = ndimage.minimum(t1, labels, linds)
+	t2s     = ndimage.maximum(t2, labels, linds)
+	# Periods is [nperiod,{start,end}] in ctime. Start is the start of the first tod
+	# in the scanning period. End is the end of the last tod in the scanning period.
+	periods = np.array([t1s, t2s]).T
+	return periods
+
+def find_period_gaps(periods, ttol=60):
+	"""Helper for find_scan_periods. Given the [:,{ctime_from,ctime_to}] for all
+	the individual scans, returns the times at which the gap between the end of
+	a tod and the start of the next is greater than ttol (default 60 seconds)."""
+	# We want to sort these and look for any places
+	# where a to is followed by a from too far away. To to this we need to keep
+	# track of which entries in the combined, sorted array was a from or a to
+	periods = np.asarray(periods)
+	types   = np.zeros(periods.shape, int)
+	types[:,1] = 1
+	types   = types.reshape(-1)
+	ts      = periods.reshape(-1)
+	order   = np.argsort(ts)
+	ts, types = ts[order], types[order]
+	# Now look for jumps
+	jumps = np.where((ts[1:]-ts[:-1] > ttol) & (types[1:]-types[:-1] < 0))[0]
+	# We will return the time corresponding to each gap
+	gap_times = np.array([ts[jumps], ts[jumps+1]]).T
+	return gap_times

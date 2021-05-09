@@ -737,7 +737,7 @@ def write_catalog_txt(ofile, cat):
 		cat.flux[:,1]*1e3, cat.dflux[:,1]*1e3,
 		cat.flux[:,2]*1e3, cat.dflux[:,2]*1e3,
 		cat.npix, cat.status,
-	]).T, fmt="%9.4f %9.4f %8.3f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %5d %2d",
+	]).T, fmt="%11.6f %11.6f %8.3f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %5d %2d",
 	header = "ra dec SNR Tamp dTamp Qamp dQamp Uamp dUamp Tflux dTflux Qflux dQflux Uflux dUflux npix status")
 
 def write_catalog_fits(ofile, cat):
