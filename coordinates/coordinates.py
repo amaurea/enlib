@@ -22,8 +22,18 @@ default_site = bunch.Bunch(
 	hum  = 0.2,
 	freq = 150.,
 	lapse= 0.0065,
+	# Tilt of the azimuth axis away from the ideal vertical. These are used in
+	# the tele<->hor transformation.
 	base_tilt =    0.0107693,
-	base_az   = -114.9733961)
+	base_az   = -114.9733961,
+	# Ad-hoc offsets in az and el as a function of azimuth.
+	# For example, azlope_daz = 0.05 would mean a 0.05 arcmin
+	# offset in az per degree of azimuth above azslope_az0.
+	# These apply *after* the baseline tilt
+	azslope_az0 = 0,
+	azslope_daz = 0,
+	azslope_del = 0,
+)
 
 def transform(from_sys, to_sys, coords, time=55500, site=None, pol=None, mag=None, bore=None):
 	"""Transforms coords[2,...] from system from_sys to system to_sys, where
@@ -236,10 +246,12 @@ def cel2hor(coord, time, site, copy=True):
 def tele2hor(coord, site, copy=True):
 	coord = np.array(coord, copy=copy)
 	coord = euler_rot([site.base_az*utils.degree, site.base_tilt*utils.degree, -site.base_az*utils.degree], coord)
+	coord = apply_azslope(coord, site, copy=False)
 	return coord
 
 def hor2tele(coord, site, copy=True):
 	coord = np.array(coord, copy=copy)
+	coord = unapply_azslope(coord, site, copy=False)
 	coord = euler_rot([site.base_az*utils.degree, -site.base_tilt*utils.degree, -site.base_az*utils.degree], coord)
 	return coord
 
@@ -361,6 +373,36 @@ def recenter(angs, center, restore=False, inverse=False):
 def decenter(angs, center, restore=False):
 	"""Recenter coordinates "angs" (as ra,dec) on the location given by "center" """
 	return recenter(angs, center, restore=restore, inverse=True)
+
+# az-dependent pointing offset. Used in tele<->hor if site demands it.
+# To go from azslope_x/y to azslope_az/el, we can use bore2tele(azslope_xy, [0,el])-[0,el]
+# Instead of putting the az slope into the pointing offset file, requireing a new pointing
+# offset format, I think it's cleaner to make it a separate file, which one can optionally
+# read in if one supports it. That way the pointing offsets can stay in the standard format.
+
+def apply_azslope(coord, site, copy=True):
+	if "azslope_az0" not in site: return coord
+	coord    = np.array(coord, copy=copy)
+	az0      = site.azslope_az0*utils.degree
+	daz      = utils.rewind(coord[0], ref=az0)-az0
+	coord[0] = daz*(1+site.azslope_daz*utils.arcmin/utils.degree*daz) + az0
+	coord[1]+= site.azslope_del*utils.arcmin/utils.degree*daz
+	return coord
+
+def unapply_azslope(coord, site, copy=True):
+	if "azslope_az0" not in site: return coord
+	coord    = np.array(coord, copy=copy)
+	az0      = site.azslope_az0*utils.degree
+	odaz     = utils.rewind(coord[0], ref=az0)-az0
+	# odaz = daz*(1+A*daz) => A*daz**2 + daz - odaz = 0
+	# => daz = (-1 + sqrt(1+4*A*odaz))/(2A)
+	A        = site.azslope_daz*utils.arcmin/utils.degree
+	if np.abs(A) > 1e-12: daz = ((4*A*odaz+1)**0.5-1)/(2*A)
+	else:                 daz = odaz
+	coord[0]  = daz + az0
+	coord[1] -= site.azslope_del*utils.arcmin/utils.degree*daz
+	return coord
+
 
 def nohor(sys): return sys if sys not in ["altaz","tele","bore"] else "icrs"
 def getsys(sys): return str2sys[sys.lower()] if isinstance(sys,basestring) else sys
