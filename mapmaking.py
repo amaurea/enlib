@@ -86,16 +86,17 @@ class Signal:
 
 class SignalMap(Signal):
 	def __init__(self, scans, area, comm, cuts=None, name="main", ofmt="{name}", output=True,
-			ext="fits", pmat_order=None, sys=None, nuisance=False, data=None, extra=[]):
+			ext="fits", pmat_order=None, sys=None, nuisance=False, data=None, extra=[], split=False):
 		Signal.__init__(self, name, ofmt, output, ext)
 		self.area = area
 		self.cuts = cuts
 		self.dof  = zipper.ArrayZipper(area, comm=comm)
 		self.dtype= area.dtype
+		self.split= split
 		if data is not None:
 			self.data = data
 		else:
-			self.data = {scan: pmat.PmatMap(scan, area, order=pmat_order, sys=sys, extra=extra) for scan in scans}
+			self.data = {scan: pmat.PmatMap(scan, area, order=pmat_order, sys=sys, extra=extra, split=scan.split if split else None) for scan in scans}
 	def forward(self, scan, tod, work, tmul=1, mmul=1):
 		if scan not in self.data: return
 		self.data[scan].forward(tod, work, tmul=tmul, mmul=mmul)
@@ -103,15 +104,20 @@ class SignalMap(Signal):
 		if scan not in self.data: return
 		self.data[scan].backward(tod, work, tmul=tmul, mmul=mmul)
 	def finish(self, m, work):
-		self.dof.comm.Allreduce(work, m)
+		if m.flags["C_CONTIGUOUS"]:
+			self.dof.comm.Allreduce(work, m)
+		else:
+			tmp = np.ascontiguousarray(m)
+			self.dof.comm.Allreduce(work, tmp)
+			m[:] = tmp
 	def zeros(self, mat=False):
 		shape = self.area.shape
-		if mat: shape = shape[:-2]+shape
+		if mat: shape = shape[:-2]+shape[-3:]
 		return enmap.zeros(shape, self.area.wcs, self.area.dtype)
-	def polinv(self, m): return array_ops.eigpow(m, -1, axes=[0,1], lim=config.get("eig_limit"), fallback="scalar")
+	def polinv(self, m): return array_ops.eigpow(m, -1, axes=[-4,-3], lim=config.get("eig_limit"), fallback="scalar")
 	def polmul(self, mat, m, inplace=False):
 		if not inplace: m = m.copy()
-		m[:] = array_ops.matmul(mat, m, axes=[0,1])
+		m[:] = array_ops.matmul(mat, m, axes=[-4,-3])
 		return m
 	def write(self, prefix, tag, m):
 		if not self.output: return
@@ -177,17 +183,17 @@ class SignalDmap(Signal):
 		geom = self.area.geometry
 		if mat:
 			geom = geom.copy()
-			geom.pre = geom.pre + geom.pre
+			geom.pre = geom.pre + geom.pre[-1:]
 		return dmap.zeros(geom)
 	def polinv(self, idiv):
 		odiv = idiv.copy()
 		for dtile in odiv.tiles:
-			dtile[:] = array_ops.eigpow(dtile, -1, axes=[0,1], lim=config.get("eig_limit"), fallback="scalar")
+			dtile[:] = array_ops.eigpow(dtile, -1, axes=[-4,-3], lim=config.get("eig_limit"), fallback="scalar")
 		return odiv
 	def polmul(self, mat, m, inplace=False):
 		if not inplace: m = m.copy()
 		for idtile, mtile in zip(mat.tiles, m.tiles):
-			mtile[:] = array_ops.matmul(idtile, mtile, axes=[0,1])
+			mtile[:] = array_ops.matmul(idtile, mtile, axes=[-4,-3])
 		return m
 	def work(self):  return self.area.geometry.build_work()
 	def write(self, prefix, tag, m):
@@ -503,10 +509,9 @@ class PreconMapBinned:
 		"""Binned preconditioner: (P'W"P)", where W" is a white
 		nosie approximation of N". If noise=False, instead computes
 		(P'P)". If hits=True, also computes a hitcount map."""
-		ncomp = signal.area.shape[0]
 		self.div = signal.zeros(mat=True)
 		calc_div_map(self.div, signal, scans, weights, noise=noise)
-		self.idiv = array_ops.eigpow(self.div, -1, axes=[0,1], lim=config.get("eig_limit"), fallback="scalar")
+		self.idiv = array_ops.eigpow(self.div, -1, axes=[-4,-3], lim=config.get("eig_limit"), fallback="scalar")
 		#self.idiv[:] = np.eye(3)[:,:,None,None]
 		if hits:
 			# Build hitcount map too
@@ -515,7 +520,7 @@ class PreconMapBinned:
 		else: self.hits = None
 		self.signal = signal
 	def __call__(self, m):
-		m[:] = array_ops.matmul(self.idiv, m, axes=[0,1])
+		m[:] = array_ops.matmul(self.idiv, m, axes=[-4,-3])
 	def write(self, prefix):
 		self.signal.write(prefix, "div", self.div)
 		if self.hits is not None:
@@ -530,7 +535,7 @@ class PreconDmapBinned:
 		calc_div_map(self.div, signal, scans, weights, noise=noise)
 		self.idiv = self.div.copy()
 		for dtile in self.idiv.tiles:
-			dtile[:] = array_ops.eigpow(dtile, -1, axes=[0,1], lim=config.get("eig_limit"), fallback="scalar")
+			dtile[:] = array_ops.eigpow(dtile, -1, axes=[-4,-3], lim=config.get("eig_limit"), fallback="scalar")
 		if hits:
 			# Build hitcount map too
 			self.hits = signal.area.copy()
@@ -539,7 +544,7 @@ class PreconDmapBinned:
 		self.signal = signal
 	def __call__(self, m):
 		for idtile, mtile in zip(self.idiv.tiles, m.tiles):
-			mtile[:] = array_ops.matmul(idtile, mtile, axes=[0,1])
+			mtile[:] = array_ops.matmul(idtile, mtile, axes=[-4,-3])
 	def write(self, prefix):
 		self.signal.write(prefix, "div", self.div)
 		if self.hits is not None:
@@ -548,13 +553,12 @@ class PreconDmapBinned:
 class PreconMapHitcount:
 	def __init__(self, signal, scans):
 		"""Hitcount preconditioner: (P'P)_TT."""
-		ncomp = signal.area.shape[0]
 		self.hits = signal.area.copy()
 		self.hits = calc_hits_map(self.hits, signal, scans)
 		self.ihits= 1.0/np.maximum(self.hits,1)
 		self.signal = signal
 	def __call__(self, m):
-		m *= self.ihits
+		m *= self.ihits[...,None,:,:]
 		#hits = np.maximum(self.hits, 1)
 		#m /= hits
 	def write(self, prefix):
@@ -569,7 +573,7 @@ class PreconDmapHitcount:
 	def __call__(self, m):
 		for htile, mtile in zip(self.hits.tiles, m.tiles):
 			htile = np.maximum(htile, 1)
-			mtile /= htile
+			mtile /= htile[...,None,:,:]
 	def write(self, prefix):
 		self.signal.write(prefix, "hits", self.hits)
 
@@ -693,12 +697,12 @@ def calc_div_map(div, signal, scans, weights, cuts=None, noise=True):
 	# actual computation of the junk sample preconditioner happens elsewhere.
 	# This is a bit redundant, but should not cost much time since this only happens
 	# in the beginning.
-	for i in range(div.shape[0]):
-		div[i,i] = 1
-		iwork = signal.prepare(div[i])
+	for i in range(div.shape[-4]):
+		div[...,i,i,:,:] = 1
+		iwork = signal.prepare(div[...,i,:,:,:])
 		owork = signal.prepare(signal.zeros())
 		prec_div_helper(signal, scans, weights, iwork, owork, cuts=cuts, noise=noise)
-		signal.finish(div[i], owork)
+		signal.finish(div[...,i,:,:,:], owork)
 
 def calc_crosslink_map(signal, scans, weights, cuts=None, noise=True):
 	saved_comps = [scan.comps.copy() for scan in scans]
@@ -808,7 +812,7 @@ def calc_hits_map(hits, signal, scans, cuts=None):
 		L.debug("hits %s %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
 	with bench.mark("hits_reduce"):
 		signal.finish(hits, work)
-	return hits[0].astype(np.int32)
+	return hits[...,0,:,:].astype(np.int32)
 
 ######## Priors ########
 

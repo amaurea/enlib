@@ -98,15 +98,15 @@ class Scan:
 		assert isinstance(sampslice,slice), "Sample part of slice must be slice object"
 		res = cpy.deepcopy(self)
 		# These will be passed to fortran, so make them contiguous
-		res.boresight = np.ascontiguousarray(utils.slice_downgrade(res.boresight, sampslice, axis=0))
+		res.boresight = np.ascontiguousarray(res.boresight[sampslice])
 		res.offsets   = np.ascontiguousarray(res.offsets[detslice])
 		res.comps     = np.ascontiguousarray(res.comps[detslice])
 		res.dets      = res.dets[detslice]
-		res.hwp       = np.ascontiguousarray(utils.slice_downgrade(res.hwp, sampslice, axis=0))
-		res.hwp_phase = np.ascontiguousarray(utils.slice_downgrade(res.hwp_phase, sampslice, axis=0))
+		res.hwp       = np.ascontiguousarray(res.hwp[sampslice])
+		res.hwp_phase = np.ascontiguousarray(res.hwp_phase[sampslice])
 		try:
 			# The whole scan stuff is horrible and should be redesigned
-			res.dark_tod = np.ascontiguousarray(utils.slice_downgrade(res.dark_tod, sampslice, axis=1))
+			res.dark_tod = slice_tod_samps(res.dark_tod, sampslice, method=config.get("downsample_method"))
 			res.dark_cut = res.dark_cut[sel]
 		except AttributeError as e: pass
 		try:
@@ -120,7 +120,7 @@ class Scan:
 		return res, detslice, sampslice
 	def __getitem__(self, sel):
 		res, detslice, sampslice = self.getitem_helper(sel)
-		res._tod = np.ascontiguousarray(utils.slice_downgrade(res._tod[detslice], sampslice, axis=-1))
+		res._tod = slice_tod_samps(res._tod, sampslice, method=config.get("downsample_method"))
 		return res
 	def resample(self, mapping):
 		res = cpy.deepcopy(self)
@@ -248,3 +248,12 @@ def resample_cut(cut, mapping):
 	# Widen cut because we had to round the cut indices
 	ocut = ocut.widen(1)
 	return ocut
+
+# Not sure where this belongs
+def slice_tod_samps(tod, sampslice, method="fft"):
+	srange = slice(sampslice.start, sampslice.stop, np.sign(sampslice.step) if sampslice.step else None)
+	tod = tod[:,srange]
+	# make sure we get exactly the same length the cuts will be expecting
+	step= np.abs(sampslice.step or 1)
+	olen= (tod.shape[1]+step-1)//step
+	return resample.resample(tod, float(olen)/tod.shape[1], method=method)

@@ -385,7 +385,7 @@ def apply_azslope(coord, site, copy=True):
 	coord    = np.array(coord, copy=copy)
 	az0      = site.azslope_az0*utils.degree
 	daz      = utils.rewind(coord[0], ref=az0)-az0
-	coord[0] = daz*(1+site.azslope_daz*utils.arcmin/utils.degree*daz) + az0
+	coord[0]+= site.azslope_daz*utils.arcmin/utils.degree*daz
 	coord[1]+= site.azslope_del*utils.arcmin/utils.degree*daz
 	return coord
 
@@ -394,11 +394,9 @@ def unapply_azslope(coord, site, copy=True):
 	coord    = np.array(coord, copy=copy)
 	az0      = site.azslope_az0*utils.degree
 	odaz     = utils.rewind(coord[0], ref=az0)-az0
-	# odaz = daz*(1+A*daz) => A*daz**2 + daz - odaz = 0
-	# => daz = (-1 + sqrt(1+4*A*odaz))/(2A)
+	# odaz = daz*(1+A) => daz = odaz/(1+A)
 	A        = site.azslope_daz*utils.arcmin/utils.degree
-	if np.abs(A) > 1e-12: daz = ((4*A*odaz+1)**0.5-1)/(2*A)
-	else:                 daz = odaz
+	daz      = odaz/(1+A)
 	coord[0]  = daz + az0
 	coord[1] -= site.azslope_del*utils.arcmin/utils.degree*daz
 	return coord
