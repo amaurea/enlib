@@ -441,16 +441,17 @@ class SignalSrcSamp(SignalCut):
 		cutrange = [0,0]
 		for scan in scans:
 			# Define our source samples
-			if srcs is None: srcs = scan.pointsrcs
-			srcparam = pointsrcs.src2param(srcs).astype(np.float64)
-			if amplim is not None:
-				srcparam = srcparam[srcparam[:,2]>amplim]
-			if rel: srcparam[:,2:5] /= srcparam[:,2,None]
-			psrc     = pmat.PmatPtsrc(scan, srcparam)
 			tod_mask = np.zeros([scan.ndet,scan.nsamp], bool)
 			tod      = np.zeros((scan.ndet,scan.nsamp), np.float32)
-			psrc.forward(tod, srcparam, tmul=0)
-			tod_mask |= tod > tol
+			if srcs is not None:
+				if srcs == "auto": srcs = scan.pointsrcs
+				srcparam = pointsrcs.src2param(srcs).astype(np.float64)
+				if amplim is not None:
+					srcparam = srcparam[srcparam[:,2]>amplim]
+				if rel: srcparam[:,2:5] /= srcparam[:,2,None]
+				psrc     = pmat.PmatPtsrc(scan, srcparam)
+				psrc.forward(tod, srcparam, tmul=0)
+				tod_mask |= tod > tol
 			if mask is not None:
 				pmap = pmat.PmatMap(scan, mask)
 				pmap.forward(tod, mask, tmul=0)
