@@ -79,12 +79,13 @@ contains
 		bore, hwp, det_pos, det_comps, &! Input pointing
 		rbox, nbox, yvals,             &! Interpolation grid
 		wbox, nphi,                    &! wbox({y,x},{from,to}) pixbox and sky wrap in pixels
-		times                          &! Benchmark times for each step.
+		times,                         &! Benchmark times for each step.
+		split                          &! Which sub-tod split to use. Activated using mmet=4. Send in length-1 dummy otherwise
 	)
 		use omp_lib
 		implicit none
 		! Parameters
-		integer(4), intent(in)    :: dir, nbox(:), wbox(:,:), nphi, pmet, mmet
+		integer(4), intent(in)    :: dir, nbox(:), wbox(:,:), nphi, pmet, mmet, split(:)
 		real(8),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
 		real(8),    intent(in)    :: det_comps(:,:)
 		real(_),    intent(in)    :: tmul, mmul
@@ -121,6 +122,7 @@ contains
 			case(0); call project_map_nearest (dir, tod(:,di), tmul, wmap, pix, phase)
 			case(1); call project_map_bilinear(dir, tod(:,di), tmul, wmap, pix, phase)
 			case(3); call project_map_bicubic (dir, tod(:,di), tmul, wmap, pix, phase)
+			case(4); call project_map_split   (dir, tod(:,di), tmul, wmap, pix, phase, split)
 			end select
 			deallocate(pix, phase)
 			tloc1 = omp_get_wtime()
@@ -141,11 +143,12 @@ contains
 		real(_),    intent(in)    :: map(:,:,:), mmul
 		real(_),    intent(inout), allocatable :: wmap(:,:,:)
 		integer(4), intent(inout), allocatable :: xmap(:)
-		integer(4) :: nwx, nwy, ix, iy, ox, oy, ic, pcut
+		integer(4) :: nwx, nwy, ix, iy, ox, oy, ic, pcut, ncomp
 		! Set up our work map based on the relevant subset of pixels.
 		nwy = wbox(1,2)-wbox(1,1)
 		nwx = wbox(2,2)-wbox(2,1)
-		allocate(wmap(3,nwx,nwy))
+		ncomp = size(map,3)
+		allocate(wmap(ncomp,nwx,nwy))
 		! Set up the pixel wrap remapper
 		allocate(xmap(nwx))
 		pcut = -(nphi-size(map,1))/2
@@ -162,7 +165,7 @@ contains
 			!$omp parallel do private(iy,ix,ic,oy)
 			do iy = 1, nwy
 				oy = max(1,min(size(map,2),iy+wbox(1,1)))
-				do ic = 1, size(map,3)
+				do ic = 1, ncomp
 					do ix = 1, nwx
 						wmap(ic,ix,iy) = map(xmap(ix),oy,ic)*mmul
 					end do
@@ -483,6 +486,62 @@ contains
 		end do
 	end subroutine
 
+	subroutine project_map_split( &
+		dir, tod, tmul, map, pix, phase, split)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, split(:)
+		real(8),    intent(in)    :: pix(:,:)
+		real(_),    intent(in)    :: tmul, phase(:,:)
+		real(_),    intent(inout) :: tod(:), map(:,:,:)
+		! Work
+		real(_)    :: v
+		integer(4) :: nsamp, si, ci, p(2), nproc, coff, co
+		nsamp = size(tod)
+		nproc = omp_get_num_threads()
+		if(dir > 0) then
+			! No clobber avoidance needed
+			do si = 1, nsamp
+				p = nint(pix(:,si))
+				! Skip all out-of-bounds pixels. Accumulating them at the edge is useless
+				if(p(1) .eq. 0) then
+					tod(si) = tod(si)*tmul
+					cycle
+				end if
+				coff = 3*split(si)
+				if(tmul .eq. 0) then
+					tod(si) = sum(map(1+coff:3+coff,p(2),p(1))*phase(1:3,si))
+				else
+					tod(si) = tod(si)*tmul + sum(map(1+coff:3+coff,p(2),p(1))*phase(1:3,si))
+				end if
+			end do
+		else
+			if(nproc > 1) then
+				do si = 1, nsamp
+					p = nint(pix(:,si))
+					if(p(1) .eq. 0) cycle ! skip OOB pixels
+					do ci = 1, 3
+						v  = (tod(si)*tmul)*phase(ci,si)
+						co = ci+3*split(si)
+						!$omp atomic
+						map(co,p(2),p(1)) = map(co,p(2),p(1)) + v
+					end do
+				end do
+			else
+				! Avoid slowing down single-proc case with atomics
+				do si = 1, nsamp
+					p = nint(pix(:,si))
+					if(p(1) .eq. 0) cycle ! skip OOB pixels
+					do ci = 1, 3
+						v  = (tod(si)*tmul)*phase(ci,si)
+						co = ci+3*split(si)
+						map(co,p(2),p(1)) = map(co,p(2),p(1)) + v
+					end do
+				end do
+			end if
+		end if
+	end subroutine
 
 	!!!! Precomputed integer-pixel shifted polynomial !!!!
 

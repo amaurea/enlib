@@ -4,6 +4,11 @@
 // I thought this was standard in math.h, but apparently it's optional
 #define M_PI 3.14159265358979323846
 
+// This takes us from sun-centered coodinates at the reference time to
+// normal celestial coordinates. That might seem the wrong way to go
+// when stacking, but the stacking part below starts from the output map
+// pixels (which should be sun-centered) and needs to find the input map pixels
+// (which are normal coordinates), so this works.
 inline void displace_pos(double dec, double ra, double * earth_pos, double r, double dy, double dx, double * odec, double * ora)
 {
 	double cdec = cos(dec);
@@ -33,7 +38,7 @@ inline void displace_pos(double dec, double ra, double * earth_pos, double r, do
 #define bgroup 2
 void displace_map_blocks_avx_omp(float * imap, float * omap, int ny, int nx, double dec0, double ddec, double ra0, double dra, double * earth_pos, double r, double dy, double dx) {
 	int btot = bs*bgroup;
-	int nphi = abs((int)round(2*M_PI/dra));
+	int nphi = (int)fabs(round(2*M_PI/dra));
 	// Loop over groups of 8x8 blocks
 	#pragma omp parallel for
 	for(int gy1 = 0; gy1 < ny; gy1+=btot) {
@@ -136,7 +141,7 @@ void solve_plain(float * frhs, float * kmap, float * osigma, int ny, int nx, flo
 	}
 }
 
-void update_total_plain(float * sigma, float * sigma_max, float * param_max, int * hit_tot, float * kmap, int ny, int nx, float r, float vy, float vx) {
+void update_total_plain(float * sigma, float * sigma_max, float * param_max, int * hit_tot, float * frhs, float * kmap, int ny, int nx, float r, float vy, float vx) {
 	#pragma omp parallel for
 	for(int y = 0; y < ny; y++)
 	for(int x = 0; x < nx; x++) {
@@ -146,10 +151,24 @@ void update_total_plain(float * sigma, float * sigma_max, float * param_max, int
 			param_max[i] = r;
 			param_max[i+ny*nx*1] = vy;
 			param_max[i+ny*nx*2] = vx;
-			param_max[i+ny*nx*3] = kmap[i];
+			param_max[i+ny*nx*3] = frhs[i];
+			param_max[i+ny*nx*4] = kmap[i];
 		}
 		if(sigma[i] != 0)
 			hit_tot[i]++;
+	}
+}
+
+void merge_param_maps_plain(float * params_in, float * sigma, float * params_max, float * sigma_max, int ny, int nx, int np) {
+	#pragma omp parallel for
+	for(int y = 0; y < ny; y++)
+	for(int x = 0; x < nx; x++) {
+		int i = y*nx+x;
+		if(sigma[i] > sigma_max[i]) {
+			sigma_max[i] = sigma[i];
+			for(int j = 0; j < np; j++)
+				params_max[ny*nx*j+i] = params_in[ny*nx*j+i];
+		}
 	}
 }
 

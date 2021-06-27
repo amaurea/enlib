@@ -3,12 +3,14 @@ import numpy as np, time, os, sys, healpy
 from . import utils
 with utils.nowarn(): import h5py
 from scipy import ndimage, stats, spatial, integrate, optimize
-from . import enmap, utils, mpi, curvedsky, bunch, parallax, cython, ephemeris, statdist, interpol
+from . import enmap, utils, curvedsky, bunch, parallax, cython, ephemeris, statdist, interpol
 from . import nmat, pmat, sampcut, fft
-from pixell import sharp
+from pixell import sharp, wcsutils
 
 try: basestring
 except: basestring = str
+
+ym   = utils.arcmin/utils.yr2days
 
 def displace_pos(pos, earth_pos, r, off):
 	dec, ra = np.array(pos)
@@ -38,6 +40,48 @@ def add_delta(map, fpix, amp=1, r=32):
 def calc_beam_area(beam_profile):
 	r, b = beam_profile
 	return integrate.simps(2*np.pi*r*b,r)
+
+def p9_like(ra, dec, r=None, vy=None, vx=None, posonly=False, rmin=280, rmax=2000, emax=0.55,
+		mininc=10*utils.degree, maxinc=30*utils.degree, dv=0.1*ym):
+	"""Return whether a set of p9 parameters roughly match the p9
+	hypothesis. Ideally we would do this test directly in terms of
+	orbital elements, but for now we will just impose the simple
+	criteria that the position shouldn't be further than the
+	inclination from the ecliptic, and that the velocity should be
+	roughly aligned with the ecliptic."""
+	# Transform to ecliptic coordinates
+	l,  b  = coordinates.transform("cel", "ecl", [ra,dec])
+	if posonly: return np.abs(b) <= maxinc
+	l2, b2 = coordinates.transform("cel", "ecl", [ra+vx/np.cos(dec),dec+vy])
+	vl, vb = l2-l, b2-b
+	good   = np.abs(b) <= maxinc
+	# The object moves in a sine wave b(l) = inc*cos(l+phi). The velocity is
+	# db/dt = A*sin(l+phi)*dl/dt => db/dl = inc*sin(l+phi)
+	# We also see that b**2 + (db/dl)**2 = inc**2. This is a strictly more
+	# powerful bound, so we don't need to restrict db/dl by itself.
+	with utils.nowarn():
+		vb_safe = np.maximum(0,np.abs(vb)-dv/2)
+		vl_safe = np.maximum(0,np.abs(vl)-dv/2)
+		inc = (b**2 + (vb_safe/vl_safe)**2)**0.5
+		inc[np.isnan(inc)] = 0
+		good  &= (inc >= mininc) & (inc <= maxinc)
+	del inc
+	# We can also place bounds on the distance and velocity
+	good  &= (r >= rmin) & (r <= rmax)
+	# An object with some semimajor axis a and eccentricity e will move
+	# between r = a*(1-e) and r = a*(1+e). The angular velocity is
+	# |v| = 360*60 * [(a/au)*(1-e**2)]**0.5 / (r/au)**2   arcmin/year
+	# If we just know r, then the highest possible speed we could have
+	# is if e and a are maximal and we are at perihelion: a = r/(1-emax),
+	# and the lowest possible speed is if they are still maximal but we
+	# are at aphelion: a = r/(1+emax)
+	def calc_v(r,a,e): return 360*60 * (a*(1-e**2))**0.5 / r**2 * ym
+	vmin  = calc_v(r, r/(1+emax), emax)
+	vmax  = calc_v(r, r/(1-emax), emax)
+	v2    = vy**2+vx**2
+	good &= (v2 >= vmin**2) & (v2 <= vmax**2)
+	del v2
+	return good
 
 #def cut_source_groups(srcs, rlim=2*utils.arcmin):
 #	"""Handling very nearby point sources requires joint fitting, which is
@@ -216,7 +260,7 @@ def hget(fname):
 	res = bunch.Bunch()
 	with h5py.File(fname, "r") as hfile:
 		for key in hfile:
-			res[key] = hfile[key].value
+			res[key] = hfile[key][()]
 	return res
 
 def hput(fname, info):
@@ -225,6 +269,7 @@ def hput(fname, info):
 			hfile[key] = info[key]
 
 def get_pixsizemap_cyl(shape, wcs):
+	# This function can be replaced by enmap.pixsizemap(shape, wcs, broadcastable=True)
 	# ra step is constant for cylindrical projections
 	dra  = np.abs(wcs.wcs.cdelt[0])*utils.degree
 	# get the dec for all the pixel edges
@@ -244,24 +289,15 @@ def get_lbeam_exact(r, br, lmax, tol=1e-10):
 def get_lbeam_flat(r, br, shape, wcs):
 	"""Given a 1d beam br(r), compute the 2d beam transform bl(ly,lx) for
 	the l-space of the map with the given shape, wcs, assuming a flat sky"""
-	cpix = np.array(shape[-2:])//2-1
-	cpos = enmap.pix2sky(shape, wcs, cpix)
-	rmap = enmap.shift(enmap.modrmap(shape, wcs, cpos), -cpix)
-	bmap = enmap.ndmap(np.interp(rmap, r, br, right=0), wcs)
-	return enmap.fft(bmap)
-
-class RmatOld:
-	def __init__(self, shape, wcs, beam_profile, rfact, lmax=20e3, pow=1):
-		self.pixarea = get_pixsizemap_cyl(shape, wcs)
-		self.bl      = healpy.sphtfunc.beam2bl(beam_profile[1]**pow, beam_profile[0], lmax)
-		# We don't really need to factorize out the beam area like this
-		self.barea   = self.bl[0]
-		self.bl     /= self.barea
-		self.rfact   = rfact
-		self.pow     = pow
-	def apply(self, map):
-		rmap = apply_beam((self.rfact**self.pow * self.barea/self.pixarea) * map, self.bl)
-		return rmap
+	cpix   = np.array(shape[-2:])//2-1
+	cpos   = enmap.pix2sky(shape, wcs, cpix)
+	rmap   = enmap.shift(enmap.modrmap(shape, wcs, cpos), -cpix)
+	bmap   = enmap.ndmap(np.interp(rmap, r, br, right=0), wcs)
+	# Normalize the beam so that l=0 corresponds to the sky mean of the beam,
+	# like it is for get_lbeam_exact
+	lbeam  = enmap.fft(bmap, normalize=False).real
+	lbeam *= lbeam.pixsize()
+	return lbeam
 
 class Rmat:
 	# Rmat represents a linear operator that takes us from pixel delta function
@@ -290,19 +326,196 @@ class Rmat:
 	# 5. For the beam2bl case, the convolution is
 	#    convolve(kmap1d,imap) = ifft(beam2bl(kmap1d)*fft(imap)).real / pix_area
 	#    so again fract is the only factor that's part of the beam and needs squaring
-	# 6. What I had is equivalent to this, but with the factors spread out between two
-	#    different functions. So R is already correct.
-	def __init__(self, shape, wcs, beam_profile, rfact, lmax=20e3, pow=1, max_distortion=0.1):
+	def __init__(self, shape, wcs, beam_profile, rfact, lmax=20e3, lknee1=0, alpha1=-5, lknee2=0, alpha2=-10,
+			pow=1, max_distortion=0.1):
+		beam_profile = np.array(beam_profile)
+		beam_profile[1] = (beam_profile[1]*rfact)**pow
+		self.beam    = Beam(shape, wcs, beam_profile, lmax=lmax, max_distortion=max_distortion)
 		self.pixarea = get_pixsizemap_cyl(shape, wcs)
-		self.r       = beam_profile[0]
-		self.rbeam   = (beam_profile[1]*rfact)**pow
-		self.flat    = get_distortion(shape, wcs) < max_distortion
-		# get_lbeam_exact uses beam2bl from healpix, which is very slow, so avoid it if possible
-		if self.flat: self.lbeam = get_lbeam_flat (self.r, self.rbeam, shape, wcs)
-		else:         self.lbeam = get_lbeam_exact(self.r, self.rbeam, lmax)
+		# Allow extra filtering with a butterworth filter. Ideally this wouldn't be necessary, but
+		# the map-maker noise model underestimates the low-l correlated noise significantly, so
+		# we need this extra filtering to avoid leaking through too much atmospheric noise.
+		# At the same time, estimate what fraction q of the remaining signal (after N" and B) this removes.
+		#
+		# Normally we have flux = mean(beam*rhs)/kmap having the right units.
+		# Now we apply the extra filter Fatm, getting flux' = mean(beam*Fatm*rhs)/kmap
+		# kmap cancels. rhs approx beam*Falready*mean_div. This gives us
+		# flux = mean(beam**2*Falready*mean_div), flux' = mean(beam**2*Fatm*Falready*mean_div)
+		# Hence flux'/flux approx mean(beam**2*Fatm*Falready)/mean(beam**2*Falready)
+		# (since mean_div is just a number).
+		if lknee1 > 0:
+			l, lbeam, nmode = self.beam.l, self.beam.lbeam, self.beam.nmode
+			Fatm     = butterworth(l, lknee1, alpha1)
+			Falready = butterworth(l, lknee2, alpha2)**0.5
+			self.q   = np.mean(Fatm*lbeam**2*Falready*nmode)/np.mean(lbeam**2*Falready*nmode)
+			self.beam.lbeam *= Fatm
+		else: self.q = 1.0
 	def apply(self, map):
-		if self.flat: return enmap.ifft(self.lbeam*enmap.fft(map)).real*map.npix**0.5
-		else:         return apply_beam_sht(map, self.lbeam)/self.pixarea
+		# The pixarea thing takes us from mean-normalization to peak normalization
+		return (self.beam.apply(map)/self.pixarea).astype(map.dtype)
+
+# It would be nice to split up the FFT/SHT and beam functionality of this class
+class Beam:
+	def __init__(self, shape, wcs, beam_profile, flat="auto", lmax=20e3, max_distortion=0.1):
+		self.r       = beam_profile[0]
+		self.rbeam   = beam_profile[1]
+		self.flat    = flat
+		if self.flat == "auto":
+			self.flat = get_distortion(shape, wcs) < max_distortion
+		self.lmax    = utils.nint(lmax)
+		# get_lbeam_exact uses beam2bl from healpix, which is very slow, so avoid it if possible
+		if self.flat:
+			self.lbeam = get_lbeam_flat (self.r, self.rbeam, shape, wcs)
+			self.l     = self.lbeam.modlmap()
+			self.nmode = 1
+		else:
+			self.lbeam = get_lbeam_exact(self.r, self.rbeam, self.lmax)
+			self.l     = np.arange(self.lbeam.size)
+			self.nmode = 2*self.l+1
+	def apply(self, map, lfilter=None):
+		"""If called as beam.apply(map), will return map convolved with the beam.
+		What to convolve with can be overridden using the lfilter argument. The default
+		corresponds to beam.apply(map, beam.lbeam). lfilter should correspond to the
+		multipoles in beam.l, which can be either 2d or 1d depending on whether self.flat
+		is True or False."""
+		if lfilter is None: lfilter = self.lbeam
+		if self.flat: return enmap.ifft(lfilter*enmap.fft(map)).real.astype(map.dtype)
+		else:         return apply_beam_sht(map, lfilter).astype(map.dtype)
+
+def butterworth(l, lknee, alpha):
+	with utils.nowarn():
+		return 1/(1 + (l/lknee)**alpha)
+
+def get_rough_powspec(map, mask, tsize=240, ntile=32, hit_tol=0.5):
+	"""Estimate a quick and dirty power spectrum from map. This should be fast no matter
+	how big the map is. It works by selecting only a limited number of randomly chosen
+	tiles from a map, and returns their mean spectrum"""
+	dl     = utils.nint(360/np.min(np.abs(map.wcs.wcs.cdelt))/tsize)
+	ny, nx = np.array(map.shape[-2:])//tsize
+	inds   = [(ty,tx) for ty in range(ny) for tx in range(nx)]
+	np.random.shuffle(inds)
+	specs, ls = [], []
+	nbin   = np.inf
+	for ty, tx in inds:
+		y1, y2 = ty*tsize, (ty+1)*tsize
+		x1, x2 = tx*tsize, (tx+1)*tsize
+		submask = mask[y1:y2,x1:x2]
+		submap  = map[...,y1:y2,x1:x2]
+		if np.mean(submask) < hit_tol: continue
+		ps2d    = np.abs(enmap.fft(submap))**2
+		spec, l = ps2d.lbin(bsize=dl)
+		specs.append(spec)
+		ls.append(l)
+		nbin = min(nbin, l.size)
+		if len(specs) > ntile: break
+	if len(specs) == 0:
+		raise ValueError("Can't estimate spectrum of overly masked map")
+	specs = np.mean([spec[:nbin] for spec in specs],0)
+	ls    = ls[0][:nbin]
+	return specs, ls
+
+def estimate_lknee(ps, l, lknee0=1000, alpha=-4):
+	"""Estimate lknee from the power spectrum ps, which is sampled at the given ls"""
+	# We might have a falling part at the left due to convergence etc. So restrict the
+	# fit to starting from the peak
+	i1 = np.argmax(ps)
+	ps2, l2 = ps[i1:], l[i1:]
+	# We will do the fit in log space
+	ps2 = np.log(ps2)
+	def calc_chisq(lknee):
+		if lknee <= 0: return np.inf
+		template = np.log(1+(np.maximum(l2,1)/lknee)**alpha)
+		# Solve for the white noise level
+		w = np.mean(ps2-template)
+		model = template+w
+		# Now that we have the model we can compute the chisquare
+		chisq = np.sum((ps2-model)**2)
+		#print("%8.2f %15.7e %15.7e" % (lknee, w, chisq))
+		return chisq
+	lknee = optimize.fmin_powell(calc_chisq, lknee0, disp=False)
+	return lknee
+
+def fit_double_butterworth(ps, l, lknee1=4000, alpha1=-5, lknee2=2000, alpha2=-10, lmin=1, verbose=False):
+	"""Fit the function A/butter(l,l1,a1)*butter(l,l2,a2) to ps, where butter(l,lknee,alpha)
+	= (1+(l/lknee)**alpha)**-1. Here the first butter could represent the rise of atmospheric
+	noise, while the second one could represent the map-maker transfer function from stopping
+	CG early."""
+	# Cut out any too small values of l in the fit. These will lead to division by zero
+	ps, l = ps[l>=lmin], l[l>=lmin]
+	# Let the weight include a part that depends on the values themselves, to make the fit
+	# more robust to large magnitude differences.
+	weight = 1/(ps + np.median(ps))**2
+	def butter(l,lknee,alpha): return 1/(1+(l/lknee)**alpha)
+	def calc_chisq(x):
+		l1, a1, l2, a2 = x
+		# Would have returned np.inf, but that makes it print a noisy warning
+		if l1 <= 0 or l2 <= 0 or a1 < -50 or a2 < -50 or a1 > 0 or a2 > 0: return 1e200
+		template = butter(l,l2,a2)/butter(l,l1,a1)
+		# Solve for the white noise level
+		A     = np.sum(ps*weight*template)/np.sum(template**2*weight)
+		model = A*template
+		chisq = np.sum((ps-model)**2*weight)
+		if verbose:
+			print("%8.2f %8.3f %8.2f %8.3f %15.7e %15.7e" % (l1, a1, l2, a2, A, chisq))
+		return chisq
+	l1, a1, l2, a2 = optimize.fmin_powell(calc_chisq, [lknee1,alpha1,lknee2,alpha2], disp=False)
+	template = butter(l,l2,a2)/butter(l,l1,a1)
+	A        = np.sum(ps*weight*template)/np.sum(template**2*weight)
+	return bunch.Bunch(lknee1=l1, alpha1=a1, lknee2=l2, alpha2=a2, A=A)
+
+def setup_noise_fit(rhs, args_lknee=None, dirpath=None, disable=False, dump=False):
+	"""Helper funciton. Here to avoid code repetition in tenki/planet9.py, not because
+	it's a useful function in general"""
+	if disable:
+		return bunch.Bunch(lknee1=0, alpha1=-5, lknee2=0, alpha2=-10, A=1)
+	if args_lknee is not None:
+		try:
+			lknee = float(args_lknee)
+			return bunch.Bunch(lknee1=lknee, alpha1=-5, lknee2=lknee/2, alpha2=-10, A=1)
+		except ValueError:
+			rhs    = enmap.read_map(args_lknee + "/" + dirpath.split("/")[-1] + "/rhs.fits")
+	try:
+		ps, ls = get_rough_powspec(rhs, rhs != 0)
+		fit    = fit_double_butterworth(ps, ls)
+		if dump:
+			model  = fit.A*butterworth(ls, fit.lknee2, fit.alpha2)/butterworth(ls+1e-9, fit.lknee1, fit.alpha1)
+			np.savetxt(dirpath + "/test_spec.txt", np.array([ls,ps,model]).T, fmt="%15.7e",
+					header="l1 %8.2f a1 %8.3f l2 %8.2f a2 %8.3f A %15.7e" % (
+						fit.lknee1, fit.alpha1, fit.lknee2, fit.alpha2, fit.A))
+		return fit
+	except ValueError:
+		return bunch.Bunch(lknee1=3000, alpha1=-5, lknee2=1500, alpha2=-10, A=1)
+
+def get_normalization(frhs, kmap, res=240, hitlim=0.5):
+	"""Compute the factor kmap must be multiplied with such that
+	sigma = frhs/kmap**0.5 has a standard deviation of 1. Unlike
+	get_smooth_normalization we only return a single number, not
+	a position-dependent normalization.
+
+	We do this by splitting the map into regions, cutting regions
+	that aren't sufficiently hit, computing the standard deviation
+	in each of the rest and using the median of these to compute
+	the result. The median is used to make us more robust to
+	outliers due to e.g. signal-dominated regions."""
+	ny, nx = np.array(frhs.shape[-2:])//res
+	mask   = kmap > np.max(kmap)*1e-4
+	r2block = frhs[:ny*res,:nx*res].reshape(ny,res,nx,res)**2
+	kblock  = kmap[:ny*res,:nx*res].reshape(ny,res,nx,res)
+	mblock  = mask[:ny*res,:nx*res].reshape(ny,res,nx,res)
+	# We want to solve for the the factor a such that r2block = a*kblock.
+	# This is a = sum(kblock*r2block)/sum(kblock**2)
+	with utils.nowarn():
+		avals = np.sum(kblock*r2block,(1,3))/np.sum(kblock**2,(1,3))
+	hitfrac = np.mean(mblock,(1,3))
+	good    = hitfrac >= hitlim
+	if np.sum(good) > 0:
+		# Get the median of the acceptable avals
+		avals   = avals[hitfrac >= hitlim]
+		a       = np.median(avals)
+	else:
+		# Hm, nothing was hit enough. If so, just do a single overall mean
+		a = np.sum(kblock*r2block)/np.sum(kblock**2)
+	return a
 
 def get_smooth_normalization(frhs, kmap, res=120, tol=2, bsize=1200):
 	"""Split into cells of size res*res. For each cell,
@@ -349,7 +562,8 @@ def get_smooth_normalization(frhs, kmap, res=120, tol=2, bsize=1200):
 	return norm_full
 
 def grow_mask(mask, n):
-	return ndimage.distance_transform_edt(~mask) <= n
+	"""Grow positive-bad mask by n pixels"""
+	return enmap.samewcs(ndimage.distance_transform_edt(~mask) <= n, mask)
 
 def solve(rhs, kmap, return_mask=False):
 	with utils.nowarn():
@@ -375,70 +589,39 @@ def solve(rhs, kmap, return_mask=False):
 #def group_neighbors(mjds, tol=1):
 #	return utils.find_equal_groups(mjds, tol)
 
-def find_candidates(sigma, params, snmin=5, pad=0):
+def find_candidates(sigma, params, hitmap=None, snmin=5, pad=0):
 	sigma, params = unpad(sigma, pad), unpad(params, pad)
+	if hitmap is not None: hitmap = unpad(hitmap, pad)
 	try: snmin = unpad(snmin, pad)
 	except: pass
 	labels, nlabel = ndimage.label(sigma >= snmin)
-	if nlabel < 1: return np.zeros([0,8])
+	if nlabel < 1: return np.zeros([0,11])
 	active = np.arange(1,nlabel+1)
 	pixs   = np.array(ndimage.maximum_position(sigma, labels, active)).T
 	sig    = sigma[pixs[0],pixs[1]]
-	r, vy, vx, ivar = params[:,pixs[0],pixs[1]]
+	r, vy, vx, rhs, ivar = params[:,pixs[0],pixs[1]]
+	if hitmap is not None:
+		hits   = hitmap[pixs[0],pixs[1]]
+	else:
+		hits   = r*0
 	damp   = ivar**-0.5
-	amp    = sig*damp
+	amp    = rhs/ivar
 	poss   = sigma.pix2sky(pixs)
-	res    = np.array([poss[0],poss[1],sig,amp,damp,r,vy,vx]).T
+	res    = np.array([poss[0],poss[1],sig,amp,damp,r,vy,vx,hits,rhs,ivar]).T
 	return res
 
-def get_maxgauss_quantile(mean, nsigma):
-	n =  statdist.maxgauss_n(mean)
-	# Could have used +sigma and maxgauss_quant, but that would have more numerical issues
-	p =  stats.norm.cdf(-nsigma)
-	q = -statdist.mingauss_quant(p, n)
-	return q
-
-def fit_tail_gauss(data, fmin=0, fmax=3, vmin=-10, vmax=10, dv=0.05, rel_tol=0.1, abs_tol=1e-3, minhit=10,minsamp=0):
-	default_params = [1,0,1]
-	data = np.asarray(data).reshape(-1)
-	nbin = int((vmax-vmin)/dv)
-	pix  = np.maximum(0,np.minimum(nbin-1,((data-vmin)/dv).astype(int)))
-	hist = np.bincount(pix, minlength=nbin).astype(float)
-	# The edges can accumulate samples. Get rid of them
-	hist[0] = hist[-1] = 0
-	norm = np.max(hist)
-	if norm == 0 or data.size < minsamp: return default_params
-	hist /= norm
-	# Extract the tail we will do the fit on
-	maxpos  = np.argmax(hist)
-	imin    = maxpos + utils.nint(fmin/dv)
-	imax    = maxpos + utils.nint(fmax/dv)+1
-	nhit = np.sum(hist[imin:imax]>0)
-	if nhit < minhit: return default_params
-	default_params[1] = vmin + maxpos*dv
-	# Set up our errors. We have a term that's proportional to hist itself
-	# both because higher errors there are expected due to poisson errors
-	# (though these would go as sqrt), and because we want to avoid having
-	# the top dominate the fit. We also have a fixed term to avoid having
-	# empty bins at high values get infinite significance.
-	dhist = hist*rel_tol + abs_tol
-	x = (np.arange(nbin)+0.5)*dv+vmin
-	def calc_chisq(params):
-		A, mu, sigma = params
-		model = A*np.exp(-0.5*((x-mu)/sigma)**2)
-		chisq = np.sum(((hist-model)/dhist)**2)
-		return chisq
-	A, mu, sigma = optimize.fmin_powell(calc_chisq, default_params, disp=False)
-	sigma = np.abs(sigma)
-	return A, mu, sigma
-
-def build_dist_map(sigma_max, mask=None, bsize=120, maskval=0):
-	# Build a [mu,sigma] map approximating the statistical properties of the
-	# nois across the map. Done by fitting a gaussian to the upper side of
-	# the values in each tile.
-	shape  = np.array(sigma_max.shape[-2:])
+def build_mu_sigma_map(imap, mask=None, bsize=(30,240), maskval=0, default=(2, 1)):
+	"""Estimate the mean (mu) and standard deviation (sigma) as a function of position
+	of the input map (imap). Returns mu, sigma. These can be used to normalize the
+	input map as such: (imap-mu)/sigma.
+	
+	This is the first step in normalizing the
+	planet 9 search detection distribution, but it is not enough by itself due to
+	the non-gaussianity of that distribution."""
+	shape  = np.array(imap.shape[-2:])
+	bsize  = np.zeros(2,int)+bsize
 	if mask is None:
-		if maskval is not None: mask = sigma_max != maskval
+		if maskval is not None: mask = imap != maskval
 		else:                   mask = np.full(shape, True, bool)
 	nblock = (shape+bsize-1)//bsize
 	by, bx = (shape+nblock-1)//nblock
@@ -446,25 +629,66 @@ def build_dist_map(sigma_max, mask=None, bsize=120, maskval=0):
 	params = []
 	for y in range(0, shape[0], by):
 		for x in range(0, shape[1], bx):
-			subs, subm = sigma_max[y:y+by,x:x+bx], mask[y:y+by,x:x+bx]
-			A, mu, sigma = fit_tail_gauss(subs[subm], minsamp=1000)
-			params.append([A,mu,sigma])
+			subs, subm = imap[y:y+by,x:x+bx], mask[y:y+by,x:x+bx]
+			vals = subs[subm]
+			if vals.size < 4000: params.append([0,1])
+			else: params.append([np.mean(vals), np.std(vals)])
+	omap = enmap.zeros((2,)+imap.shape[-2:], imap.wcs, imap.dtype)
 	# Replace bad fits with typical values
 	params = np.array(params)
-	bad    = (params[:,1] == 0)|(params[:,0]<0.5)
+	bad    = params[:,0] == 0
 	ngood  = len(params)-np.sum(bad)
 	if ngood == 0:
-		return sigma_max.copy()
-	refpar = np.median(params[~bad,:],0)
-	params[bad,:] = refpar
-	omap = enmap.zeros((2,)+sigma_max.shape[-2:], sigma_max.wcs, sigma_max.dtype)
-	# Then loop through and insert them into snmin
-	i = 0
-	for y in range(0, shape[0], by):
-		for x in range(0, shape[1], bx):
-			omap[:,y:y+by,x:x+bx] = params[i,1:,None,None]
-			i += 1
-	return omap
+		# use default value if we couldn't measure anything at all.
+		# A mean of 2 and dev of 1/3 is typical. We use (2,1) here to be conservative.
+		omap[0] = default[0]
+		omap[1] = default[1]
+	else:
+		refpar = np.median(params[~bad,:],0)
+		params[bad,:] = refpar
+		# Then loop through and insert them into omap
+		i = 0
+		for y in range(0, shape[0], by):
+			for x in range(0, shape[1], bx):
+				omap[:,y:y+by,x:x+bx] = params[i,:,None,None]
+				i += 1
+	return omap # [{mu,sigma},ny,nx]
+
+def find_sf_correction(snmap, mask=None, ref_res=2*utils.arcmin, sncut=1, pmax_fit=0.1, nmin=100, icut=50):
+	"""Given a S/N map, such as the one one gets by applying build_mu_sigma_map to a raw S/N map,
+	find the transformation sn -> (sn-mu)/sigma one must apply such that the high-SN tail of the
+	CDF matches that of a normal distribution."""
+	from scipy.special import erf, erfinv
+	if mask is None: mask = snmap != 0
+	else: snmap = snmap * mask
+	# Here's how the fit will work:
+	# 1. find the peaks
+	labels, n = ndimage.label(snmap > sncut)
+	sn  = ndimage.maximum(snmap, labels, np.arange(n)+1)
+	# 2. build their empirical distribution function
+	sn  = np.sort(sn)[::-1]
+	sf  = np.arange(n)+1
+	# 3. Given the area we cover we can figure out what sn *should* be
+	# to match the sf we actually observe for that value. This gives us
+	# a correction: sn_corr = inv_sf_theory(sf_empirical(sn)).
+	# sf_theory = ndof * 0.5*(1+erf(-x/2**0.5)), so
+	# inv_sf_theory = -inv_erf(x*2/ndof-1)*2**0.5
+	area = np.sum(mask.pixsizemap()*mask)
+	ndof = utils.nint(area/ref_res**2)
+	def find(a, v): return np.searchsorted(a, v)
+	def inv_sf_theory(x): return -2**0.5 * erfinv(x*2/ndof-1)
+	imin = min(utils.nint(n*pmax_fit), ndof) # skip values too close to peak or too big for inverse
+	if imin-icut < nmin: return 0, 1
+	sn, sf = sn[icut:imin], sf[icut:imin]
+	targ_sn = inv_sf_theory(sf)
+	# 4. Fit a linear model to sn: sn = targ_sn*sigma+mu
+	P   = np.array([targ_sn,targ_sn*0+1])
+	rhs = P.dot(sn)
+	div = P.dot(P.T)
+	mu, sigma = np.linalg.solve(div, rhs)[::-1]
+	# Ok, we're done. Using this we can go from the observed sn to a more gaussian sn
+	# via sn -> (sn-mu)/sigma.
+	return mu, sigma
 
 def unpad(map, pad): return map[...,pad:map.shape[-2]-pad,pad:map.shape[-1]-pad]
 
@@ -534,6 +758,110 @@ def cut_asteroids_scan(scan, asteroids, r=3*utils.arcmin):
 		scan.cut *= actcuts.avoidance_cut(bore, scan.offsets[:,1:], scan.site, apos, r)
 		t2 = time.time()
 	return scan
+
+def build_planet_mask(shape, wcs, planets, mjds, r=50*utils.arcmin):
+	"""Build a mask with the geometry shape, wcs for the given list of planet names,
+	masking all pixels hit by any of the planets for the given set of mjds, up to a radius
+	of r"""
+	mask = enmap.zeros(shape, wcs, bool)
+	mjds = np.asarray(mjds)
+	for pi, pname in enumerate(planets):
+		# Get the coordinates for each mjd
+		poss   = ephemeris.ephem_raw(pname, mjds)[1::-1].T
+		pboxes = enmap.neighborhood_pixboxes(shape, wcs, poss, r)
+		for i, pbox in enumerate(pboxes):
+			submap = mask.extract_pixbox(pbox)
+			submap = submap.modrmap(poss[i])<=r
+			mask.insert_at(pbox, submap, op=np.ndarray.__ior__)
+	return mask
+
+def overlaps(pbox1, pbox2, nphi=0):
+	return len(utils.sbox_intersect(np.array(pbox1).T,np.array(pbox2).T,wrap=[0,nphi])) > 0
+
+# Get the pixel bounding box of each input map in terms of our output area
+def read_pboxes(idirs, wcs, inames=None, comm=None, verbose=False):
+	if comm is None:
+		from . import mpi
+		comm = mpi.COMM_SELF
+	pboxes = np.zeros((len(idirs),2,2),int)
+	for ind in range(comm.rank, len(idirs), comm.size):
+		name = inames[ind] if inames is not None else idirs[ind]
+		if verbose: print("%3d Reading geometry %s" % (comm.rank, name))
+		tshape, twcs = enmap.read_map_geometry(idirs[ind] + "/frhs.fits")
+		pboxes[ind] = enmap.pixbox_of(wcs, tshape, twcs)
+	pboxes = utils.allreduce(pboxes, comm)
+	return pboxes
+
+def get_geometry_file(area): return enmap.read_map_geometry(area)
+def get_geometry_str(area):
+	# dec1:dec2,ra1:ra2[,down] -> [[dec1,ra1],[dec2,ra2]]
+	toks = area.split(",")
+	down = int(toks[2]) if len(toks) > 2 else 1
+	box = np.array([[float(w) for w in tok.split(":")] for tok in toks[:2]]).T*utils.degree
+	box[:,1] = np.sort(box[:,1])[::-1] # standard ra ordering
+	geo      = enmap.geometry(box, res=0.5*utils.arcmin, proj="car", ref=[0,0])
+	geo_ref  = enmap.fullsky_geometry(res=0.5*utils.arcmin)
+	if down > 1: geo = downgrade_geometry_compatible(*geo, geo_ref[1], down)
+	return geo
+def get_geometry(area):
+	try: return get_geometry_str(area)
+	except ValueError: return get_geometry_file(area)
+
+def downgrade_compatible(map, ref_wcs, factor):
+	"""Downgrade map by factor, but crop as necessary to make sure that
+	we stay compatible with the given reference geometry if it's downgraded by the
+	same factor"""
+	orig_wcs = wcsutils.scale(ref_wcs, factor)
+	y1, x1   = utils.nint(enmap.sky2pix(None, orig_wcs, map.pix2sky([0,0]), safe=False))
+	omap     = enmap.downgrade(map[...,(-y1)%factor:,(-x1)%factor:], factor)
+	return omap
+
+def downgrade_geometry_compatible(shape, wcs, ref_wcs, factor):
+	"""Downgrade geometry by factor, but crop as necessary to make sure that
+	we stay compatible with the given reference geometry if it's downgraded by the
+	same factor"""
+	# Get the coordinates of our top-left corner in the reference geometry
+	orig_wcs = wcsutils.scale(ref_wcs, factor)
+	y1, x1 = utils.nint(enmap.sky2pix(None, orig_wcs, enmap.pix2sky(shape, wcs, [0,0]), safe=False))
+	# These must be a multiple of factor for us to stay compatible, so slice as necessary
+	shape, wcs = enmap.slice_geometry(shape, wcs, (slice((-y1)%factor,None),slice((-x1)%factor,None)))
+	shape, wcs = enmap.downgrade_geometry(shape, wcs, factor)
+	return shape, wcs
+
+def calc_rlim(fluxlim, dists, fref, rref):
+	"""Compute the distance limit for a given *distance-depencent* flux-limit
+	fluxlim[nr,ny,nx], with the first axis corresponding to the distances dists[nr]"""
+	dists = np.asarray(dists)
+	# For a single flim, rlim = rref * (flim/fref)**-0.5, but things get more complicated
+	# for an r-dependent flim. We start by computing the limit for each of them.
+	ndist = len(dists)
+	with utils.nowarn():
+		rlims = rref * (fluxlim/fref)**-0.5
+		rlims[~np.isfinite(rlims)] = 0
+	# This gives us the rlim at each distance sample point. We can now loop through
+	# each distance pair for which we can linearly interpolate:
+	# rlim = rlim1 + (rlim2-rlim1)*x
+	# r    = r1 + (r2-r1)*x
+	# If the r and rlim curves don't cross, then this bin doesn't apply for the distance in
+	# question. If they do cross, then that r = rlim is the one we want. In theory this
+	# could happen in multiple bins, but it's pretty unlikely to.
+	# there will be a crossing if (rlim1-r1)*(rlim2-r2) <= 0, and the crossing will be
+	# at x = -(rlim1-r1)/((rlim2-r2)-(rlim1-r1)) = -roff1/(roff2-roff1)
+	roff = rlims - dists[:,None,None]
+	rlim = rlims[0]*0
+	for i in range(ndist-1):
+		roff1, roff2 = roff[i:i+2]
+		crosses = roff1*roff2 <= 0
+		x = -roff1/(roff2-roff1)
+		rlim[crosses] = dists[i] + x[crosses]*(dists[i+1]-dists[i])
+	del crosses
+	# Handle edges
+	inner = np.all(roff < 0, 0)
+	rlim[inner] = rlims[0,inner]
+	del inner
+	outer = np.all(roff > 0, 0)
+	rlim[outer] = rlims[-1,outer]
+	return rlim
 
 ############################### old stuff - will be removed ################################
 

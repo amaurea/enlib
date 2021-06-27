@@ -33,7 +33,7 @@ class PointingMatrix:
 
 class PmatMap(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation."""
-	def __init__(self, scan, template, sys=None, order=None, extra=[]):
+	def __init__(self, scan, template, sys=None, order=None, extra=[], split=None):
 		sys        = config.get("map_sys", sys)
 		transform  = pos2pix(scan,template,sys, extra=extra)
 		ipol, obox, err = build_interpol(transform, scan.box, id=scan.id)
@@ -46,18 +46,23 @@ class PmatMap(PointingMatrix):
 		self.core  = get_core(self.dtype)
 		self.order = config.get("pmat_map_order", order)
 		self.err   = err
+		if split is not None:
+			self.split = np.array(split, np.int32)
+			self.order = 4
+		else:
+			self.split = np.zeros(1, np.int32)
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""m -> tod"""
 		if times is None: times = np.zeros(5)
 		self.core.pmat_map_direct_grid(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
 				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
-				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times, self.split)
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
 		self.core.pmat_map_direct_grid(-1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
 				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
-				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times, self.split)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -288,7 +293,7 @@ class PmatMapMultibeam(PointingMatrix):
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
 			core.pmat_map_direct_grid(1, tod.T, 1.0, m.T, mmul, 1, self.order, self.scan.boresight.T,
 					self.scan.hwp_phase.T, boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T,
-					self.pixbox.T, self.nphi, times)
+					self.pixbox.T, self.nphi, times, np.zeros(1,np.int32))
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
@@ -298,7 +303,7 @@ class PmatMapMultibeam(PointingMatrix):
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
 			core.pmat_map_direct_grid(-1, tod.T, tmul, m.T, 1.0, 1, self.order, self.scan.boresight.T,
 					self.scan.hwp_phase.T, boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T,
-					self.pixbox.T, self.nphi, times)
+					self.pixbox.T, self.nphi, times, np.zeros(1,np.int32))
 
 def get_moby_pointing(entry, bore, dets, downgrade=1):
 	# Set up moby2

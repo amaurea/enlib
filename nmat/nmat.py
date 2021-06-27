@@ -74,6 +74,23 @@ class NmatNull(NoiseMatrix):
 		if res.dets is not None: res.dets = res.dets[detslice]
 		return res
 
+## WIP
+#class NmatOOF(NoiseMatrix):
+#	def __init__(self, dets=None, fknee=3.0, alpha=-4):
+#		self.dets = dets
+#		self.fknee= fknee
+#		self.alpha= alpha
+#	def apply(self, tod):
+#		tod[:] = 0
+#		return tod
+#	@property
+#	def ivar(self): return np.zeros(len(self.dets))
+#	def white(self, tod): return self.apply(tod)
+#	def __getitem__(self, sel):
+#		res, detslice, sampslice = self.getitem_helper(sel)
+#		if res.dets is not None: res.dets = res.dets[detslice]
+#		return res
+
 class NmatBinned(NoiseMatrix):
 	"""TOD noise matrices where power is assumed to be constant
 	in a set of bins in frequency. Stores a covariance matrix for

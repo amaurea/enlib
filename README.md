@@ -58,3 +58,13 @@ Mapmaking
 * Internal dependencies: [misc. utils, coordinate transformation, flat-sky maps]
 * External dependencies: `mpi4py`, `pygetdata`, `zipfile`, `tempfile`, `shutil`
 * To build: `make`
+
+Issues
+======
+
+* gfortran has gotten stricter/stupider about argument mismatches, which makes it difficult
+  to apply blas to sub-sections of arrays without copying. This is used in the enlib noise
+  matrix acceleration, so if you're trying to compile enlib with a recent gfortran you
+  might get an error like "Type mismatch between actual argument at (1) and actual argument at (2)"
+  or "Element of assumed-shape or pointer array as actual argument at (1) cannot correspond to actual argument at (2)".
+  Pass -fallow-argument-mismatch to fix this. This can be set in your compile\_opts.

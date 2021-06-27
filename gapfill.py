@@ -52,11 +52,17 @@ def gapfill_pair(tod, cut, inplace=False, gapfill=gapfill_linear):
 	tod[1::2] = d1
 	return tod
 
+#def hdump(fname, arr):
+#	import h5py
+#	with h5py.File(fname, "w") as hfile:
+#		hfile["data"] = arr
+
 def gapfill_joneig(tod, cut, thresh=4, niter=4, nloop=4, inplace=False, gapfill=gapfill_linear, cov_step=10, amp_step=10, overlap=None):
 	"""Gapfill a tod[ndet,nsamp] in cuts cut[ndet,{ranges}] using
 	Jon's eigenmode iteration. It's about 20 times slower than linear
 	gapfilling, mostly due to calling gapfill_linear niter*nloop times
 	internally."""
+	#hdump("test_init.hdf", tod[:4])
 	tod = gapfill(tod, cut, inplace=inplace)
 	cut_small = cut[:,::amp_step]
 	for i in range(nloop):
@@ -82,6 +88,7 @@ def gapfill_joneig(tod, cut, thresh=4, niter=4, nloop=4, inplace=False, gapfill=
 		tod -= amps_tot.T.dot(basis)
 		gapfill(tod, cut, inplace=True)
 		tod += amps_tot.T.dot(basis)
+		#hdump("test_step%02d.hdf" % i, tod[:4])
 	return tod
 
 def gapfill_constrained(tod, cut, iN, mask_scale=1.0, lim=1e-4, maxiter=50, inplace=False, verbose=False):
