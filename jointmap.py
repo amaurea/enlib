@@ -444,8 +444,8 @@ def detrend_map(map, div, edge=60, tol=1e-3, nstep=30):
 	solver = cg.CG(A, rhs.reshape(-1).copy(), M=M)
 	for i in range(nstep):
 		solver.step()
-	#enmap.write_map("detrend_model.fits", enmap.samewcs(solver.x.reshape(map.shape),map))
 	omap = (div>0)*(map-solver.x.reshape(map.shape))
+	#enmap.write_map("detrend_model.fits", enmap.samewcs(solver.x.reshape(map.shape),map))
 	#enmap.write_map("detrend_after.fits", omap)
 	return omap
 
@@ -661,12 +661,8 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		#enmap.write_map("test_totmap.fits", dset_map)
 		# Then use it to build the diff maps and noise spectra
 		dset_ps = None
-		#print "A", dataset.name, len(dataset.splits)
 		for i, split in enumerate(dataset.splits):
-			#print "B", split.data is not None
 			if split.data is None: continue
-			#enmap.write_map("test_map_%s_%d.fits" % (dataset.name, i), split.data.map)
-			#enmap.write_map("test_div_%s_%d.fits" % (dataset.name, i), split.data.div)
 			diff  = split.data.map - dset_map
 			#enmap.write_map("test_diff_%s_%d.fits" % (dataset.name, i), diff)
 			# We can't whiten diff with just H.
@@ -813,7 +809,7 @@ def setup_filter(mapset, mode="weight", filter_kxrad=20, filter_highpass=200, fi
 			filter   = 1
 		if   mode == "weight": dataset.iN    *= filter
 		elif mode == "filter": dataset.filter = filter
-		elif mode == "none":   pass
+		elif mode == "none": pass
 		else: raise ValueError("Unrecognized filter mode '%s'" % mode)
 	mapset.mode = mode
 
@@ -875,8 +871,7 @@ def setup_beams(mapset):
 				wy, wx = enmap.calc_window(beam_2d.shape)
 				beam_2d *= wy[:,None]
 				beam_2d *= wx[None,:]
-			elif d.pixel_window_params[0] == "none":
-				pass
+			elif d.pixel_window_params[0] == "none": pass
 			elif d.pixel_window_params[0] == "lmax":
 				beam_2d[mapset.l>d.pixel_window_params[1]] = 0
 			elif d.pixel_window_params[0] == "separable":
