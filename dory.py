@@ -318,8 +318,7 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=2
 		sn_lim = np.max(np.abs(fmap/norm)*(apod_map>0))
 		for iblock in range(nblock):
 			snmap   = fmap/norm
-			if dump:
-				enmap.write_map(dump + "snmap_%02d_%02d.fits" % (ipass, iblock), snmap)
+			if dump: enmap.write_map(dump + "snmap_%02d_%02d.fits" % (ipass, iblock), snmap)
 			# Find all significant candidates, even those below our current block cutoff.
 			# We do this because we will later compute a weighted average position, and we
 			# want to use more than just a few pixels near the peak for that average.
@@ -483,6 +482,9 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 	# Apodize a bit before any fourier space operations
 	apod_map = (idiv*0+1).apod(apod) * get_apod_holes(idiv,apod)
 	imap     = imap*apod_map
+	if dump:
+		enmap.write_map(dump + "imap.fits", imap)
+		enmap.write_map(dump + "idiv.fits", idiv)
 	# We should either handle the polarization looping inside this function,
 	# or possibly always return something for all the input sources. As it is,
 	# we can have any logic here that would select different sources for different
@@ -737,7 +739,7 @@ def write_catalog_txt(ofile, cat):
 		cat.flux[:,1]*1e3, cat.dflux[:,1]*1e3,
 		cat.flux[:,2]*1e3, cat.dflux[:,2]*1e3,
 		cat.npix, cat.status,
-	]).T, fmt="%11.6f %11.6f %8.3f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %5d %2d",
+	]).T, fmt="%11.6f %11.6f %8.3f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %5.0f %2.0f",
 	header = "ra dec SNR Tamp dTamp Qamp dQamp Uamp dUamp Tflux dTflux Qflux dQflux Uflux dUflux npix status")
 
 def write_catalog_fits(ofile, cat):
