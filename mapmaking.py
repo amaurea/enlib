@@ -434,7 +434,7 @@ class SignalMapBuddies(SignalMap):
 # postprocessing operation that adds up the values in the src pixels.
 
 class SignalSrcSamp(SignalCut):
-	def __init__(self, scans, dtype, comm, srcs=None, tol=100, amplim=None, rel=False, mask=None, name="srcsamp", ofmt="{name}_{rank:02}", output=False, cut_type="full"):
+	def __init__(self, scans, dtype, comm, srcs=None, tol=100, amplim=None, rel=False, mask=None, name="srcsamp", ofmt="{name}_{rank:02}", output=False, cut_type="full", sys="cel"):
 		Signal.__init__(self, name, ofmt, output, ext="hdf")
 		self.data  = {}
 		self.dtype = dtype
@@ -449,11 +449,11 @@ class SignalSrcSamp(SignalCut):
 				if amplim is not None:
 					srcparam = srcparam[srcparam[:,2]>amplim]
 				if rel: srcparam[:,2:5] /= srcparam[:,2,None]
-				psrc     = pmat.PmatPtsrc(scan, srcparam)
+				psrc     = pmat.PmatPtsrc(scan, srcparam, sys=sys)
 				psrc.forward(tod, srcparam, tmul=0)
 				tod_mask |= tod > tol
 			if mask is not None:
-				pmap = pmat.PmatMap(scan, mask)
+				pmap = pmat.PmatMap(scan, mask, sys=sys)
 				pmap.forward(tod, mask, tmul=0)
 				tod_mask |= tod > 0.5
 			del tod
@@ -1396,12 +1396,14 @@ class SourceHandler:
 ######## Equation system ########
 
 class Eqsys:
-	def __init__(self, scans, signals, filters=[], filters2=[], weights=[], multiposts=[], dtype=np.float64, comm=None):
+	def __init__(self, scans, signals, filters=[], filters2=[], weights=[], multiposts=[],
+			dtype=np.float64, comm=None, filters_noisebuild=[]):
 		self.scans   = scans
 		self.signals = signals
 		self.dtype   = dtype
 		self.filters = filters
 		self.filters2= filters2
+		self.filters_noisebuild = filters_noisebuild
 		self.multiposts= multiposts
 		self.weights = weights
 		self.dof     = zipper.MultiZipper([signal.dof for signal in signals], comm=comm)
@@ -1541,7 +1543,14 @@ class Eqsys:
 			#dump("dump_postweight.hdf", tod)
 			#dump("dump_prenoise.hdf", tod[:32])
 			with bench.mark("b_N_build"):
+				if self.filters_noisebuild:
+					tod_orig = tod.copy()
+					for filter in self.filters_noisebuild: filter(scan, tod)
+					tod = utils.deslope(tod)
 				scan.noise = scan.noise.update(tod, scan.srate)
+				if self.filters_noisebuild:
+					tod = tod_orig
+					del tod_orig
 				#print "FIXME gapfill const after building noise model", scan.id, scan.cut.ndet, scan.cut.nsamp, tod.shape
 				#sampcut.gapfill_const(scan.cut, tod, 0.0, True)
 			#dump("dump_postupdate.hdf", tod)

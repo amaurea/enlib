@@ -130,7 +130,7 @@ class Dmap(object):
 	def __getitem__(self, sel):
 		# Split sel into normal and wcs parts. We only handle non-pixel slices
 		sel1, sel2 = utils.split_slice(sel, [self.ndim-2,2])
-		if len(sel2) > 0:
+		if not trivial_slice(sel2):
 			raise NotImplementedError("Pixel slicing of dmaps not implemented")
 		geometry = self.geometry[sel1]
 		tiles = [tile[sel1] for tile in self.tiles]
@@ -138,7 +138,7 @@ class Dmap(object):
 	def __setitem__(self, sel, val):
 		# Split sel into normal and wcs parts. We only handle non-pixel slices
 		sel1, sel2 = utils.split_slice(sel, [self.ndim-2,2])
-		if len(sel2) > 0:
+		if not trivial_slice(sel2):
 			raise NotImplementedError("Pixel slicing of dmaps not implemented")
 		try:
 			for tile, vtile in zip(self.tiles, val.tiles): tile[sel] = vtile
@@ -791,3 +791,9 @@ class DmapZipper(zipper.ArrayZipper):
 def select_nonempty(a, b):
 	asize = np.product(a[...,1,:]-a[...,0,:],-1,dtype=int)
 	return np.where(asize[...,None,None] > 0, a, b)
+
+def trivial_slice(sel):
+	for s in sel:
+		if s.start != None or s.stop != None or s.step != None:
+			return False
+	return True

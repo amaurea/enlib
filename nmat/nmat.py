@@ -487,7 +487,8 @@ def write_nmat_helper(fname, fields, prefix=""):
 		f = h5py.File(fname, "w")
 	else:
 		f = fname
-	for k, v in fields.iteritems():
+	for k in fields:
+		v = fields[k]
 		if isinstance(v, dict):
 			write_nmat_helper(f, v, prefix+k+"/")
 		else:

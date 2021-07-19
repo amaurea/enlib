@@ -149,6 +149,8 @@ class H5Scan(Scan):
 			ranges, detmap, nsamp = [hfile["cut/%s" % name].value for name in ["ranges","detmap","nsamp"]]
 			self.cut  = sampcut.Sampcut(ranges, detmap, nsamp)
 			self.cut_noiseest = self.cut.copy()
+			self.cut_basic    = self.cut.copy()
+			self.cut_qualit   = self.cut.copy()
 			self.noise= nmat.read_nmat(hfile, "noise")
 			self.site = bunch.Bunch({k:hfile["site/"+k].value for k in hfile["site"]})
 			self.subdets = np.arange(self.ndet)

@@ -46,15 +46,27 @@ def oneoverf_noise(ndet, nsamp, sigma, fknee=0.2, alpha=1):
 	ebins = np.zeros([nbin,2],dtype=int)
 	return nmat.NmatDetvecs(Nu, np.zeros([1,ndet]), np.zeros([1]), bins, ebins)
 
-def oneoverf_detcorr_noise(ndet, nsamp, sigma, fknee=0.2, alpha=1):
-	# A single, atmospheric mode
+def oneoverf_detcorr_noise(ndet, nper, nsamp, sigma, fknee=0.2, alpha=1, nmode=1):
+	"""Simulate detector-correlated 1/f noise. The nmode argument specifies the number
+	of correlated modes to simulate. Detectors in a group (group size given by nper)
+	will always have 100% correlated correlated noise. The modes are relatively simple -
+	simply fourier modes in the 1d group index."""
 	nbin  = 1000
 	bins  = build_bins_linear(1.0, nbin)
 	freq  = np.mean(bins,1)
 	Nu    = np.zeros([nbin,ndet])+sigma**2
-	E     = (freq/fknee)**-alpha * sigma**2
-	V     = np.zeros([nbin,ndet])+1
-	ebins = build_bins_linear(nbin,nbin)
+	gi    = np.arange(ndet)//nper
+	ngi   = ndet//nper+1
+	modi  = np.arange(nmode)
+	# The correlated modes [nmode,ndet]
+	V     = np.cos(2*np.pi*modi[:,None]*gi[None,:]/ngi)
+	# The power in these modes [nbin,nmode]
+	E     = (freq[:,None]/fknee*(modi+1))**-alpha * sigma**2
+	# Expand and flatten to [nvec,ndet] and [nvec], where nvec = nmode*nbin
+	V     = np.repeat(V, nbin, 0)
+	E     = E.reshape(-1)
+	# The mapping info the flattened arrays
+	ebins = build_bins_linear(nbin*nmode, nbin).astype(int)
 	return nmat.NmatDetvecs(Nu, V, E, bins, ebins)
 
 def scan_ceslike(nsamp, box, mjd0=55500, sys="hor", srate=100, azrate=1.5*utils.degree):
@@ -98,6 +110,21 @@ def dets_scattered(nmul, nper=3, rad=0.5*np.pi/180, seed=0):
 	# T,Q,U sensitivity
 	angles = np.arange(ndet)*np.pi/nmul
 	comps     = np.zeros([ndet,3])
+	comps[:,0] = 1
+	comps[:,1] = np.cos(2*angles)
+	comps[:,2] = np.sin(2*angles)
+	return bunch.Bunch(comps=comps, offsets=offsets)
+
+def dets_row(nmul, nper=3, rad=0.5*np.pi/180, dir=[1,1]):
+	"""Simulate nmul groups of detectors in a row with a half-width of rad and a
+	direction of dir, defaulting to a diagonal [1,1]."""
+	ndet = nmul*nper
+	dir  = np.array([0,dir[0],dir[1]])
+	v    = rad*dir/np.sum(dir**2)**0.5
+	offsets = np.repeat(np.linspace(-1,1,nmul), nper)[:,None]*v
+	# T,Q,U sensitivity
+	angles = np.arange(ndet)*np.pi/nmul
+	comps  = np.zeros([ndet,3])
 	comps[:,0] = 1
 	comps[:,1] = np.cos(2*angles)
 	comps[:,2] = np.sin(2*angles)
