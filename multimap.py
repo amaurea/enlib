@@ -1,5 +1,6 @@
-import numpy as np
-from pixell import enmap, utils
+import numpy as np, os, warnings
+import astropy.io.fits
+from pixell import enmap, utils, wcsutils
 
 class ndmaps(np.ndarray):
 	"""A class for representing and working with a list of enmaps as if they were a single
@@ -28,6 +29,9 @@ class ndmaps(np.ndarray):
 	@property
 	def ntot(self):
 		return np.sum(self.npixs)
+	@property
+	def nmap(self):
+		return len(self.geometries)
 	def copy(self, order='K'):
 		return ndmaps(np.copy(self,order), self.geometries)
 	@property
@@ -44,7 +48,7 @@ class _map_view:
 	def __init__(self, mmap):
 		self.multimap = mmap
 		self.offs     = utils.cumsum(mmap.npixs, endpoint=True)
-	def __len__(self): return len(self.multimap.geometries)
+	def __len__(self): return self.multimap.nmap
 	def __getitem__(self, sel):
 		sel1, sel2 = utils.split_slice(sel, [1,self.multimap.ndim+2-1])
 		if len(sel1) == 0: return self.multimap
@@ -196,3 +200,43 @@ def rotate_pol(mmap, angle, comps=[-2,-1]):
 	res[...,comps[0],:] = c*mmap[...,comps[0],:] - s*mmap[...,comps[1],:]
 	res[...,comps[1],:] = s*mmap[...,comps[0],:] + c*mmap[...,comps[1],:]
 	return res
+
+def write_map(fname, mmap, extra={}):
+	"""Write multimap mmap to the file fname. Each map in mmap will be written
+	to its own image hdu in the file. These can be read individually with
+	enmap.read_map, or together with multimap.read_map."""
+	hdus = []
+	for ind in range(mmap.nmap):
+		emap   = mmap.map[ind].copy()
+		header = emap.wcs.to_header(relax=True)
+		# Add our map headers
+		header['NAXIS'] = emap.ndim
+		for i,n in enumerate(emap.shape[::-1]):
+			header['NAXIS%d'%(i+1)] = n
+		for key, val in extra.items():
+			header[key] = val
+		# multimap-specific stuff
+		if ind == 0:
+			header["MMAPN"] = str(mmap.nmap)
+			hdu = astropy.io.fits.PrimaryHDU(emap, header)
+		else:
+			hdu = astropy.io.fits.ImageHDU(emap, header)
+		hdus.append(hdu)
+	hdus = astropy.io.fits.HDUList(hdus)
+	utils.mkdir(os.path.dirname(fname))
+	with warnings.catch_warnings():
+		warnings.filterwarnings('ignore')
+		hdus.writeto(fname, clobber=True)
+
+def read_map(fname, sel=None, box=None, wrap="auto", mode=None, sel_threshold=10e6, verbose=False):
+	"""Read a multimap from the file fname."""
+	hdus = astropy.io.fits.open(fname)
+	h0   = hdus[0].header
+	nmap = int(h0["MMAPN"]) if "MMAPN" in h0 else len(hdus)
+	maps = []
+	for ind in range(nmap):
+		with warnings.catch_warnings():
+			wcs = wcsutils.WCS(hdus[ind].header).sub(2)
+		proxy = enmap.ndmap_proxy_fits(hdus[ind], wcs, fname=fname, threshold=sel_threshold, verbose=verbose)
+		maps.append(enmap.read_helper(proxy, sel=sel, box=box, wrap=wrap, mode=mode))
+	return multimap(maps)
