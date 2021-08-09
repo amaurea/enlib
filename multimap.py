@@ -151,7 +151,7 @@ def map_mul(mat, vec):
 
 def fft(mmap, omap=None, nthread=0, normalize=True, adjoint_ifft=False, dct=False):
 	if omap is None: omap = mmap*0j
-	return multimap([enmap.fft(im, omap=om, nthread=nthread, normalize=normalize, adjoint_ifft=adjoint_ifft, dct=dct) for im, om in zip(mmap.map, omap.map)])
+	return multimap([enmap.fft(im.astype(om.dtype), omap=om, nthread=nthread, normalize=normalize, adjoint_ifft=adjoint_ifft, dct=dct) for im, om in zip(mmap.map, omap.map)])
 
 def ifft(mmap, omap=None, nthread=0, normalize=True, adjoint_fft=False, dct=False):
 	mmap = utils.ascomplex(mmap)
