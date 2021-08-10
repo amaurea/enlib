@@ -1,14 +1,96 @@
-# Wavelet transforms. The main part is defining the wavelet filters. I want something that can
-# 1. tell me the lmax for each scale, so I can decide on the resolution that scale needs
-# 2. evaluate a basis function given a set of ls. Might be easier to implement if all bases
-#    are evaluated at the same time...
-#
-# Could be easiest to implement by evaluating them as 1d functions of l internally, and then
-# interpolate those functions onto the requested ls later. But that can be an implementation
-# detail.
 import numpy as np
 from pixell import enmap, utils, wcsutils, curvedsky, sharp
 from . import multimap
+
+######## Wavelet basis generators ########
+
+class Butterworth:
+	"""Butterworth waveleth basis. Built from differences between Butterworth lowpass filters,
+	which have a good tradeoff between harmonic and spatial localization. However it doesn't
+	have the sharp boundaries in harmonic space that needlets or scale-discrete wavelets do.
+	This is a problem when we want to reduce the resolution of the wavelet maps. With a discrete
+	cutoff this can be done losslessly, but with these Butterworth wavelets there's always some
+	tail of the basis that extneds to arbitrarily high l, making resolution reduction lossy.
+	This loss is controlled with the tol parameter."""
+	# 1+2**a = 1/q => a = log2(1/tol-1)
+	def __init__(self, step=2, shape=7, tol=1e-3, lmin=None, lmax=None):
+		self.step = step; self.shape = shape; self.tol = tol
+		self.lmin = lmin; self.lmax  = lmax
+		if lmax is not None:
+			if lmin is None: lmin = 1
+			self._finalize()
+	def with_bounds(self, lmin, lmax):
+		"""Return a new instance with the given multipole bounds"""
+		return Butterworth(step=self.step, shape=self.shape, tol=self.tol, lmin=lmin, lmax=lmax)
+	def __call__(self, i, l):
+		if i == self.n-1: profile  = np.full(l.shape, 1.0)
+		else:             profile  = self.kernel(i,   l)
+		if i > 0:         profile -= self.kernel(i-1, l)
+		return profile
+	def kernel(self, i, l):
+		return 1/(1 + (l/(self.lmin*self.step**(i+0.5)))**(self.shape/np.log(self.step)))
+	def _finalize(self):
+		self.n        = int((np.log(self.lmax)-np.log(self.lmin))/np.log(self.step))
+		# 1+(l/(lmin*(step**(i+0.5))))**a = 1/tol =>
+		# l = (1/tol-1)**(1/a) * lmin*(step**(i+0.5))
+		self.lmaxs    = np.round(self.lmin * (1/self.tol-1)**(np.log(self.step)/self.shape) * self.step**(np.arange(self.n)+0.5)).astype(int)
+		self.lmaxs[-1] = self.lmax
+
+class ButterTrim:
+	"""Butterworth waveleth basis made harmonically compact by clipping off the tails.
+	Built from differences between trimmed Butterworth lowpass filters. This trimming
+	sacrifices some signal suppression at high radius, but this is a pretty small effect
+	even with quite aggressive trimming."""
+	def __init__(self, step=2, shape=7, trim=1e-2, lmin=None, lmax=None):
+		self.step = step; self.shape = shape; self.trim = trim
+		self.lmin = lmin; self.lmax  = lmax
+		if lmax is not None:
+			if lmin is None: lmin = 1
+			self._finalize()
+	def with_bounds(self, lmin, lmax):
+		"""Return a new instance with the given multipole bounds"""
+		return ButterTrim(step=self.step, shape=self.shape, trim=self.trim, lmin=lmin, lmax=lmax)
+	def __call__(self, i, l):
+		if i == self.n-1: profile  = np.full(l.shape, 1.0)
+		else:             profile  = self.kernel(i,   l)
+		if i > 0:         profile -= self.kernel(i-1, l)
+		return profile
+	def kernel(self, i, l):
+		return trim_kernel(1/(1 + (l/(self.lmin*self.step**(i+0.5)))**(self.shape/np.log(self.step))), self.trim)
+	def _finalize(self):
+		self.n        = int((np.log(self.lmax)-np.log(self.lmin))/np.log(self.step))
+		# 1/(1+(l/(lmin*(step**(i+0.5))))**a)*(1+2*trim)-trim = 0
+		# => l = ((1+2*trim)/trim-1)**(1/a) * (lmin*(step**(i+0.5)))
+		self.lmaxs    = np.ceil(self.lmin * ((1+2*self.trim)/self.trim-1)**(np.log(self.step)/self.shape) * self.step**(np.arange(self.n)+0.5)).astype(int)
+		self.lmaxs[-1] = self.lmax
+
+class AdriSD:
+	"""Scale-discrete wavelet basis provided by Adri's optweight library.
+	A bit heavy to initialize."""
+	def __init__(self, lamb=2, lmin=None, lmax=None):
+		self.lamb = lamb; self.lmin = lmin; self.lmax = lmax
+		if lmax is not None:
+			if lmin is None: lmin = 1
+			self._finalize()
+	def with_bounds(self, lmin, lmax):
+		"""Return a new instance with the given multipole bounds"""
+		return AdriSD(lamb=self.lamb, lmin=lmin, lmax=lmax)
+	@property
+	def n(self): return len(self.profiles)
+	def __call__(self, i, l):
+		return np.interp(l, np.arange(self.profiles[i].size), self.profiles[i])
+	def _finalize(self):
+		from optweight import wlm_utils
+		self.profiles, self.lmaxs = wlm_utils.get_sd_kernels(self.lamb, self.lmax, lmin=self.lmin)
+		self.profiles **= 2
+
+##### Wavelet transforms #####
+
+# How do I actually get a proper invertible wavelet transform? What I have now
+# is not orthogonal, so while map -> wave -> map works fine, wave -> map -> wave
+# leaks power between wavelet scales due to their overlap. Because the wavelets
+# overlap, there are more degrees of freedom in the wavelet coefficients than
+# in the input map, meaning that the transform can't be invertible.
 
 class WaveletTransform:
 	"""This class implements a wavelet tansform. It provides thw forwards and
@@ -108,87 +190,35 @@ class WaveletTransform:
 				omap = enmap.zeros(wave.pre + self.uht.shape[-2:], self.uht.wcs, wave.dtype)
 			return curvedsky.alm2map(oalm, omap)
 
-######## Wavelet basis generators ########
-
-class Butterworth:
-	"""Butterworth waveleth basis. Built from differences between Butterworth lowpass filters,
-	which have a good tradeoff between harmonic and spatial localization. However it doesn't
-	have the sharp boundaries in harmonic space that needlets or scale-discrete wavelets do.
-	This is a problem when we want to reduce the resolution of the wavelet maps. With a discrete
-	cutoff this can be done losslessly, but with these Butterworth wavelets there's always some
-	tail of the basis that extneds to arbitrarily high l, making resolution reduction lossy.
-	This loss is controlled with the tol parameter."""
-	# 1+2**a = 1/q => a = log2(1/tol-1)
-	def __init__(self, step=2, shape=7, tol=1e-3, lmin=None, lmax=None):
-		self.step = step; self.shape = shape; self.tol = tol
-		self.lmin = lmin; self.lmax  = lmax
-		if lmax is not None:
-			if lmin is None: lmin = 1
-			self._finalize()
-	def with_bounds(self, lmin, lmax):
-		"""Return a new instance with the given multipole bounds"""
-		return Butterworth(step=self.step, shape=self.shape, tol=self.tol, lmin=lmin, lmax=lmax)
-	def __call__(self, i, l):
-		if i == self.n-1: profile  = np.full(l.shape, 1.0)
-		else:             profile  = self.kernel(i,   l)
-		if i > 0:         profile -= self.kernel(i-1, l)
-		return profile
-	def kernel(self, i, l):
-		return 1/(1 + (l/(self.lmin*self.step**(i+0.5)))**(self.shape/np.log(self.step)))
-	def _finalize(self):
-		self.n        = int((np.log(self.lmax)-np.log(self.lmin))/np.log(self.step))
-		# 1+(l/(lmin*(step**(i+0.5))))**a = 1/tol =>
-		# l = (1/tol-1)**(1/a) * lmin*(step**(i+0.5))
-		self.lmaxs    = np.round(self.lmin * (1/self.tol-1)**(np.log(self.step)/self.shape) * self.step**(np.arange(self.n)+0.5)).astype(int)
-		self.lmaxs[-1] = self.lmax
-
-class ButterTrim:
-	"""Butterworth waveleth basis made harmonically compact by clipping off the tails.
-	Built from differences between trimmed Butterworth lowpass filters. This trimming
-	sacrifices some signal suppression at high radius, but this is a pretty small effect
-	even with quite aggressive trimming."""
-	def __init__(self, step=2, shape=7, trim=1e-2, lmin=None, lmax=None):
-		self.step = step; self.shape = shape; self.trim = trim
-		self.lmin = lmin; self.lmax  = lmax
-		if lmax is not None:
-			if lmin is None: lmin = 1
-			self._finalize()
-	def with_bounds(self, lmin, lmax):
-		"""Return a new instance with the given multipole bounds"""
-		return ButterTrim(step=self.step, shape=self.shape, trim=self.trim, lmin=lmin, lmax=lmax)
-	def __call__(self, i, l):
-		if i == self.n-1: profile  = np.full(l.shape, 1.0)
-		else:             profile  = self.kernel(i,   l)
-		if i > 0:         profile -= self.kernel(i-1, l)
-		return profile
-	def kernel(self, i, l):
-		return trim_kernel(1/(1 + (l/(self.lmin*self.step**(i+0.5)))**(self.shape/np.log(self.step))), self.trim)
-	def _finalize(self):
-		self.n        = int((np.log(self.lmax)-np.log(self.lmin))/np.log(self.step))
-		# 1/(1+(l/(lmin*(step**(i+0.5))))**a)*(1+2*trim)-trim = 0
-		# => l = ((1+2*trim)/trim-1)**(1/a) * (lmin*(step**(i+0.5)))
-		self.lmaxs    = np.ceil(self.lmin * ((1+2*self.trim)/self.trim-1)**(np.log(self.step)/self.shape) * self.step**(np.arange(self.n)+0.5)).astype(int)
-		self.lmaxs[-1] = self.lmax
-
-class AdriSD:
-	"""Scale-discrete wavelet basis provided by Adri's optweight library.
-	A bit heavy to initialize."""
-	def __init__(self, lamb=2, lmin=None, lmax=None):
-		self.lamb = lamb; self.lmin = lmin; self.lmax = lmax
-		if lmax is not None:
-			if lmin is None: lmin = 1
-			self._finalize()
-	def with_bounds(self, lmin, lmax):
-		"""Return a new instance with the given multipole bounds"""
-		return AdriSD(lamb=self.lamb, lmin=lmin, lmax=lmax)
-	@property
-	def n(self): return len(self.profiles)
-	def __call__(self, i, l):
-		return np.interp(l, np.arange(self.profiles[i].size), self.profiles[i])
-	def _finalize(self):
-		from optweight import wlm_utils
-		self.profiles, self.lmaxs = wlm_utils.get_sd_kernels(self.lamb, self.lmax, lmin=self.lmin)
-		self.profiles **= 2
+class HaarTransform:
+	"""A simple 2d Haar wavelet transform. Fast due to not using harmonic space, and
+	has the nice property of being orthoginal, which means that there's no mode leakage.
+	Does not take the sky's curvature into account. This might not be a big deal since
+	wavelets support position-dependent models anyway."""
+	def __init__(self, nlevel, ref=[0,0]):
+		"""Initialize the HaarTransform.
+		* nlevel: The number of wavelets to compute. Each level halves the map resolution.
+		* ref: The coordinates (dec,ra in radians) of a reference point that the resolution levels should try to keep at a consistent pixel location. Useful for making sure that different patches have compatible wavelet maps. Set to None to disable. Defaults to ra=0, dec=0."""
+		self.nlevel = nlevel
+		self.ref    = ref
+	def map2wave(self, map):
+		"""Transform from an enmap map[...,ny,nx] to a multimap of wavelet coefficients,
+		which is effectively a group of enmaps with the same pre-dimensions but varying shape."""
+		omaps = []
+		for i in range(self.nlevel):
+			off  = enmap.get_downgrade_offset(*map.geometry, 2, self.ref)
+			down = enmap.downgrade(map, 2, off=off, inclusive=True)
+			omaps.append(map-enmap.upgrade(down, 2, off=off, inclusive=True, oshape=map.shape))
+			map  = down
+		omaps.append(map)
+		return multimap.multimap(omaps[::-1])
+	def wave2map(self, wave):
+		"""Transform from the wavelet coefficients wave (multimap), to the corresponding enmap."""
+		omap = wave.map[0].copy()
+		for i in range(1, wave.nmap):
+			off  = enmap.get_downgrade_offset(*wave.geometries[i], 2, self.ref)
+			omap = wave.map[i] + enmap.upgrade(omap, 2, off=off, inclusive=True, oshape=wave.geometries[i].shape)
+		return omap
 
 ####### Helper functions #######
 
