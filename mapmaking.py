@@ -1192,6 +1192,10 @@ class FilterGapfill:
 		if self.basic: gapfill.gapfill(tod, scan.cut_basic, inplace=True)
 		else:          gapfill.gapfill(tod, scan.cut, inplace=True)
 
+class FilterDeslope:
+	def __call__(self, scan, tod):
+		tod[:] = utils.deslope(tod)
+
 class FilterAddPhase:
 	def __init__(self, scans, phasemap, pids, mmul=1, tmul=1):
 		self.phasemap = phasemap

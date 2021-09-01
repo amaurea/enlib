@@ -5,8 +5,11 @@ For performance and memory reasons, the noise matrix
 overwrites its input array."""
 import numpy as np, copy, h5py
 from scipy.optimize import minimize
-from .. import utils, array_ops, fft
+from .. import utils, array_ops, fft, config
 from  . import nmat_core_32, nmat_core_64
+
+config.default("nmat_white_fmin", 15, "Min frequency to use when estimating white noise level from noise model")
+config.default("nmat_white_fmax", 25, "Max frequency to use when estimating white noise level from noise model")
 
 try: basestring
 except: basestring = str
@@ -178,13 +181,16 @@ class NmatDetvecs(NmatBinned):
 		# Compute corresponding parameters for the inverse
 		self.iD, self.iV, self.iE = self.calc_inverse()
 
-		# Compute white noise approximation
+		# Compute white noise approximation. This is currently mean of the inverse
+		# variance per detector. But the white noise is not meant to describe the
+		# low ls, might be best to make this the mean of only the white part.
 		tdiag = np.zeros([len(self.dets)])
-		for d,b,eb in zip(self.iD, self.bins, self.ebins):
+		weight= (self.bins[:,0] >= config.get("nmat_white_fmin"))&(self.bins[:,1] <= config.get("nmat_white_fmax"))
+		for d,b,eb,w in zip(self.iD, self.bins, self.ebins,weight):
 			v, e = self.iV[eb[0]:eb[1]], self.iE[eb[0]:eb[1]]
-			tdiag += (d + np.sum(v**2*e[:,None],0))*(b[1]-b[0])
+			tdiag += (d + np.sum(v**2*e[:,None],0))*(b[1]-b[0])*w
 			#tdiag += d*(b[1]-b[0])
-		tdiag /= np.sum(self.bins[:,1]-self.bins[:,0])
+		tdiag /= np.sum((self.bins[:,1]-self.bins[:,0])*weight)
 
 		self.tdiag = tdiag
 	def calc_inverse(self):

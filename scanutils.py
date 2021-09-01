@@ -1,6 +1,6 @@
 from __future__ import division, print_function
 import numpy as np, logging, h5py, sys
-from . import scan as enscan, errors, utils, coordinates, dmap
+from . import scan as enscan, errors, utils, coordinates, dmap, bunch
 from enact import actdata, filedb
 from scipy import ndimage
 L = logging.getLogger(__name__)
@@ -143,6 +143,75 @@ def read_scans(filelist, inds, reader, db=None, dets=None, quiet=False, downsamp
 		myinds.append(ind)
 		myscans.append(scan)
 	return myinds, myscans
+
+def read_scans_autobalance(ids, reader, comm, db=None, dets=None, quiet=False, downsample=1,
+		hwp_resample=False, sky_local=False, osys="equ"):
+	"""Read the given list of ids/files, and try to distribute them across the tasks of MPI communicator
+	comm as balancedly as possible. if sky_local=True, then the distribution will also try to keep the
+	tods belonging to each mpi task in a local area of the sky.
+
+	Returns a Bunch with members:
+	.n:     The total number of scans read. Check if this is zero to see if there's anything to do.
+	.scans: The list of scans for this mpi task
+	.inds:  The corresponding indices into the ids list
+	.bbox:  The bounding box of this tasks's scans on the sky. Only computed if sky_local is True,
+	        otherwise this is None.
+	"""
+	if not quiet: L.info("Reading %d scans" % len(ids))
+	myinds = np.arange(len(ids))[comm.rank::comm.size]
+	myinds, myscans = read_scans(ids, myinds, reader, db=db, dets=dets, downsample=downsample,
+			hwp_resample=hwp_resample, quiet=quiet)
+	myinds = np.array(myinds, int)
+
+	# Collect scan info. This currently fails if any task has empty myinds
+	read_ids  = [ids[ind] for ind in utils.allgatherv(myinds, comm)]
+	read_ntot = len(read_ids)
+	if not quiet: L.info("Found %d tods" % read_ntot)
+	if read_ntot == 0: return bunch.Bunch(n=0, inds=[], scans=[], bbox=None, subs=None, autocuts=None)
+
+	# Some scans may have been cut by the autocuts. Save that information here,
+	# since it would be lost otherwise
+	read_ndets= utils.allgatherv([len(scan.dets) for scan in myscans], comm)
+	ncut = np.sum(read_ndets==0)
+	nok  = np.sum(read_ndets >0)
+	try: # Apparently this can fail
+		autocuts = bunch.Bunch(
+				names= [cut[0] for cut in myscans[0].autocut],
+				cuts = utils.allgatherv(np.array([[cut[1:] for cut in scan.autocut] for scan in myscans]),comm),
+				ids  = read_ids)
+	except (AttributeError, IndexError):
+		autocuts = None
+
+	# Prune fully autocut scans, now that we have output the autocuts
+	mydets  = [len(scan.dets) for scan in myscans]
+	myinds  = [ind  for ind, ndet in zip(myinds, mydets) if ndet > 0]
+	myscans = [scan for scan,ndet in zip(myscans,mydets) if ndet > 0]
+	if not quiet: L.info("Pruned %d fully autocut tods" % ncut)
+
+	# Try to get about the same amount of data for each mpi task.
+	# If we use distributed maps, we also try to make things as local as possible
+	mycosts = [s.nsamp*s.ndet for s in myscans]
+	if sky_local: # distributed maps
+		myboxes = [calc_sky_bbox_scan(s, osys) for s in myscans]
+		myinds, mysubs, mybbox = distribute_scans(myinds, mycosts, myboxes, comm)
+	else:
+		myinds = distribute_scans(myinds, mycosts, None, comm)
+		mybbox, mysubs = None, None
+	del myscans # scans do take up some space, even without the tod being read in
+
+	# And reread the correct files this time. Ideally we would
+	# transfer this with an mpi all-to-all, but then we would
+	# need to serialize and unserialize lots of data, which
+	# would require lots of code.
+	if not quiet: L.info("Rereading shuffled scans")
+	myinds, myscans = read_scans(ids, myinds, reader, db=db, dets=dets, downsample=downsample,
+			hwp_resample=hwp_resample, quiet=quiet)
+
+	# Get the index into the global list of accepted scans
+	allinds = utils.allgatherv(myinds, comm)
+	rinds   = utils.find(allinds, myinds)
+
+	return bunch.Bunch(n=nok, scans=myscans, inds=myinds, rinds=rinds, bbox=mybbox, subs=mysubs, autocuts=autocuts)
 
 def get_tod_groups(ids, samelen=True):
 	"""Given a set of ids. Return a list of groups of ids. Each croup consists of

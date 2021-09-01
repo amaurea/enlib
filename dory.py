@@ -373,6 +373,8 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=2
 			cat.dec, cat.ra = wmap.pix2sky(fits.pix.T)
 			cat.amp[:,0]  = fits.amp*rms
 			cat.damp[:,0] = fits.damp*rms
+			# Should not be necessary due to np.zeros above, but they appear to be uninitialized
+			cat.amp[:,1:] = cat.damp[:,1:] = 0
 			cat.npix = fits.npix
 			# Get fluxes. 1e9 is for GHz, 1e6 is for uK
 			fluxconv = utils.flux_factor(beam_area, freq*1e9)/1e6
@@ -465,6 +467,8 @@ def group_independent(pos, corrlen):
 #    starting to be quite a few things that need to be passed in:
 #    map, ivar, beam, freq and pixwin.
 
+class FitError(Exception): pass
+
 def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		apod=15, npass=2, indep_tol=1e-4, ps_res=2000, pixwin=True, beam_tol=1e-4,
 		dump=None, verbose=False, apod_margin=10, hack=0, region=0):
@@ -529,6 +533,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		# Build the noise model based on the current noise map
 		C          = measure_noise(H*noise, apod, apod, ps_res=ps_res)
 		if hack: C = planck_hack(C, hack)
+		if np.sum(C) == 0: raise FitError("No data in region")
 		iC         = 1/C
 		#enmap.write_map("test_iC.fits", iC)
 		rhs  = np.zeros([nsrc])
