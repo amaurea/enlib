@@ -114,6 +114,13 @@ def wrap_mm_m(name, vec2mat=False):
 		return B
 	return f
 
+def scale_rows(tod, scales):
+	"""Multpilies each row in tod[ndet,nsamp] by the corresponding
+	number in scales[ndet], in place, returning the result."""
+	core = get_core(tod.dtype)
+	core.scale_rows(tod.T, scales)
+	return tod
+
 matmul_sym   = wrap_mm_m("matmul_multi_sym", vec2mat=True)
 solve_multi  = wrap_mm_m("solve_multi")
 solve_masked = wrap_mm_m("solve_masked")

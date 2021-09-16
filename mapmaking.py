@@ -465,6 +465,34 @@ class SignalSrcSamp(SignalCut):
 		self.njunk = cutrange[1]
 		self.dof = zipper.ArrayZipper(np.zeros(self.njunk, self.dtype), shared=False, comm=comm)
 
+class SignalTemplate(Signal):
+	def __init__(self, scans, template, comm, name="template", ofmt="{name}", output=True,
+			ext="txt", pmat_order=None, sys=None, extra=[]):
+		Signal.__init__(self, name, ofmt, output, ext)
+		self.template = template
+		self.dof  = zipper.ArrayZipper(np.zeros(len(scans), dtype=template.dtype), shared=False, comm=comm)
+		self.dtype= template.dtype
+		self.data = {scan: pmat.PmatMap(scan, template, order=pmat_order, sys=sys, extra=extra) for scan in scans}
+		self.inds = {scan:i for i, scan in enumerate(scans)}
+		self.scans= scans
+		self.n    = len(scans)
+	def forward(self, scan, tod, work, tmul=1, mmul=1):
+		if scan not in self.data: return
+		self.data[scan].forward(tod, self.template*work[self.inds[scan]], tmul=tmul, mmul=mmul)
+	def backward(self, scan, tod, work, tmul=1, mmul=1):
+		if scan not in self.data: return
+		Ptd = self.template*0
+		self.data[scan].backward(tod, Ptd, tmul=tmul)
+		work[self.inds[scan]] = work[self.inds[scan]]*mmul + np.sum(Ptd)
+	def zeros(self, mat=False): return np.zeros(self.n, self.dtype)
+	def write(self, prefix, tag, m):
+		if not self.output: return
+		oname = self.ofmt.format(name=self.name, rank=self.dof.comm.rank)
+		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
+		with open(oname, "w") as ofile:
+			for i in range(self.n):
+				ofile.write("%s %8.3f\n" % (self.scans[i].id, m[i]))
+
 ######## Preconditioners ########
 # Preconditioners have a lot of overlap with Eqsys.A. That's not
 # really surprising, as their job is to approximate A, but it does
@@ -1054,12 +1082,18 @@ class MultiPostInsertSrcSamp:
 			all_maps[ind] = omaps[i]
 
 class FilterAddMap:
-	def __init__(self, scans, map, sys=None, mul=1, tmul=1, pmat_order=None):
-		self.map, self.sys, self.mul, self.tmul = map, sys, mul, tmul
-		self.data = {scan: pmat.PmatMap(scan, map, order=pmat_order, sys=sys) for scan in scans}
+	def __init__(self, scans, map, sys=None, mul=1, tmul=1, pmat_order=None, ptoff=[0,0], det_muls=None):
+		muls   = np.zeros(len(scans))+mul
+		ptoffs = np.zeros((len(scans),2))+ptoff
+		self.map, self.sys, self.mul, self.tmul, self.ptoffs, self.det_muls = map, sys, muls, tmul, ptoffs, det_muls
+		self.data = {scan: [pmat.PmatMap(scan, map, order=pmat_order, sys=sys, extra=extra_ptoff(ptoff)),mul,i] for i, (scan, mul, ptoff) in enumerate(zip(scans,muls,ptoffs))}
 	def __call__(self, scan, tod):
-		pmat = self.data[scan]
-		pmat.forward(tod, self.map, tmul=self.tmul, mmul=self.mul)
+		pmat, mul, i = self.data[scan]
+		pmat.forward(tod, self.map, tmul=self.tmul, mmul=mul)
+		if self.det_muls is not None:
+			if self.tmul != 0:
+				raise NotImplementedError("Per-detector gain errors in FilterAddMap not supported when tmul != 0")
+			array_ops.scale_rows(tod, self.det_muls[i])
 
 class FilterAddDmap:
 	def __init__(self, scans, subinds, dmap, sys=None, mul=1, tmul=1, pmat_order=None):
@@ -1071,6 +1105,10 @@ class FilterAddDmap:
 	def __call__(self, scan, tod):
 		pmat, work = self.data[scan]
 		pmat.forward(tod, work, tmul=self.tmul, mmul=self.mul)
+
+def extra_ptoff(ptoff):
+	if ptoff is None or np.all(ptoff == 0): return []
+	else: return [lambda pos,time: np.concatenate([pos[:2]+ptoff[:,None],pos[2:]],0)]
 
 class PostAddMap:
 	# This one is easy if imap and map are compatible (the common case),

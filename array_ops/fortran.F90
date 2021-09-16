@@ -374,4 +374,17 @@ subroutine maxbin(map, inds, vals)
 	end do
 end subroutine
 
+subroutine scale_rows(tod, det_scales)
+	implicit none
+	real(_), intent(inout) :: tod(:,:)
+	real(_), intent(in)    :: det_scales(:)
+	integer :: di, si
+	!$omp parallel do collapse(2)
+	do di = 1, size(tod,2)
+		do si = 1, size(tod,1)
+			tod(si,di) = tod(si,di) * det_scales(di)
+		end do
+	end do
+end subroutine
+
 end module
