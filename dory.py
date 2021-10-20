@@ -889,7 +889,10 @@ def merge_duplicates(cat, rlim=1*utils.arcmin, alim=0.25, uncertainty="min"):
 			def wmean(v, w):
 				if np.any(~np.isfinite(v.T)) or np.any(~np.isfinite(w)):
 					print(v, w, np.isfinite(v), np.isfinite(w))
-				return (np.sum(v.T*w.T,-1)/np.sum(w.T,-1)).T
+				rhs = np.sum(v.T*w.T,-1)
+				div = np.sum(w.T,-1)
+				div = np.maximum(div, 1e-30)
+				return (rhs/div).T
 			def nonan(a): return np.where(np.isfinite(a),a,0)
 			for key in cat.dtype.fields:
 				# Weighted mean in case one is more uncertain for some reason
