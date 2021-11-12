@@ -35,7 +35,7 @@ class ndmaps(np.ndarray):
 	def copy(self, order='K'):
 		return ndmaps(np.copy(self,order), self.geometries)
 	@property
-	def map(self):
+	def maps(self):
 		return _map_view(self)
 	def posmap(self, safe=True, corner=False, separable="auto", dtype=np.float64): return posmap(self.shape, self.wcs, safe=safe, corner=corner, separable=separable, dtype=dtype)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
@@ -151,12 +151,12 @@ def map_mul(mat, vec):
 
 def fft(mmap, omap=None, nthread=0, normalize=True, adjoint_ifft=False, dct=False):
 	if omap is None: omap = mmap*0j
-	return multimap([enmap.fft(im.astype(om.dtype), omap=om, nthread=nthread, normalize=normalize, adjoint_ifft=adjoint_ifft, dct=dct) for im, om in zip(mmap.map, omap.map)])
+	return multimap([enmap.fft(im.astype(om.dtype), omap=om, nthread=nthread, normalize=normalize, adjoint_ifft=adjoint_ifft, dct=dct) for im, om in zip(mmap.maps, omap.maps)])
 
 def ifft(mmap, omap=None, nthread=0, normalize=True, adjoint_fft=False, dct=False):
 	mmap = utils.ascomplex(mmap)
 	if omap is None: omap = mmap.copy()
-	return multimap([enmap.ifft(im, omap=om, nthread=nthread, normalize=normalize, adjoint_fft=adjoint_fft, dct=dct) for im, om in zip(mmap.map, omap.map)])
+	return multimap([enmap.ifft(im, omap=om, nthread=nthread, normalize=normalize, adjoint_fft=adjoint_fft, dct=dct) for im, om in zip(mmap.maps, omap.maps)])
 
 # Not sure if all these are needed here
 
@@ -176,10 +176,10 @@ def dct_adjoint(emap, omap=None, nthread=0, normalize=True):
 	return ifft(emap, omap=omap, nthread=nthread, normalize=normalize, adjoint_fft=True, dct=True)
 
 def map2harm(mmap, nthread=0, normalize=True, iau=False, spin=[0,2], adjoint_harm2map=False):
-	return multimap([enmap.map2harm(m, nthread=nthread, normalize=normalize, iau=iau, spin=spin, adjoint_harm2map=adjoint_harm2map) for m in mmap.map])
+	return multimap([enmap.map2harm(m, nthread=nthread, normalize=normalize, iau=iau, spin=spin, adjoint_harm2map=adjoint_harm2map) for m in mmap.maps])
 
 def harm2map(mmap, nthread=0, normalize=True, iau=False, spin=[0,2], keep_imag=False, adjoint_map2harm=False):
-	return multimap([enmap.harm2map(m, nthread=nthread, normalize=normalize, iau=iau, spin=spin, adjoint_map2harm=adjoint_map2harm) for m in mmap.map])
+	return multimap([enmap.harm2map(m, nthread=nthread, normalize=normalize, iau=iau, spin=spin, adjoint_map2harm=adjoint_map2harm) for m in mmap.maps])
 
 def map2harm_adjoint(mmap, nthread=0, normalize=True, iau=False, spin=[0,2], keep_imag=False):
 	return harm2map(mmap, nthread=nthread, normalize=normalize, iau=iau, spin=spin, keep_imag=keep_imag, adjoint_map2harm=True)
@@ -207,7 +207,7 @@ def write_map(fname, mmap, extra={}):
 	enmap.read_map, or together with multimap.read_map."""
 	hdus = []
 	for ind in range(mmap.nmap):
-		emap   = mmap.map[ind].copy()
+		emap   = mmap.maps[ind].copy()
 		header = emap.wcs.to_header(relax=True)
 		# Add our map headers
 		header['NAXIS'] = emap.ndim
