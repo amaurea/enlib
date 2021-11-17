@@ -127,7 +127,7 @@ class WaveletTransform:
 	"""This class implements a wavelet tansform. It provides thw forwards and
 	backwards wavelet transforms map2wave and wave2map, where map is a normal enmap
 	and the wavelet coefficients are represented as multimaps."""
-	def __init__(self, uht, basis=ButterTrim()):
+	def __init__(self, uht, basis=ButterTrim(), ores=None):
 		"""Initialize the WaveletTransform. Arguments:
 		* uht: An inscance of uharm.UHT, which specifies how to do harmonic transforms
 		  (flat-sky vs. curved sky and what lmax).
@@ -153,17 +153,23 @@ class WaveletTransform:
 			self.basis = basis.with_bounds(lmin, lmax)
 		# Build the geometries for each wavelet scale
 		if uht.mode == "flat":
-			oress      = np.maximum(np.pi/self.basis.lmaxs, ires)
+			oress = np.maximum(np.pi/self.basis.lmaxs, ires)
+			if ores is not None: oress[:] = ores
 			self.geometries = [make_wavelet_geometry_flat(uht.shape, uht.wcs, ires, ores) for ores in oress[:-1]] + [(uht.shape, uht.wcs)]
+
+			#self.geometries = [(uht.shape, uht.wcs) for i in oress]
+
 			# Evaluating the filters like this instead of using modlmap separately per geometry ensures that
 			# no rounding errors sneak in.
 			self.filters = [enmap.ndmap(self.basis(i, self.get_ls(i)), geo[1]) for i, geo in enumerate(self.geometries)]
 			# The norm ensures a unit fourier-space integral. lpixsize is just dly*dlx.
-			self.norms   = np.array([np.mean(f**2) for f in self.filters])
+			#self.norms   = np.array([np.mean(f**2) for f in self.filters])
+			self.norms   = np.array([np.sum(f**2)/uht.npix for f in self.filters])
 		else:
 			# I thought I would need twice the resolution here, but it doesn't seem necessary
 			# May be solved with ducc0 in the future.
-			oress        = np.maximum(np.pi/self.basis.lmaxs, ires)
+			oress = np.maximum(np.pi/self.basis.lmaxs, ires)
+			if ores is not None: oress[:] = ores
 			self.geometries = [make_wavelet_geometry_curved(uht.shape, uht.wcs, ores) for ores in oress]
 			self.filters = [self.basis(i, self.get_ls(i)) for i, geo in enumerate(self.geometries)]
 			self.norms   = [np.sum(f**2*(2*uht.l+1)) for f in self.filters]
@@ -186,17 +192,15 @@ class WaveletTransform:
 		geos = [(map.shape[:-2]+tuple(shape[-2:]), wcs) for (shape, wcs) in self.geometries]
 		if owave is None: owave = multimap.zeros(geos, map.dtype)
 		if self.uht.mode == "flat":
-			# I don't understand why this normalization is necessary. It's
-			# *mostly* pixel-normalization, except for the resample_fft part.
-			# physical normalization, which would make sense, gives the wrong result.
-			# TODO: Once things are more finalized, I should factor out the
-			# normalization to speed things up.
-			fmap = enmap.fft(map, normalize=True)
+			# This normalization is equivalent to True, "pix", True, but avoids the
+			# redundant multiplications
+			fmap = enmap.fft(map, normalize=False)
 			for i, (shape, wcs) in enumerate(self.geometries):
-				fsmall  = enmap.resample_fft(fmap, shape, norm="phys", corner=True)
-				fsmall *= self.filters[i]/self.norms[i]**0.5
-				owave.maps[i] = enmap.ifft(fsmall, normalize=True).real
+				fsmall  = enmap.resample_fft(fmap, shape, norm=None, corner=True)
+				fsmall *= self.filters[i] / (self.norms[i]**0.5 * fmap.npix)
+				owave.maps[i] = enmap.ifft(fsmall, normalize=False).real
 		else:
+			# TODO: Fix normalization
 			ainfo = sharp.alm_info(lmax=self.basis.lmax)
 			alm   = curvedsky.map2alm(map, ainfo=ainfo)
 			for i, (shape, wcs) in enumerate(self.geometries):
@@ -210,17 +214,19 @@ class WaveletTransform:
 		If omap is provided, it must have the correct geometry (the .geometry member of this class),
 		and will be overwritten with the result. In any case the result is returned."""
 		if self.uht.mode == "flat":
-			# See the comment in map2wave about the units.
+			# This normalization is equivalent to True, "pix", True, but avoids the
+			# redundant multiplications
 			fomap = enmap.zeros(wave.pre + self.uht.shape[-2:], self.uht.wcs, np.result_type(wave.dtype,0j))
 			for i, (shape, wcs) in enumerate(self.geometries):
-				fsmall  = enmap.fft(wave.maps[i], normalize=True)
-				fsmall *= self.filters[i]*self.norms[i]**0.5
-				enmap.resample_fft(fsmall, self.uht.shape, fomap=fomap, norm="phys", corner=True, op=np.add)
-			tmp = enmap.ifft(fomap, normalize=True).real
+				fsmall  = enmap.fft(wave.maps[i], normalize=False)
+				fsmall *= self.filters[i] * (self.norms[i]**0.5 / fsmall.npix)
+				enmap.resample_fft(fsmall, self.uht.shape, fomap=fomap, norm=None, corner=True, op=np.add)
+			tmp = enmap.ifft(fomap, normalize=False).real
 			if omap is None: omap    = tmp
 			else:            omap[:] = tmp
 			return omap
 		else:
+			# TODO: Fix normalization
 			ainfo = sharp.alm_info(lmax=self.basis.lmax)
 			oalm  = np.zeros(wave.pre + (ainfo.nelem,), dtype=np.result_type(wave.dtype,0j))
 			for i, (shape, wcs) in enumerate(self.geometries):
