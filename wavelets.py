@@ -26,7 +26,7 @@ class Butterworth:
 		if i == self.n-1: profile  = np.full(l.shape, 1.0)
 		else:             profile  = self.kernel(i,   l)
 		if i > 0:         profile -= self.kernel(i-1, l)
-		return profile
+		return profile**0.5
 	def kernel(self, i, l):
 		return 1/(1 + (l/(self.lmin*self.step**(i+0.5)))**(self.shape/np.log(self.step)))
 	def _finalize(self):
@@ -54,7 +54,7 @@ class ButterTrim:
 		if i == self.n-1: profile  = np.full(l.shape, 1.0)
 		else:             profile  = self.kernel(i,   l)
 		if i > 0:         profile -= self.kernel(i-1, l)
-		return profile
+		return profile**0.5
 	def kernel(self, i, l):
 		return trim_kernel(1/(1 + (l/(self.lmin*self.step**(i+0.5)))**(self.shape/np.log(self.step))), self.trim)
 	def _finalize(self):
@@ -63,6 +63,38 @@ class ButterTrim:
 		# => l = ((1+2*trim)/trim-1)**(1/a) * (lmin*(step**(i+0.5)))
 		self.lmaxs    = np.ceil(self.lmin * ((1+2*self.trim)/self.trim-1)**(np.log(self.step)/self.shape) * self.step**(np.arange(self.n)+0.5)).astype(int)
 		self.lmaxs[-1] = self.lmax
+
+class DigitalButterTrim:
+	"""Digitized version of ButterTrim, where the smooth filters are approximated with
+	a comb of top-hat functions. This makes the wavelets orthogonal, at the cost of
+	introducing poisson noise into the real-space profiles. This effective noise floor
+	to the real-space profile makes them couple things to arbitrary large distance at the
+	0.1% level in my tests."""
+	def __init__(self, step=2, shape=7, trim=1e-2, lmin=None, lmax=None):
+		self.step = step; self.shape = shape; self.trim = trim
+		self.lmin = lmin; self.lmax  = lmax
+		if lmax is not None:
+			if lmin is None: lmin = 1
+			self._finalize()
+	def with_bounds(self, lmin, lmax):
+		"""Return a new instance with the given multipole bounds"""
+		return DigitalButterTrim(step=self.step, shape=self.shape, trim=self.trim, lmin=lmin, lmax=lmax)
+	def __call__(self, i, l):
+		return utils.interpol(self.profiles[i], l[None], order=0)
+	def kernel(self, i, l):
+		return trim_kernel(1/(1 + (l/(self.lmin*self.step**(i+0.5)))**(self.shape/np.log(self.step))), self.trim)
+	def _finalize(self):
+		self.n        = int((np.log(self.lmax)-np.log(self.lmin))/np.log(self.step))
+		# 1/(1+(l/(lmin*(step**(i+0.5))))**a)*(1+2*trim)-trim = 0
+		# => l = ((1+2*trim)/trim-1)**(1/a) * (lmin*(step**(i+0.5)))
+		self.lmaxs    = np.ceil(self.lmin * ((1+2*self.trim)/self.trim-1)**(np.log(self.step)/self.shape) * self.step**(np.arange(self.n)+0.5)).astype(int)
+		self.lmaxs[-1] = self.lmax
+		# Evaluate 1d profiles
+		l        = np.arange(self.lmax)
+		kernels  = np.array([np.zeros(l.size)]+[digitize(self.kernel(i,l)) for i in range(self.n-1)] + [np.full(l.size,1.0)])
+		kernels  = np.sort(kernels,0)
+		self.profiles = kernels[1:]-kernels[:-1] # 0 or 1, so no square root needed
+
 
 class AdriSD:
 	"""Scale-discrete wavelet basis provided by Adri's optweight library.
@@ -82,7 +114,6 @@ class AdriSD:
 	def _finalize(self):
 		from optweight import wlm_utils
 		self.profiles, self.lmaxs = wlm_utils.get_sd_kernels(self.lamb, self.lmax, lmin=self.lmin)
-		self.profiles **= 2
 
 ##### Wavelet transforms #####
 
@@ -96,7 +127,7 @@ class WaveletTransform:
 	"""This class implements a wavelet tansform. It provides thw forwards and
 	backwards wavelet transforms map2wave and wave2map, where map is a normal enmap
 	and the wavelet coefficients are represented as multimaps."""
-	def __init__(self, uht, basis=ButterTrim()):
+	def __init__(self, uht, basis=ButterTrim(), ores=None):
 		"""Initialize the WaveletTransform. Arguments:
 		* uht: An inscance of uharm.UHT, which specifies how to do harmonic transforms
 		  (flat-sky vs. curved sky and what lmax).
@@ -122,23 +153,34 @@ class WaveletTransform:
 			self.basis = basis.with_bounds(lmin, lmax)
 		# Build the geometries for each wavelet scale
 		if uht.mode == "flat":
-			oress      = np.maximum(np.pi/self.basis.lmaxs, ires)
+			oress = np.maximum(np.pi/self.basis.lmaxs, ires)
+			if ores is not None: oress[:] = ores
 			self.geometries = [make_wavelet_geometry_flat(uht.shape, uht.wcs, ires, ores) for ores in oress[:-1]] + [(uht.shape, uht.wcs)]
+
+			#self.geometries = [(uht.shape, uht.wcs) for i in oress]
+
 			# Evaluating the filters like this instead of using modlmap separately per geometry ensures that
 			# no rounding errors sneak in.
-			self.filters = [self.basis(i, enmap.resample_fft(uht.l, geo[0], norm=None, corner=True)) for i, geo in enumerate(self.geometries)]
+			self.filters = [enmap.ndmap(self.basis(i, self.get_ls(i)), geo[1]) for i, geo in enumerate(self.geometries)]
+			# The norm ensures a unit fourier-space integral. lpixsize is just dly*dlx.
+			#self.norms   = np.array([np.mean(f**2) for f in self.filters])
+			self.norms   = np.array([np.sum(f**2)/uht.npix for f in self.filters])
 		else:
-			# Our quadrature requires twice the ideal resolution for now.
+			# I thought I would need twice the resolution here, but it doesn't seem necessary
 			# May be solved with ducc0 in the future.
-			oress        = np.maximum(np.pi/self.basis.lmaxs/2, ires)
+			oress = np.maximum(np.pi/self.basis.lmaxs, ires)
+			if ores is not None: oress[:] = ores
 			self.geometries = [make_wavelet_geometry_curved(uht.shape, uht.wcs, ores) for ores in oress]
-			self.filters = [self.basis(i, uht.l) for i, geo in enumerate(self.geometries)]
+			self.filters = [self.basis(i, self.get_ls(i)) for i, geo in enumerate(self.geometries)]
+			self.norms   = [np.sum(f**2*(2*uht.l+1)) for f in self.filters]
 	@property
 	def shape(self): return self.uht.shape
 	@property
 	def wcs(self): return self.uht.shape
 	@property
 	def geometry(self): return self.shape, self.wcs
+	@property
+	def nlevel(self): return len(self.geometries)
 	def map2wave(self, map, owave=None):
 		"""Transform from an enmap map[...,ny,nx] to a multimap of wavelet coefficients,
 		which is effectively a group of enmaps with the same pre-dimensions but varying shape.
@@ -150,51 +192,67 @@ class WaveletTransform:
 		geos = [(map.shape[:-2]+tuple(shape[-2:]), wcs) for (shape, wcs) in self.geometries]
 		if owave is None: owave = multimap.zeros(geos, map.dtype)
 		if self.uht.mode == "flat":
-			fmap = enmap.fft(map, normalize=False)/map.npix
+			# This normalization is equivalent to True, "pix", True, but avoids the
+			# redundant multiplications
+			fmap = enmap.fft(map, normalize=False)
 			for i, (shape, wcs) in enumerate(self.geometries):
 				fsmall  = enmap.resample_fft(fmap, shape, norm=None, corner=True)
-				fsmall *= self.filters[i]
-				owave.map[i] = enmap.ifft(fsmall, normalize=False).real
+				fsmall *= self.filters[i] / (self.norms[i]**0.5 * fmap.npix)
+				owave.maps[i] = enmap.ifft(fsmall, normalize=False).real
 		else:
+			# TODO: Fix normalization
 			ainfo = sharp.alm_info(lmax=self.basis.lmax)
 			alm   = curvedsky.map2alm(map, ainfo=ainfo)
 			for i, (shape, wcs) in enumerate(self.geometries):
 				smallinfo = sharp.alm_info(lmax=self.basis.lmaxs[i])
 				asmall    = sharp.transfer_alm(ainfo, alm, smallinfo)
-				smallinfo.lmul(asmall, self.filters[i], asmall)
-				curvedsky.alm2map(asmall, owave.map[i])
+				smallinfo.lmul(asmall, self.filters[i]/self.norms[i]**0.5, asmall)
+				curvedsky.alm2map(asmall, owave.maps[i])
 		return owave
 	def wave2map(self, wave, omap=None):
 		"""Transform from the wavelet coefficients wave (multimap), to the corresponding enmap.
 		If omap is provided, it must have the correct geometry (the .geometry member of this class),
 		and will be overwritten with the result. In any case the result is returned."""
 		if self.uht.mode == "flat":
-			# Hard to save memory by specifying omap in this case
+			# This normalization is equivalent to True, "pix", True, but avoids the
+			# redundant multiplications
 			fomap = enmap.zeros(wave.pre + self.uht.shape[-2:], self.uht.wcs, np.result_type(wave.dtype,0j))
 			for i, (shape, wcs) in enumerate(self.geometries):
-				fsmall  = enmap.fft(wave.map[i], normalize=False)
-				fsmall /= fsmall.npix
+				fsmall  = enmap.fft(wave.maps[i], normalize=False)
+				fsmall *= self.filters[i] * (self.norms[i]**0.5 / fsmall.npix)
 				enmap.resample_fft(fsmall, self.uht.shape, fomap=fomap, norm=None, corner=True, op=np.add)
 			tmp = enmap.ifft(fomap, normalize=False).real
 			if omap is None: omap    = tmp
 			else:            omap[:] = tmp
 			return omap
 		else:
+			# TODO: Fix normalization
 			ainfo = sharp.alm_info(lmax=self.basis.lmax)
 			oalm  = np.zeros(wave.pre + (ainfo.nelem,), dtype=np.result_type(wave.dtype,0j))
 			for i, (shape, wcs) in enumerate(self.geometries):
 				smallinfo = sharp.alm_info(lmax=self.basis.lmaxs[i])
-				asmall    = curvedsky.map2alm(wave.map[i], ainfo=smallinfo)
+				asmall    = curvedsky.map2alm(wave.maps[i], ainfo=smallinfo)
+				smallinfo.lmul(asmall, self.filters[i]*self.norms[i]**0.5, asmall)
 				sharp.transfer_alm(smallinfo, asmall, ainfo, oalm, op=np.add)
 			if omap is None:
 				omap = enmap.zeros(wave.pre + self.uht.shape[-2:], self.uht.wcs, wave.dtype)
 			return curvedsky.alm2map(oalm, omap)
+	def get_ls(self, i):
+		"""Get the multipole indices for wavelet scale i"""
+		if self.uht.mode == "flat":
+			return enmap.resample_fft(self.uht.l, self.geometries[i][0], norm=None, corner=True)
+		else:
+			return self.uht.l
 
 class HaarTransform:
-	"""A simple 2d Haar wavelet transform. Fast due to not using harmonic space, and
+	"""A simple 2d Haar-ish wavelet transform. Fast due to not using harmonic space, and
 	has the nice property of being orthoginal, which means that there's no mode leakage.
 	Does not take the sky's curvature into account. This might not be a big deal since
-	wavelets support position-dependent models anyway."""
+	wavelets support position-dependent models anyway.
+
+	The way this is implemented it isn't fully orthogonal, since the wavelets have slightly
+	more degrees of freedom than the map.
+	"""
 	def __init__(self, nlevel, ref=[0,0]):
 		"""Initialize the HaarTransform.
 		* nlevel: The number of wavelets to compute. Each level halves the map resolution.
@@ -214,15 +272,21 @@ class HaarTransform:
 		return multimap.multimap(omaps[::-1])
 	def wave2map(self, wave):
 		"""Transform from the wavelet coefficients wave (multimap), to the corresponding enmap."""
-		omap = wave.map[0].copy()
+		omap = wave.maps[0].copy()
 		for i in range(1, wave.nmap):
 			off  = enmap.get_downgrade_offset(*wave.geometries[i], 2, self.ref)
-			omap = wave.map[i] + enmap.upgrade(omap, 2, off=off, inclusive=True, oshape=wave.geometries[i].shape)
+			omap = wave.maps[i] + enmap.upgrade(omap, 2, off=off, inclusive=True, oshape=wave.geometries[i].shape)
 		return omap
 
 ####### Helper functions #######
 
 def trim_kernel(a, tol): return np.clip(a*(1+2*tol)-tol,0,1)
+
+def digitize(a):
+	"""Turn a smooth array with values between 0 and 1 into an on/off array
+	that approximates it."""
+	f = np.round(np.cumsum(a))
+	return np.concatenate([[1],f[1:]!=f[:-1]])
 
 def make_wavelet_geometry_flat(ishape, iwcs, ires, ores):
 	# I've found that, possibly due to rounding or imprecise scaling, I sometimes need to add up
@@ -233,7 +297,7 @@ def make_wavelet_geometry_flat(ishape, iwcs, ires, ores):
 	owcs      = wcsutils.scale(iwcs, oshape[-2:]/ishape[-2:], rowmajor=True, corner=True)
 	return oshape, owcs
 
-def make_wavelet_geometry_curved(ishape, iwcs, ores, pad=0):
+def make_wavelet_geometry_curved(ishape, iwcs, ores, minres=2*utils.degree):
 	# NOTE: This function assumes:
 	# * cylindrical coordinates
 	# * dec increases with y, ra decreases with x
@@ -241,7 +305,7 @@ def make_wavelet_geometry_curved(ishape, iwcs, ores, pad=0):
 	# We need to be able to perform SHTs on these, so we can't just generate an arbitrary
 	# pixelization. Find the fullsky geometry with the desired resolution, and cut out the
 	# part best matching our patch.
-	res = np.pi/np.ceil(np.pi/ores)
+	res = min(np.pi/np.ceil(np.pi/ores),minres)
 	# Find the bounding box of our patch, and make sure it's in bounds.
 	box = enmap.corners(ishape, iwcs)
 	box[:,0] = np.clip(box[:,0], -np.pi/2, np.pi/2)
