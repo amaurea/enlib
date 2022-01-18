@@ -87,7 +87,7 @@ class DataField:
 		return self
 	def __setattr__(self, name, val):
 		# Enforce contiguous data if requested
-		if name is "data" and self.force_contiguous:
+		if name == "data" and self.force_contiguous:
 			val = np.ascontiguousarray(val)
 		if name in ["dets","samples","dets_orig","samples_orig"] and val is not None:
 			val = np.asarray(val)
@@ -173,7 +173,7 @@ class DataSet:
 		self.__dict__["datafields"][name].data = value
 	def __delitem__(self, name):
 		del self.datafields[name]
-	def __dir__(self): return sorted(self.__dict__.keys() + self.names)
+	def __dir__(self): return sorted(tuple(self.__dict__.keys()) + tuple(self.names))
 	def __repr__(self):
 		descs = ["%s%s" % (name, self.datafields[name].data_desc()) for name in self.datafields]
 		return "DataSet([%s])" % (",".join(descs))
