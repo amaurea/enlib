@@ -200,7 +200,7 @@ class WaveletTransform:
 				fsmall *= self.filters[i] / (self.norms[i]**0.5 * fmap.npix)
 				owave.maps[i] = enmap.ifft(fsmall, normalize=False).real
 		else:
-			# TODO: Fix normalization
+			# FIXME: Normalization is broken
 			ainfo = sharp.alm_info(lmax=self.basis.lmax)
 			alm   = curvedsky.map2alm(map, ainfo=ainfo)
 			for i, (shape, wcs) in enumerate(self.geometries):
@@ -226,7 +226,7 @@ class WaveletTransform:
 			else:            omap[:] = tmp
 			return omap
 		else:
-			# TODO: Fix normalization
+			# FIXME: Normalization is broken
 			ainfo = sharp.alm_info(lmax=self.basis.lmax)
 			oalm  = np.zeros(wave.pre + (ainfo.nelem,), dtype=np.result_type(wave.dtype,0j))
 			for i, (shape, wcs) in enumerate(self.geometries):
@@ -243,6 +243,108 @@ class WaveletTransform:
 			return enmap.resample_fft(self.uht.l, self.geometries[i][0], norm=None, corner=True)
 		else:
 			return self.uht.l
+
+#class DirectionalWaveletTransform:
+#	"""This class implements a directional wavelet tansform. It provides thw forwards and
+#	backwards wavelet transforms map2wave and wave2map, where map is a normal enmap
+#	and the wavelet coefficients are represented as multimaps."""
+#	def __init__(self, uht, basis=ButterTrim(), angular_basis=AngularButterTrim(), ores=None):
+#		"""Initialize the WaveletTransform. Arguments:
+#		* uht: An inscance of uharm.UHT, which specifies how to do harmonic transforms
+#		  (flat-sky vs. curved sky and what lmax).
+#		* basis: A basis-generating function, which provides the definition of the wavelet
+#		  filters. Defaults to ButterTrim(), which is fast to evaluate and decently local
+#		  both spatially and harmonically.
+#
+#		Currently only flat-sky is supported."""
+#		self.uht   = uht
+#		self.basis = basis
+#		ires       = np.max(enmap.pixshapebounds(uht.shape, uht.wcs))
+#		# Respect the lmin and lmax in the basis if they are present, but otherwise
+#		# determine them ourselves.
+#		if self.basis.lmax is None or self.basis.lmin is None:
+#			lmin = self.basis.lmin; lmax = self.basis.lmax
+#			if lmax is None: lmax = min(int(np.ceil(np.pi/ires)),uht.lmax)
+#			if lmin is None: lmin = min(int(np.ceil(np.pi/np.max(enmap.extent(uht.shape, uht.wcs)))),lmax)
+#			self.basis = basis.with_bounds(lmin, lmax)
+#		# Build the geometries for each wavelet scale
+#		oress = np.maximum(np.pi/self.basis.lmaxs, ires)
+#		if ores is not None: oress[:] = ores
+#		self.geometries = [make_wavelet_geometry_flat(uht.shape, uht.wcs, ires, ores) for ores in oress[:-1]] + [(uht.shape, uht.wcs)]
+#		self.filters = [enmap.ndmap(self.basis(i, self.get_ls(i)), geo[1]) for i, geo in enumerate(self.geometries)]
+#		self.norms   = np.array([np.sum(f**2)/uht.npix for f in self.filters])
+#	@property
+#	def shape(self): return self.uht.shape
+#	@property
+#	def wcs(self): return self.uht.shape
+#	@property
+#	def geometry(self): return self.shape, self.wcs
+#	@property
+#	def nlevel(self): return len(self.geometries)
+#	def map2wave(self, map, owave=None):
+#		"""Transform from an enmap map[...,ny,nx] to a multimap of wavelet coefficients,
+#		which is effectively a group of enmaps with the same pre-dimensions but varying shape.
+#		If owave is provided, it should be a multimap with the right shape (compatible with
+#		the .geometries member of this class), and will be overwritten with the result. In
+#		any case the resulting wavelet coefficients are returned."""
+#		# Output geometry. Can't just use our existing one because it doesn't know about the
+#		# map pre-dimensions. There should be an easier way to do this.
+#		geos = [(map.shape[:-2]+tuple(shape[-2:]), wcs) for (shape, wcs) in self.geometries]
+#		if owave is None: owave = multimap.zeros(geos, map.dtype)
+#		if self.uht.mode == "flat":
+#			# This normalization is equivalent to True, "pix", True, but avoids the
+#			# redundant multiplications
+#			fmap = enmap.fft(map, normalize=False)
+#			for i, (shape, wcs) in enumerate(self.geometries):
+#				fsmall  = enmap.resample_fft(fmap, shape, norm=None, corner=True)
+#				fsmall *= self.filters[i] / (self.norms[i]**0.5 * fmap.npix)
+#				owave.maps[i] = enmap.ifft(fsmall, normalize=False).real
+#		else:
+#			# FIXME: Normalization is broken
+#			ainfo = sharp.alm_info(lmax=self.basis.lmax)
+#			alm   = curvedsky.map2alm(map, ainfo=ainfo)
+#			for i, (shape, wcs) in enumerate(self.geometries):
+#				smallinfo = sharp.alm_info(lmax=self.basis.lmaxs[i])
+#				asmall    = sharp.transfer_alm(ainfo, alm, smallinfo)
+#				smallinfo.lmul(asmall, self.filters[i]/self.norms[i]**0.5, asmall)
+#				curvedsky.alm2map(asmall, owave.maps[i])
+#		return owave
+#	def wave2map(self, wave, omap=None):
+#		"""Transform from the wavelet coefficients wave (multimap), to the corresponding enmap.
+#		If omap is provided, it must have the correct geometry (the .geometry member of this class),
+#		and will be overwritten with the result. In any case the result is returned."""
+#		if self.uht.mode == "flat":
+#			# This normalization is equivalent to True, "pix", True, but avoids the
+#			# redundant multiplications
+#			fomap = enmap.zeros(wave.pre + self.uht.shape[-2:], self.uht.wcs, np.result_type(wave.dtype,0j))
+#			for i, (shape, wcs) in enumerate(self.geometries):
+#				fsmall  = enmap.fft(wave.maps[i], normalize=False)
+#				fsmall *= self.filters[i] * (self.norms[i]**0.5 / fsmall.npix)
+#				enmap.resample_fft(fsmall, self.uht.shape, fomap=fomap, norm=None, corner=True, op=np.add)
+#			tmp = enmap.ifft(fomap, normalize=False).real
+#			if omap is None: omap    = tmp
+#			else:            omap[:] = tmp
+#			return omap
+#		else:
+#			# FIXME: Normalization is broken
+#			ainfo = sharp.alm_info(lmax=self.basis.lmax)
+#			oalm  = np.zeros(wave.pre + (ainfo.nelem,), dtype=np.result_type(wave.dtype,0j))
+#			for i, (shape, wcs) in enumerate(self.geometries):
+#				smallinfo = sharp.alm_info(lmax=self.basis.lmaxs[i])
+#				asmall    = curvedsky.map2alm(wave.maps[i], ainfo=smallinfo)
+#				smallinfo.lmul(asmall, self.filters[i]*self.norms[i]**0.5, asmall)
+#				sharp.transfer_alm(smallinfo, asmall, ainfo, oalm, op=np.add)
+#			if omap is None:
+#				omap = enmap.zeros(wave.pre + self.uht.shape[-2:], self.uht.wcs, wave.dtype)
+#			return curvedsky.alm2map(oalm, omap)
+#	def get_ls(self, i):
+#		"""Get the multipole indices for wavelet scale i"""
+#		if self.uht.mode == "flat":
+#			return enmap.resample_fft(self.uht.l, self.geometries[i][0], norm=None, corner=True)
+#		else:
+#			return self.uht.l
+#
+#
 
 class HaarTransform:
 	"""A simple 2d Haar-ish wavelet transform. Fast due to not using harmonic space, and
@@ -288,11 +390,11 @@ def digitize(a):
 	f = np.round(np.cumsum(a))
 	return np.concatenate([[1],f[1:]!=f[:-1]])
 
-def make_wavelet_geometry_flat(ishape, iwcs, ires, ores):
+def make_wavelet_geometry_flat(ishape, iwcs, ires, ores, margin=4):
 	# I've found that, possibly due to rounding or imprecise scaling, I sometimes need to add up
 	# to +2 to avoid parts of some basis functions being cut off. I add +5 to get some margin -
 	# it's cheap anyway - though it would be best to get to the bottom of it.
-	oshape    = (np.ceil(np.array(ishape[-2:])*ires/ores)).astype(int)+5
+	oshape    = (np.ceil(np.array(ishape[-2:])*ires/ores)).astype(int)+margin
 	oshape    = np.minimum(oshape, ishape[-2:])
 	owcs      = wcsutils.scale(iwcs, oshape[-2:]/ishape[-2:], rowmajor=True, corner=True)
 	return oshape, owcs

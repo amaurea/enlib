@@ -225,7 +225,9 @@ def sz_2d_profile(shape, pixshape, pos=[0,0], fwhm=1.0, oversample=5, core=10, p
 		big_map = sz_rad_projected_fast(big_rad, fwhm, fwhm_deriv=scale_deriv)
 		# Then downgrade. This is done to get the pixel window. We can't just use
 		# fourier method to get the pixel window here, as the signal is not band-limited
-		map   = enmap.downgrade(big_map, oversample)
+		#map   = enmap.downgrade(big_map, oversample)
+		map   = utils.block_reduce(big_map, oversample, axis=-2)
+		map   = utils.block_reduce(map,     oversample, axis=-1)
 		return map
 	# First evaluate the locations at medium resolution
 	map  = over_helper(shape, pixshape, fwhm, bpos+ipos, oversample)
@@ -271,14 +273,14 @@ def sz_2d_profile(shape, pixshape, pos=[0,0], fwhm=1.0, oversample=5, core=10, p
 #	y2d = enmap.ndmap(np.exp(interpolate.splev(r, spline)), wcs)
 #	return y2d
 
-def sz_map_profile(shape, wcs, fwhm=1.0):
+def sz_map_profile(shape, wcs, fwhm=1.0, corner=True):
 	"""Evaluate the 2d sz profile for the enmap with the given shape
 	and profile."""
 	pixshape = enmap.pixshape(shape, wcs)/utils.arcmin
 	pixshape[1] *= np.cos(enmap.pix2sky(shape, wcs, [shape[-2]//2,shape[-1]//2])[0])
-	res = sz_2d_profile(shape, pixshape, fwhm=fwhm, oversample=1, core=50, periodic=True)
+	res = sz_2d_profile(shape, pixshape, fwhm=fwhm, oversample=1, core=min(50,min(shape[-2:])//2), periodic=True)
 	# Shift center to top left corner
-	res = np.roll(np.roll(res, -(shape[-2]//2), -2), -(shape[-1]//2), -1)
+	if corner: res = np.roll(np.roll(res, -(shape[-2]//2), -2), -(shape[-1]//2), -1)
 	return enmap.ndmap(res, wcs)
 
 def butter(f, f0, alpha):
