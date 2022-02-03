@@ -22,11 +22,12 @@ class Butterworth:
 	def with_bounds(self, lmin, lmax):
 		"""Return a new instance with the given multipole bounds"""
 		return Butterworth(step=self.step, shape=self.shape, tol=self.tol, lmin=lmin, lmax=lmax)
-	def __call__(self, i, l):
-		if i == self.n-1: profile  = np.full(l.shape, 1.0)
-		else:             profile  = self.kernel(i,   l)
-		if i > 0:         profile -= self.kernel(i-1, l)
+	def __call__(self, i, l, half=False):
+		if i == self.n-1:      profile  = np.full(l.shape, 1.0)
+		else:                  profile  = self.kernel(i,   l)
+		if i > 0 and not half: profile -= self.kernel(i-1, l)
 		return profile**0.5
+	def half(self, i, l): return self(i, l, half=True)
 	def kernel(self, i, l):
 		return 1/(1 + (l/(self.lmin*self.step**(i+0.5)))**(self.shape/np.log(self.step)))
 	def _finalize(self):
@@ -50,11 +51,12 @@ class ButterTrim:
 	def with_bounds(self, lmin, lmax):
 		"""Return a new instance with the given multipole bounds"""
 		return ButterTrim(step=self.step, shape=self.shape, trim=self.trim, lmin=lmin, lmax=lmax)
-	def __call__(self, i, l):
-		if i == self.n-1: profile  = np.full(l.shape, 1.0)
-		else:             profile  = self.kernel(i,   l)
-		if i > 0:         profile -= self.kernel(i-1, l)
+	def __call__(self, i, l, half=False):
+		if i == self.n-1:      profile  = np.full(l.shape, 1.0)
+		else:                  profile  = self.kernel(i,   l)
+		if i > 0 and not half: profile -= self.kernel(i-1, l)
 		return profile**0.5
+	def half(self, i, l): return self(i, l, half=True)
 	def kernel(self, i, l):
 		return trim_kernel(1/(1 + (l/(self.lmin*self.step**(i+0.5)))**(self.shape/np.log(self.step))), self.trim)
 	def _finalize(self):
@@ -81,6 +83,7 @@ class DigitalButterTrim:
 		return DigitalButterTrim(step=self.step, shape=self.shape, trim=self.trim, lmin=lmin, lmax=lmax)
 	def __call__(self, i, l):
 		return utils.interpol(self.profiles[i], l[None], order=0)
+	def half(self, i, l): raise NotImplementedError
 	def kernel(self, i, l):
 		return trim_kernel(1/(1 + (l/(self.lmin*self.step**(i+0.5)))**(self.shape/np.log(self.step))), self.trim)
 	def _finalize(self):
@@ -111,6 +114,7 @@ class AdriSD:
 	def n(self): return len(self.profiles)
 	def __call__(self, i, l):
 		return np.interp(l, np.arange(self.profiles[i].size), self.profiles[i])
+	def half(self, i, l): raise NotImplementedError
 	def _finalize(self):
 		from optweight import wlm_utils
 		self.profiles, self.lmaxs = wlm_utils.get_sd_kernels(self.lamb, self.lmax, lmin=self.lmin)
@@ -158,12 +162,6 @@ class WaveletTransform:
 				self.geometries = [make_wavelet_geometry_flat(uht.shape, uht.wcs, ires, ores) for ores in oress[:-1]] + [(uht.shape, uht.wcs)]
 			else:
 				self.geometries = [make_wavelet_geometry_flat(uht.shape, uht.wcs, ires, ores) for l in self.basis.lmaxs]
-			# Evaluating the filters like this instead of using modlmap separately per geometry ensures that
-			# no rounding errors sneak in.
-			self.filters = [enmap.ndmap(self.basis(i, self.get_ls(i)), geo[1]) for i, geo in enumerate(self.geometries)]
-			# The norm ensures a unit fourier-space integral. lpixsize is just dly*dlx.
-			#self.norms   = np.array([np.mean(f**2) for f in self.filters])
-			self.norms   = np.array([np.sum(f**2)/uht.npix for f in self.filters])
 		else:
 			# I thought I would need twice the resolution here, but it doesn't seem necessary
 			# May be solved with ducc0 in the future.
@@ -172,8 +170,7 @@ class WaveletTransform:
 				self.geometries = [make_wavelet_geometry_curved(uht.shape, uht.wcs, ores) for ores in oress]
 			else:
 				self.geometries = [make_wavelet_geometry_curved(uht.shape, uht.wcs, ores) for l in self.basis.lmaxs]
-			self.filters = [self.basis(i, self.get_ls(i)) for i, geo in enumerate(self.geometries)]
-			self.norms   = [np.sum(f**2*(2*uht.l+1)) for f in self.filters]
+		self.filters, self.norms = self.build_filters()
 	@property
 	def shape(self): return self.uht.shape
 	@property
@@ -182,12 +179,15 @@ class WaveletTransform:
 	def geometry(self): return self.shape, self.wcs
 	@property
 	def nlevel(self): return len(self.geometries)
-	def map2wave(self, map, owave=None):
+	def map2wave(self, map, owave=None, half=False):
 		"""Transform from an enmap map[...,ny,nx] to a multimap of wavelet coefficients,
 		which is effectively a group of enmaps with the same pre-dimensions but varying shape.
 		If owave is provided, it should be a multimap with the right shape (compatible with
 		the .geometries member of this class), and will be overwritten with the result. In
 		any case the resulting wavelet coefficients are returned."""
+		# The half-filter is uncommon, so build it on the fly instead of precomputing to
+		# not waste memory.
+		filters, norms = self.build_filters(True) if half else (self.filters, self.norms)
 		# Output geometry. Can't just use our existing one because it doesn't know about the
 		# map pre-dimensions. There should be an easier way to do this.
 		geos = [(map.shape[:-2]+tuple(shape[-2:]), wcs) for (shape, wcs) in self.geometries]
@@ -198,7 +198,7 @@ class WaveletTransform:
 			fmap = enmap.fft(map, normalize=False)
 			for i, (shape, wcs) in enumerate(self.geometries):
 				fsmall  = enmap.resample_fft(fmap, shape, norm=None, corner=True)
-				fsmall *= self.filters[i] / (self.norms[i]**0.5 * fmap.npix)
+				fsmall *= filters[i] / (norms[i]**0.5 * fmap.npix)
 				owave.maps[i] = enmap.ifft(fsmall, normalize=False).real
 		else:
 			# FIXME: Normalization is broken
@@ -207,21 +207,22 @@ class WaveletTransform:
 			for i, (shape, wcs) in enumerate(self.geometries):
 				smallinfo = sharp.alm_info(lmax=self.basis.lmaxs[i])
 				asmall    = sharp.transfer_alm(ainfo, alm, smallinfo)
-				smallinfo.lmul(asmall, self.filters[i]/self.norms[i]**0.5, asmall)
+				smallinfo.lmul(asmall, filters[i]/norms[i]**0.5, asmall)
 				curvedsky.alm2map(asmall, owave.maps[i], tweak=self.uht.tweak)
 		return owave
-	def wave2map(self, wave, omap=None, individual=False):
+	def wave2map(self, wave, omap=None, half=False, individual=False):
 		"""Transform from the wavelet coefficients wave (multimap), to the corresponding enmap.
 		If omap is provided, it must have the correct geometry (the .geometry member of this class),
 		and will be overwritten with the result. In any case the result is returned."""
 		if individual: return self._wave2map_individual(wave, omap=omap)
+		filters, norms = self.build_filters(True) if half else self.filters, self.norms
 		if self.uht.mode == "flat":
 			# This normalization is equivalent to True, "pix", True, but avoids the
 			# redundant multiplications
 			fomap = enmap.zeros(wave.pre + self.uht.shape[-2:], self.uht.wcs, np.result_type(wave.dtype,0j))
 			for i, (shape, wcs) in enumerate(self.geometries):
 				fsmall  = enmap.fft(wave.maps[i], normalize=False)
-				fsmall *= self.filters[i] * (self.norms[i]**0.5 / fsmall.npix)
+				fsmall *= filters[i] * (norms[i]**0.5 / fsmall.npix)
 				enmap.resample_fft(fsmall, self.uht.shape, fomap=fomap, norm=None, corner=True, op=np.add)
 			tmp = enmap.ifft(fomap, normalize=False).real
 			if omap is None: omap    = tmp
@@ -234,7 +235,7 @@ class WaveletTransform:
 			for i, (shape, wcs) in enumerate(self.geometries):
 				smallinfo = sharp.alm_info(lmax=self.basis.lmaxs[i])
 				asmall    = curvedsky.map2alm(wave.maps[i], ainfo=smallinfo, tweak=self.uht.tweak)
-				smallinfo.lmul(asmall, self.filters[i]*self.norms[i]**0.5, asmall)
+				smallinfo.lmul(asmall, filters[i]*norms[i]**0.5, asmall)
 				sharp.transfer_alm(smallinfo, asmall, ainfo, oalm, op=np.add)
 			if omap is None:
 				omap = enmap.zeros(wave.pre + self.uht.shape[-2:], self.uht.wcs, wave.dtype)
@@ -272,6 +273,15 @@ class WaveletTransform:
 			return enmap.resample_fft(self.uht.l, self.geometries[i][0], norm=None, corner=True)
 		else:
 			return self.uht.l
+	def build_filters(self, half=False):
+		basis = self.basis if not half else self.basis.half
+		if self.uht.mode == "flat":
+			filters = [enmap.ndmap(basis(i, self.get_ls(i)), geo[1]) for i, geo in enumerate(self.geometries)]
+			norms   = np.array([np.sum(f**2)/self.uht.npix for f in filters])
+		else:
+			filters = [basis(i, self.get_ls(i)) for i, geo in enumerate(self.geometries)]
+			norms   = [np.sum(f**2*(2*self.uht.l+1)) for f in filters]
+		return filters, norms
 
 #class DirectionalWaveletTransform:
 #	"""This class implements a directional wavelet tansform. It provides thw forwards and
