@@ -243,6 +243,8 @@ def find_scan_periods(db, ttol=60, atol=1*utils.degree):
 	# Start, end
 	t1   = info[:,-2] - info[:,-1]/2
 	t2   = t1 + info[:,-1]
+	# Remove angle ambiguities
+	info[0] = utils.rewind(info[0])
 	# How to find jumps:
 	# 1. It's a jump if the scanning changes
 	# 2. It's also a jump if a the interval between tod-ends and tod-starts becomes too big

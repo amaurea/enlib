@@ -459,6 +459,15 @@ class SignalSrcSamp(SignalCut):
 			del tod
 			src_cut  = sampcut.from_mask(tod_mask); del tod_mask
 			# Then set up our pointing matrix and DOF as usual
+			# Should I use keep=True or keep=False?
+			# False:
+			#  Faster convergence.
+			#  Might have problems with partially masked pixels?
+			#  Requires SrcSamp to be earlier than the other signals in the list
+			# True:
+			#  Degeneracy gives slower convergence
+			#  Less error prone ot use
+			# I'll use keep=True for now
 			mat = pmat.PmatCut(scan, cut_type, keep=True, cut=src_cut)
 			cutrange = [cutrange[1], cutrange[1]+mat.njunk]
 			self.data[scan] = [mat, cutrange]
@@ -1554,7 +1563,6 @@ class Eqsys:
 					#tod -= np.copy(tod[:,0,None])
 					tod  = tod.astype(self.dtype)
 			else: tod = itod
-			#FIXME
 			tod = utils.deslope(tod)
 			#dump("dump_getsamples.hdf", tod)
 			#dump("dump_prefilter_mean.hdf", np.mean(tod,0))
@@ -1593,8 +1601,6 @@ class Eqsys:
 				if self.filters_noisebuild:
 					tod = tod_orig
 					del tod_orig
-				#print "FIXME gapfill const after building noise model", scan.id, scan.cut.ndet, scan.cut.nsamp, tod.shape
-				#sampcut.gapfill_const(scan.cut, tod, 0.0, True)
 			#dump("dump_postupdate.hdf", tod)
 			with bench.mark("b_filter2"):
 				for filter in self.filters2: filter(scan, tod)
