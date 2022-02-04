@@ -350,7 +350,7 @@ def smooth_ps_hybrid(ps, grid_res, rad_res=2.0):
 	ps_smooth = ps_resid*ps_radial
 	return ps_smooth
 
-def read_map(fname, pbox, name=None, cache_dir=None, dtype=None, read_cache=False):
+def read_map(fname, pbox=None, geometry=None, name=None, cache_dir=None, dtype=None, read_cache=False):
 	if read_cache:
 		map = enmap.read_map(cache_dir + "/" + name)
 		if dtype is not None: map = map.astype(dtype)
@@ -360,7 +360,7 @@ def read_map(fname, pbox, name=None, cache_dir=None, dtype=None, read_cache=Fals
 			map = retile.read_area(fname, pbox)
 			if dtype is not None: map = map.astype(dtype)
 		else:
-			map = enmap.read_map(fname, pixbox=pbox)
+			map = enmap.read_map(fname, pixbox=pbox, geometry=geometry)
 		if cache_dir is not None and name is not None:
 			enmap.write_map(cache_dir + "/" + name, map)
 	#if map.ndim == 3: map = map[:1]
@@ -502,6 +502,8 @@ class Mapset:
 				split.div = os.path.join(cdir, split.div)
 			if "mask" in dataset:
 				dataset.mask = os.path.join(cdir, dataset.mask)
+			if "filter_mask" in dataset:
+				dataset.filter_mask = os.path.join(cdir, dataset.filter_mask)
 		# Read the geometry from all the datasets. Also make paths relative to us instead
 		# of the config file
 		self.nl = 30000
@@ -569,15 +571,21 @@ class Mapset:
 				continue
 
 			if "mask" in dataset:
-				mask = 1-read_map(dataset.mask, pbox, name=os.path.basename(dataset.mask), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
+				mask = 1-read_map(dataset.mask, geometry=(res.shape, res.wcs), name=os.path.basename(dataset.mask), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
 			else: mask = None
+			if "filter_mask" in dataset:
+				dataset.filter_mask = 1-read_map(dataset.filter_mask, geometry=(res.shape, res.wcs), name=os.path.basename(dataset.filter_mask), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
+			else: dataset.filter_mask = None
+
+			dataset.filter     = dataset.filter     if "filter"     in dataset else []
+			dataset.downweight = dataset.downweight if "downweight" in dataset else []
 
 			for si, split in enumerate(dataset.splits):
 				split.data = None
 				if verbose: print("Reading %s" % split.map)
 				try:
-					map = read_map(split.map, pbox, name=os.path.basename(split.map), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
-					div = read_map(split.div, pbox, name=os.path.basename(split.div), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
+					map = read_map(split.map, geometry=(res.shape, res.wcs), name=os.path.basename(split.map), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
+					div = read_map(split.div, geometry=(res.shape, res.wcs), name=os.path.basename(split.div), cache_dir=cache_dir,dtype=dtype, read_cache=read_cache)
 				except (IOError, OSError) as e: continue
 				map *= dataset.gain
 				div *= dataset.gain**-2
@@ -615,15 +623,19 @@ def sanitize_maps(mapset, map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, a
 			split.data.div = np.minimum(split.data.div, split.ref_div*div_tol)
 			split.data.div = filter_div(split.data.div)
 			split.data.map = np.maximum(-map_max, np.minimum(map_max, split.data.map))
-			if dataset.highpass and detrend:
-				# This uses an area 60 pixels wide around the edge of the div as a context to solve
-				# for a smooth background behavior, and then subtracts it. This will bias the the edge
-				# power low, but mostly towards the outer parts of the reference region, which is strongly
-				# apodized anyway.
-				split.data.map  = detrend_map(split.data.map, split.data.div, edge=apod_div_edge)
+			# FIXME: detrend commented out for now. It was very slow, and introduced more bias
+			# than expected. Its inclusion was mainly motivated by MBAC and deep patches. Will think
+			# about what to do with it. Probably best to make it a per-dataset choice.
+			#if dataset.highpass and detrend:
+			#	# This uses an area 60 pixels wide around the edge of the div as a context to solve
+			#	# for a smooth background behavior, and then subtracts it. This will bias the the edge
+			#	# power low, but mostly towards the outer parts of the reference region, which is strongly
+			#	# apodized anyway.
+			#	split.data.map  = detrend_map(split.data.map, split.data.div, edge=apod_div_edge)
 			if crop_div_edge:
 				# Avoid areas too close to the edge of div
 				split.data.div *= calc_dist(split.data.div > 0) > 60
+			print("A", dataset.name, i, np.std(split.data.map))
 			# Expand map to ncomp components
 			split.data.map = add_missing_comps(split.data.map, mapset.ncomp, fill="random")
 			# Distrust very low hitcount regions
@@ -791,37 +803,103 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		dataset.splits = [split for split in dataset.splits if split.data is not None]
 	mapset.datasets = [dataset for dataset in mapset.datasets if len(dataset.splits) >= 2 and dataset.iN is not None]
 
-def setup_filter(mapset, mode="weight", filter_kxrad=20, filter_highpass=200, filter_kx_ymax_scale=0.5):
-	# Add any fourier-space masks to this
-	ly, lx  = enmap.laxes(mapset.shape, mapset.wcs)
-	lr      = (ly[:,None]**2 + lx[None,:]**2)**0.5
-	if len(mapset.datasets) > 0:
-		bmin = np.min([beam_size(dataset.beam) for dataset in mapset.datasets])
-	for dataset in mapset.datasets:
-		dataset.filter = 1
-		if dataset.highpass:
-			kxmask   = butter(lx, filter_kxrad,   -5)
-			kxmask   = 1-(1-kxmask[None,:])*(np.abs(ly)<bmin*filter_kx_ymax_scale)[:,None]
-			highpass = butter(lr, filter_highpass,-10)
-			filter   = highpass * kxmask
-			del kxmask, highpass
-		else:
-			filter   = 1
-		if   mode == "weight": dataset.iN    *= filter
-		elif mode == "filter": dataset.filter = filter
-		elif mode == "none": pass
-		else: raise ValueError("Unrecognized filter mode '%s'" % mode)
-	mapset.mode = mode
+#def setup_filter(mapset, mode="weight", filter_kxrad=50, filter_highpass=200, filter_kx_ymax_scale=0.5):
+#	# Add any fourier-space masks to this
+#	ly, lx  = enmap.laxes(mapset.shape, mapset.wcs)
+#	lr      = enmap.ndmap((ly[:,None]**2 + lx[None,:]**2)**0.5, mapset.wcs)
+#	if len(mapset.datasets) > 0:
+#		bmin = np.min([beam_size(dataset.beam) for dataset in mapset.datasets])
+#	for dataset in mapset.datasets:
+#		dataset.filter = 1
+#		if dataset.highpass:
+#			print(filter_kxrad, filter_highpass, filter_kx_ymax_scale, bmin)
+#			kxmask   = butter(lx, filter_kxrad,   -5)
+#			kxmask   = 1-(1-kxmask[None,:])*(np.abs(ly[:,None])<(bmin*filter_kx_ymax_scale))
+#			highpass = butter(lr, filter_highpass,-10)
+#			filter   = highpass * kxmask
+#			#enmap.write_map("filter.fits", filter.lform())
+#			#1/0
+#			del kxmask, highpass
+#		else:
+#			filter   = 1
+#		if   mode == "weight": dataset.iN    *= filter
+#		elif mode == "filter": dataset.filter = filter
+#		elif mode == "none": pass
+#		else: raise ValueError("Unrecognized filter mode '%s'" % mode)
+#	mapset.mode = mode
 
-def downweight_lowl(mapset, lknee, alpha, lim=1e-10):
-	"""Inflate low-l noise below l=lknee uniformly for all datasets.
-	This could be used to represent a generic low-l foreground component
-	with unknown frequency dependence, for example."""
-	with utils.nowarn():
-		filter = 1/(1+(mapset.l/lknee)**-alpha)
-	filter = np.maximum(filter, lim)
+def setup_downweight(mapset):
+	ly, lx  = enmap.laxes(mapset.shape, mapset.wcs, method="intermediate")
+	lr      = enmap.ndmap((ly[:,None]**2 + lx[None,:]**2)**0.5, mapset.wcs)
 	for dataset in mapset.datasets:
-		dataset.iN *= filter
+		filter = build_filter(dataset.downweight, lr, ly, lx)
+		if filter is not None:
+			dataset.iN *= filter
+
+def setup_filter(mapset):
+	ly, lx  = enmap.laxes(mapset.shape, mapset.wcs, method="intermediate")
+	lr      = enmap.ndmap((ly[:,None]**2 + lx[None,:]**2)**0.5, mapset.wcs)
+	for dataset in mapset.datasets:
+		dataset.filter = build_filter(dataset.filter, lr, ly, lx)
+	# And apply it
+	apply_filter(mapset)
+
+def build_filter(filter_desc, lr, ly, lx):
+	"""Build a 2d fourier filter that can be applied by multiplying the fourier
+	coefificients of the map (but see filter_mask). filter_desc is a list of the form
+	[(name, params..),(name, params..),...], where name specifies which functional
+	form should be used, where params are a dict"""
+	if len(filter_desc) == 0: return None
+	filter    = np.zeros_like(lr)
+	filter[:] = 1
+	for name, params in filter_desc:
+		if    name == "invert": filter  = 1-filter
+		elif  name == "axial":  filter *= build_filter_axial (lr, ly, lx, **params)
+		elif  name == "radial": filter *= build_filter_radial(lr, ly, lx, **params)
+		else: raise ValueError("Unrecognized filter '%s'" % (str(name)))
+	return filter
+
+def build_filter_radial(lr, ly, lx, lknee=1000, alpha=-3):
+	with utils.nowarn():
+		return 1/(1+(lr/lknee)**alpha)
+
+def build_filter_axial(lr, ly, lx, axis="x", lknee=1000, alpha=-3, lmax=None):
+	if axis == "x": l = lx[None,:]; l2 = ly[:,None]
+	else:           l = ly[:,None]; l2 = lx[None,:]
+	with utils.nowarn():
+		filter = 1/(1+(l/lknee)**alpha)
+		if lmax is not None:
+			filter = 1-(1-filter)*(np.abs(l2)<lmax)
+	return filter
+
+def apply_filter(mapset):
+	"""Apply the filter set up in setup_filter to the maps in the mapset, changing them.
+	Should be done after the noise model has been computed."""
+	for dataset in mapset.datasets:
+		if dataset.filter is None: continue
+		if dataset.filter_mask is None:
+			for split in dataset.splits:
+					split.data.map = enmap.ifft(dataset.filter*enmap.fft(split.data.map)).real
+		else:
+			ifilter = 1-dataset.filter
+			for split in dataset.splits:
+				ivar= split.data.div*dataset.filter_mask
+				bad  = enmap.ifft(ifilter*enmap.fft(split.data.map*ivar)).real
+				div  = enmap.ifft(ifilter*enmap.fft(               ivar)).real
+				# Avoid division by very low values
+				div  = np.maximum(div, max(1e-10,np.max(div[::10,::10])*1e-4))
+				bad /= div
+				split.data.map -= bad
+
+#def downweight_lowl(mapset, lknee, alpha, lim=1e-10):
+#	"""Inflate low-l noise below l=lknee uniformly for all datasets.
+#	This could be used to represent a generic low-l foreground component
+#	with unknown frequency dependence, for example."""
+#	with utils.nowarn():
+#		filter = 1/(1+(mapset.l/lknee)**-alpha)
+#	filter = np.maximum(filter, lim)
+#	for dataset in mapset.datasets:
+#		dataset.iN *= filter
 
 def setup_profiles_ptsrc(mapset):
 	setup_profiles_helper(mapset, lambda freq: calc_profile_ptsrc(freq, nl=mapset.nl))
@@ -952,9 +1030,10 @@ class Coadder:
 		self.m  = [split.data.map             for dataset in mapset.datasets for split in dataset.splits]
 		self.H  = [split.data.H               for dataset in mapset.datasets for split in dataset.splits]
 		self.iN = [dataset.iN                 for dataset in mapset.datasets for split in dataset.splits]
-		self.F  = [dataset.filter             for dataset in mapset.datasets for split in dataset.splits]
+		#self.F  = [dataset.filter             for dataset in mapset.datasets for split in dataset.splits]
 		self.B  = [dataset.beam_2d/mapset.target_beam_2d for dataset in mapset.datasets for split in dataset.splits]
 		self.insufficient = [dataset.insufficient for dataset in mapset.datasets for split in dataset.splits]
+
 		# For debug stuff
 		self.names = ["%s_set%d" % (dataset.name, i) for dataset in mapset.datasets for i, split in enumerate(dataset.splits)]
 		#enmap.write_map("coadder_m.fits", enmap.samewcs(self.m, self.m[0]))
@@ -977,7 +1056,7 @@ class Coadder:
 		# Calc rhs = B'HCH m
 		rhs = enmap.zeros(self.shape, self.wcs, self.dtype)
 		for i in range(self.nmap):
-			m = map_ifft(self.F[i]*map_fft(self.m[i])) if np.any(self.F[i] != 1) else self.m[i]
+			m    = self.m[i]
 			rhs += map_ifft(self.B[i]*map_fft(self.H[i]*map_ifft(self.iN[i]*map_fft(self.H[i]*m))))
 		return rhs
 	def calc_map(self, rhs, maxiter=250, cg_tol=1e-4, verbose=False, dump_dir=None):
@@ -1062,7 +1141,6 @@ class Wiener:
 		self.m  = [split.data.map   for dataset in mapset.datasets for split in dataset.splits]
 		self.H  = [split.data.H     for dataset in mapset.datasets for split in dataset.splits]
 		self.iN = [dataset.iN       for dataset in mapset.datasets for split in dataset.splits]
-		self.F  = [dataset.filter   for dataset in mapset.datasets for split in dataset.splits]
 		self.B  = [dataset.beam_2d  for dataset in mapset.datasets for split in dataset.splits]
 		self.shape, self.wcs = mapset.shape, mapset.wcs
 		self.dtype= mapset.dtype
