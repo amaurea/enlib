@@ -144,7 +144,7 @@ def map_mul(mat, vec):
 	indices."""
 	# Allow scalar product, broadcasting if necessary
 	mat = np.asanyarray(mat)
-	if mat.ndim <= 3: return mat*vec
+	if mat.ndim <= 2: return mat*vec
 	# Otherwise we do a matrix product along the last axes
 	ovec = samegeos(np.einsum("...abi,...bi->...ai", mat, vec), mat, vec)
 	return ovec

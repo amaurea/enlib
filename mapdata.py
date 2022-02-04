@@ -43,7 +43,7 @@ def read(fname, splits=None, type="auto", maxmaps=1000, **kwargs):
 	with flexget(work, "beam.txt") as f:
 		# This supports theformats [l,b,...] and [b]. The beam is assumed to
 		# start at l=0 and have a step of 1
-		data.beam = np.loadtxt(f, ndmin=2)
+		data.beam = np.loadtxt(f, ndmin=2).T
 		data.beam = data.beam[min(1, len(data.beam)-1)]
 	if splits is None:
 		for i in range(0, maxmaps):
