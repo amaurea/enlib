@@ -1,4 +1,4 @@
-import os, sys, zipfile, shutil
+import os, sys, zipfile, shutil, io
 from pixell import bunch
 from contextlib import contextmanager
 # Module for encapsulating a (possibly split) map and all the metadata it needs.
@@ -34,8 +34,8 @@ def read(fname, splits=None, type="auto", maxmaps=1000, **kwargs):
 	import numpy as np
 	from pixell import enmap
 	if   type == "auto": type = infer_type(fname)
-	if   type == "zip": work, flexget = zipfile.ZipFile(fname, "r"), zip_flexget
-	elif type == "dir": work, flexget = fname, dir_flexget
+	if   type == "zip": work, flexget = zipfile.ZipFile(fname, "r"), zip_flexopen
+	elif type == "dir": work, flexget = fname, dir_flexopen
 	elif type == "mapinfo": work, flexget = fname, mapinfo_flexget
 	else: raise ValueError("Unrecognized type '%s'" % str(type))
 	data = bunch.Bunch(maps=[], ivars=[], beam=None, gain=None, freq=None)
@@ -66,8 +66,8 @@ def read_meta(fname, type="auto", maxmaps=1000, **kwargs):
 	import numpy as np
 	from pixell import enmap
 	if   type == "auto": type = infer_type(fname)
-	if   type == "zip": work, flexget, has = zipfile.ZipFile(fname, "r"), zip_flexget, zip_has
-	elif type == "dir": work, flexget, has = fname, dir_flexget, dir_has
+	if   type == "zip": work, flexget, has = zipfile.ZipFile(fname, "r"), zip_flexopen, zip_has
+	elif type == "dir": work, flexget, has = fname, dir_flexopen, dir_has
 	elif type == "mapinfo": work, flexget, has = fname, mapinfo_flexget, mapinfo_has
 	else: raise ValueError("Unrecognized type '%s'" % str(type))
 	meta = bunch.Bunch(nmap=0, map_geometry=None, ivar_geometry=None)
@@ -78,6 +78,23 @@ def read_meta(fname, type="auto", maxmaps=1000, **kwargs):
 		else: break
 	if type == "zip": work.close()
 	return meta
+
+def write(fname, data, splits=None, type="auto", maxmaps=1000, **kwargs):
+	import numpy as np
+	from pixell import enmap, utils
+	if   type == "auto": type = infer_type(fname)
+	if   type == "zip": work, flexopen = zipfile.ZipFile(fname, "w"), zip_flexopen
+	elif type == "dir":
+		utils.mkdir(fname)
+		work, flexopen = fname, dir_flexopen
+	else: raise ValueError("Unrecognized type '%s'" % str(type))
+	with flexopen(work, "info.txt", "w") as f: write_info(f, data)
+	with flexopen(work, "beam.txt", "w") as f:
+		np.savetxt(f, np.array([np.arange(len(data.beam)), data.beam]).T, fmt="%5.0f %15.7e")
+	for i, m in enumerate(data.maps):
+		with flexopen(work, "map%d.fits"  % (i+1), "w") as f: enmap.write_fits(f, m)
+	for i, m in enumerate(data.ivars):
+		with flexopen(work, "ivar%d.fits" % (i+1), "w") as f: enmap.write_fits(f, m)
 
 ####################################################
 #### Functions for manipulating mapdata on disk ####
@@ -230,31 +247,42 @@ def zip_readlink(zfile, name):
 	return zfile.read(name).decode() # this assumes unicode paths, might change
 
 @contextmanager
-def zip_flexget(zfile, name):
+def zip_flexopen(zfile, name, mode="r"):
 	"""Open name in zipfile, returning a file-like object unless it's
 	a symlink, in which case the path string is returned"""
 	try:
 		obj  = None
-		info = zfile.getinfo(name)
-		link = info.external_attr & 0xA0000000 == 0xA0000000
-		if link: yield zfile.read(name).decode()
+		if mode == "r":
+			# When reading, support symlinks
+			info = zfile.getinfo(name)
+			link = info.external_attr & 0xA0000000 == 0xA0000000
+			if link: yield zfile.read(name).decode()
+			else:
+				obj = zfile.open(name, "r")
+				yield obj
 		else:
-			obj = zfile.open(name, "r")
-			yield obj
+			obj = zfile.open(name, "w")
+			with two_step_write(obj) as f:
+				yield f
 	except KeyError: raise FileNotFoundError
 	finally:
 		if obj: obj.close()
 
 @contextmanager
-def dir_flexget(dirpath, name):
+def dir_flexopen(dirpath, name, mode="r"):
 	try:
 		obj   = None
 		fname = dirpath + "/" + name
-		link  = os.path.islink(fname)
-		if link: yield getlink(fname)
+		if mode == "r":
+			# When reading, support symlinks
+			link  = os.path.islink(fname)
+			if link: yield getlink(fname)
+			else:
+				obj = open(fname, "rb")
+				yield(obj)
 		else:
-			obj = open(fname, "rb")
-			yield(obj)
+			obj = open(fname, mode+"b")
+			yield obj
 	finally:
 		if obj: obj.close()
 
@@ -276,6 +304,14 @@ def mapinfo_flexget(dirpath, name):
 		else: raise FileNotFoundError
 	finally:
 		pass
+
+@contextmanager
+def two_step_write(f):
+	try:
+		buf = io.BytesIO()
+		yield buf
+	finally:
+		f.write(buf.getvalue())
 
 def zip_has(zfile, name):
 	try:
