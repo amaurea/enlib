@@ -240,14 +240,16 @@ def calc_model(shape, wcs, ipos, template, amp=1.0):
 		enmap.insert_at(model, pix0+dbox, srcmodel, op=lambda a,b:a+b, wrap=shape[-2:])
 	return model
 
-def sim_initial_noise(div, lknee=3000, alpha=-2, seed=0):
+def sim_initial_noise(div, lknee=None, alpha=-2, seed=0):
 	# Simulate white noise, but temporarily switch to a fixed seed to avoid getting
 	# randomness in the point source fitter output.
+	if lknee is None: lknee = 3000
 	rng   = np.random.RandomState(seed)
 	noise = enmap.ndmap(rng.standard_normal(div.shape).astype(div.dtype), div.wcs)
 	l     = div.modlmap()
-	profile = 1 + ((l+0.5)/lknee)**alpha
+	profile = (1 + ((l+0.5)/lknee)**alpha)**0.5
 	profile[0,0] = 0
+	#np.savetxt("profile.txt", np.array(profile.lbin()).T, fmt="%15.7e")
 	noise  = enmap.ifft(enmap.fft(noise)*profile).real
 	noise[div>0] *= div[div>0]**-0.5
 	return noise
@@ -470,8 +472,8 @@ def group_independent(pos, corrlen):
 class FitError(Exception): pass
 
 def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
-		apod=15, npass=2, indep_tol=1e-4, ps_res=2000, pixwin=True, beam_tol=1e-4,
-		dump=None, verbose=False, apod_margin=10, hack=0, region=0):
+		apod=15, npass=2, indep_tol=1e-4, ps_res=500, pixwin=True, beam_tol=1e-4,
+		dump=None, verbose=False, apod_margin=10, hack=0, region=0, lknee=None):
 	# Get the (fractional) pixel positions of each source
 	t1 = time.time()
 	src_pix  = imap.sky2pix(src_pos.T).T
@@ -526,7 +528,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 	# it doesn't implicitly assume that the point source profile itself is modulated
 	# by the hitcounts. We can afford that here because we know where the sources are.
 	H      = idiv**0.5 * apod_map
-	noise  = sim_initial_noise(idiv)
+	noise  = sim_initial_noise(idiv, lknee=lknee)
 	t2 = time.time()
 	if verbose: print("%8.2f Prepare" % (t2-t1))
 	for ipass in range(npass):
@@ -535,12 +537,17 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		if hack: C = planck_hack(C, hack)
 		if np.sum(C) == 0: raise FitError("No data in region")
 		iC         = 1/C
+		#np.savetxt("C.txt", np.array(C.lbin()).T, fmt="%15.7e")
+		#np.savetxt("iC.txt", np.array(iC.lbin()).T, fmt="%15.7e")
+		#np.savetxt("BiC.txt", np.array((beam2d*iC).lbin()).T, fmt="%15.7e")
 		#enmap.write_map("test_iC.fits", iC)
 		rhs  = np.zeros([nsrc])
 		icov = np.zeros([nsrc,nsrc])
 		# We can now build our rhs
 		t1 = time.time()
 		Nd = H*map_ifft(iC*map_fft(H*imap))
+		#enmap.write_map("Nd.fits", Nd)
+		#enmap.write_map("BNd.fits", enmap.ifft(enmap.fft(Nd)*beam2d).real)
 		for sid in range(nsrc):
 			rhs[sid] = np.sum(Nd.extract_pixbox(pboxes[sid])*Bs[sid])
 		t2 = time.time()
@@ -553,7 +560,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		# Instead we will use indep groups to efficiently compute NB for each source,
 		# and then loop over each source's neighborhood
 		corrlen  = measure_corrlen(beam2d**2*iC, indep_tol)
-		#print("corrlen", corrlen/utils.degree)
+		print("corrlen", corrlen/utils.degree)
 		cboxes   = enmap.neighborhood_pixboxes(imap.shape, imap.wcs, src_pos, corrlen)
 		with bench.mark("make groups"):
 			# We don't want any part of another source's matched filter inside the
@@ -586,10 +593,6 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 				icov[sid,sid2] = np.sum(overlap*Bs[sid2])
 		t2 = time.time()
 		if verbose: print("%8.2f Build icov pass %d/%d" % (t2-t1, ipass+1, npass))
-		#print "rhs"
-		#np.savetxt("test_rhs_%02d.txt" % ipass, rhs, fmt="%6.3f")
-		#print "icov"
-		#np.savetxt("test_icov_%02d.txt" % ipass, icov*1e4, fmt="%6.3f")
 		#np.save("test_rhs1_%02d.npy" % ipass, rhs)
 		#np.save("test_icov1_%02d.npy" % ipass, icov)
 		# Apply any prior
