@@ -43,8 +43,7 @@ def read(fname, splits=None, type="auto", maxmaps=1000, **kwargs):
 	with flexget(work, "beam.txt") as f:
 		# This supports theformats [l,b,...] and [b]. The beam is assumed to
 		# start at l=0 and have a step of 1
-		data.beam = np.loadtxt(f, ndmin=2).T
-		data.beam = data.beam[min(1, len(data.beam)-1)]
+		data.beam = read_beam(f)
 	if splits is None:
 		for i in range(0, maxmaps):
 			try:
@@ -76,6 +75,8 @@ def read_meta(fname, type="auto", maxmaps=1000, **kwargs):
 	for i in range(maxmaps):
 		if has(work, "map%d.fits" % (i+1)): meta.nmap = i+1
 		else: break
+	with flexget(work, "beam.txt") as f: meta.beam = read_beam(f)
+	with flexget(work, "info.txt") as f: read_info(f, meta)
 	if type == "zip": work.close()
 	return meta
 
@@ -231,6 +232,11 @@ def read_info(fileobj, out=None):
 
 def write_info(fileobj, info):
 	fileobj.write(("gain:%.8g\nfreq:%.8g\n" % (info["gain"], info["freq"])).encode())
+
+def read_beam(f):
+	import numpy as np
+	beam = np.loadtxt(f, ndmin=2).T
+	return beam[min(1, len(beam)-1)]
 
 def infer_type(fname):
 	if isinstance(fname, str):
