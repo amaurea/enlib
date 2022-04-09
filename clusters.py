@@ -1,6 +1,180 @@
 import numpy as np, pyccl
 from pixell import utils, bunch
 
+sigma_T = 6.6524587158e-29 # m²
+m_e     = 9.10938356e-31   # kg
+
+class ProfileBase:
+	"""Cluster profile evaluator base class. Defines the general
+	interface and implements the simplest functions, but can't
+	be used by itself. Instead use a subclass that defines the
+	cluster pressure profile, like ProfileBattaglia"""
+	def __init__(self, cosmology=None):
+		self.cosmology = cosmology or pyccl.Cosmology(Omega_c=0.2589, Omega_b=0.0486, h=0.6774, sigma8=0.8159, n_s=0.9667, transfer_function="boltzmann_camb")
+	def y    (self, m200, z, r=0, dist="angular"):
+		"""Evaluate the (line-of-sight integrated) Compton y parameter
+		for clusters with mass m200 and redshift z at a distance r
+		from the center.
+		* m200: M_200c in kg. M_200c is the mass inside R_200c, the
+		  distance from the cluster center inside which the mean density
+		  is 200 times the critical density.
+		* z: The redshift
+		* r: The distance from the cluster center
+		* dist: The units of r
+		  * "angular":  Angular distance in radians
+		  * "physical": Physical distance in m
+		  * "relative": Distance in units of R_200c
+		m200, z and r can all be arrays, in which case their shapes
+		must broadcast. For example, if you have nobj objects with
+		masses m200[nobj] and redshifts z[nobj] and you want to evaluate
+		all of them at the same set of distances r[nr], then use
+		y(m200[:,None], z[:,None], r), which will return [nobj,nr]
+		"""
+		return self.Pe_los(m200, z, r=r, dist=dist) * (sigma_T/(m_e*utils.c**2))
+	def Pe_los(self, m200, z, r=0, dist="angular"):
+		"""Evaluate the line-of-sight-integrated electron pressure in Pa m.
+		See y for the meaning of the arguments."""
+		return 0.5176 * self.Pth_los(m200, z, r=r, dist=dist)
+	def Pth_los(self, m200, z, r=0, dist="angular"):
+		"""Evaluate the line-of-sight-integrated thermal pressure in Pa m.
+		See y for the meaning of the arguments."""
+		m200, z = [np.asanyarray(arr) for arr in [m200,z]]
+		rho_c = calc_rho_c(self.cosmology, z)
+		f_b   = self.cosmology["Omega_b"]/self.cosmology["Omega_m"]
+		return utils.G * m200 * 200 * rho_c * f_b / 2 * self._raw_los(m200, z, r=r, dist=dist)
+	def _raw_los(self, m200, z, r=0, dist="angular"): raise NotImplementedError
+	def Pe(self, m200, z, r, dist="physical"):
+		"""Evaluate the 3d electron pressure in Pa.
+		See y for the meaning of the arguments."""
+		return 0.5176 * self.Pth(m200, z, r=r, dist=dist)
+	def Pth(self, m200, z, r=0, dist="physical"):
+		"""Evaluate the 3d thermal pressure in Pa.
+		See y for the meaning of the arguments."""
+		m200, z = [np.asanyarray(arr) for arr in [m200,z]]
+		r200  = calc_rdelta(m200, z, self.cosmology)
+		rho_c = calc_rho_c(self.cosmology, z)
+		f_b   = self.cosmology["Omega_b"]/self.cosmology["Omega_m"]
+		return utils.G * m200 * 200 * rho_c * f_b / (2*r200) * self._raw(m200, z, r=r, dist=dist, r200=r200)
+	def _raw(self, m200, z, r, dist="physical", r200=None): raise NotImplementedError
+	def r2x(self, r200, z, r, dist="angular"):
+		"""Transform distances to the relative units used internally"""
+		r200, r, z = [np.asanyarray(arr) for arr in [r200, r, z]]
+		if dist in ["rel",  "relative"]: return r
+		if dist in ["ang",  "angular" ]:  return r/calc_angsize(r200, z, self.cosmology)
+		if dist in ["phys", "physical"]:  return r/r200
+		raise ValueError("Unrecognized distance type '%s'" % (str(dist)))
+
+class ProfileBattaglia(ProfileBase):
+	"""Battaglia cluster profile evaluator."""
+	def _raw(self, m200, z, r, dist="physical", r200=None):
+		"""Evaluate the dimensionless 3d pressure profiles for clusters
+		with the the given masses m200 and redshifts z at the distances
+		r from the center. m200, z and r must broadcast to the same shape."""
+		m200, z, r = [np.asanyarray(arr) for arr in [m200, z, r]]
+		if r200 is None: r200 = calc_rdelta(m200, z, self.cosmology)
+		x      = self.r2x(m200, z, r, dist=dist)
+		params = get_params_battaglia(m200, z, self.cosmology)
+		return params.P0 * utils.gnfw(x, xc=params.xc, alpha=params.alpha, beta=params.beta, gamma=params.gamma)
+	def _raw_los(self, m200, z, r=0, dist="angular"):
+		"""Evaluate the dimensionless line-of-sight-integrated pressure
+		profiles for clusters with the the given masses m200 and redshifts z
+		at the distances r from the center. m200, z and r must broadcast
+		to the same shape."""
+		m200, z, r = np.broadcast_arrays(m200, z, r)
+		shape      = m200.shape
+		m200, z, r = [arr.reshape(-1) for arr in [m200,z,r]]
+		n          = len(m200)
+		# Compute our shape parameters and cluster size
+		params = get_params_battaglia(m200, z, self.cosmology)
+		r200   = calc_rdelta(m200, z, self.cosmology)
+		x      = self.r2x(r200, z, r, dist=dist)
+		res    = np.zeros(n, m200.dtype)
+		for i in range(m200.size):
+			res[i] = params.P0[i]*utils.tsz_profile_los_exact(x[i], xc=params.xc[i], alpha=params.alpha, beta=params.beta[i], gamma=params.gamma)
+		return res.reshape(shape)
+
+class ProfileBattagliaFast(ProfileBattaglia):
+	def __init__(self, cosmology=None, beta_range=[-14,-3], obeta=6, nbeta=None, pad=0.1,
+			alpha=1, gamma=-0.3, x1=1e-10, x2=1e8, npoint=200, zmax=1e5, _a=8):
+		"""Initialize a Battaglia cluster profile evaluator. This exploits the
+		Battaglia profile's constant alpha and gamma parameters to get away with
+		a relatively simple interpolation scheme. This is further helped by xc
+		only entering as a radial scaling, so the only real shape parameter is
+		beta. We can therefore use a simple 1d interpolation over beta. Parameters:
+
+		* cosmology: The pyccl cosmology object to use
+		* beta_range: [beta_min, beta_max] used when building the interpolation
+		* obeta: The interpolation order in beta
+		* nbeta: The number of points to sample when building the beta interpolator.
+		  Defaults to obeta.
+		* pad: Log-factor to pad the beta range by. Defaults to 0.1
+		* alpha, gamma: The alpha and gamma gnfw parameters. Must be consistent
+		  with get_params_battaglia.
+		* x1, x2: The minimal and maximal x = r/r200 to use in the radial
+		  interpolator. This is done in log-space, so these should be positive
+		  and separated by many orders of magnitude.
+		* npoint: The number of points to use in the raidal interpolator.
+		* zmax: The highest z = distance/r200 to consider in the line-of-sight
+		  integral. This is done using a power-law-scaling, so large values are
+		  ok.
+		* _a: Implementation detail: Power-law scaling used to speed up
+		  line-of-sight integral."""
+		super().__init__(cosmology)
+		# If the number of beta samples are not specified, use one point per basis function
+		if nbeta is None: nbeta = obeta
+		# The radial values to evlauate things at
+		xp = np.linspace(np.log(x1),np.log(x2),npoint)
+		# typically beta is */ 1.5. After log that's ± 0.4
+		lbeta1, lbeta2 = np.log([-beta_range[1], -beta_range[0]])
+		lbeta0 = 0.5*(lbeta2+lbeta1)
+		dlbeta = 0.5*(lbeta2-lbeta1)+pad
+		lbetas = np.linspace(lbeta0-dlbeta, lbeta0+dlbeta, nbeta)
+		# Evaluate for all combinations
+		yps = np.array([utils.tsz_profile_los_exact(np.exp(xp), xc=1, alpha=alpha, beta=-np.exp(lbeta), gamma=gamma, zmax=zmax, _a=_a) for lbeta in lbetas]) # [nbeta,npoint]
+		yps = np.log(yps)
+		# Build a polynomial interpolator in beta
+		B = ((lbetas-lbeta0)/dlbeta)**(np.arange(obeta)[:,None]) # [obeta,nbeta]
+		# Fit our data points to this basis
+		a = np.linalg.solve(B.dot(B.T), B.dot(yps)) # [obeta,npoint]
+		# Prefilter a to make utils.interpol faster
+		a = utils.interpol_prefilter(a, npre=1, inplace=True)
+		# We have everything we need for interpolation now
+		self.lbeta0, self.dlbeta = lbeta0, dlbeta
+		self.xp0,    self.dxp    = xp[0], xp[1]-xp[0]
+		self.B, self.a, self.npoint, self.obeta = B, a, npoint, obeta
+	def _raw(self, m200, z, r, dist="physical", r200=None):
+		"""Evaluate the dimensionless 3d pressure profiles for clusters
+		with the the given masses m200 and redshifts z at the distances
+		r from the center. m200, z and r must broadcast to the same shape."""
+		m200, z, r = [np.asanyarray(arr) for arr in [m200, z, r]]
+		if r200 is None: r200 = calc_rdelta(m200, z, self.cosmology)
+		x      = self.r2x(m200, z, r, dist=dist)
+		params = get_params_battaglia(m200, z, self.cosmology)
+		return params.P0 * utils.gnfw(x, xc=params.xc, alpha=params.alpha, beta=params.beta, gamma=params.gamma)
+	def _raw_los(self, m200, z, r=0, dist="angular"):
+		"""Evaluate the dimensionless line-of-sight-integrated pressure
+		profiles for clusters with the the given masses m200 and redshifts z
+		at the distances r from the center. m200, z and r must broadcast
+		to the same shape."""
+		m200, z, r = [np.asanyarray(arr) for arr in [m200, z, r]]
+		# Compute our shape parameters and cluster size
+		params = get_params_battaglia(m200, z, self.cosmology)
+		r200   = calc_rdelta(m200, z, self.cosmology)
+		# Nomralize beta so it matches what our polynomial basis expects
+		b    = (np.log(-np.array(params.beta))-self.lbeta0)/self.dlbeta
+		front= (slice(None),)+(None,)*b.ndim
+		B    = b**(np.arange(self.obeta)[front]) # [obeta,...]
+		# Get our dimensionless x values. Absorb xc into these since
+		# we've built our interpolation around xc=1, but remember to compensate
+		# for the unit change this implies before returning
+		x    = self.r2x(r200*params.xc, z, r, dist=dist)
+		xpix = (np.log(np.maximum(x,1e-10))-self.xp0)/self.dxp # [...]
+		# This is inefficient if we have more interp points than output points
+		ainter = utils.interpol(self.a, xpix[None], prefilter=False) # [obeta,...]
+		profs  = np.sum(B*ainter,0) # [...]
+		profs  = np.exp(profs)*params.xc*params.P0
+		return profs
+
 # Battaglia 12 says:
 #
 # Δ = 200
@@ -61,32 +235,11 @@ def decode_websky(data, cosmology, mass_interp):
 	ra, dec = utils.rect2ang(data.T[:3])
 	return bunch.Bunch(z=z, ra=ra, dec=dec, m200=m200)
 
-def get_halo_params(m200, z, cosmology):
-	"""Compute gnfw parameters and the physical normalization based on m200 and redshift"""
-	# Position, redshift and size
-	r200    = calc_rdelta (m200, z, cosmology)
-	rang    = calc_angsize(r200, z, cosmology)
-	rho_c   = calc_rho_c(cosmology, z)
-	# GNFW parameters given this
-	params= get_params_battaglia(m200, z, cosmology)
-	# Compute the factor that takes us from what tsz_profile_los()
-	# returns to the compton y parameter
-	# Pe  = (2X_H+2)/(5H_H+3) * Pth = 0.5176 Pth
-	# Pth = G M_Δ Δ ρ_cr(z) f_b / (2 R_Δ) * P0 * gnfw()
-	# y   = sigma_T/(m_e c²) * int dl P_e
-	#     = sigma_T/(m_e c²) * 0.5176 * G M_Δ Δ ρ_cr(z) f_b / (2 R_Δ) * R_Δ * P0 * tsz_profile_los()
-	# Here the extra R_Δ comes from the radial integral, dl = R_Δ dx
-	sigma_T = 6.6524587158e-29 # m²
-	m_e     = 9.10938356e-31   # kg
-	f_b     = cosmology["Omega_b"]/cosmology["Omega_m"]
-	y_conv  = sigma_T/(m_e*utils.c**2) * 0.5176 * utils.G * m200 * 200 * rho_c * f_b / (2*r200) * r200
-	#print(0.5176 * utils.G * m200 * 200 * rho_c * f_b / (2*r200) * params.P0)
-	# Unit m² / (kg*m²/s²) * 1/kg m³/s² * kg * kg/m³ = 1 OK
-	return bunch.Bunch(r200=r200, rang=rang, y_conv=y_conv, **params)
-
 def get_H0(cosmology): return cosmology["h"]*100*1e3/(1e6*utils.pc)
+
 def calc_rho_c(cosmology, z):
-	H     = get_H0(cosmology)*pyccl.h_over_h0(cosmology, 1/(z+1))
+	z     = np.asanyarray(z)
+	H     = get_H0(cosmology)*pyccl.h_over_h0(cosmology, 1/(z.reshape(-1)+1)).reshape(z.shape)
 	rho_c = 3*H**2/(8*np.pi*utils.G)
 	return rho_c
 
@@ -99,7 +252,8 @@ def calc_rdelta(mdelta, z, cosmology, delta=200):
 
 def calc_angsize(physsize, z, cosmology):
 	"""Given a physical size in m, returns the angular size in radians"""
-	d_A = pyccl.angular_diameter_distance(cosmology, 1/(z+1))*1e6*utils.pc
+	z   = np.asanyarray(z)
+	d_A = pyccl.angular_diameter_distance(cosmology, 1/(z.reshape(-1)+1)).reshape(z.shape)*1e6*utils.pc
 	return np.arctan2(physsize,d_A)
 
 def get_params_battaglia(m200, z, cosmology):
@@ -116,78 +270,6 @@ def get_params_battaglia(m200, z, cosmology):
 	# Go from battaglia convention to standard gnfw
 	beta  = gamma - alpha*beta
 	return bunch.Bunch(xc=xc, alpha=alpha, beta=beta, gamma=gamma, P0=P0)
-
-def eval_battaglia_slow(mdelta, zs, rang, cosmology, rs):
-	rprofs = []
-	for i, (mdelta, z, rang) in enumerate(zip(mdeltas, zs, rangs)):
-		params = get_params_battaglia(mdelta, z, cosmology)
-		# 29 ms per object. Slow... cache={} to prevent caching of single-use params
-		rprofs.append(params.P0*utils.tsz_profile_los(rs/rang, xc=params.xc, alpha=params.alpha, beta=params.beta, gamma=params.gamma, cache={}))
-	return np.array(rprofs)
-
-class FastBattagliaInterp:
-	def __init__(self, beta1, beta2, cosmology, alpha=1, gamma=-0.3,
-			obeta=4, nbeta=None, npoint=200, pad=0.1, x1=1e-10, x2=1e8, _a=8, zmax=1e5):
-		# I first thought an xc,beta expansion would be necessary here, but
-		# xc just enters as a scaling of x anyway, and we handle x interpolation.
-		# NB: xc also scales the dz integral in the LOS calculation
-		# If the number of beta samples are not specified, use one point per basis function
-		if nbeta is None: nbeta = obeta
-		# The radial values to evlauate things at
-		xp = np.linspace(np.log(x1),np.log(x2),npoint)
-		# typically beta is */ 1.5. After log that's ± 0.4
-		lbeta1, lbeta2 = np.log([-beta2, -beta1])
-		lbeta0 = 0.5*(lbeta2+lbeta1)
-		dlbeta = 0.5*(lbeta2-lbeta1)+pad
-		lbetas = np.linspace(lbeta0-dlbeta, lbeta0+dlbeta, nbeta)
-		# Evaluate for all combinations
-		yps = np.array([utils.tsz_profile_los_exact(np.exp(xp), xc=1, alpha=alpha, beta=-np.exp(lbeta), gamma=gamma, zmax=zmax, _a=_a) for lbeta in lbetas]) # [nbeta,npoint]
-		yps = np.log(yps)
-		# I hoped scipy would have an efficient 2d interpolator, but I could only find
-		# map_coordinates and RegularGridInterpolator. The former has bad boundary conditions,
-		# and the latter is just a subset of the former. I'll just do some polynomial
-		# interpolation myself.
-		B = ((lbetas-lbeta0)/dlbeta)**(np.arange(obeta)[:,None]) # [obeta,nbeta]
-		# Fit our data points to this basis
-		a = np.linalg.solve(B.dot(B.T), B.dot(yps)) # [obeta,npoint]
-		# Prefilter a to make utils.interpol faster
-		a = utils.interpol_prefilter(a, npre=1, inplace=True)
-		# We have everything we need for interpolation now
-		self.lbeta0 = lbeta0
-		self.dlbeta = dlbeta
-		self.xp0    = xp[0]
-		self.dxp    = xp[1]-xp[0]
-		self.B  = B
-		self.a  = a
-		self.npoint = npoint
-		self.obeta  = obeta
-	def __call__(self, betas, xcs, P0s, rangs, r):
-		"""betas: betas to evaluate profiles for. [ncase]
-		xs = r/rang/xc. Scaled values to evaluate profiles as [ncase,nx]"""
-		# Broadcast and reshape to the expected shapes
-		betas, xcs, P0s, rangs = np.broadcast_arrays(betas, xcs, P0s, rangs)
-		r      = np.array(r)
-		bshape = betas.shape
-		rshape = r.shape
-		betas, xcs, P0s, rangs = [a.reshape(-1) for a in [betas, xcs, P0s, rangs]]
-		r      = r.reshape(-1)
-		# Nomralize beta so it matches what our polynomial basis expects
-		b    = (np.log(-np.array(betas))-self.lbeta0)/self.dlbeta
-		B    = b**(np.arange(self.obeta)[:,None]) # [obeta,ncase]
-		# Get our dimensionless x values. Absorb xc into these since
-		# we've built our interpolation around xc=1, but remember to compensate
-		# for the unit change this implies before returning
-		x     = r/(rangs*xcs)[:,None]
-		x     = np.maximum(x, 1e-10)
-		xpix = (np.log(x)-self.xp0)/self.dxp
-		ncase, nx = xpix.shape
-		# This is inefficient if we have more interp points than output points
-		ainter = utils.interpol(self.a, xpix.T[None], prefilter=False) # [obeta,nx,ncase]
-		profs  = np.sum(B[:,None,:]*ainter,0).T
-		profs  = np.exp(profs)*xcs[:,None]*P0s[:,None]
-		# Reshape result to match inputs
-		profs  = profs.reshape(bshape+rshape)
-		return profs
 
 class MdeltaTranslator:
 	def __init__(self, cosmology,
