@@ -1,8 +1,9 @@
 import numpy as np, pyccl
 from pixell import utils, bunch
 
-sigma_T = 6.6524587158e-29 # m²
-m_e     = 9.10938356e-31   # kg
+# TODO
+# 1. pyccl dependency is annoying. The main thing I need it for is chi(z) and d_A(z)
+# 2. Maybe mark ProfileBattagliaFast as the default somehow? Or make a factory function?
 
 class ProfileBase:
 	"""Cluster profile evaluator base class. Defines the general
@@ -30,7 +31,7 @@ class ProfileBase:
 		all of them at the same set of distances r[nr], then use
 		y(m200[:,None], z[:,None], r), which will return [nobj,nr]
 		"""
-		return self.Pe_los(m200, z, r=r, dist=dist) * (sigma_T/(m_e*utils.c**2))
+		return self.Pe_los(m200, z, r=r, dist=dist) * (utils.sigma_T/(utils.m_e*utils.c**2))
 	def Pe_los(self, m200, z, r=0, dist="angular"):
 		"""Evaluate the line-of-sight-integrated electron pressure in Pa m.
 		See y for the meaning of the arguments."""
@@ -39,7 +40,7 @@ class ProfileBase:
 		"""Evaluate the line-of-sight-integrated thermal pressure in Pa m.
 		See y for the meaning of the arguments."""
 		m200, z = [np.asanyarray(arr) for arr in [m200,z]]
-		rho_c = calc_rho_c(self.cosmology, z)
+		rho_c = calc_rho_c(z, self.cosmology)
 		f_b   = self.cosmology["Omega_b"]/self.cosmology["Omega_m"]
 		return utils.G * m200 * 200 * rho_c * f_b / 2 * self._raw_los(m200, z, r=r, dist=dist)
 	def _raw_los(self, m200, z, r=0, dist="angular"): raise NotImplementedError
@@ -52,7 +53,7 @@ class ProfileBase:
 		See y for the meaning of the arguments."""
 		m200, z = [np.asanyarray(arr) for arr in [m200,z]]
 		r200  = calc_rdelta(m200, z, self.cosmology)
-		rho_c = calc_rho_c(self.cosmology, z)
+		rho_c = calc_rho_c(z, self.cosmology)
 		f_b   = self.cosmology["Omega_b"]/self.cosmology["Omega_m"]
 		return utils.G * m200 * 200 * rho_c * f_b / (2*r200) * self._raw(m200, z, r=r, dist=dist, r200=r200)
 	def _raw(self, m200, z, r, dist="physical", r200=None): raise NotImplementedError
@@ -201,13 +202,13 @@ class ProfileBattagliaFast(ProfileBattaglia):
 # Relation of dl and dx, which is what I have in my LOS integral:
 # x = l/R_Δ
 
-def get_pkcs_nhalo(fname):
+def websky_pkcs_nhalo(fname):
 	"""Read rows offset:offset+num of raw data from the given pkcs file.
 	if num==0, all values are read"""
 	with open(fname, "r") as ifile:
 		return np.fromfile(ifile, count=3, dtype=np.uint32)[0]
 
-def read_pkcs_halos(fname, num=0, offset=0):
+def websky_pkcs_read(fname, num=0, offset=0):
 	"""Read rows offset:offset+num of raw data from the given pkcs file.
 	if num==0, all values are read"""
 	with open(fname, "r") as ifile:
@@ -223,13 +224,13 @@ def websky_m200m_to_m200c(m200m, z, cosmology):
 	m200c   = omegamz**0.35 * m200m # m200m to m200c conversion used for websky
 	return m200c
 
-def decode_websky(data, cosmology, mass_interp):
+def websky_decode(data, cosmology, mass_interp):
 	"""Go from a raw websky catalog to pos, z and m200"""
 	chi     = np.sum(data.T[:3]**2,0)**0.5 # comoving Mpc
 	a       = pyccl.scale_factor_of_chi(cosmology, chi)
 	z       = 1/a-1
 	R       = data.T[6].astype(float) * 1e6*utils.pc # m. This is *not* r200!
-	rho_m   = calc_rho_c(cosmology, 0)*cosmology["Omega_m"]
+	rho_m   = calc_rho_c(0, cosmology)*cosmology["Omega_m"]
 	m200m   = 4/3*np.pi*rho_m*R**3
 	m200    = mass_interp(m200m, z)
 	ra, dec = utils.rect2ang(data.T[:3])
@@ -237,16 +238,18 @@ def decode_websky(data, cosmology, mass_interp):
 
 def get_H0(cosmology): return cosmology["h"]*100*1e3/(1e6*utils.pc)
 
-def calc_rho_c(cosmology, z):
-	z     = np.asanyarray(z)
-	H     = get_H0(cosmology)*pyccl.h_over_h0(cosmology, 1/(z.reshape(-1)+1)).reshape(z.shape)
+def get_H(z, cosmology):
+	z = np.asanyarray(z)
+	return get_H0(cosmology)*pyccl.h_over_h0(cosmology, 1/(z.reshape(-1)+1)).reshape(z.shape)
+
+def calc_rho_c(z, cosmology):
+	H     = get_H(z, cosmology)
 	rho_c = 3*H**2/(8*np.pi*utils.G)
 	return rho_c
 
 def calc_rdelta(mdelta, z, cosmology, delta=200):
 	"""Given M_delta in kg, returns R_delta in m"""
-	# Why do I have to access a private member to get H0?
-	rho_c  = calc_rho_c(cosmology, z)
+	rho_c  = calc_rho_c(z, cosmology)
 	rdelta = (mdelta/(4/3*np.pi*delta*rho_c))**(1/3)
 	return rdelta
 
@@ -275,6 +278,20 @@ class MdeltaTranslator:
 	def __init__(self, cosmology,
 			type1="matter", delta1=200, type2="critical", delta2=200,
 			zlim=[0,20], mlim=[1e11*utils.M_sun,5e16*utils.M_sun], step=0.1):
+		"""Construct a functor that translates from one M_delta defintion to
+		another.
+		* type1, type2: Type of M_delta, e.g. m200c vs m200m.
+		  * "matter": The mass inside the region where the average density is
+		    delta times higher than the current matter density
+		  * "critical": The same, but for the critical density instead. This
+		    differs due to the presence of dark energy.
+		* delta1, delta2: The delta value used in type1, type2.
+		* zlim: The z-range to build the interpolator for.
+		* mlim: The Mass range to build the interpolator for, in kg
+		* step: The log-spacing of the interpolators.
+		Some combinations of delta and type may not be supported, limited by
+		support in pyccl. The main thing this object does beyond pyccl is to
+		allow one to vectorize over both z and mass."""
 		idef = pyccl.halos.MassDef(delta1, type1, c_m_relation="Bhattacharya13")
 		odef = pyccl.halos.MassDef(delta2, type2, c_m_relation="Bhattacharya13")
 		# Set up our sample grid, which will be log-spaced in both z and mass direction
