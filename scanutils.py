@@ -230,13 +230,15 @@ def get_tod_groups(ids, samelen=True):
 		groups = [g for g in groups if len(g) == nsub]
 	return groups
 
-def find_scan_periods(db, ttol=60, atol=1*utils.degree):
+def find_scan_periods(db, ttol=60, atol=2*utils.degree, mindur=120):
 	"""Given a scan db, return the set of contiguous scanning periods in the form
 	[:,{ctime_from,ctime_to}]."""
 	atol = atol/utils.degree
 	info = np.array([filedb.scans.data[a] for a in ["baz", "bel", "waz", "wel", "t", "dur"]]).T
 	# Get rid of nan entries
 	bad  = np.any(~np.isfinite(info),1)
+	# get rid of too short tods, since those don't have reliable az bounds
+	bad |= info[:,-1] < mindur
 	info = info[~bad]
 	t1   = info[:,-2] - info[:,-1]/2
 	info = info[np.argsort(t1)]
@@ -244,7 +246,7 @@ def find_scan_periods(db, ttol=60, atol=1*utils.degree):
 	t1   = info[:,-2] - info[:,-1]/2
 	t2   = t1 + info[:,-1]
 	# Remove angle ambiguities
-	info[0] = utils.rewind(info[0])
+	info[:,0] = utils.rewind(info[:,0], period=360)
 	# How to find jumps:
 	# 1. It's a jump if the scanning changes
 	# 2. It's also a jump if a the interval between tod-ends and tod-starts becomes too big

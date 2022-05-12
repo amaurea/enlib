@@ -10,9 +10,15 @@ def gapfill(arr, ranges, inplace=False, overlap=None):
 	gapfiller = {
 			"linear":gapfill_linear,
 			"joneig":gapfill_joneig,
+			"common":gapfill_common,
+			"none":  gapfill_none,
 		}[config.get("gapfill")]
 	overlap = config.get("gapfill_context", overlap)
 	return gapfiller(arr, ranges, inplace=inplace, overlap=overlap)
+
+def gapfill_none(tod, cut, inplace=False, overlap=None):
+	if not inplace: tod = tod.copy()
+	return tod
 
 def gapfill_constant(tod, cut, inplace=False, value=0.0, overlap=None):
 	return sampcut.gapfill_const(cut, tod, value, inplace=inplace)
@@ -56,6 +62,20 @@ def gapfill_pair(tod, cut, inplace=False, gapfill=gapfill_linear):
 #	import h5py
 #	with h5py.File(fname, "w") as hfile:
 #		hfile["data"] = arr
+
+def gapfill_common(tod, cuts, inplace=False, gapfill=gapfill_linear, overlap=None):
+	"""Gapfill by using common-mode-modulated linear gapfilling. Relatively
+	fast and simple."""
+	mask = 1-cuts.to_mask().astype(tod.dtype)
+	rhs  = np.sum(tod*mask,0)
+	div  = np.maximum(np.sum(mask,0),1)
+	del mask
+	common = rhs/div
+	res = gapfill(tod-common, cuts, overlap=overlap)+common
+	if not inplace: return res
+	else:
+		tod[:] = res
+		return tod
 
 def gapfill_joneig(tod, cut, thresh=4, niter=4, nloop=4, inplace=False, gapfill=gapfill_linear, cov_step=10, amp_step=10, overlap=None):
 	"""Gapfill a tod[ndet,nsamp] in cuts cut[ndet,{ranges}] using

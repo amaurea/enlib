@@ -71,6 +71,7 @@ class Signal:
 	def free(self): pass
 	def finish  (self, x, y): x[:] = y
 	def polmat(self): return self.zeros(mat=True)
+	def transform(self, m, op): return op(m)
 	def polinv(self, m): return 1/m
 	def polmul(self, mat, m, inplace=False): return mat*m
 	# This one is a potentially cheaper version of self.prepare(self.zeros())
@@ -185,6 +186,11 @@ class SignalDmap(Signal):
 			geom = geom.copy()
 			geom.pre = geom.pre + geom.pre[-1:]
 		return dmap.zeros(geom)
+	def transform(self, imap, op):
+		omap = imap.copy()
+		for dtile in omap.tiles:
+			dtile[:] = op(dtile)
+		return omap
 	def polinv(self, idiv):
 		odiv = idiv.copy()
 		for dtile in odiv.tiles:
