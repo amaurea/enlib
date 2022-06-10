@@ -216,7 +216,7 @@ def read_data(fnames, sel=None, pixbox=None, box=None, geometry=None, comp=0, sp
 	for ifile in fnames:
 		d = mapdata.read(ifile, sel=sel, pixbox=pixbox, box=box, geometry=geometry)
 		# The 0 here is just selecting the first split. That is, we don't support splits
-		data.maps .append(d.maps [split].astype(dtype)[comp])
+		data.maps .append(d.maps [split].preflat.astype(dtype)[comp])
 		data.ivars.append(d.ivars[split].astype(dtype)*ivscale[comp])
 		data.freqs.append(d.freq)
 		if data.l is None: data.l = d.maps[0].modlmap()
