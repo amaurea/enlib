@@ -1,8 +1,10 @@
-import numpy as np, pyccl
+import numpy as np
 from pixell import utils, bunch
+from scipy.integrate import quad
 
 # TODO
-# 1. pyccl dependency is annoying. The main thing I need it for is chi(z) and d_A(z)
+# 1. pyccl dependency is annoying. The main thing I need it for is chi(z) and d_A(z) 
+# NB This pull request addresses #1 - removed pyccl dependence at the cost of some speed
 # 2. Maybe mark ProfileBattagliaFast as the default somehow? Or make a factory function?
 
 class ProfileBase:
@@ -11,7 +13,7 @@ class ProfileBase:
 	be used by itself. Instead use a subclass that defines the
 	cluster pressure profile, like ProfileBattaglia"""
 	def __init__(self, cosmology=None):
-		self.cosmology = cosmology or pyccl.Cosmology(Omega_c=0.2589, Omega_b=0.0486, h=0.6774, sigma8=0.8159, n_s=0.9667, transfer_function="boltzmann_camb")
+		self.cosmology = cosmology #NB SAVED for Default cosmo values or pyccl.Cosmology(Omega_c=0.2589, Omega_b=0.0486, h=0.6774, sigma8=0.8159, n_s=0.9667, transfer_function="boltzmann_camb")
 	def y    (self, m200, z, r=0, dist="angular"):
 		"""Evaluate the (line-of-sight integrated) Compton y parameter
 		for clusters with mass m200 and redshift z at a distance r
@@ -227,7 +229,7 @@ def websky_m200m_to_m200c(m200m, z, cosmology):
 def websky_decode(data, cosmology, mass_interp):
 	"""Go from a raw websky catalog to pos, z and m200"""
 	chi     = np.sum(data.T[:3]**2,0)**0.5 # comoving Mpc
-	a       = pyccl.scale_factor_of_chi(cosmology, chi)
+	a       = scale_factor_of_chi(cosmology, chi)
 	z       = 1/a-1
 	R       = data.T[6].astype(float) * 1e6*utils.pc # m. This is *not* r200!
 	rho_m   = calc_rho_c(0, cosmology)*cosmology["Omega_m"]
@@ -240,7 +242,10 @@ def get_H0(cosmology): return cosmology["h"]*100*1e3/(1e6*utils.pc)
 
 def get_H(z, cosmology):
 	z = np.asanyarray(z)
-	return get_H0(cosmology)*pyccl.h_over_h0(cosmology, 1/(z.reshape(-1)+1)).reshape(z.shape)
+	omegam  = cosmology["Omega_m"]
+	#return get_H0(cosmology)*np.sqrt(omegam * (1.+z)**3 + (1. - omegam))
+	return get_H0(cosmology)*np.sqrt(omegam * (1.+z.reshape(-1))**3 + (1. - omegam)).reshape(z.shape)
+	#pyccl.h_over_h0(cosmology, 1/(z.reshape(-1)+1)).reshape(z.shape)
 
 def calc_rho_c(z, cosmology):
 	H     = get_H(z, cosmology)
@@ -253,10 +258,33 @@ def calc_rdelta(mdelta, z, cosmology, delta=200):
 	rdelta = (mdelta/(4/3*np.pi*delta*rho_c))**(1/3)
 	return rdelta
 
+def chi_int (z, cosmology):
+	return utils.c / get_H(z, cosmology)
+
+def chi (cosmology, z):
+	ans = np.array([])
+	for i in range (len(z)):	
+		temp, err = quad(chi_int,0,z[i],args=cosmology)
+		ans = np.append(ans,temp)
+	return ans/(1e6*utils.pc)
+
+def scale_factor_of_chi(cosmology,dist,z0=0.01,z1=5.,tol=1e-5,n=0):
+	"""secant method for finding the scale factor given a distance"""
+	n+=1
+	y0 = dist - quad(chi_int,0,z0,args=cosmology)[0]/(1e6*utils.pc)
+	y1 = dist - quad(chi_int,0,z1,args=cosmology)[0]/(1e6*utils.pc)
+	zn = z1 - y1 * ((z1 - z0) / (y1 - y0))
+	if np.abs(y1) < tol:
+		return 1./(1.+zn)
+	return scale_factor_of_chi(cosmology, dist, z0=z1, z1=zn, n=n)	
+
+def angular_diameter_distance(cosmology,z):
+	return chi(cosmology,z)/(1. + z)
+
 def calc_angsize(physsize, z, cosmology):
 	"""Given a physical size in m, returns the angular size in radians"""
 	z   = np.asanyarray(z)
-	d_A = pyccl.angular_diameter_distance(cosmology, 1/(z.reshape(-1)+1)).reshape(z.shape)*1e6*utils.pc
+	d_A = angular_diameter_distance(cosmology, z).reshape(z)*1e6*utils.pc
 	return np.arctan2(physsize,d_A)
 
 def get_params_battaglia(m200, z, cosmology):
