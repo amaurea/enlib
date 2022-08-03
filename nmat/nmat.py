@@ -472,11 +472,11 @@ def read_nmat(fname, group=None):
 	else:
 		f = fname
 	g = f[group] if group else f
-	typ = np.array(g["type"])[...]
+	typ = np.array(g["type"]).reshape(-1)[0].decode()
 	if typ == "detvecs":
-		return NmatDetvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["dets"].value)
+		return NmatDetvecs(g["D"][()], g["V"][()], g["E"][()], g["bins"][()], g["ebins"][()], g["dets"][()])
 	elif typ == "sharedvecs":
-		return NmatSharedvecs(g["D"].value, g["V"].value, g["E"].value, g["bins"].value, g["ebins"].value, g["vbins"].value, g["dets"].value)
+		return NmatSharedvecs(g["D"][()], g["V"][()], g["E"][()], g["bins"][()], g["ebins"][()], g["vbins"][()], g["dets"][()])
 	elif typ == "binned":
 		return NmatBinned(g["icovs"], g["bins"], g["dets"])
 	else:

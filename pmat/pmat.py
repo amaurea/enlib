@@ -67,6 +67,17 @@ class PmatMap(PointingMatrix):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
 		raise NotImplementedError
+	def get_pix_phase(self, float_pix=False):
+		ndet, nsamp = self.scan.ndet, self.scan.nsamp
+		pix    = np.zeros([ndet,nsamp,2],np.float64)
+		phase  = np.zeros([ndet,nsamp,3],self.dtype)
+		# -1 in pixbox as shortcut for subtracting 1 from pixels to go from
+		# fortran to C/python indexing
+		self.core.precompute_pointing_grid(pix.T, phase.T, 1, self.scan.boresight.T,
+				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox.T, self.yvals.T, self.pixbox.T-1, self.nphi)
+		if not float_pix: pix = utils.nint(pix).astype(np.int32)
+		return pix, phase
 
 class PmatMapFast(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation

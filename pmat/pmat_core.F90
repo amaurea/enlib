@@ -2030,4 +2030,35 @@ contains
 		end if
 	end subroutine
 
+	subroutine precompute_pointing_grid( &
+		pix, phase,                    &! The output pixel[yx,nsamp,ndet] and phase[TQU,nsamp,ndet] arrays
+		pmet,                          &! Grid pointing interpol variant: 1: bilinear, 2:gradient
+		bore, hwp, det_pos, det_comps, &! Input pointing
+		rbox, nbox, yvals,             &! Interpolation grid
+		wbox, nphi                     &! wbox({y,x},{from,to}) pixbox and sky wrap in pixels
+	)
+		use omp_lib
+		implicit none
+		! Parameters
+		real(8),    intent(inout) :: pix(:,:,:)
+		real(_),    intent(inout) :: phase(:,:,:)
+		integer(4), intent(in)    :: nbox(:), wbox(:,:), nphi, pmet
+		real(8),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
+		real(8),    intent(in)    :: det_comps(:,:)
+		! Work
+		integer(4) :: nsamp, ndet, di, steps(3)
+		real(8)    :: x0(3), inv_dx(3)
+		nsamp   = size(bore, 2)
+		ndet    = size(det_comps, 2)
+		call interpol_prepare(nbox, rbox, steps, x0, inv_dx)
+		!$omp parallel do
+		do di = 1, ndet
+			call build_pointing_grid(pmet, bore, hwp, pix(:,:,di), phase(:,:,di), &
+				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals)
+			call cap_pixels(pix(:,:,di), wbox)
+			pix(1,:,di) = pix(1,:,di) + wbox(1,1)
+			pix(2,:,di) = pix(2,:,di) + wbox(2,1)
+		end do
+	end subroutine
+
 end module
