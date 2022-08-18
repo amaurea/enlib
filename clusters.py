@@ -163,7 +163,7 @@ class ProfileBattagliaFast(ProfileBattaglia):
 		r200   = calc_rdelta(m200, z, self.cosmology)
 		# Nomralize beta so it matches what our polynomial basis expects
 		b    = (np.log(-np.array(params.beta))-self.lbeta0)/self.dlbeta
-		front= (slice(None),)+(None,)*b.ndim
+		front= (slice(None),)+(None,)*(b.ndim or r.ndim)
 		B    = b**(np.arange(self.obeta)[front]) # [obeta,...]
 		# Get our dimensionless x values. Absorb xc into these since
 		# we've built our interpolation around xc=1, but remember to compensate
