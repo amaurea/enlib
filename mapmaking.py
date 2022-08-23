@@ -450,7 +450,7 @@ class SignalSrcSamp(SignalCut):
 			tod_mask = np.zeros([scan.ndet,scan.nsamp], bool)
 			tod      = np.zeros((scan.ndet,scan.nsamp), np.float32)
 			if srcs is not None:
-				if srcs == "auto": srcs = scan.pointsrcs
+				if utils.streq(srcs,"auto"): srcs = scan.pointsrcs
 				srcparam = pointsrcs.src2param(srcs).astype(np.float64)
 				if amplim is not None:
 					srcparam = srcparam[srcparam[:,2]>amplim]
