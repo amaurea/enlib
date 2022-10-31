@@ -1327,6 +1327,51 @@ class FilterBroadenBeamHor:
 	def __call__(self, scan, tod):
 		broaden_beam_hor(tod, scan, self.ibeam, self.obeam)
 
+class FilterInpaintSub:
+	def __init__(self, targets, fknee=10, alpha=10):
+		"""Use the samples more than dist away from each target in the targets string
+		to predict what the noise should be doing in the samples closer than that, and
+		subtract this prediction from the whole TOD. The prediction is based on gapfill_joneig
+		plus an extra smoothing. This filter is appropriate for reducing correlated noise in
+		the special case where you know the signal is almost entirely contained in small
+		regions near some objects.
+
+		The targets string has the format
+		  obj:dist,obj:dist,...
+		where obj can either be a capitalized planet name or [ra,dec] in degrees.
+		:dist is in degrees, and is optional. If left out the previous dist will be
+		repeated. The default is 0.5."""
+		self.targets = targets
+		self.fknee   = fknee
+		self.alpha   = alpha
+	def __call__(self, scan, tod):
+		from enact import cuts as actcuts
+		objs = utils.split_outside(self.targets,",")
+		dist = 0.5*utils.degree
+		# Reformat point offset to actdata convention, which is what avoidance_cut wants
+		bore = scan.boresight.T.copy()
+		bore[0] += utils.mjd2ctime(scan.mjd0)
+		# Build a "cut" that selects the samples near the objects
+		mycuts = sampcut.empty(*tod.shape)
+		for obj in objs:
+			toks = obj.split(":")
+			objname = toks[0]
+			if objname.startswith("["):
+				objname = [float(w)*utils.degree for w in objname[1:-1].split(",")]
+			if len(toks) > 1: dist = float(toks[1])*utils.degree
+			mycuts *= actcuts.avoidance_cut(bore, scan.offsets[:,1:], scan.site, objname, dist)
+		# Use this to gapfill a copy of the tod
+		model = gapfill.gapfill_joneig(tod, mycuts, inplace=False)
+		# Smooth this with a simple lowpass filter
+		ftod = fft.rfft(model)
+		freq = fft.rfftfreq(model.shape[-1])*scan.srate
+		flt  = 1/(1+(freq/self.fknee)**self.alpha)
+		ftod*= flt
+		fft.ifft(ftod, model, normalize=True)
+		del ftod
+		# And subtract this from the actual data
+		tod -= model
+
 def broaden_beam_hor(tod, scan, ibeam, obeam):
 	ft    = fft.rfft(tod)
 	k     = 2*np.pi*fft.rfftfreq(scan.nsamp, 1/scan.srate)

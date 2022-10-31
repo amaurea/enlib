@@ -35,8 +35,8 @@ class PmatMap(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation."""
 	def __init__(self, scan, template, sys=None, order=None, extra=[], split=None):
 		sys        = config.get("map_sys", sys)
-		transform  = pos2pix(scan,template,sys, extra=extra)
-		ipol, obox, err = build_interpol(transform, scan.box, id=scan.id)
+		self.transform  = pos2pix(scan,template,sys, extra=extra)
+		ipol, obox, err = build_interpol(self.transform, scan.box, id=scan.id)
 		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
 		# Use obox to extract a pixel bounding box for this scan.
 		# These are the only pixels pmat needs to concern itself with.
