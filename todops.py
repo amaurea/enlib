@@ -44,7 +44,7 @@ def fit_common(tods, cuts=None, niter=None, overlap=None, clean_tod=False, weigh
 	if niter is None: niter = 3
 	if weight is None:
 		weight = np.full(len(tods), 1.0, dtype=tods.dtype)
-	elif weight is "auto":
+	elif utils.streq(weight, "auto"):
 		weight = 1/estimate_white_noise(tods)
 		weight /= np.mean(weight)
 	# Output and work arrays
@@ -68,7 +68,7 @@ def fit_phase_flat(tods, az, daz=1*utils.arcmin, cuts=None, niter=None,
 	if niter is None: niter = 3
 	if weight is None:
 		weight = np.full(len(tods), 1.0, dtype=tods.dtype)
-	elif weight is "auto":
+	elif utils.streq(weight, "auto"):
 		weight = 1/estimate_white_noise(tods)
 		weight /= np.mean(weight)
 	# Set up phase pixels

@@ -1,6 +1,7 @@
 module pmat_core
 
 	private map_block_prepare, map_block_finish
+	private map_block_prepare_noatomic, map_block_finish_noatomic
 	private map_block_prepare_shifted_flat, map_block_finish_shifted_flat
 	private map_block_prepare_direct_flat, map_block_finish_direct_flat
 
@@ -119,10 +120,10 @@ contains
 			select case(mmet)
 			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
 			! is even slower for nthread > 8
-			case(0); call project_map_nearest (dir, tod(:,di), tmul, wmap, pix, phase)
-			case(1); call project_map_bilinear(dir, tod(:,di), tmul, wmap, pix, phase)
-			case(3); call project_map_bicubic (dir, tod(:,di), tmul, wmap, pix, phase)
-			case(4); call project_map_split   (dir, tod(:,di), tmul, wmap, pix, phase, split)
+			case(0); call project_map_nearest (dir, tod(:,di), tmul, wmap, pix, phase, .true.)
+			case(1); call project_map_bilinear(dir, tod(:,di), tmul, wmap, pix, phase, .true.)
+			case(3); call project_map_bicubic (dir, tod(:,di), tmul, wmap, pix, phase, .true.)
+			case(4); call project_map_split   (dir, tod(:,di), tmul, wmap, pix, phase, split, .true.)
 			end select
 			deallocate(pix, phase)
 			tloc1 = omp_get_wtime()
@@ -205,6 +206,156 @@ contains
 		deallocate(wmap, xmap)
 	end subroutine
 
+	! Same as the above, but without atomics
+	subroutine pmat_map_direct_grid_noatomic( &
+		dir,                           &! Direction of direction: 1: forward (map2tod), -1: backward (tod2map)
+		tod, tmul,                     &! The tod(nsamp,ndet)  and what to multiply it by
+		map, mmul,                     &! The map(nx,ny,ncomp) and what to multiply it by
+		pmet,                          &! Grid pointing interpol variant: 1: bilinear, 2:gradient
+		mmet,                          &! Map projection method: 1: nearest, 2:bilinear, 3:bicubic
+		bore, hwp, det_pos, det_comps, &! Input pointing
+		rbox, nbox, yvals,             &! Interpolation grid
+		wbox, nphi,                    &! wbox({y,x},{from,to}) pixbox and sky wrap in pixels
+		times,                         &! Benchmark times for each step.
+		split                          &! Which sub-tod split to use. Activated using mmet=4. Send in length-1 dummy otherwise
+	)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, nbox(:), wbox(:,:), nphi, pmet, mmet, split(:)
+		real(8),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
+		real(8),    intent(in)    :: det_comps(:,:)
+		real(_),    intent(in)    :: tmul, mmul
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		real(8),    intent(inout) :: times(:)
+		! Work
+		real(8),    allocatable   :: pix(:,:)
+		real(_),    allocatable   :: wmap(:,:,:,:), phase(:,:)
+		integer(4), allocatable   :: xmap(:)
+		integer(4) :: nsamp, ndet, di, steps(3), id, myind
+		real(8)    :: x0(3), inv_dx(3), t1, t2, tloc1, tloc2, tpoint, tproj
+		nsamp   = size(bore, 2)
+		ndet    = size(det_comps, 2)
+		t1 = omp_get_wtime()
+		call interpol_prepare(nbox, rbox, steps, x0, inv_dx)
+		t2 = omp_get_wtime()
+		times(1) = times(1) + t2-t1
+		call map_block_prepare_noatomic(dir, wbox, nphi, mmul, map, wmap, xmap)
+		t1 = omp_get_wtime()
+		times(2) = times(1) + t1-t2
+		tpoint = 0; tproj = 0 ! avoid ifort overeager optimization
+		!$omp parallel do private(di, pix, phase, tloc1, tloc2, id, myind) reduction(+:tpoint,tproj)
+		do di = 1, ndet
+			tloc1 = omp_get_wtime()
+			id    = omp_get_thread_num()
+			myind = min(id+1, size(wmap,4))
+			allocate(pix(2,nsamp), phase(3,nsamp))
+			call build_pointing_grid(pmet, bore, hwp, pix, phase, &
+				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals)
+			call cap_pixels(pix, wbox)
+			tloc2 = omp_get_wtime()
+			tpoint = tpoint + tloc2-tloc1
+			select case(mmet)
+			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
+			! is even slower for nthread > 8
+			case(0); call project_map_nearest (dir, tod(:,di), tmul, wmap(:,:,:,myind), pix, phase, .false.)
+			case(1); call project_map_bilinear(dir, tod(:,di), tmul, wmap(:,:,:,myind), pix, phase, .false.)
+			case(3); call project_map_bicubic (dir, tod(:,di), tmul, wmap(:,:,:,myind), pix, phase, .false.)
+			case(4); call project_map_split   (dir, tod(:,di), tmul, wmap(:,:,:,myind), pix, phase, split, .false.)
+			end select
+			deallocate(pix, phase)
+			tloc1 = omp_get_wtime()
+			tproj = tproj + tloc1-tloc2
+		end do
+		t2 = omp_get_wtime()
+		times(3) = times(3) + (t2-t1)*tpoint/(tpoint+tproj)
+		times(4) = times(4) + (t2-t1)*tproj /(tpoint+tproj)
+		call map_block_finish_noatomic(dir, wbox, mmul, map, wmap, xmap)
+		t1 = omp_get_wtime()
+		times(5) = times(5) + t1-t2
+	end subroutine
+
+	subroutine map_block_prepare_noatomic(dir, wbox, nphi, mmul, map, wmap, xmap)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, wbox(:,:), nphi
+		real(_),    intent(in)    :: map(:,:,:), mmul
+		real(_),    intent(inout), allocatable :: wmap(:,:,:,:)
+		integer(4), intent(inout), allocatable :: xmap(:)
+		integer(4) :: nwx, nwy, ix, iy, ox, oy, ic, pcut, ncomp, nbuf
+		! Set up our work map based on the relevant subset of pixels.
+		nwy = wbox(1,2)-wbox(1,1)
+		nwx = wbox(2,2)-wbox(2,1)
+		ncomp = size(map,3)
+		if(dir < 0) then
+			nbuf = omp_get_max_threads()
+		else
+			nbuf = 1
+		end if
+		allocate(wmap(ncomp,nwx,nwy,nbuf))
+		! Set up the pixel wrap remapper
+		allocate(xmap(nwx))
+		pcut = -(nphi-size(map,1))/2
+		do ix = 1, nwx
+			ox = modulo(ix-1+wbox(2,1)-pcut,nphi)+pcut+1
+			xmap(ix) = max(1,min(size(map,1),ox))
+		end do
+		!$omp parallel workshare
+		wmap = 0
+		!$omp end parallel workshare
+		if (dir > 0) then
+			! map2tod. Copy values over so we can add them to the tod later
+			! 5% of total cost
+			!$omp parallel do private(iy,ix,ic,oy)
+			do iy = 1, nwy
+				oy = max(1,min(size(map,2),iy+wbox(1,1)))
+				do ic = 1, ncomp
+					do ix = 1, nwx
+						wmap(ic,ix,iy,1) = map(xmap(ix),oy,ic)*mmul
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
+	subroutine map_block_finish_noatomic(dir, wbox, mmul, map, wmap, xmap)
+		implicit none
+		integer(4), intent(in)    :: dir, wbox(:,:)
+		real(_),    intent(inout) :: map(:,:,:)
+		real(_),    intent(in)    :: mmul
+		real(_),    intent(inout), allocatable :: wmap(:,:,:,:)
+		integer(4), intent(inout), allocatable :: xmap(:)
+		integer(4) :: nwx, nwy, ix, iy, ox, ic, oy
+		real(_)    :: v
+		nwy = wbox(1,2)-wbox(1,1)
+		nwx = wbox(2,2)-wbox(2,1)
+		if (dir < 0) then
+			! Reduce buffers
+			!$omp parallel do private(iy,ix,ic,v)
+			do iy = 1, size(wmap,3)
+				do ix = 1, size(wmap,2)
+					do ic = 1, size(wmap,1)
+						v = sum(wmap(ic,ix,iy,:))*mmul
+						wmap(ic,ix,iy,1) = v
+					end do
+				end do
+			end do
+			! tod2map, must copy out result from wmap. map is
+			! usually bigger than wmap, so optimize loop for it
+			!$omp parallel do private(iy,ix,ic,ox,oy)
+			do iy = 1, nwy
+				oy = max(1,min(size(map,2),iy+wbox(1,1)))
+				do ic = 1, size(map,3)
+					do ix = 1, nwx
+						map(xmap(ix),oy,ic) = map(xmap(ix),oy,ic) + wmap(ic,ix,iy,1)
+					end do
+				end do
+			end do
+		end if
+		deallocate(wmap, xmap)
+	end subroutine
+
+
 	subroutine build_pointing_grid( &
 		pmet, bore, hwp, pix, phase, &
 		det_pos, det_comps, steps, x0, inv_dx, yvals)
@@ -259,7 +410,7 @@ contains
 
 	! ops: about nsamp * 7
 	subroutine project_map_nearest( &
-		dir, tod, tmul, map, pix, phase)
+		dir, tod, tmul, map, pix, phase, atomic)
 		use omp_lib
 		implicit none
 		! Parameters
@@ -267,6 +418,7 @@ contains
 		real(8),    intent(in)    :: pix(:,:)
 		real(_),    intent(in)    :: tmul, phase(:,:)
 		real(_),    intent(inout) :: tod(:), map(:,:,:)
+		logical                   :: atomic
 		! Work
 		real(_)    :: v
 		integer(4) :: nsamp, si, ci, p(2), nproc
@@ -288,7 +440,7 @@ contains
 				end if
 			end do
 		else
-			if(nproc > 1) then
+			if(nproc > 1 .and. .not. atomic) then
 				do si = 1, nsamp
 					p = nint(pix(:,si))
 					if(p(1) .eq. 0) cycle ! skip OOB pixels
@@ -327,7 +479,7 @@ contains
 	! Sadly, our pixel truncation in the pixel calculation is not
 	! enough to avoid OOB in this case. Must handle this ourselves.
 	subroutine project_map_bilinear( &
-		dir, tod, tmul, map, pix, phase)
+		dir, tod, tmul, map, pix, phase, atomic)
 		use omp_lib
 		implicit none
 		! Parameters
@@ -335,6 +487,7 @@ contains
 		real(8),    intent(in)    :: pix(:,:)
 		real(_),    intent(in)    :: tmul, phase(:,:)
 		real(_),    intent(inout) :: tod(:), map(:,:,:)
+		logical                   :: atomic
 		real(8)    :: rpix(2)
 		integer(4) :: p(2), ci
 		! Work
@@ -371,7 +524,7 @@ contains
 				v3(:,2) = v4*x(2)
 				v1 = v3*(1-x(1))
 				v2 = v3*x(1)
-				if(nproc > 1) then
+				if(nproc > 1 .and. .not. atomic) then
 					! I don't like using this many atomics. With four
 					! times the number I usually have, this is probably
 					! slower than separate work arrays.
@@ -399,7 +552,7 @@ contains
 	end subroutine
 
 	subroutine project_map_bicubic( &
-		dir, tod, tmul, map, pix, phase)
+		dir, tod, tmul, map, pix, phase, atomic)
 		use omp_lib
 		implicit none
 		! Parameters
@@ -407,6 +560,7 @@ contains
 		real(8),    intent(in)    :: pix(:,:)
 		real(_),    intent(in)    :: tmul, phase(:,:)
 		real(_),    intent(inout) :: tod(:), map(:,:,:)
+		logical                   :: atomic
 		real(8)    :: rpix(2)
 		integer(4) :: p(2), ci, i, j, i2
 		! Work
@@ -461,7 +615,7 @@ contains
 				do i = 1, 4
 					vy(:,i) = vx*w(i,2)
 				end do
-				if(nproc > 1) then
+				if(nproc > 1 .and. .not. atomic) then
 					do i = 1, 4
 						do i2 = 1, 4
 							do ci = 1, 3
@@ -487,7 +641,7 @@ contains
 	end subroutine
 
 	subroutine project_map_split( &
-		dir, tod, tmul, map, pix, phase, split)
+		dir, tod, tmul, map, pix, phase, split, atomic)
 		use omp_lib
 		implicit none
 		! Parameters
@@ -495,6 +649,7 @@ contains
 		real(8),    intent(in)    :: pix(:,:)
 		real(_),    intent(in)    :: tmul, phase(:,:)
 		real(_),    intent(inout) :: tod(:), map(:,:,:)
+		logical                   :: atomic
 		! Work
 		real(_)    :: v
 		integer(4) :: nsamp, si, ci, p(2), nproc, coff, co
@@ -517,7 +672,7 @@ contains
 				end if
 			end do
 		else
-			if(nproc > 1) then
+			if(nproc > 1 .and. .not. atomic) then
 				do si = 1, nsamp
 					p = nint(pix(:,si))
 					if(p(1) .eq. 0) cycle ! skip OOB pixels
@@ -2029,5 +2184,66 @@ contains
 			deallocate(wmap)
 		end if
 	end subroutine
+
+	subroutine precompute_pointing_grid( &
+		pix, phase,                    &! The output pixel[yx,nsamp,ndet] and phase[TQU,nsamp,ndet] arrays
+		pmet,                          &! Grid pointing interpol variant: 1: bilinear, 2:gradient
+		bore, hwp, det_pos, det_comps, &! Input pointing
+		rbox, nbox, yvals,             &! Interpolation grid
+		wbox, nphi                     &! wbox({y,x},{from,to}) pixbox and sky wrap in pixels
+	)
+		use omp_lib
+		implicit none
+		! Parameters
+		real(8),    intent(inout) :: pix(:,:,:)
+		real(_),    intent(inout) :: phase(:,:,:)
+		integer(4), intent(in)    :: nbox(:), wbox(:,:), nphi, pmet
+		real(8),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
+		real(8),    intent(in)    :: det_comps(:,:)
+		! Work
+		integer(4) :: nsamp, ndet, di, steps(3)
+		real(8)    :: x0(3), inv_dx(3)
+		nsamp   = size(bore, 2)
+		ndet    = size(det_comps, 2)
+		call interpol_prepare(nbox, rbox, steps, x0, inv_dx)
+		!$omp parallel do
+		do di = 1, ndet
+			call build_pointing_grid(pmet, bore, hwp, pix(:,:,di), phase(:,:,di), &
+				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals)
+			call cap_pixels(pix(:,:,di), wbox)
+			pix(1,:,di) = pix(1,:,di) + wbox(1,1)
+			pix(2,:,di) = pix(2,:,di) + wbox(2,1)
+		end do
+	end subroutine
+
+	! Comap test stuff
+	subroutine pmat_comap(dir, tod, map, pix)
+		use omp_lib
+		implicit none
+		integer, intent(in)    :: dir, pix(:,:,:)
+		real(_), intent(inout) :: map(:,:,:,:), tod(:,:,:)
+		integer :: ndet, nfreq, nsamp, di, fi, si, y, x
+		! pix = [{y,x},nsamp,ndet]
+		! tod = [nfreq,nsamp,ndet]
+		! map = [nfreq,nx,ny,ndet]
+		ndet  = size(tod,3)
+		nsamp = size(tod,2)
+		nfreq = size(tod,1)
+		if(dir > 0) then
+		else
+			!$omp parallel do collapse(2) private(di,si,y,x,fi)
+			do di = 1, ndet
+				do si = 1, nsamp
+					y = pix(si,di,1)
+					x = pix(si,di,2)
+					do fi = 1, nfreq
+						map(fi,x,y,di) = map(fi,x,y,di) + tod(fi,si,di)
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
+
 
 end module

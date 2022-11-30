@@ -39,7 +39,7 @@
 from __future__ import division, print_function
 import numpy as np, h5py, logging, gc
 from . import enmap, dmap, array_ops, pmat, utils, todfilter, pointsrcs, zipper
-from . import config, nmat, bench, gapfill, mpi, sampcut, fft
+from . import config, nmat, bench, gapfill, mpi, sampcut, fft, bunch
 from .cg import CG
 L = logging.getLogger(__name__)
 
@@ -450,7 +450,7 @@ class SignalSrcSamp(SignalCut):
 			tod_mask = np.zeros([scan.ndet,scan.nsamp], bool)
 			tod      = np.zeros((scan.ndet,scan.nsamp), np.float32)
 			if srcs is not None:
-				if srcs == "auto": srcs = scan.pointsrcs
+				if utils.streq(srcs,"auto"): srcs = scan.pointsrcs
 				srcparam = pointsrcs.src2param(srcs).astype(np.float64)
 				if amplim is not None:
 					srcparam = srcparam[srcparam[:,2]>amplim]
@@ -1381,6 +1381,18 @@ def broaden_beam_hor(tod, scan, ibeam, obeam):
 	ft *= np.exp(-0.5*(sigma/skyspeed)**2*k**2)
 	fft.ifft(ft, tod, normalize=True)
 
+class FilterHighpass:
+	def __init__(self, fknee=1.0, alpha=-3.5):
+		"""Apply a highpass-filter to the TOD"""
+		self.fknee = fknee
+		self.alpha = alpha
+	def __call__(self, scan, tod):
+		f     = fft.rfftfreq(scan.nsamp, 1/scan.srate)
+		ftod  = fft.rfft(tod)
+		flt   = (1 + (np.maximum(f, f[1]/2)/self.fknee)**self.alpha)**-1
+		ftod *= flt
+		fft.ifft(ftod, tod, normalize=True)
+
 ###### Map filters ######
 
 class MapfilterGauss:
@@ -1624,16 +1636,6 @@ class Eqsys:
 			if not config.get("debug_raw"):
 				with bench.mark("b_filter"):
 					for filter in self.filters: filter(scan, tod)
-
-			#print(tod.shape)
-			#with h5py.File("moo_enki.hdf", "w") as hfile:
-			#	hfile["dets"] = np.char.encode(scan.dets)
-			#	hfile["t"] = utils.mjd2ctime(scan.mjd0 + scan.boresight[:,0]/3600/24)
-			#	hfile["az"] = scan.boresight[:,1]
-			#	hfile["el"] = scan.boresight[:,2]
-			#dump("dump_postfilter.hdf", tod)
-			#1/0
-
 			#dump("dump_postfilter.hdf", tod)
 			#dump("dump_postfilter_mean.hdf", np.mean(tod,0))
 			#dump("dump_postfilter.hdf", tod[:4])

@@ -57,7 +57,7 @@ def init(level=INFO, rank=mpi.COMM_WORLD.rank, file=None, fmt=default_format, co
 	The console level threshold is set by the level argument, which must be a
 	python logging module level. The threshold does not apply to file output, where
 	everything is output."""
-	logger  = getLogger("")
+	logger  = getLogger("enlib")
 	logger.setLevel(DEBUG)
 	if file:
 		try:

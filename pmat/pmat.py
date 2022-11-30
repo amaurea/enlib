@@ -19,6 +19,7 @@ def get_core(dtype):
 		return pmat_core_64.pmat_core
 
 config.default("pmat_map_order",      0, "The interpolation order of the map pointing matrix.")
+config.default("pmat_map_atomic", "auto", "Whether to use atomics or per-thread memory in the tod2map operation. Can be 'atomic', 'buffers' or 'auto'")
 config.default("pmat_cut_type",  "full", "The cut sample representation used. 'full' uses one degree of freedom for each cut sample. 'bin:N' uses one degree of freedom for every N samples. 'exp' used one degree of freedom for the first sample, then one for the next two, one for the next 4, and so on, giving high resoultion at the edges of each cut range, and low resolution in the middle.")
 config.default("map_sys",       "equ", "The coordinate system of the maps. Can be eg. 'hor', 'equ' or 'gal'.")
 config.default("pmat_accuracy",     1.0, "Factor by which to lower accuracy requirement in pointing interpolation. 1.0 corresponds to 1e-3 pixels and 0.1 arc minute in polangle")
@@ -33,7 +34,7 @@ class PointingMatrix:
 
 class PmatMap(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation."""
-	def __init__(self, scan, template, sys=None, order=None, extra=[], split=None):
+	def __init__(self, scan, template, sys=None, order=None, extra=[], split=None, atomic=None):
 		sys        = config.get("map_sys", sys)
 		self.transform  = pos2pix(scan,template,sys, extra=extra)
 		ipol, obox, err = build_interpol(self.transform, scan.box, id=scan.id)
@@ -44,7 +45,8 @@ class PmatMap(PointingMatrix):
 		self.pixbox, self.nphi  = build_pixbox(obox[:,:2], template)
 		self.scan,   self.dtype = scan, template.dtype
 		self.core  = get_core(self.dtype)
-		self.order = config.get("pmat_map_order", order)
+		self.order = config.get("pmat_map_order",  order)
+		self.atomic= parse_atomic(config.get("pmat_map_atomic", atomic), self.order)
 		self.err   = err
 		if split is not None:
 			self.split = np.array(split, np.int32)
@@ -54,19 +56,40 @@ class PmatMap(PointingMatrix):
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""m -> tod"""
 		if times is None: times = np.zeros(5)
-		self.core.pmat_map_direct_grid(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+		if self.atomic: fun = self.core.pmat_map_direct_grid
+		else:           fun = self.core.pmat_map_direct_grid_noatomic
+		fun(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
 				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
 				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times, self.split)
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
-		self.core.pmat_map_direct_grid(-1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+		if self.atomic: fun = self.core.pmat_map_direct_grid
+		else:           fun = self.core.pmat_map_direct_grid_noatomic
+		fun(-1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
 				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
 				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times, self.split)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
 		raise NotImplementedError
+	def get_pix_phase(self, float_pix=False):
+		ndet, nsamp = self.scan.ndet, self.scan.nsamp
+		pix    = np.zeros([ndet,nsamp,2],np.float64)
+		phase  = np.zeros([ndet,nsamp,3],self.dtype)
+		# -1 in pixbox as shortcut for subtracting 1 from pixels to go from
+		# fortran to C/python indexing
+		self.core.precompute_pointing_grid(pix.T, phase.T, 1, self.scan.boresight.T,
+				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox.T, self.yvals.T, self.pixbox.T-1, self.nphi)
+		if not float_pix: pix = utils.nint(pix).astype(np.int32)
+		return pix, phase
+
+def parse_atomic(desc, order):
+	if   desc == "atomic":  return True
+	elif desc == "buffers": return False
+	elif desc == "auto":    return order == 0
+	else: raise ValueError("Unrecognized atomic setting '%s'" % str(desc))
 
 class PmatMapFast(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation
