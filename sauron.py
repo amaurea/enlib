@@ -3,7 +3,8 @@
 import numpy as np, time, os
 from numpy.lib import recfunctions
 from pixell import enmap, utils, bunch, analysis, uharm, powspec, pointsrcs, curvedsky, mpi
-from enlib import mapdata, array_ops, wavelets, multimap
+from enlib import array_ops, wavelets, multimap
+from enlib import mapdata_simple as mapdata
 from scipy import ndimage
 
 def smooth_ps_angular(ps2d, brel=5):
@@ -213,11 +214,14 @@ def read_data(fnames, sel=None, pixbox=None, box=None, geometry=None, comp=0, sp
 	# Read in our data files and harmonize
 	br   = np.arange(0,beam_rmax,beam_res)
 	data = bunch.Bunch(maps=[], ivars=[], beams=[], freqs=[], l=None, bls=[], names=[], beam_profiles=[])
-	for ifile in fnames:
+	for fi, ifile in enumerate(fnames):
 		d = mapdata.read(ifile, sel=sel, pixbox=pixbox, box=box, geometry=geometry)
+		maps  = d.maps[split].astype(dtype)
+		ivars = np.broadcast_to(d.ivars[split].astype(dtype), maps.shape, subok=True)
+		maps, ivars = maps[comp], ivars[comp]
 		# The 0 here is just selecting the first split. That is, we don't support splits
-		data.maps .append(d.maps [split].astype(dtype)[comp])
-		data.ivars.append(d.ivars[split].astype(dtype)*ivscale[comp])
+		data.maps .append(maps)
+		data.ivars.append(ivars*ivscale[comp])
 		data.freqs.append(d.freq)
 		if data.l is None: data.l = d.maps[0].modlmap()
 		data.beams.append(enmap.ndmap(np.interp(data.l, np.arange(len(d.beam)), d.beam/np.max(d.beam)), d.maps[0].wcs).astype(dtype))
@@ -241,7 +245,7 @@ def read_data(fnames, sel=None, pixbox=None, box=None, geometry=None, comp=0, sp
 	data.ivars /= data.fconvs[:,None,None]**2
 
 	if mask is not None:
-		mask_map    = 1-enmap.read_map(mask, sel=sel, pixbox=pixbox, box=box)
+		mask_map    = 1-enmap.read_map(mask, geometry=data.maps.geometry)
 		data.ivars *= mask_map
 		del mask_map
 
@@ -535,7 +539,7 @@ def search_maps(ifiles, mode="find", icat=None, sel=None, pixbox=None, box=None,
 			# Optionally inject signal
 			if sim_cat is not None: inject_objects(data, cases, slice_cat_comp(sim_cat, comp))
 			if verbose: print("1st pass %s measure" % comps[comp])
-			nmat  = build_nmat_prior(data, type=nmat1, pol=True, cmb=cmb[comp,comp] if cmb is None else None)
+			nmat  = build_nmat_prior(data, type=nmat1, pol=True, cmb=cmb[comp,comp] if cmb is not None else None)
 			res_p = measure_objects(data, cases, nmat, res_t.cat, verbose=verbose)
 			if nmat2 != "none":
 				if verbose: print("2nd pass %s measure" % comps[comp])
@@ -572,7 +576,7 @@ def search_maps_tiled(ifiles, odir, tshape=(1000,1000), margin=100, padding=150,
 	utils.mkdir(wdir)
 	if comm is None: comm = bunch.Bunch(rank=0, size=1)
 	tshape = np.zeros(2,int)+tshape
-	meta   = mapdata.read_meta(ifiles[0])
+	meta  = mapdata.read_meta(ifiles[0])
 	# Allow us to slice the map that will be tiled
 	geo    = enmap.Geometry(*meta.map_geometry)
 	if pixbox is not None or box is not None:
