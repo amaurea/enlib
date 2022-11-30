@@ -463,6 +463,54 @@ class NmatScaled(NoiseMatrix):
 #		fields = self.export()
 #		write_nmat_helper(fname, fields)
 
+class NmatOofCommon(NoiseMatrix):
+	"""A binned noise matrix where the inverse covariance matrix is stored and
+	used in a compressed form, as a set of eigenvectors and eigenvalues."""
+	def __init__(self, sigma_white, srate=400, lknee_atm=3.0, lknee_common=0.5, alpha_atm=-3, alpha_common=-4):
+		self.sigma_white = np.array(sigma_white)
+		self.lknee_atm   = lknee_atm
+		self.lknee_common= lknee_common
+		self.alpha_atm   = alpha_atm
+		self.alpha_common= alpha_common
+		self.srate       = srate
+	def apply(self, tod, inverse=False):
+		ft = fft.rfft(tod)
+		self.apply_ft(ft, tod.shape[-1], tod.dtype, inverse=inverse)
+		fft.irfft(ft, tod, flags=['FFTW_ESTIMATE','FFTW_DESTROY_INPUT'])
+		return tod
+	def apply_ft(self, ft, nsamp, dtype, inverse=False):
+		freq    = fft.rfftfreq(nsamp, 1/self.srate)
+		freq[0] = freq[1]/2
+		# Noise model is
+		#  N_ab = sigma_a*sigma_b * (1 + (freq/lknee_atm_a)**alpha_atm_a * delta_ab + (freq/lknee_common)**alpha_common)
+		# In matrix form:
+		#  N = S(1+A+VV'c)S
+		# Define B = A+1. Then
+		# => N" = S"(B+VcV')"S"
+		# Woodbury
+		# N" = S"(B"-B"V(c"+V'V)"V'B")S"
+		# V = [1,1,1,1,1...], so V'V = ndet
+		B = 1 + (freq/self.lknee_atm)**self.alpha_atm
+		c = (freq/self.lknee_common)**self.alpha_common
+		if inverse:
+			ft *= self.sigma_white[:,None]
+			ft  = A*ft + np.sum(ft,0)*c
+			ft *= self.sigma_white[:,None]
+		else:
+			iB  = 1/B
+			ft /= self.sigma_white[:,None]
+			ft *= iB
+			ft -= iB*np.sum(ft,0)/(1/c+len(ft))
+			ft /= self.sigma_white[:,None]
+	def __getitem__(self, sel):
+		res, detslice, sampslice = self.getitem_helper(sel)
+
+
+	def export(self): pass
+	def write(self, fname):
+		fields = self.export()
+		write_nmat_helper(fname, fields)
+
 
 def read_nmat(fname, group=None):
 	"""Read a noise matrix from file, optionally from the named group
