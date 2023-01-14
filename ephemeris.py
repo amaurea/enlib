@@ -31,7 +31,7 @@ def ephem_raw(objname, mjd, nodelay=False):
 	(case sensitive)."""
 	mjd = np.asarray(mjd)
 	if nodelay:
-		# Undo pyephem's light travel time stuff. This is nor properly tested
+		# Undo pyephem's light travel time stuff. This is not properly tested
 		dist  = ephem_raw(objname, mjd, nodelay=False)[2]
 		delay = dist*utils.AU/utils.c/utils.day2sec
 		return ephem_raw(objname, mjd - delay, nodelay=False)
