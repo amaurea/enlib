@@ -215,7 +215,11 @@ def read_scans_autobalance(ids, reader, comm, db=None, dets=None, quiet=False, d
 
 def get_tod_groups(ids, samelen=True):
 	"""Given a set of ids. Return a list of groups of ids. Each croup consists of
-	ids that cover the same time period with a different array."""
+	ids that cover the same time period with a different array.
+	
+	The function currently assumes that the tods must have *exactly* the same
+	starting label, which is usually but not always the case.
+	"""
 	times = np.array([float(id[:id.index(".")]) for id in ids])
 	labels = utils.label_unique(times, rtol=0, atol=10)
 	nlabel = np.max(labels)+1

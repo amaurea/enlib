@@ -39,7 +39,7 @@
 from __future__ import division, print_function
 import numpy as np, h5py, logging, gc
 from . import enmap, dmap, array_ops, pmat, utils, todfilter, pointsrcs, zipper
-from . import config, nmat, bench, gapfill, mpi, sampcut, fft
+from . import config, nmat, bench, gapfill, mpi, sampcut, fft, bunch
 from .cg import CG
 L = logging.getLogger(__name__)
 
@@ -450,7 +450,7 @@ class SignalSrcSamp(SignalCut):
 			tod_mask = np.zeros([scan.ndet,scan.nsamp], bool)
 			tod      = np.zeros((scan.ndet,scan.nsamp), np.float32)
 			if srcs is not None:
-				if srcs == "auto": srcs = scan.pointsrcs
+				if utils.streq(srcs,"auto"): srcs = scan.pointsrcs
 				srcparam = pointsrcs.src2param(srcs).astype(np.float64)
 				if amplim is not None:
 					srcparam = srcparam[srcparam[:,2]>amplim]
@@ -1327,6 +1327,51 @@ class FilterBroadenBeamHor:
 	def __call__(self, scan, tod):
 		broaden_beam_hor(tod, scan, self.ibeam, self.obeam)
 
+class FilterInpaintSub:
+	def __init__(self, targets, fknee=10, alpha=10):
+		"""Use the samples more than dist away from each target in the targets string
+		to predict what the noise should be doing in the samples closer than that, and
+		subtract this prediction from the whole TOD. The prediction is based on gapfill_joneig
+		plus an extra smoothing. This filter is appropriate for reducing correlated noise in
+		the special case where you know the signal is almost entirely contained in small
+		regions near some objects.
+
+		The targets string has the format
+		  obj:dist,obj:dist,...
+		where obj can either be a capitalized planet name or [ra,dec] in degrees.
+		:dist is in degrees, and is optional. If left out the previous dist will be
+		repeated. The default is 0.5."""
+		self.targets = targets
+		self.fknee   = fknee
+		self.alpha   = alpha
+	def __call__(self, scan, tod):
+		from enact import cuts as actcuts
+		objs = utils.split_outside(self.targets,",")
+		dist = 0.5*utils.degree
+		# Reformat point offset to actdata convention, which is what avoidance_cut wants
+		bore = scan.boresight.T.copy()
+		bore[0] += utils.mjd2ctime(scan.mjd0)
+		# Build a "cut" that selects the samples near the objects
+		mycuts = sampcut.empty(*tod.shape)
+		for obj in objs:
+			toks = obj.split(":")
+			objname = toks[0]
+			if objname.startswith("["):
+				objname = [float(w)*utils.degree for w in objname[1:-1].split(",")]
+			if len(toks) > 1: dist = float(toks[1])*utils.degree
+			mycuts *= actcuts.avoidance_cut(bore, scan.offsets[:,1:], scan.site, objname, dist)
+		# Use this to gapfill a copy of the tod
+		model = gapfill.gapfill_joneig(tod, mycuts, inplace=False)
+		# Smooth this with a simple lowpass filter
+		ftod = fft.rfft(model)
+		freq = fft.rfftfreq(model.shape[-1])*scan.srate
+		flt  = 1/(1+(freq/self.fknee)**self.alpha)
+		ftod*= flt
+		fft.ifft(ftod, model, normalize=True)
+		del ftod
+		# And subtract this from the actual data
+		tod -= model
+
 def broaden_beam_hor(tod, scan, ibeam, obeam):
 	ft    = fft.rfft(tod)
 	k     = 2*np.pi*fft.rfftfreq(scan.nsamp, 1/scan.srate)
@@ -1335,6 +1380,18 @@ def broaden_beam_hor(tod, scan, ibeam, obeam):
 	sigma = (obeam**2-ibeam**2)**0.5
 	ft *= np.exp(-0.5*(sigma/skyspeed)**2*k**2)
 	fft.ifft(ft, tod, normalize=True)
+
+class FilterHighpass:
+	def __init__(self, fknee=1.0, alpha=-3.5):
+		"""Apply a highpass-filter to the TOD"""
+		self.fknee = fknee
+		self.alpha = alpha
+	def __call__(self, scan, tod):
+		f     = fft.rfftfreq(scan.nsamp, 1/scan.srate)
+		ftod  = fft.rfft(tod)
+		flt   = (1 + (np.maximum(f, f[1]/2)/self.fknee)**self.alpha)**-1
+		ftod *= flt
+		fft.ifft(ftod, tod, normalize=True)
 
 ###### Map filters ######
 
@@ -1579,16 +1636,6 @@ class Eqsys:
 			if not config.get("debug_raw"):
 				with bench.mark("b_filter"):
 					for filter in self.filters: filter(scan, tod)
-
-			#print(tod.shape)
-			#with h5py.File("moo_enki.hdf", "w") as hfile:
-			#	hfile["dets"] = np.char.encode(scan.dets)
-			#	hfile["t"] = utils.mjd2ctime(scan.mjd0 + scan.boresight[:,0]/3600/24)
-			#	hfile["az"] = scan.boresight[:,1]
-			#	hfile["el"] = scan.boresight[:,2]
-			#dump("dump_postfilter.hdf", tod)
-			#1/0
-
 			#dump("dump_postfilter.hdf", tod)
 			#dump("dump_postfilter_mean.hdf", np.mean(tod,0))
 			#dump("dump_postfilter.hdf", tod[:4])

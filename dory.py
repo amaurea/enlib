@@ -560,7 +560,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		# Instead we will use indep groups to efficiently compute NB for each source,
 		# and then loop over each source's neighborhood
 		corrlen  = measure_corrlen(beam2d**2*iC, indep_tol)
-		print("corrlen", corrlen/utils.degree)
+		if verbose: print("corrlen", corrlen/utils.degree)
 		cboxes   = enmap.neighborhood_pixboxes(imap.shape, imap.wcs, src_pos, corrlen)
 		with bench.mark("make groups"):
 			# We don't want any part of another source's matched filter inside the
@@ -569,9 +569,9 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 			# 2**0.5 with extra mask.
 			indep_groups, corr_groups = group_independent(src_pos, corrlen*2*2**0.5)
 		NBs = [None for i in range(nsrc)]
+		t1 = time.time()
 		for gi, igroup in enumerate(indep_groups):
 			# Evaluate the covariance around every source in igroup in parallel
-			t1 = time.time()
 			NB = imap*0
 			for sid in igroup:
 				NB.insert(Bs[sid], op=np.add)
@@ -579,8 +579,8 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 			for sid in igroup:
 				NBs[sid] = NB.extract_pixbox(cboxes[sid])
 				#enmap.write_map("test_NBs_%02d_%02d.fits" % (ipass, sid), NBs[sid])
-			t2 = time.time()
-			if verbose: print("%8.2f Build NBs pass %d/%d group %d/%d" % (t2-t1, ipass+1, npass, gi+1, len(indep_groups)))
+		t2 = time.time()
+		if verbose: print("%8.2f Built NBs pass %d/%d" % (t2-t1, ipass+1, npass))
 		t1 = time.time()
 		#js = [1,54,55,57,71]
 		for sid in range(nsrc):
@@ -592,7 +592,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 				#	enmap.write_map("test_overlap_%02d_%02d_%02d.fits" % (ipass, sid, sid2), overlap)
 				icov[sid,sid2] = np.sum(overlap*Bs[sid2])
 		t2 = time.time()
-		if verbose: print("%8.2f Build icov pass %d/%d" % (t2-t1, ipass+1, npass))
+		if verbose: print("%8.2f Built icov pass %d/%d" % (t2-t1, ipass+1, npass))
 		#np.save("test_rhs1_%02d.npy" % ipass, rhs)
 		#np.save("test_icov1_%02d.npy" % ipass, icov)
 		# Apply any prior
