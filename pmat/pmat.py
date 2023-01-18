@@ -599,7 +599,7 @@ class PmatPtsrcTransient(PmatPtsrc):
 		# Handle angle wrapping without modifying the original srcs array
 		wsrcs = srcs.copy()
 		wsrcs[...,:2] = utils.rewind(srcs[...,:2], self.ref) # + self.dpos
-		core = lib.get_core(tod.dtype)
+		core = get_core(tod.dtype)
 		core.pmat_ptsrct(dir, tmul, pmul, tod.T, wsrcs.T, self.profiles.T,
 				self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T,
 				self.rbox.T, self.nbox.T, self.yvals.T,
