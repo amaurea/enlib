@@ -1097,18 +1097,35 @@ class MultiPostInsertSrcSamp:
 			all_maps[ind] = omaps[i]
 
 class FilterAddMap:
-	def __init__(self, scans, map, sys=None, mul=1, tmul=1, pmat_order=None, ptoff=[0,0], det_muls=None):
-		muls   = np.zeros(len(scans))+mul
-		ptoffs = np.zeros((len(scans),2))+ptoff
-		self.map, self.sys, self.mul, self.tmul, self.ptoffs, self.det_muls = map, sys, muls, tmul, ptoffs, det_muls
-		self.data = {scan: [pmat.PmatMap(scan, map, order=pmat_order, sys=sys, extra=extra_ptoff(ptoff)),mul,i] for i, (scan, mul, ptoff) in enumerate(zip(scans,muls,ptoffs))}
+	def __init__(self, scans, map, sys=None, mul=1, tmul=1, pmat_order=None, ptoff=None, det_muls=None, poleffs=None, tconstoff=None):
+		self.map, self.sys, self.mul, self.tmul, self.ptoff, self.det_muls, self.poleffs, self.tconstoff = map, sys, mul, tmul, ptoff, det_muls, poleffs, tconstoff
+		self.data = {}
+		for scan in scans:
+			# Make a shallow copy of the scan where we can override properties for the
+			# purpose simulating instrumental errors
+			myscan = scan.copy(shallow=True)
+			myscan.comps   = scan.comps.copy()
+			myscan.offsets = scan.offsets.copy()
+			if det_muls is not None:
+				myscan.comps *= det_muls[scan][:,None]
+			if poleffs is not None:
+				myscan.comps[:,1:] *= poleffs[scan][:,None]
+			if ptoff is not None:
+				myscan.offsets[:,1:] += ptoff[scan]
+			pmap = pmat.PmatMap(myscan, map, order=pmat_order, sys=sys)
+			self.data[scan] = pmap
 	def __call__(self, scan, tod):
-		pmat, mul, i = self.data[scan]
-		pmat.forward(tod, self.map, tmul=self.tmul, mmul=mul)
-		if self.det_muls is not None:
-			if self.tmul != 0:
-				raise NotImplementedError("Per-detector gain errors in FilterAddMap not supported when tmul != 0")
-			array_ops.scale_rows(tod, self.det_muls[i])
+		pmat = self.data[scan]
+		pmat.forward(tod, self.map, tmul=self.tmul, mmul=self.mul)
+		# optionally apply time constant error
+		if self.tconstoff is not None:
+			assert self.tmul == 0, "FilterAddMap requires tmul=0 when injecting a signal with time constant erorrs"
+			from enact import filters
+			ft    = fft.rfft(tod)
+			freq  = fft.rfftfreq(tod.shape[1], 1/scan.srate)
+			for di in range(len(ft)):
+				ft[di] /= filters.tconst_filter(freq, self.tconstoff[scan][di])
+			fft.irfft(ft, tod, normalize=True)
 
 class FilterAddDmap:
 	def __init__(self, scans, subinds, dmap, sys=None, mul=1, tmul=1, pmat_order=None):
@@ -1392,6 +1409,109 @@ class FilterHighpass:
 		flt   = (1 + (np.maximum(f, f[1]/2)/self.fknee)**self.alpha)**-1
 		ftod *= flt
 		fft.ifft(ftod, tod, normalize=True)
+
+class FilterBandpass:
+	def __init__(self, fknee1=1.0, fknee2=2.0, alpha=-10):
+		"""Apply a bandpass-filter to the TOD"""
+		self.fknee1 = fknee1
+		self.fknee2 = fknee2
+		self.alpha  = alpha
+	def __call__(self, scan, tod):
+		f     = fft.rfftfreq(scan.nsamp, 1/scan.srate)
+		f     = np.maximum(f, f[1]/2)
+		flt1  = (1+(f/self.fknee1)**self.alpha)**-1 if self.fknee1 > 0 else f*0+1
+		flt2  = (1+(f/self.fknee2)**self.alpha)**-1 if self.fknee2 > 0 else f*0
+		flt   = flt1-flt2
+		ftod  = fft.rfft(tod)
+		ftod *= flt
+		fft.ifft(ftod, tod, normalize=True)
+
+class FilterBadify:
+	def __init__(self, gainerr=0, deterr=0, deterr_rand=0, seed=0, tconsterr=0):
+		"""Introduce systematic errors into the TOD. Only gain supported for now.
+		Time constants should be easy. Pointing will be hard to support since div will
+		already have been built by this point."""
+		self.gainerr   = gainerr
+		self.deterr    = deterr
+		self.deterr_rand = deterr_rand
+		self.tconsterr = tconsterr
+		self.seed      = seed
+	def __call__(self, scan, tod):
+		# Build our random number generator
+		import random
+		seed2 = random.Random(scan.entry.id).randrange(0,0x10000000)
+		rs = np.random.RandomState(np.random.MT19937(np.random.SeedSequence((self.seed, seed2))))
+		# Gain errors
+		det_muls  = 1 + rs.randn()*self.gainerr
+		det_muls *= 1 + rs.randn(scan.ndet)*self.deterr_rand
+		# random det errs. This didn't seem to do much
+		# det_muls = [1+deterr*np.random.standard_normal(scan.ndet) for scan in myscans]
+		# radial det errs
+		det_r  = np.sum((scan.offsets[:,1:]-np.mean(scan.offsets[:,1:],0))**2,1)**0.5
+		det_g  = utils.rescale(-det_r, [-self.deterr, self.deterr])
+		det_g += 1 - np.mean(det_g)
+		det_muls *= det_g
+		# Then apply
+		tod *= det_muls[:,None]
+		# Maybe apply time constant error
+		if self.tconsterr != 0:
+			from enact import filters
+			taus = rs.randn(scan.ndet)*self.tconsterr
+			freq = fft.rfftfreq(scan.nsamp, 1/scan.srate)
+			ft   = fft.rfft(tod)
+			for di in range(ndet):
+				ft[di] /= filters.tconst_filter(freq, taus[di])
+			fft.irfft(ft, tod, normalize=True)
+
+class FilterGainfit:
+	"""Build a common mode and fit each detector to it, getting an estimate for
+	the relative gain. Use these to recalibrate the tod in-place."""
+	def __init__(self, fmax=1.0, odir=None):
+		self.fmax = fmax
+		self.odir = odir
+	def __call__(self, scan, tod):
+		# median to avoid being too affected by huge signals like bright point sources.
+		# We want to be atmosphere-dominated
+		common = np.median(tod,0)
+		# Smooth away non-atmospheric stuff, which would dilute the fit
+		freq   = fft.rfftfreq(scan.nsamp, 1/scan.srate)
+		fmask  = (freq>0)&(freq<=self.fmax)
+		fft.irfft(fft.rfft(common)*fmask, common, normalize=True)
+		# Do the fit
+		amps   = np.sum(tod*common,-1)/np.sum(common**2,-1)
+		# And apply it
+		tod   /= amps[:,None]
+		# Optionally dump fits
+		if self.odir:
+			from enact import actdata
+			utils.mkdir(self.odir)
+			ofile = self.odir + "/cmodefit_%s.txt" % (scan.id.replace(":","_"))
+			dets  = actdata.split_detname(scan.dets)[1]
+			np.savetxt(ofile, np.concatenate([dets[None], scan.d.point_template.T/utils.degree, amps[None]]).T, fmt="%4d %8.5f %8.5f %8.5f")
+
+class FilterCommon:
+	"""Fit a common mode to the detectors, and either subtract it or replace the tod with it.
+	This is the simplest case of high/low-pass filtering the focalplane"""
+	def __init__(self, mode="highpass"):
+		self.mode = mode
+	def __call__(self, scan, tod):
+		# median to avoid being too affected by single detectors
+		common = np.median(tod,0)
+		# We could smooth common in time too, if we suspect time-dependent gain errors
+		# Not implemented for now
+		if self.mode == "highpass":
+			tod -= common
+		elif self.mode == "lowpass":
+			tod[:] = common
+		else:
+			raise ValueError("Unrecognized FilterCommon mode '%s'" % (str(self.mode)))
+
+class FilterReplaceGain:
+	def __call__(self, scan, tod):
+		"""Test suggested by Thibaut. Use one set of gains to build the noise model,
+		and another set to calibrate the data. Implemented by running this filter
+		after the noise model has been built"""
+		tod *= (scan.d.gain2 / scan.d.gain)[:,None]
 
 ###### Map filters ######
 

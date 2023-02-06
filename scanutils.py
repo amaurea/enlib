@@ -100,7 +100,7 @@ def classify_scanning_patterns(myscans, tol=0.5*utils.degree, comm=None):
 		pids = pids[rank==comm.rank]
 	return pboxes, pids
 
-def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1, hwp_resample=False):
+def scan_iterator(filelist, inds, reader, db=None, dets=None, det_blacklist=None, quiet=False, downsample=1, hwp_resample=False):
 	"""Given a set of ids/files and a set of indices into that list. Try
 	to read each of these scans. Returns a list of successfully read scans
 	and a list of their indices."""
@@ -126,6 +126,17 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 				d = d[det_inds]
 			else:
 				d = eval("d[%s]" % dets)
+		if det_blacklist:
+			# Blacklist is always in terms of uids
+			if det_blacklist.startswith("@"):
+				with open(det_blacklist[1:],"r") as bfile:
+					black_uids = [int(line.split()[0]) for line in bfile]
+			else:
+				black_uids = utils.parse_ints(det_blacklist)
+			cur_uids  = actdata.split_detname(d.dets)[1]
+			keep_uids = sorted(list(set(cur_uids)-set(black_uids)))
+			keep_inds = utils.find(cur_uids, keep_uids)
+			d = d[keep_inds]
 		hwp_active = np.any(d.hwp_phase[0] != 0)
 		if hwp_resample and hwp_active:
 			mapping = enscan.build_hwp_sample_mapping(d.hwp)
@@ -134,12 +145,12 @@ def scan_iterator(filelist, inds, reader, db=None, dets=None, quiet=False, downs
 		if not quiet: L.debug("Read %s" % str(filelist[ind]))
 		yield ind, d
 
-def read_scans(filelist, inds, reader, db=None, dets=None, quiet=False, downsample=1, hwp_resample=False):
+def read_scans(filelist, inds, reader, db=None, dets=None, det_blacklist=None, quiet=False, downsample=1, hwp_resample=False):
 	"""Given a set of ids/files and a set of indices into that list. Try
 	to read each of these scans. Returns a list of successfully read scans
 	and a list of their indices."""
 	myinds, myscans  = [], []
-	for ind, scan in scan_iterator(filelist, inds, reader, db=db, dets=dets, quiet=quiet, downsample=downsample, hwp_resample=hwp_resample):
+	for ind, scan in scan_iterator(filelist, inds, reader, db=db, dets=dets, det_blacklist=det_blacklist, quiet=quiet, downsample=downsample, hwp_resample=hwp_resample):
 		myinds.append(ind)
 		myscans.append(scan)
 	return myinds, myscans
