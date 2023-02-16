@@ -240,12 +240,14 @@ def websky_decode(data, cosmology, mass_interp):
 
 def get_H0(cosmology): return cosmology["h"]*100*1e3/(1e6*utils.pc)
 
-def get_H(z, cosmology):
+def get_EZ(z,cosmology):
 	z = np.asanyarray(z)
 	omegam  = cosmology["Omega_m"]
 	#return get_H0(cosmology)*np.sqrt(omegam * (1.+z)**3 + (1. - omegam))
-	return get_H0(cosmology)*np.sqrt(omegam * (1.+z.reshape(-1))**3 + (1. - omegam)).reshape(z.shape)
-	#pyccl.h_over_h0(cosmology, 1/(z.reshape(-1)+1)).reshape(z.shape)
+	return np.sqrt(omegam * (1.+z.reshape(-1))**3 + (1. - omegam)).reshape(z.shape)	
+
+def get_H(z, cosmology):
+	return get_H0(cosmology)*get_EZ(z,cosmology)
 
 def calc_rho_c(z, cosmology):
 	H     = get_H(z, cosmology)
@@ -258,6 +260,22 @@ def calc_rdelta(mdelta, z, cosmology, delta=200):
 	rdelta = (mdelta/(4/3*np.pi*delta*rho_c))**(1/3)
 	return rdelta
 
+def calc_rdelta_m(mdelta, z, cosmology, delta=200):
+	"""Given M_delta_matter in kg, returns R_delta in m"""
+	omegam  = cosmology["Omega_m"]
+	rho_c  = calc_rho_c(z, cosmology)
+	rdelta = (mdelta/(4/3*np.pi*delta*rho_c*omegam*(1+z)**3))**(1/3)
+	return rdelta
+
+def m_x(x):
+	""" inclosed mass in NFW"""
+	ans = np.log(1 + x) - x/(1+x)
+	return ans
+
+def con(M, z):
+	"""Duffy C-M relation"""
+	return 5.71 / (1 + z)**0.47 * (M / (2.*10**12))**(-0.084)
+
 def chi_int (z, cosmology):
 	return utils.c / get_H(z, cosmology)
 
@@ -266,9 +284,9 @@ def chi (cosmology, z):
 	for i in range (len(z)):	
 		temp, err = quad(chi_int,0,z[i],args=cosmology)
 		ans = np.append(ans,temp)
-	return ans/(1e6*utils.pc)
+	return ans[:,None]/(1e6*utils.pc)
 
-def scale_factor_of_chi(cosmology,dist,z0=0.01,z1=5.,tol=1e-5,n=0):
+def scale_factor_of_chi_func(cosmology,dist,z0=0.01,z1=5.,tol=1e-5,n=0):
 	"""secant method for finding the scale factor given a distance"""
 	n+=1
 	y0 = dist - quad(chi_int,0,z0,args=cosmology)[0]/(1e6*utils.pc)
@@ -276,16 +294,39 @@ def scale_factor_of_chi(cosmology,dist,z0=0.01,z1=5.,tol=1e-5,n=0):
 	zn = z1 - y1 * ((z1 - z0) / (y1 - y0))
 	if np.abs(y1) < tol:
 		return 1./(1.+zn)
-	return scale_factor_of_chi(cosmology, dist, z0=z1, z1=zn, n=n)	
+	return scale_factor_of_chi_func(cosmology, dist, z0=z1, z1=zn, n=n)	
+
+def scale_factor_of_chi(cosmology,dist,z1=5.,Niter=1000):
+	dmax = quad(chi_int,0,z1,args=cosmology)[0]/(1e6*utils.pc)
+	distarr = np.linspace(0,dmax,Niter)
+	a_ans = np.zeros (Niter)	
+	for ai, dists in enumerate(distarr):
+		a_ans[ai] = scale_factor_of_chi_func(cosmology,dists)
+	ans = np.interp(dist,distarr,a_ans)
+	return ans
 
 def angular_diameter_distance(cosmology,z):
-	return chi(cosmology,z)/(1. + z)
+	return chi(cosmology,z/(1. + z))
 
 def calc_angsize(physsize, z, cosmology):
 	"""Given a physical size in m, returns the angular size in radians"""
 	z   = np.asanyarray(z)
-	d_A = angular_diameter_distance(cosmology, z).reshape(z)*1e6*utils.pc
+	d_A = angular_diameter_distance(cosmology, z)*1e6*utils.pc
 	return np.arctan2(physsize,d_A)
+
+def translate_mass(cosmology,Mdel,z,EPS=1e-10):
+	Mdel = Mdel*cosmology["h"]
+	Mass = Mdel
+	rdels = calc_rdelta_m(Mdel, z, cosmology)
+	ans = 0
+	while np.abs(ans/Mass - 1) > EPS : 
+		ans = Mass
+		conz = con(Mass,z) #DUFFY
+		rs = calc_rdelta(Mdel, z, cosmology)/conz
+		xx = rdels / rs
+		Mass = Mdel * m_x(conz) / m_x(xx)
+		## Finish when they Converge
+	return ans/cosmology["h"]
 
 def get_params_battaglia(m200, z, cosmology):
 	"""Return a bunch of xc, alpha, beta, gamma for a cluster with
@@ -303,6 +344,48 @@ def get_params_battaglia(m200, z, cosmology):
 	return bunch.Bunch(xc=xc, alpha=alpha, beta=beta, gamma=gamma, P0=P0)
 
 class MdeltaTranslator:
+	def __init__(self, cosmology,
+			type1="matter", delta1=200, type2="critical", delta2=200,
+			zlim=[0,20], mlim=[1e11*utils.M_sun,5e16*utils.M_sun], step=0.1):
+		"""Construct a functor that translates from one M_delta defintion to
+		another.
+		* type1, type2: Type of M_delta, e.g. m200c vs m200m.
+		  * "matter": The mass inside the region where the average density is
+		    delta times higher than the current matter density
+		  * "critical": The same, but for the critical density instead. This
+		    differs due to the presence of dark energy.
+		* delta1, delta2: The delta value used in type1, type2.
+		* zlim: The z-range to build the interpolator for.
+		* mlim: The Mass range to build the interpolator for, in kg
+		* step: The log-spacing of the interpolators.
+		Some combinations of delta and type may not be supported, limited by the functions used.
+		The main thing this object does is to
+		allow one to vectorize over both z and mass."""
+
+		lz1, lz2 = np.log(1+np.array(zlim)) # lz = log(1+z) = -log(a)
+		lm1, lm2 = np.log(np.array(mlim))   # lm = log(m)
+		nz  = utils.ceil((lz2-lz1)/step)
+		nm  = utils.ceil((lm2-lm1)/step)
+		lzs = np.linspace(lz1, lz2, nz)
+		lms = np.linspace(lm1, lm2, nm)
+		olms = np.zeros((len(lzs),len(lms)))
+		for ai, lz in enumerate(lzs):
+			for bi, lm in enumerate(lms):
+				#moo = np.exp(lms[-1])/utils.M_sun
+				olms[ai,bi] = translate_mass(cosmology, np.exp(lm)/utils.M_sun, np.exp(-lz))
+		olms = np.log(olms*utils.M_sun)
+		olms = utils.interpol_prefilter(olms, order=3)			
+		# Save parameters
+		self.lz1, self.lz2, self.dlz = lz1, lz2, (lz2-lz1)/(nz-1)
+		self.lm1, self.lm2, self.dlm = lm1, lm2, (lm2-lm1)/(nm-1)
+		self.olms = olms
+	def __call__(self, m, z):
+		zpix = (np.log(1+np.array(z))-self.lz1)/self.dlz
+		mpix = (np.log(m)-self.lm1)/self.dlm
+		pix  = np.array([zpix,mpix])
+		return np.exp(utils.interpol(self.olms, pix, order=3, prefilter=False))
+
+class MdeltaTranslatorCCL:
 	def __init__(self, cosmology,
 			type1="matter", delta1=200, type2="critical", delta2=200,
 			zlim=[0,20], mlim=[1e11*utils.M_sun,5e16*utils.M_sun], step=0.1):
