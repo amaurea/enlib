@@ -1258,12 +1258,13 @@ contains
 	! different cut types per cut if needed. The glen part is redundant and could be
 	! removed, but makes it easier to interpret the junk array. The disadvantage of this
 	! format is that it's quite opaque.
-	subroutine pmat_cut(dir, tod, junk, cuts)
+	subroutine pmat_cut(dir, tod, junk, cuts, tmul)
 		use omp_lib
 		implicit none
 		! Parameters
 		integer(4), intent(in)    :: dir, cuts(:,:)
 		real(_),    intent(inout) :: tod(:,:), junk(:)
+		real(_),    intent(in)    :: tmul
 		integer(4), parameter     :: det=1, lstart=2, llen=3, gstart=4, glen=5, cuttype=6
 		integer(4) :: ci, di, l1, l2, g1, g2
 		!$omp parallel do private(l1,l2,g1,g2,di)
@@ -1271,7 +1272,7 @@ contains
 			l1 = cuts(lstart,ci)+1; l2 = l1+cuts(llen,ci)-1
 			g1 = cuts(gstart,ci)+1; g2 = g1+cuts(glen,ci)-1
 			di = cuts(det,ci)+1
-			call pmat_cut_range(dir, tod(l1:l2,di), junk(g1:g2), cuts(cuttype:,ci))
+			call pmat_cut_range(dir, tod(l1:l2,di), junk(g1:g2), cuts(cuttype:,ci), tmul)
 		end do
 	end subroutine
 
@@ -1283,7 +1284,7 @@ contains
 		integer(4) :: ci
 		real(_) :: foo(1)
 		do ci = 1, size(cuts,2)
-			call pmat_cut_range(0, foo, foo, cuts(cuttype:,ci), cuts(llen,ci), cuts(glen,ci))
+			call pmat_cut_range(0, foo, foo, cuts(cuttype:,ci), ilen=cuts(llen,ci), olen=cuts(glen,ci))
 		end do
 	end subroutine
 
@@ -1301,14 +1302,22 @@ contains
 	! each detector for each scan is. The easiest way to get
 	! that is to just run pmat_cut for each cut range once
 	! and for all, to establish the inital cutglob values.
-	subroutine pmat_cut_range(dir, tod, junk, cuttype, ilen, olen)
+	subroutine pmat_cut_range(dir, tod, junk, cuttype, tmul, ilen, olen)
 		implicit none
 		integer(4), intent(in)    :: cuttype(:), dir
 		integer(4), intent(in),  optional :: ilen
 		integer(4), intent(out), optional :: olen
+		real(_),    intent(in),  optional :: tmul
 		real(_),    intent(inout) :: junk(:), tod(:)
 		integer(4) :: si, w, bi, si2, si3, n, ol, i
 		real(_), allocatable :: x(:), Pa(:), Pb(:), Pc(:)
+		real(_)              :: tmul_
+
+		tmul_ = 0; if(present(tmul)) tmul_ = tmul
+		! Forwards projection. Apply any tod multiplication before cuts are
+		! projected. Send in tmul=1 to add cuts to tod, and tmul=0 to overwrite
+		if(dir > 0 .and. tmul_ .ne. 1) tod = tod * tmul_
+
 		n = size(tod)
 		if(present(ilen)) n = ilen
 		ol = 0
@@ -1320,9 +1329,7 @@ contains
 			! Full resolution cuts. All cut samples are stored.
 			if(dir < 0) then
 				junk = tod
-			elseif(dir == 1) then
-				tod = junk
-			elseif(dir >= 2) then
+			elseif(dir > 0) then
 				tod = tod + junk
 			end if
 			ol = n
@@ -1336,18 +1343,14 @@ contains
 				ol = ol+1
 				if(dir < 0) then
 					junk(ol) = sum(tod((bi-1)*w+1:bi*w))
-				elseif(dir == 1) then
-					tod((bi-1)*w+1:bi*w) = junk(ol)
-				elseif(dir >= 2) then
+				elseif(dir > 0) then
 					tod((bi-1)*w+1:bi*w) = tod((bi-1)*w+1:bi*w) + junk(ol)
 				end if
 			end do
 			ol = ol+1
 			if(dir < 0) then
 				junk(ol) = sum(tod((bi-1)*w+1:n))
-			elseif(dir == 1) then
-				tod((bi-1)*w+1:n) = junk(ol)
-			elseif(dir >= 2) then
+			elseif(dir > 0) then
 				tod((bi-1)*w+1:n) = tod((bi-1)*w+1:n) + junk(ol)
 			end if
 		case(3)
@@ -1364,9 +1367,7 @@ contains
 				ol = ol+1
 				if(dir < 0) then
 					junk(ol) = sum(tod(si:si+w-1))
-				elseif(dir == 1) then
-					tod(si:si+w-1) = junk(ol)
-				elseif(dir >= 2) then
+				elseif(dir > 0) then
 					tod(si:si+w-1) = tod(si:si+w-1) + junk(ol)
 				end if
 				si            = si+w
@@ -1380,9 +1381,7 @@ contains
 				si3 = n-si2+1
 				if(dir < 0) then
 					junk(ol) = sum(tod(si3-w+1:si3))
-				elseif(dir == 1) then
-					tod(si3-w+1:si3) = junk(ol)
-				elseif(dir >= 2) then
+				elseif(dir > 0) then
 					tod(si3-w+1:si3) = tod(si3-w+1:si3) + junk(ol)
 				end if
 				si2           = si2+w
@@ -1393,9 +1392,7 @@ contains
 			! Middle
 			if(dir < 0) then
 				junk(ol)   = sum(tod(si:si3))
-			elseif(dir == 1) then
-				tod(si:si3) = junk(ol)
-			elseif(dir >= 2) then
+			elseif(dir > 0) then
 				tod(si:si3) = tod(si:si3) + junk(ol)
 			end if
 		case(4)
@@ -1410,10 +1407,8 @@ contains
 			end select
 			!w = min(n,4+n/cuttype(2))
 			if(w <= 1) then
-				if(dir >= 2) then
+				if(dir > 0) then
 					tod = tod + junk(1)
-				elseif(dir == 1) then
-					tod = junk(1)
 				elseif(dir < 0) then
 					junk(1) = sum(tod)
 				end if
@@ -1443,9 +1438,12 @@ contains
 				end do
 			end if
 		end select
-		! These samples have been handled, so remove them so that
-		! the map pmats do not use them again.
-		if(dir .eq. -1 .and. cuttype(1) .ne. 0) tod = 0
+		! Backward projection done. After this we will usually want to
+		! zero out these samples in the tod. Pass tmul=0 to do this.
+		! This is consistent with using tmul=0 in the forward projection.
+		! We used to have dir = -2 as a special case to disable this, but
+		! now it is controlled more generally with tmul
+		if(dir < 0 .and. tmul_ .ne. 1) tod = tod * tmul_
 		if(present(olen)) olen = ol
 	end subroutine
 

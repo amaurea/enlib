@@ -46,7 +46,10 @@ class ArrayZipper(SingleZipper):
 			self.template[...] = x.reshape(self.template.shape)
 		else:
 			self.template[self.mask] = x
-		return self.template
+		# Return a copy to allow the same ArrayZipper to be used
+		# multiple times without the results overwriting each other.
+		# This does come at a memory cost.
+		return self.template.copy()
 
 class MultiZipper:
 	"""Meta-zipper"""

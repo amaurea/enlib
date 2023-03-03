@@ -235,13 +235,15 @@ class SignalDmapFast(SignalDmap):
 		mat.backward(tod, work.maps[ind], self.pix, self.phase)
 
 class SignalCut(Signal):
-	def __init__(self, scans, dtype, comm, name="cut", ofmt="{name}_{rank:02}", output=False, cut_type=None, keep=False):
+	def __init__(self, scans, dtype, comm, name="cut", ofmt="{name}_{rank:02}", output=False, cut_type=None, cuts=None, keep=False):
 		Signal.__init__(self, name, ofmt, output, ext="hdf")
 		self.data  = {}
 		self.dtype = dtype
 		cutrange = [0,0]
-		for scan in scans:
-			mat = pmat.PmatCut(scan, cut_type, keep)
+		for si, scan in enumerate(scans):
+			# Use cuts from scan by default, but allow override
+			cut = None if cuts is None else cuts[si]
+			mat = pmat.PmatCut(scan, cut_type, tmul=keep*1.0, cut=cut)
 			cutrange = [cutrange[1], cutrange[1]+mat.njunk]
 			self.data[scan] = [mat, cutrange]
 		self.njunk = cutrange[1]
@@ -440,41 +442,28 @@ class SignalMapBuddies(SignalMap):
 # postprocessing operation that adds up the values in the src pixels.
 
 class SignalSrcSamp(SignalCut):
-	def __init__(self, scans, dtype, comm, srcs=None, tol=100, amplim=None, rel=False, mask=None, name="srcsamp", ofmt="{name}_{rank:02}", output=False, cut_type="full", sys="cel"):
+	def __init__(self, scans, dtype, comm, mask=None, name="srcsamp", ofmt="{name}_{rank:02}", output=False, cut_type="full", sys="cel", keep=True):
 		Signal.__init__(self, name, ofmt, output, ext="hdf")
 		self.data  = {}
 		self.dtype = dtype
+		self.keep  = keep
+		self.sys   = sys
+		self.cut_type = cut_type
 		cutrange = [0,0]
+		self.mask  = mask
 		for scan in scans:
-			# Define our source samples
-			tod_mask = np.zeros([scan.ndet,scan.nsamp], bool)
+			# Project our sample density into time domain
 			tod      = np.zeros((scan.ndet,scan.nsamp), np.float32)
-			if srcs is not None:
-				if utils.streq(srcs,"auto"): srcs = scan.pointsrcs
-				srcparam = pointsrcs.src2param(srcs).astype(np.float64)
-				if amplim is not None:
-					srcparam = srcparam[srcparam[:,2]>amplim]
-				if rel: srcparam[:,2:5] /= srcparam[:,2,None]
-				psrc     = pmat.PmatPtsrc(scan, srcparam, sys=sys)
-				psrc.forward(tod, srcparam, tmul=0)
-				tod_mask |= tod > tol
-			if mask is not None:
-				pmap = pmat.PmatMap(scan, mask, sys=sys)
-				pmap.forward(tod, mask, tmul=0)
-				tod_mask |= tod > 0.5
-			del tod
-			src_cut  = sampcut.from_mask(tod_mask); del tod_mask
-			# Then set up our pointing matrix and DOF as usual
-			# Should I use keep=True or keep=False?
-			# False:
-			#  Faster convergence.
-			#  Might have problems with partially masked pixels?
-			#  Requires SrcSamp to be earlier than the other signals in the list
-			# True:
-			#  Degeneracy gives slower convergence
-			#  Less error prone ot use
-			# I'll use keep=True for now
-			mat = pmat.PmatCut(scan, cut_type, keep=True, cut=src_cut)
+			pmap     = pmat.PmatMap(scan, mask, sys=sys, order=1)
+			pmap.forward(tod, mask)
+			tod[:]   = tod > 0.5
+			# Accumulate density and use this to define a sample mask
+			cumsamps = np.concatenate([[0],utils.floor(np.cumsum(tod))])
+			# minimum shouldn't be necessary, but present to guard against floating point issues
+			tod_mask = np.minimum(cumsamps[1:]-cumsamps[:-1],1).reshape(tod.shape)
+			del cumsamps, tod
+			cut = sampcut.from_mask(tod_mask); del tod_mask
+			mat = pmat.PmatCut(scan, cut_type, tmul=keep*1.0, cut=cut)
 			cutrange = [cutrange[1], cutrange[1]+mat.njunk]
 			self.data[scan] = [mat, cutrange]
 		self.njunk = cutrange[1]
@@ -908,6 +897,35 @@ class PriorProjectOut:
 		self.signal_map.finish(mmap, mwork)
 		omap += mmap*self.weight
 
+class PriorSrcSamp:
+	def __init__(self, signal_srcsamp, eps_edge=10, eps_core=0.01, redge=2*utils.arcmin):
+		# Measure the distance of each sample from the edge.
+		# The mask can be quite low-res, so we will need to interpolate. We already have
+		# bilinear mapmaking available for this.
+		dtype     = signal_srcsamp.dtype
+		distmap   = signal_srcsamp.mask*0
+		distmap[0]= signal_srcsamp.mask.preflat[0].distance_transform()
+		distsamps = signal_srcsamp.zeros()
+		whitesamps= signal_srcsamp.zeros()
+		assert signal_srcsamp.cut_type == "full", "PriorSrcSamp requires per-sampe (full) cuts in SignalSrcSamp"
+		for scan in signal_srcsamp.data:
+			tod  = np.zeros([scan.ndet, scan.nsamp], dtype)
+			pmap = pmat.PmatMap(scan, distmap, sys=signal_srcsamp.sys, order=1)
+			pmap.forward(tod, distmap)
+			# This assumes that we use per-sample degrees of freedom in SignalSrcSamp, which
+			# is currently hardcoded, so this is safe until that changes.
+			signal_srcsamp.backward(scan, tod, distsamps)
+			# white noise level, to have something sensible to scale the prior with
+			tod[:] = 1
+			scan.noise.white(tod)
+			signal_srcsamp.backward(scan, tod, whitesamps)
+		# Use these distances to build the per-sample prior amplitude
+		x = np.minimum(distsamps/redge, 1)
+		self.epsilon  = np.exp(np.log(eps_edge) * (1-x) + np.log(eps_core) * x)
+		self.epsilon *= whitesamps
+	def __call__(self, scans, imap, omap):
+		omap += imap * self.epsilon
+
 ######## Filters ########
 # Possible filters: A (P'BN"BP)" P'BN"BC d
 # B: weighting filter: windowing
@@ -1055,6 +1073,12 @@ class MultiPostInsertSrcSamp:
 		self.signals        = signals
 		self.weights        = weights
 	def __call__(self, all_signals, all_maps):
+		# FIXME: This assumes that one can project the srcsamp degrees
+		# of freedom into map space as QP'Wd, where W is the white noise
+		# inverse variance and Q is the preconditioner. This holds for
+		# binned mapmaking, but not for bilinear mapmaking, where the
+		# preconditioner doesn't invert the white system. Probably need
+		# a few rounds of CG in that case.
 		# Find the index in all_maps corresponding to each of our own signals
 		signals = self.signals
 		inds  = [all_signals.index(signal) for signal in signals]
@@ -1095,6 +1119,121 @@ class MultiPostInsertSrcSamp:
 		# in-place operation
 		for i, ind in enumerate(inds):
 			all_maps[ind] = omaps[i]
+
+class MultiPostInsertSrcSampFixed:
+	def __init__(self, scans, signal_srcsamp, weights=[]):
+		self.scans = scans
+		self.signal_srcsamp = signal_srcsamp
+		self.weights        = weights
+		self.dtype          = signal_srcsamp.dtype
+		self.comm           = signal_srcsamp.dof.comm
+	def __call__(self, all_signals, all_maps):
+		# Mapmaker is linear in the data, so to project our srcsamps into
+		# the desired output maps we just need to project them (and only them)
+		# into time domain, and then build white-noise-weighted maps of the
+		# desired signals. Cuts should already have zero contribution, but
+		# let's include them to be safe since all our other logic uses them.
+		#
+		# I think we should treat all non-srcsamp samples as cut for this
+		# to be consistent. Full cuts that big are very memory-intensive, though,
+		# and legendre cuts still use one degree of freedom per 0.25 s per detector.
+		# That's about 6.4. MB/tod. Well, let's test it.
+		#
+		# 1. Define our srcsamp -> tod operator
+		data_srcsamp = all_maps[all_signals.index(self.signal_srcsamp)]
+		def tod_provider(scan):
+			tod = np.zeros((scan.ndet, scan.nsamp), self.dtype)
+			self.signal_srcsamp.forward(scan, tod, data_srcsamp)
+			return tod
+		# 2. Set up our mapmaker. This is like our normal mapmaker except
+		#    a) The noise model is white
+		#    b) We skip the srcsamp signal itself
+		active_inds   = [i for i, signal in enumerate(all_signals) if signal != self.signal_srcsamp]
+		other_signals = [all_signals[i] for i in active_inds]
+		eqsys         = Eqsys(self.scans, other_signals, weights=self.weights,
+				dtype=self.dtype, white_noise=True, comm=self.comm)
+		# 3. Calculate the right-hand side
+		eqsys.calc_b(tod_provider=tod_provider)
+		# 4. Solve the system
+		L.info("Reinserting srcsamps")
+		cg = CG(eqsys.A, eqsys.b, M=eqsys.M, dot=eqsys.dot)
+		errlim = 1e-4
+		nmax   = 100
+		while cg.i < nmax and cg.err > errlim:
+			with bench.mark("srcsamp_step"):
+				cg.step()
+			dt = bench.stats["srcsamp_step"]["time"].last
+			ptime = bench.stats["M"]["time"].last
+			L.info("SS step %5d %15.7e %6.1f %6.3f %6.3f" % (cg.i, cg.err, dt, dt/max(1,len(eqsys.scans)), ptime))
+		# 5. Done. Add to actual maps
+		omaps = eqsys.dof.unzip(cg.x)
+		print("FIXME multipost")
+		for ind, omap in zip(active_inds, omaps):
+			#all_maps[ind] += omap
+			all_maps[ind] = omap
+
+class MultiPostInsertSrcSampFixed2:
+	def __init__(self, scans, signal_srcsamp, weights=[], redge=10*utils.arcmin):
+		self.scans = scans
+		self.signal_srcsamp = signal_srcsamp
+		self.weights        = weights
+		self.dtype          = signal_srcsamp.dtype
+		self.comm           = signal_srcsamp.dof.comm
+		# Make an edge mask that selects regions close to the mask, but not inside it
+		r         = (1-signal_srcsamp.mask).distance_transform(rmax=redge)
+		edge_mask = ((r>0)&(r<redge)).astype(self.dtype)
+		# Define a signal that cuts these samples
+		self.signal_cut_around = SignalSrcSamp(scans, self.dtype, self.comm, mask=edge_mask, name="cut_around", keep=False)
+	def __call__(self, all_signals, all_maps):
+		# Mapmaker is linear in the data, so to project our srcsamps into
+		# the desired output maps we just need to project them (and only them)
+		# into time domain, and then build white-noise-weighted maps of the
+		# desired signals. Cuts should already have zero contribution, but
+		# let's include them to be safe since all our other logic uses them.
+		#
+		# I think we should treat all non-srcsamp samples as cut for this
+		# to be consistent. This is heavy though, so we cut samples in a region
+		# around.
+		#
+		# 1. Define our srcsamp -> tod operator
+		data_srcsamp = all_maps[all_signals.index(self.signal_srcsamp)]
+		def tod_provider(scan):
+			tod = np.zeros((scan.ndet, scan.nsamp), self.dtype)
+			self.signal_srcsamp.forward(scan, tod, data_srcsamp)
+			return tod
+		# 2. Set up our mapmaker. This is like our normal mapmaker except
+		#    a) The noise model is white
+		#    b) We skip the srcsamp signal itself
+		#    c) We cut non-srcsamp samples
+		# We would ideally cut all non-srcsamp samples, but that's too slow and/or
+		# memory-intensive. Instead we'll cut the ones nearby.
+		my_signals = [self.signal_cut_around]
+		active_inds = []
+		for si, signal in enumerate(all_signals):
+			if signal == self.signal_srcsamp: continue
+			active_inds.append(si)
+			my_signals.append(signal)
+		eqsys = Eqsys(self.scans, my_signals, weights=self.weights,
+				dtype=self.dtype, white_noise=True, comm=self.comm)
+		# 3. Calculate the right-hand side
+		eqsys.calc_b(tod_provider=tod_provider)
+		# 4. Solve the system
+		L.info("Reinserting srcsamps")
+		cg = CG(eqsys.A, eqsys.b, M=eqsys.M, dot=eqsys.dot)
+		errlim = 1e-4
+		nmax   = 100
+		while cg.i < nmax and cg.err > errlim:
+			with bench.mark("srcsamp_step"):
+				cg.step()
+			dt = bench.stats["srcsamp_step"]["time"].last
+			ptime = bench.stats["M"]["time"].last
+			L.info("SS step %5d %15.7e %6.1f %6.3f %6.3f" % (cg.i, cg.err, dt, dt/max(1,len(eqsys.scans)), ptime))
+		# 5. Done. Add to actual maps
+		omaps = eqsys.dof.unzip(cg.x)
+		print("FIXME multipost")
+		for ind, omap in zip(active_inds, omaps[1:]):
+			#all_maps[ind] += omap
+			all_maps[ind] = omap
 
 class FilterAddMap:
 	def __init__(self, scans, map, sys=None, mul=1, tmul=1, pmat_order=None, ptoff=None, det_muls=None, poleffs=None, tconstoff=None):
@@ -1631,7 +1770,7 @@ class SourceHandler:
 
 class Eqsys:
 	def __init__(self, scans, signals, filters=[], filters2=[], weights=[], multiposts=[],
-			dtype=np.float64, comm=None, filters_noisebuild=[]):
+			dtype=np.float64, comm=None, filters_noisebuild=[], white_noise=False):
 		self.scans   = scans
 		self.signals = signals
 		self.dtype   = dtype
@@ -1642,6 +1781,7 @@ class Eqsys:
 		self.weights = weights
 		self.dof     = zipper.MultiZipper([signal.dof for signal in signals], comm=comm)
 		self.b       = None
+		self.white   = white_noise
 	def A(self, x, debug_file=None):
 		"""Apply the A-matrix P'N"P to the zipped vector x, returning the result."""
 		with bench.mark("A_init"):
@@ -1673,7 +1813,8 @@ class Eqsys:
 			# Apply the noise matrix (N")
 			with bench.mark("A_N"):
 				for weight in self.weights: weight(scan, tod)
-				scan.noise.apply(tod)
+				if self.white: scan.noise.white(tod)
+				else:          scan.noise.apply(tod)
 				for weight in self.weights[::-1]: weight(scan, tod)
 			# Project the TOD onto each signal (P') in normal order. This is done
 			# to allow the cuts to zero out the relevant TOD samples first
@@ -1702,7 +1843,7 @@ class Eqsys:
 			for signal, map in zip(self.signals, maps):
 				signal.precon(map)
 			return self.dof.zip(maps)
-	def calc_b(self, itod=None):
+	def calc_b(self, tod_provider=None):
 		"""Compute b = P'N"d, and store it as the .b member. This involves
 		reading in the TOD data and potentially estimating a noise model,
 		so it is a heavy operation."""
@@ -1711,42 +1852,13 @@ class Eqsys:
 		#owork = [signal.prepare(map) for signal, map in zip(self.signals,maps)]
 		for scan in self.scans:
 			# Get the actual TOD samples (d)
-			if itod is None:
+			if tod_provider is None:
 				with bench.mark("b_read"):
-					#if config.get("debug_raw"):
-					#	from enact import actscan
-					#	if self.dof.comm.rank == 0: print("debug_raw", self.filters[:-1])
-					#	# Super-hacky. Read off input map at full resolution
-					#	adder = self.filters[0]
-					#	scan_full = actscan.ACTScan(scan.entry, d=scan.d)
-					#	scan_full = scan_full[utils.find(scan_full.dets, scan.dets)]
-					#	padd  = pmat.PmatMap(scan_full, adder.map, sys=adder.sys)
-					#	tod   = np.zeros([scan.d.ndet, scan.d.nsamp],self.dtype)
-					#	padd.forward(tod, adder.map, tmul=adder.tmul, mmul=adder.mul)
-					#	# Deslope, but remember the slope
-					#	slope = tod.copy(); tod = utils.deslope(tod); slope -= tod
-					#	from enact import filters
-					#	# Apply the time constant, MCE filter and gain to go to raw units
-					#	ft     = fft.rfft(tod)
-					#	freqs  = np.linspace(0, scan_full.srate/2, ft.shape[-1])
-					#	butter = filters.mce_filter(freqs, scan_full.d.mce_fsamp, scan_full.d.mce_params)
-					#	ft *= butter
-					#	for di in range(len(ft)):
-					#		ft[di] *= filters.tconst_filter(freqs, scan_full.d.tau[di])
-					#	fft.irfft(ft, tod, normalize=True)
-					#	# Add back the slope
-					#	tod += slope
-					#	del slope
-					#	# And unapply the gain
-					#	tod /= (scan_full.d.gain[:,None]*8)
-					#	tod  = (tod*128).astype(np.int32)
-					#	tod  = scan.get_samples(verbose=False, debug_inject=tod)
-					#else:
 					tod  = scan.get_samples(verbose=False)
-					#tod -= np.copy(tod[:,0,None])
 					tod  = tod.astype(self.dtype)
-			else: tod = itod
-			tod = utils.deslope(tod)
+					tod  = utils.deslope(tod)
+			else:
+				tod = tod_provider(scan)
 			#dump("dump_getsamples.hdf", tod)
 			#dump("dump_prefilter_mean.hdf", np.mean(tod,0))
 			#dump("dump_prefilter.hdf", tod[:4])
@@ -1779,7 +1891,8 @@ class Eqsys:
 				for filter in self.filters2: filter(scan, tod)
 			#dump("dump_prenoise.hdf", tod)
 			with bench.mark("b_N"):
-				scan.noise.apply(tod)
+				if self.white: scan.noise.white(tod)
+				else:          scan.noise.apply(tod)
 			#dump("dump_postnoise.hdf", tod)
 			#1/0
 			with bench.mark("b_weight"):
