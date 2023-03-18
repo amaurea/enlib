@@ -124,6 +124,8 @@ contains
 			case(1); call project_map_bilinear(dir, tod(:,di), tmul, wmap, pix, phase, .true.)
 			case(3); call project_map_bicubic (dir, tod(:,di), tmul, wmap, pix, phase, .true.)
 			case(4); call project_map_split   (dir, tod(:,di), tmul, wmap, pix, phase, split, .true.)
+			case(5)
+				call project_map_nearest (dir, tod(:,di), tmul, wmap(3*split(di)+1:3*split(di)+3,:,:), pix, phase, .true.)
 			end select
 			deallocate(pix, phase)
 			tloc1 = omp_get_wtime()
@@ -262,6 +264,8 @@ contains
 			case(1); call project_map_bilinear(dir, tod(:,di), tmul, wmap(:,:,:,myind), pix, phase, .false.)
 			case(3); call project_map_bicubic (dir, tod(:,di), tmul, wmap(:,:,:,myind), pix, phase, .false.)
 			case(4); call project_map_split   (dir, tod(:,di), tmul, wmap(:,:,:,myind), pix, phase, split, .false.)
+			case(5)
+				call project_map_nearest (dir, tod(:,di), tmul, wmap(3*split(di)+1:3*split(di)+3,:,:,myind), pix, phase, .false.)
 			end select
 			deallocate(pix, phase)
 			tloc1 = omp_get_wtime()

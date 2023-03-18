@@ -82,6 +82,5 @@ def expand_override(desc):
 			for line in open(seg[1:], "r"):
 				olines.append(line)
 		else:
-			toks  = seg.split(":")
-			olines.append('%s = "%s"' % (toks[0],toks[1]))
+			olines.append(seg)
 	return "\n".join(olines)

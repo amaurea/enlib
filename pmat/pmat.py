@@ -34,7 +34,7 @@ class PointingMatrix:
 
 class PmatMap(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation."""
-	def __init__(self, scan, template, sys=None, order=None, extra=[], split=None, atomic=None):
+	def __init__(self, scan, template, sys=None, order=None, extra=[], split=None, detsplit=None, atomic=None):
 		sys        = config.get("map_sys", sys)
 		self.transform  = pos2pix(scan,template,sys, extra=extra)
 		ipol, obox, err = build_interpol(self.transform, scan.box, id=scan.id)
@@ -51,6 +51,9 @@ class PmatMap(PointingMatrix):
 		if split is not None:
 			self.split = np.array(split, np.int32)
 			self.order = 4
+		elif detsplit is not None:
+			self.split = np.array(detsplit, np.int32)
+			self.order = 5
 		else:
 			self.split = np.zeros(1, np.int32)
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
