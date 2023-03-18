@@ -424,7 +424,7 @@ class PmatMoby(PointingMatrix):
 class PmatCut(PointingMatrix):
 	"""Implementation of cuts-as-extra-degrees-of-freedom for a single
 	scan."""
-	def __init__(self, scan, params=None, keep=False, cut=None):
+	def __init__(self, scan, params=None, tmul=0, cut=None):
 		params = config.get("pmat_cut_type", params)
 		if cut is None: cut = scan.cut
 		# Extract the cut parameters. E.g. poly:foo_secs -> [4,foo_samps]
@@ -448,22 +448,22 @@ class PmatCut(PointingMatrix):
 		self.njunk  = np.sum(self.cuts[:,4])
 		self.params = params
 		self.scan = scan
-		self.keep = keep
-	def forward(self, tod, junk):
+		self.tmul = tmul
+	def forward(self, tod, junk, tmul=None):
 		"""Project from the cut parameter (junk) space for this scan
 		to tod."""
-		dir = 2 if self.keep else 1
+		if tmul is None: tmul = self.tmul
 		if self.cuts.size > 0:
-			get_core(tod.dtype).pmat_cut(dir, tod.T, junk, self.cuts.T)
-	def backward(self, tod, junk):
+			get_core(tod.dtype).pmat_cut( 1, tod.T, junk, self.cuts.T, tmul)
+	def backward(self, tod, junk, tmul=None):
 		"""Project from tod to cut parameters (junk) for this scan.
 		This is meant to be called before the map projection, and
 		removes the cut samples from the tod at the same time,
 		replacing them with zeros. That way the map projection can
 		be done without needing to care about the cuts."""
-		dir = -2 if self.keep else -1
+		if tmul is None: tmul = self.tmul
 		if self.cuts.size > 0:
-			get_core(tod.dtype).pmat_cut(dir, tod.T, junk, self.cuts.T)
+			get_core(tod.dtype).pmat_cut(-1, tod.T, junk, self.cuts.T, tmul)
 	def parse_params(self,params,srate):
 		toks = params.split(":")
 		kind = toks[0]
