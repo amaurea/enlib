@@ -1121,9 +1121,25 @@ class PostAddMap:
 	def __call__(self, imap):
 		return imap + self.map*self.mul
 
+def prepare_buddy_map(map, rcut=1*utils.arcmin, rapod=5*utils.arcmin):
+	"""Prepare input map for buddy subtraction. Cut areas within rcut
+	radians from an unhit area, and apodize a further rapod from here.
+	Areas outside the map geometry are not counted as unhit, so the
+	edge of the geometry won't be cut or apodized.
+
+	The goal of this operation is to avoid having very noisy areas near
+	the edge leak into the useful part of the map due to buddy subtraction."""
+	mask = map.preflat[0] != 0
+	mask = mask.distance_transform(rmax=rcut) >= rcut
+	apod = enmap.apod_mask(mask, width=rapod, edge=False).astype(map.dtype)
+	return map*apod
+
 class FilterBuddy:
-	def __init__(self, scans, map, sys=None, mul=1, tmul=1, pmat_order=None):
+	def __init__(self, scans, map, sys=None, mul=1, tmul=1, pmat_order=None,
+			rcut=1*utils.arcmin, rapod=5*utils.arcmin):
 		self.map, self.sys, self.mul, self.tmul = map, sys, mul, tmul
+		# Handle potentially super-noisy edge
+		self.map = prepare_buddy_map(self.map, rcut=rcut, rapod=rapod)
 		self.data = {scan: pmat.PmatMapMultibeam(scan, map, scan.buddy_offs,
 			scan.buddy_comps, order=pmat_order, sys=sys) for scan in scans}
 	def __call__(self, scan, tod):
@@ -1131,10 +1147,14 @@ class FilterBuddy:
 		pmat.forward(tod, self.map, tmul=self.tmul, mmul=self.mul)
 
 class FilterBuddyDmap:
-	def __init__(self, scans, subinds, dmap, sys=None, mul=1, tmul=1, pmat_order=None):
-		self.map, self.sys, self.mul, self.tmul = dmap, sys, mul, tmul
+	def __init__(self, scans, subinds, dmap, sys=None, mul=1, tmul=1, pmat_order=None,
+			rcut=1*utils.arcmin, rapod=5*utils.arcmin):
+		self.map, self.sys, self.mul, self.tmul = dmap.copy(), sys, mul, tmul
+		# Handle potentially super-noisy edge
+		for tile in self.map.tiles:
+			tile[:] = prepare_buddy_map(tile, rcut=rcut, rapod=rapod)
 		self.data = {}
-		work = dmap.tile2work()
+		work = self.map.tile2work()
 		for scan, subind in zip(scans, subinds):
 			self.data[scan] = [pmat.PmatMapMultibeam(scan, work.maps[subind], scan.buddy_offs,
 				scan.buddy_comps, order=pmat_order, sys=sys), work.maps[subind]]
