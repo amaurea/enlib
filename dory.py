@@ -274,12 +274,12 @@ def build_prior(amps, damps, variability=1.0, min_ivar=1e-10):
 	return amps, ivars
 
 def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=2.5, nblock=10,
-		ps_res=2000, pixwin=True, kernel=256, dump=None, verbose=False, apod_margin=10):
+		ps_res=2000, pixwin=True, pixwin_order=0, kernel=256, dump=None, verbose=False, apod_margin=10):
 	# Apodize a bit before any fourier space operations
 	apod_map = (idiv*0+1).apod(apod) * get_apod_holes(idiv,apod)
 	imap = imap*apod_map
 	# Deconvolve the pixel window from the beginning, so we don't have to worry about it
-	if pixwin: imap = enmap.apply_window(imap,-1)
+	if pixwin: imap = enmap.unapply_window(imap,order=pixwin_order)
 	# Whiten the map
 	wmap   = imap * idiv**0.5
 	adiv   = idiv * apod_map**2
@@ -472,7 +472,7 @@ def group_independent(pos, corrlen):
 class FitError(Exception): pass
 
 def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
-		apod=15, npass=2, indep_tol=1e-4, ps_res=500, pixwin=True, beam_tol=1e-4,
+		apod=15, npass=2, indep_tol=1e-4, ps_res=500, pixwin=True, pixwin_order=0, beam_tol=1e-4,
 		dump=None, verbose=False, apod_margin=10, hack=0, region=0, lknee=None):
 	# Get the (fractional) pixel positions of each source
 	t1 = time.time()
@@ -500,7 +500,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 	if np.sum(idiv*apod_map**2) == 0:
 		return fit_inds, np.zeros(nsrc), np.zeros([nsrc,nsrc]), np.zeros(nsrc)
 	# Deconvolve the pixel window from the beginning, so we don't have to worry about it
-	if pixwin: imap = enmap.apply_window(imap,-1)
+	if pixwin: imap = enmap.unapply_window(imap, order=pixwin_order)
 	beam_prof = get_beam_profile(beam)
 	# Find the distance at which point we have fallen to beam_tol
 	brad      = get_beam_rad(beam_prof, beam_tol)
@@ -600,6 +600,11 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 			prior_amp, prior_ivar = prior
 			rhs  += prior_ivar[fit_inds]*prior_amp[fit_inds]
 			icov += np.diag(prior_ivar[fit_inds])
+		else:
+			# Pseudo-prior to avoid degenerate equation system
+			ref   = np.max(icov)*1e-6
+			if ref <= 0: ref = 1
+			icov += np.diag(np.full(len(rhs),ref))
 		#np.save("test_rhs2_%02d.npy" % ipass, rhs)
 		#np.save("test_icov2_%02d.npy" % ipass, icov)
 		# Our equation system can be a bit asymmetrical. This is expected at some level
@@ -614,6 +619,9 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		#print("amp %d" % ipass)
 		#print(np.sort(amp))
 		damp  = np.diag(icov)**-0.5
+		if prior is None:
+			# Give pseudo-prior-dominated entries infinite uncertainty
+			damp[damp >= ref**-0.5/2] = np.inf
 		# Subtract this from the map to get a better noise estimate
 		model = imap*0
 		for sid in range(nsrc):
@@ -971,7 +979,7 @@ def build_merge_weight(shape, dtype=np.float64):
 	return weights
 
 def merge_maps_onto(maplist, shape, wcs, comm, root=0, crop=0, dtype=None):
-	if dtype is None: dtype = maplist[0].dtype
+	if dtype is None: dtype = comm.bcast(maplist[0].dtype.char)
 	dtype = utils.fix_dtype_mpi4py(dtype)
 	pre = tuple(shape[:-2])
 	# First crop the maps if necessary
