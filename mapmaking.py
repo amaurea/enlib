@@ -538,18 +538,20 @@ config.default("eig_limit", 1e-3, "Smallest relative eigenvalue to invert in eig
 # eig_limit like 1e-3 instead of 1e-6, which I used before
 
 class PreconMapBinned:
-	def __init__(self, signal, scans, weights, noise=True, hits=True):
+	def __init__(self, signal, scans, weights, noise=True, hits=True, mask=None):
 		"""Binned preconditioner: (P'W"P)", where W" is a white
 		nosie approximation of N". If noise=False, instead computes
 		(P'P)". If hits=True, also computes a hitcount map."""
 		self.div = signal.zeros(mat=True)
 		calc_div_map(self.div, signal, scans, weights, noise=noise)
+		if mask is not None: self.div *= mask
 		self.idiv = array_ops.eigpow(self.div, -1, axes=[-4,-3], lim=config.get("eig_limit"), fallback="scalar")
 		#self.idiv[:] = np.eye(3)[:,:,None,None]
 		if hits:
 			# Build hitcount map too
 			self.hits = signal.area.copy()
 			self.hits = calc_hits_map(self.hits, signal, scans)
+			if mask is not None: self.hits *= mask
 		else: self.hits = None
 		self.signal = signal
 	def __call__(self, m):
