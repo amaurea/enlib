@@ -184,7 +184,7 @@ def register_object(name, obj):
 
 # Asteroid stuff
 
-def phase_offset(mjd, pos, dist, lat=0, lon=0, alt=0):
+def spin_phase_offset(mjd, pos, dist, lat=0, lon=0, alt=0):
 	"""Given an asteroid or other object's position pos[{ra,dec},...] and
 	distance from earth dist[...] in AU at times mjd[...], compute the
 	offset between the object's phase angle relative to the stars and it's
