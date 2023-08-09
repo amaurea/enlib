@@ -5,7 +5,7 @@ with utils.nowarn(): import h5py
 from scipy import ndimage, stats, spatial, integrate, optimize
 from . import enmap, utils, curvedsky, bunch, parallax, cython, ephemeris, statdist, interpol
 from . import nmat, pmat, sampcut, fft
-from pixell import sharp, wcsutils
+from pixell import wcsutils
 
 try: basestring
 except: basestring = str
@@ -238,8 +238,7 @@ def apply_beam_fft(map, bl):
 
 def apply_beam_sht(map, bl, tol=1e-5):
 	lmax = np.where(bl/np.max(bl) > tol)[0][-1]
-	ainfo= sharp.alm_info(lmax)
-	alm  = curvedsky.map2alm_cyl(map, ainfo=ainfo)
+	alm  = curvedsky.map2alm_cyl(map, lmax=lmax)
 	ainfo.lmul(alm, bl[:lmax+1], out=alm)
 	return curvedsky.alm2map_cyl(alm, map, copy=True)
 

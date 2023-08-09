@@ -247,10 +247,17 @@ def calc_rho_c(z, cosmology):
 	rho_c = 3*H**2/(8*np.pi*utils.G)
 	return rho_c
 
-def calc_rdelta(mdelta, z, cosmology, delta=200):
+def calc_rho_m(z, cosmology):
+	rho_c = calc_rho_c(z, cosmology)
+	rho_m = rho_c * cosmology["Omega_m"]
+	return rho_m
+
+def calc_rdelta(mdelta, z, cosmology, delta=200, type="critical"):
 	"""Given M_delta in kg, returns R_delta in m"""
-	rho_c  = calc_rho_c(z, cosmology)
-	rdelta = (mdelta/(4/3*np.pi*delta*rho_c))**(1/3)
+	if   type == "critical": rho = calc_rho_c(z, cosmology)
+	elif type == "mean":     rho = calc_rho_m(z, cosmology)
+	else: raise ValueError("Unknown density type '%s'" % str(type))
+	rdelta = (mdelta/(4/3*np.pi*delta*rho))**(1/3)
 	return rdelta
 
 def calc_angsize(physsize, z, cosmology):
