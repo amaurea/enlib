@@ -1209,11 +1209,11 @@ class FilterBuddyPertod:
 		del signal_map
 
 class FilterAddSrcs:
-	def __init__(self, scans, params, sys=None, mul=1):
+	def __init__(self, scans, params, sys=None, mul=1, tmul=1):
 		self.params = params
 		self.data = {}
 		for scan in scans:
-			self.data[scan] = pmat.PmatPtsrc(scan, params, sys=sys, pmul=mul)
+			self.data[scan] = pmat.PmatPtsrc(scan, params, sys=sys, pmul=mul, tmul=tmul)
 	def __call__(self, scan, tod):
 		pmat = self.data[scan]
 		pmat.forward(tod, self.params)

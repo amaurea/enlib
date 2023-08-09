@@ -5,6 +5,8 @@ module pmat_core
 	private map_block_prepare_shifted_flat, map_block_finish_shifted_flat
 	private map_block_prepare_direct_flat, map_block_finish_direct_flat
 
+	private map_block_prepare_cf, map_block_finish_cf
+
 contains
 
 ! Scinet benchmark results (OMP 16 on standard node):
@@ -2245,5 +2247,268 @@ contains
 			end do
 		end if
 	end subroutine
+
+
+	!!!!! Test of cache-friendly stuff !!!!!!
+
+	! Organize pixels in work array in cache-friendly blocks. A cache
+	! line is 64 bytes = 16 floats = 8 doubles, so a natural block size
+	! is 16x16 for float and 8x8 for double (though they don't have to be square)
+	! Want to do as much work at the same time with each block while it's in
+	! cache, so ideally we want to process all samples that hit a block at the
+	! same time. But then we're back to the problem of organizing the samples.
+	!
+	! At full sample rate, 400 Hz, we move around 0.3 pixels per sample, so an
+	! 16x16 block would have around 60 samples in a row in it. If we store
+	! sample-ranges per block, then we end up needing around 21 MB per tod
+	! to store the block range information. That's borderline OK, and decreases
+	! with with bigger block size. This approach could also be used to avoid
+	! atomics. But it could end up with a bad access pattern for the TOD array.
+
+	! How would this work with bilinear mapmaking? Some samples would belong to
+	! multiple blocks. Problematic for block-oriented processing.
+
+	! Maybe the skew-transform approach is better after all? Maybe a per-detector
+	! transform or something. Especially if it can be done such that the skewed
+	! line-maps are added back to the full map in a well-ordered way.
+
+
+	! Ideas:
+	!
+	! 1. Plain blocking. With a 4x4 block size, each block fits in one cache line
+	!    at single precision. 13 samples per block as full sample rate. Should be
+	!    cache friendly no matter the local scanning direction. No precomputation
+	!    required. Does not do anything to solve the atomics problem. Simple to
+	!    implement. Let's do this first.
+	! 2. Global skew. Apply a dec-wise pixel offset to straighten the central
+	!    detector. If we do this separately for left-going and right-going scans,
+	!    then it should be possible to split the detectors into non-interacting
+	!    groups that can be processed in paralell. Alternatively one could also
+	!    split by dec. This approach is cache-friendly and also handles the
+	!    atomics problem, but is complicated to implement.
+
+	! I tested #1, but it just made project_map_nearest 25% slower. This was
+	! an implementation with a 5d work array. I tested both [ncomp,bsize,bsize,nby,nbx]
+	! and [bsize,bsize,ncomp,nby,nbx], which made no difference. It seems like
+	! this idea is a dead end.
+
+	subroutine pmat_map_direct_grid_cf( &
+		dir,                           &! Direction of direction: 1: forward (map2tod), -1: backward (tod2map)
+		tod, tmul,                     &! The tod(nsamp,ndet)  and what to multiply it by
+		map, mmul,                     &! The map(nx,ny,ncomp) and what to multiply it by
+		pmet,                          &! Grid pointing interpol variant: 1: bilinear, 2:gradient
+		mmet,                          &! Map projection method: 1: nearest, 2:bilinear, 3:bicubic
+		bore, hwp, det_pos, det_comps, &! Input pointing
+		rbox, nbox, yvals,             &! Interpolation grid
+		wbox, nphi,                    &! wbox({y,x},{from,to}) pixbox and sky wrap in pixels
+		times                          &! Benchmark times for each step.
+	)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir, nbox(:), wbox(:,:), nphi, pmet, mmet
+		real(8),    intent(in)    :: bore(:,:), hwp(:,:), yvals(:,:), det_pos(:,:), rbox(:,:)
+		real(8),    intent(in)    :: det_comps(:,:)
+		real(_),    intent(in)    :: tmul, mmul
+		real(_),    intent(inout) :: tod(:,:), map(:,:,:)
+		real(8),    intent(inout) :: times(:)
+		! Work
+		real(8),    allocatable   :: pix(:,:)
+		real(_),    allocatable   :: wmap(:,:,:,:,:), phase(:,:)
+		integer(4), allocatable   :: xmap(:)
+		integer(4) :: nsamp, ndet, di, steps(3)
+		real(8)    :: x0(3), inv_dx(3), t1, t2, tloc1, tloc2, tpoint, tproj
+		nsamp   = size(bore, 2)
+		ndet    = size(det_comps, 2)
+		t1 = omp_get_wtime()
+		call interpol_prepare(nbox, rbox, steps, x0, inv_dx)
+		t2 = omp_get_wtime()
+		times(1) = times(1) + t2-t1
+		call map_block_prepare_cf(dir, wbox, nphi, mmul, map, wmap, xmap)
+		t1 = omp_get_wtime()
+		times(2) = times(1) + t1-t2
+		tpoint = 0; tproj = 0 ! avoid ifort overeager optimization
+		!$omp parallel do private(di, pix, phase, tloc1, tloc2) reduction(+:tpoint,tproj)
+		do di = 1, ndet
+			tloc1 = omp_get_wtime()
+			allocate(pix(2,nsamp), phase(3,nsamp))
+			call build_pointing_grid(pmet, bore, hwp, pix, phase, &
+				det_pos(:,di), det_comps(:,di), steps, x0, inv_dx, yvals)
+			call cap_pixels(pix, wbox)
+			tloc2 = omp_get_wtime()
+			tpoint = tpoint + tloc2-tloc1
+			select case(mmet)
+			! 0.0648 / 0.1714, tod2map slower due to atomic, but separate buffers
+			! is even slower for nthread > 8
+			case(0); call project_map_nearest_cf(dir, tod(:,di), tmul, wmap, pix, phase, .true.)
+			end select
+			deallocate(pix, phase)
+			tloc1 = omp_get_wtime()
+			tproj = tproj + tloc1-tloc2
+		end do
+		t2 = omp_get_wtime()
+		times(3) = times(3) + (t2-t1)*tpoint/(tpoint+tproj)
+		times(4) = times(4) + (t2-t1)*tproj /(tpoint+tproj)
+		call map_block_finish_cf(dir, wbox, mmul, map, wmap, xmap)
+		t1 = omp_get_wtime()
+		times(5) = times(5) + t1-t2
+	end subroutine
+
+	subroutine map_block_prepare_cf(dir, wbox, nphi, mmul, map, wmap, xmap)
+		use omp_lib
+		implicit none
+		integer(4), intent(in)    :: dir, wbox(:,:), nphi
+		real(_),    intent(in)    :: map(:,:,:), mmul
+		real(_),    intent(inout), allocatable :: wmap(:,:,:,:,:)
+		integer(4), intent(inout), allocatable :: xmap(:)
+		integer(4) :: nwx, nwy, nbx, nby, bx, by, sx, sy, ix, iy, ox, oy, ic, pcut, ncomp
+		integer, parameter :: bsize = 4
+		! Set up our work map based on the relevant subset of pixels.
+		nwy = wbox(1,2)-wbox(1,1)
+		nwx = wbox(2,2)-wbox(2,1)
+		nby = (nwy+bsize-1)/bsize
+		nbx = (nwx+bsize-1)/bsize
+		ncomp = size(map,3)
+		allocate(wmap(ncomp,bsize,bsize,nbx,nby))
+		! Set up the pixel wrap remapper
+		allocate(xmap(nwx))
+		pcut = -(nphi-size(map,1))/2
+		do ix = 1, nwx
+			ox = modulo(ix-1+wbox(2,1)-pcut,nphi)+pcut+1
+			xmap(ix) = max(1,min(size(map,1),ox))
+		end do
+		!$omp parallel workshare
+		wmap = 0
+		!$omp end parallel workshare
+		if (dir > 0) then
+			! map2tod. Copy values over so we can add them to the tod later
+			! 5% of total cost
+			!$omp parallel do private(by,bx,sy,sx,iy,ix,oy,ox)
+			do by = 1, nby
+				do sy = 1, bsize
+					iy = (by-1)*bsize+sy
+					oy = max(1,min(size(map,2),iy+wbox(1,1)))
+					do bx = 1, nbx
+						do sx = 1, bsize
+							ix = (bx-1)*bsize+sx
+							if(ix > nwx) cycle
+							ox = xmap(ix)
+							wmap(1:3,sx,sy,bx,by) = map(ox,oy,1:3)*mmul
+						end do
+					end do
+				end do
+			end do
+		end if
+	end subroutine
+
+	subroutine map_block_finish_cf(dir, wbox, mmul, map, wmap, xmap)
+		implicit none
+		integer(4), intent(in)    :: dir, wbox(:,:)
+		real(_),    intent(inout) :: map(:,:,:)
+		real(_),    intent(in)    :: mmul
+		real(_),    intent(inout), allocatable :: wmap(:,:,:,:,:)
+		integer(4), intent(inout), allocatable :: xmap(:)
+		integer(4) :: nwx, nwy, nby, nbx, by, bx, sy, sx, ix, iy, ox, ic, oy
+		integer, parameter :: bsize = 4
+		nby = size(wmap,5)
+		nbx = size(wmap,4)
+		nwy = wbox(1,2)-wbox(1,1)
+		nwx = wbox(2,2)-wbox(2,1)
+		if (dir < 0) then
+			if(mmul .ne. 1) then
+				!$omp parallel workshare
+				map = map*mmul
+				!$omp end parallel workshare
+			end if
+			! tod2map, must copy out result from wmap. map is
+			! usually bigger than wmap, so optimize loop for it
+			!$omp parallel do private(by,bx,sy,sx,iy,ix,oy,ox)
+			do by = 1, nby
+				do sy = 1, bsize
+					iy = (by-1)*bsize+sy
+					oy = max(1,min(size(map,2),iy+wbox(1,1)))
+					do bx = 1, nbx
+						do sx = 1, bsize
+							ix = (bx-1)*bsize+sx
+							if(ix > nwx) cycle
+							ox = xmap(ix)
+							map(ox,oy,1:3) = wmap(1:3,sx,sy,bx,by)
+						end do
+					end do
+				end do
+			end do
+		end if
+		deallocate(wmap, xmap)
+	end subroutine
+
+	subroutine project_map_nearest_cf( &
+		dir, tod, tmul, map, pix, phase, atomic)
+		use omp_lib
+		implicit none
+		! Parameters
+		integer(4), intent(in)    :: dir
+		real(8),    intent(in)    :: pix(:,:)
+		real(_),    intent(in)    :: tmul, phase(:,:)
+		real(_),    intent(inout) :: tod(:), map(:,:,:,:,:)
+		logical                   :: atomic
+		! Work
+		real(_)    :: v
+		integer(4) :: nsamp, si, ci, p(2), nproc, by, bx, sy, sx
+		integer, parameter :: bsize = 4
+		nsamp = size(tod)
+		nproc = omp_get_num_threads()
+		if(dir > 0) then
+			! No clobber avoidance needed
+			do si = 1, nsamp
+				p = nint(pix(:,si))
+				! Skip all out-of-bounds pixels. Accumulating them at the edge is useless
+				if(p(1) .eq. 0) then
+					tod(si) = tod(si)*tmul
+					cycle
+				end if
+				! Calculate our block and sub-block index
+				by = (p(1)-1)/bsize+1
+				bx = (p(2)-1)/bsize+1
+				sy = p(1)-(by-1)*bsize
+				sx = p(2)-(bx-1)*bsize
+				if(tmul .eq. 0) then
+					tod(si) = sum(map(1:3,sx,sy,bx,by)*phase(1:3,si))
+				else
+					tod(si) = tod(si)*tmul + sum(map(1:3,sx,sy,bx,by)*phase(1:3,si))
+				end if
+			end do
+		else
+			if(nproc > 1 .and. .not. atomic) then
+				do si = 1, nsamp
+					p = nint(pix(:,si))
+					if(p(1) .eq. 0) cycle ! skip OOB pixels
+					by = (p(1)-1)/bsize+1
+					bx = (p(2)-1)/bsize+1
+					sy = p(1)-(by-1)*bsize
+					sx = p(2)-(bx-1)*bsize
+					do ci = 1, 3
+						v = (tod(si)*tmul)*phase(ci,si)
+						!$omp atomic
+						map(ci,sx,sy,bx,by) = map(ci,sx,sy,bx,by) + v
+					end do
+				end do
+			else
+				! Avoid slowing down single-proc case with atomics
+				do si = 1, nsamp
+					p = nint(pix(:,si))
+					if(p(1) .eq. 0) cycle ! skip OOB pixels
+					by = (p(1)-1)/bsize+1
+					bx = (p(2)-1)/bsize+1
+					sy = p(1)-(by-1)*bsize
+					sx = p(2)-(bx-1)*bsize
+					do ci = 1, 3
+						v = (tod(si)*tmul)*phase(ci,si)
+						map(ci,sx,sy,bx,by) = map(ci,sx,sy,bx,by) + v
+					end do
+				end do
+			end if
+		end if
+	end subroutine
+
 
 end module
