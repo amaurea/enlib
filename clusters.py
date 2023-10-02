@@ -12,8 +12,9 @@ class ProfileBase:
 	interface and implements the simplest functions, but can't
 	be used by itself. Instead use a subclass that defines the
 	cluster pressure profile, like ProfileBattaglia"""
-	def __init__(self, cosmology=None):
+	def __init__(self, cosmology=None,astropars=None):
 		self.cosmology = cosmology #NB SAVED for Default cosmo values or pyccl.Cosmology(Omega_c=0.2589, Omega_b=0.0486, h=0.6774, sigma8=0.8159, n_s=0.9667, transfer_function="boltzmann_camb")
+		self.astropars = astropars 
 	def y    (self, m200, z, r=0, dist="angular"):
 		"""Evaluate the (line-of-sight integrated) Compton y parameter
 		for clusters with mass m200 and redshift z at a distance r
@@ -76,7 +77,8 @@ class ProfileBattaglia(ProfileBase):
 		m200, z, r = [np.asanyarray(arr) for arr in [m200, z, r]]
 		if r200 is None: r200 = calc_rdelta(m200, z, self.cosmology)
 		x      = self.r2x(m200, z, r, dist=dist)
-		params = get_params_battaglia(m200, z, self.cosmology)
+		params = get_params_battaglia(m200, z, self.cosmology,self.astropars)
+		#params = get_params_battaglia_simp(m200, z, self.cosmology,self.astropars)
 		return params.P0 * utils.gnfw(x, xc=params.xc, alpha=params.alpha, beta=params.beta, gamma=params.gamma)
 	def _raw_los(self, m200, z, r=0, dist="angular"):
 		"""Evaluate the dimensionless line-of-sight-integrated pressure
@@ -88,7 +90,8 @@ class ProfileBattaglia(ProfileBase):
 		m200, z, r = [arr.reshape(-1) for arr in [m200,z,r]]
 		n          = len(m200)
 		# Compute our shape parameters and cluster size
-		params = get_params_battaglia(m200, z, self.cosmology)
+		params = get_params_battaglia(m200, z, self.cosmology,self.astropars)
+		#params = get_params_battaglia_simp(m200, z, self.cosmology,self.astropars)
 		r200   = calc_rdelta(m200, z, self.cosmology)
 		x      = self.r2x(r200, z, r, dist=dist)
 		res    = np.zeros(n, m200.dtype)
@@ -97,7 +100,7 @@ class ProfileBattaglia(ProfileBase):
 		return res.reshape(shape)
 
 class ProfileBattagliaFast(ProfileBattaglia):
-	def __init__(self, cosmology=None, beta_range=[-14,-3], obeta=6, nbeta=None, pad=0.1,
+	def __init__(self, cosmology=None, astropars=None, beta_range=[-14,-3], obeta=6, nbeta=None, pad=0.1,
 			alpha=1, gamma=-0.3, x1=1e-10, x2=1e8, npoint=200, zmax=1e5, _a=8):
 		"""Initialize a Battaglia cluster profile evaluator. This exploits the
 		Battaglia profile's constant alpha and gamma parameters to get away with
@@ -122,7 +125,7 @@ class ProfileBattagliaFast(ProfileBattaglia):
 		  ok.
 		* _a: Implementation detail: Power-law scaling used to speed up
 		  line-of-sight integral."""
-		super().__init__(cosmology)
+		super().__init__(cosmology,astropars)
 		# If the number of beta samples are not specified, use one point per basis function
 		if nbeta is None: nbeta = obeta
 		# The radial values to evlauate things at
@@ -152,7 +155,8 @@ class ProfileBattagliaFast(ProfileBattaglia):
 		m200, z, r = [np.asanyarray(arr) for arr in [m200, z, r]]
 		if r200 is None: r200 = calc_rdelta(m200, z, self.cosmology)
 		x      = self.r2x(m200, z, r, dist=dist)
-		params = get_params_battaglia(m200, z, self.cosmology)
+		params = get_params_battaglia(m200, z, self.cosmology,self.astropars)
+		#params = get_params_battaglia_simp(m200, z, self.cosmology,self.astropars)
 		return params.P0 * utils.gnfw(x, xc=params.xc, alpha=params.alpha, beta=params.beta, gamma=params.gamma)
 	def _raw_los(self, m200, z, r=0, dist="angular"):
 		"""Evaluate the dimensionless line-of-sight-integrated pressure
@@ -161,7 +165,8 @@ class ProfileBattagliaFast(ProfileBattaglia):
 		to the same shape."""
 		m200, z, r = [np.asanyarray(arr) for arr in [m200, z, r]]
 		# Compute our shape parameters and cluster size
-		params = get_params_battaglia(m200, z, self.cosmology)
+		params = get_params_battaglia(m200, z, self.cosmology,self.astropars)
+		#params = get_params_battaglia_simp(m200, z, self.cosmology,self.astropars)
 		r200   = calc_rdelta(m200, z, self.cosmology)
 		# Nomralize beta so it matches what our polynomial basis expects
 		b    = (np.log(-np.array(params.beta))-self.lbeta0)/self.dlbeta
@@ -328,16 +333,31 @@ def translate_mass(cosmology,Mdel,z,EPS=1e-10):
 		## Finish when they Converge
 	return ans/cosmology["h"]
 
-def get_params_battaglia(m200, z, cosmology):
+def get_params_battaglia(m200, z, cosmology, astropars):
 	"""Return a bunch of xc, alpha, beta, gamma for a cluster with
 	the given m200 in SI units."""
 	# First get the gnfw parameters. utils.gnfw has the opposite sign for
 	# beta and gamma as nemo, but otherwise the same convention
 	z1    = z+1
 	m     = m200/(1e14*utils.M_sun)
-	P0    =  18.1     * m** 0.154   * z1**-0.758
+	P0    =  18.1     * m** 0.154   * z1**-0.758 * astropars['P0']
 	xc    =  0.497    * m**-0.00865 * z1** 0.731
-	beta  =  4.35     * m** 0.0393  * z1** 0.415
+	beta  =  4.35     * m** 0.0393  * z1** 0.415 * astropars['beta']
+	alpha =  1; gamma = -0.3
+	# Go from battaglia convention to standard gnfw
+	beta  = gamma - alpha*beta
+	return bunch.Bunch(xc=xc, alpha=alpha, beta=beta, gamma=gamma, P0=P0)
+
+def get_params_battaglia_simp(m200, z, cosmology, astropars):
+	"""Return a bunch of xc, alpha, beta, gamma for a cluster with
+	the given m200 in SI units."""
+	# First get the gnfw parameters. utils.gnfw has the opposite sign for
+	# beta and gamma as nemo, but otherwise the same convention
+	z1    = z+1
+	m     = m200/(1e14*utils.M_sun)
+	P0    =  18.1     * astropars['P0']
+	xc    =  0.5    
+	beta  =  4.35     * astropars['beta']
 	alpha =  1; gamma = -0.3
 	# Go from battaglia convention to standard gnfw
 	beta  = gamma - alpha*beta
