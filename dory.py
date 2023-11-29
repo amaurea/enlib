@@ -473,7 +473,7 @@ class FitError(Exception): pass
 
 def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		apod=15, npass=2, indep_tol=1e-4, ps_res=500, pixwin=True, pixwin_order=0, beam_tol=1e-4,
-		dump=None, verbose=False, apod_margin=10, hack=0, region=0, lknee=None):
+		dump=None, verbose=False, apod_margin=10, hack=0, region=0, lknee=None, maxcorrlen=3*utils.arcmin):
 	# Get the (fractional) pixel positions of each source
 	t1 = time.time()
 	src_pix  = imap.sky2pix(src_pos.T).T
@@ -560,6 +560,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		# Instead we will use indep groups to efficiently compute NB for each source,
 		# and then loop over each source's neighborhood
 		corrlen  = measure_corrlen(beam2d**2*iC, indep_tol)
+		corrlen  = np.minimum(corrlen, maxcorrlen)
 		if verbose: print("corrlen", corrlen/utils.degree)
 		cboxes   = enmap.neighborhood_pixboxes(imap.shape, imap.wcs, src_pos, corrlen)
 		with bench.mark("make groups"):

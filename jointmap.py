@@ -30,8 +30,9 @@ def read_beam(params, nl=50000, workdir=".", regularization="ratio", cutoff=0.01
 		bdata[:len(tmp)] = tmp[:nl]
 		del tmp
 		# We want a normalized beam
-		bdata[~np.isfinite(bdata)] = 0
-		bdata /= np.max(bdata)
+		if "nonorm" not in params[2:]:
+			bdata[~np.isfinite(bdata)] = 0
+			bdata /= np.max(bdata)
 		l      = np.arange(len(bdata)).astype(float)
 		if regularization == "gauss":
 			low = np.where(bdata<cutoff)[0]
@@ -50,10 +51,14 @@ def read_beam(params, nl=50000, workdir=".", regularization="ratio", cutoff=0.01
 			# approximately gaussian, then there is a single function that has these
 			# properties while matching both the slope and value at the cutoff point:
 			# g(l) = cutoff*(l/lc)**(2*log(cutoff)), where lc is the cutoff point.
-			low   = np.where(bdata<cutoff)[0]
+			# Update: We support beams that don't peak at 1 and where the peak isn't
+			# at the beginning, by searching from the peak, and scaling the cutoff by it.
+			ipeak  = np.argmax(bdata)
+			cuteff = bdata[ipeak]*cutoff
+			low   = np.where(bdata[ipeak:]<cuteff)[0]+ipeak
 			if len(low) > 0:
 				lcut = low[0]
-				lv   = np.log(cutoff)
+				lv   = np.log(cuteff)
 				bdata[:lcut+1] = np.log(bdata[:lcut+1])
 				bdata[lcut+1:] = lv + (np.log(l[lcut+1:])-np.log(l[lcut]))*(2*lv)
 		else: raise ValueError("Unknown beam regularization '%s'" % regularization)
@@ -513,7 +518,9 @@ class Mapset:
 			shape, wcs = read_geometry(dataset.splits[0].map)
 			dataset.shape = shape
 			dataset.wcs   = wcs
-			dataset.beam  = read_beam(dataset.beam_params, workdir=cdir, nl=self.nl)
+			dataset.beam    = read_beam(dataset.beam_params, workdir=cdir, nl=self.nl)
+			if "polbeam_params" in dataset:
+				dataset.polbeam = read_beam(dataset.polbeam_params, workdir=cdir, nl=self.nl)
 			#np.savetxt("beam_1d_%s.txt" % dataset.name, dataset.beam)
 			dataset.box   = enmap.box(shape, wcs, corner=False)
 		self.datasets = datasets
@@ -637,7 +644,7 @@ def sanitize_maps(mapset, map_max=1e8, div_tol=20, apod_val=0.2, apod_alpha=5, a
 			if crop_div_edge:
 				# Avoid areas too close to the edge of div
 				split.data.div *= calc_dist(split.data.div > 0) > 60
-			print("A", dataset.name, i, np.std(split.data.map))
+			#print("A", dataset.name, i, np.std(split.data.map))
 			# Expand map to ncomp components
 			split.data.map = add_missing_comps(split.data.map, mapset.ncomp, fill="random")
 			# Distrust very low hitcount regions
@@ -935,7 +942,7 @@ def calc_beam_area(beam_2d):
 	# So the beam area should simply be lbeam[0,0]*npix/mean(lbeam)*pix_area,
 	# up to fourier normalization. In practice this works out to be
 	# area = lbeam[0,0]/mean(lbeam)*pix_area
-	return beam_2d[0,0]/np.mean(beam_2d)*beam_2d.pixsize()
+	return beam_2d[...,0,0]/np.mean(beam_2d)*beam_2d.pixsize()
 
 def setup_beams(mapset):
 	"""Set up the full beams with pixel windows for each dataset in the mapset,
@@ -945,6 +952,11 @@ def setup_beams(mapset):
 		param = (d.beam_params, d.pixel_window_params)
 		if param not in cache:
 			beam_2d = eval_beam(d.beam, mapset.l)
+			if "polbeam" in d:
+				# If a separate polarization beam is defined, then
+				# beam_2d will be [T,Q,U] instead of just scalar.
+				polbeam_2d = eval_beam(d.polbeam, mapset.l)
+				beam_2d = enmap.enmap([beam_2d,polbeam_2d,polbeam_2d])
 			#enmap.write_map("beam_2d_raw_%s.fits" % d.name, beam_2d)
 			# Apply pixel window
 			if d.pixel_window_params[0] == "native":
@@ -953,7 +965,7 @@ def setup_beams(mapset):
 				beam_2d *= wx[None,:]
 			elif d.pixel_window_params[0] == "none": pass
 			elif d.pixel_window_params[0] == "lmax":
-				beam_2d[mapset.l>d.pixel_window_params[1]] = 0
+				beam_2d *= mapset.l<=d.pixel_window_params[1]
 			elif d.pixel_window_params[0] == "separable":
 				try:
 					beam_2d *= d.ywin[:,None]
