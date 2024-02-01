@@ -7,7 +7,7 @@
 # [....]
 # beam path_to_beam_transform
 # freq freq_in_GHz
-import numpy as np
+import numpy as np, os
 from pixell import bunch, enmap, utils
 
 def read(fname, splits=None, maxmaps=1000, **kwargs):
@@ -33,8 +33,7 @@ def read(fname, splits=None, maxmaps=1000, **kwargs):
 				break
 	freq = float(paths.freq)
 	# Read the beam, getting only the b(l) part
-	beam = np.loadtxt(paths.beam, ndmin=2).T
-	beam = beam[min(1, len(beam)-1)]
+	beam = get_beam(paths.beam)
 	res  = bunch.Bunch(freq=freq, beam=beam, maps=[], ivars=[])
 	for i in splits:
 		tag = "" if i == 0 else str(i+1)
@@ -71,8 +70,29 @@ def read_info(fname):
 			if line.startswith("#"): continue
 			toks = utils.split_outside(line, sep=" ", start="\"'", end="\"'")
 			toks = [tok for tok in toks if len(tok) > 0 ]
-			print(toks)
 			if len(toks) != 2:
 				raise ValueError("Error parsing key-value file. Expected format key value, but got '%s'" % (line))
-			res[toks[0]] = toks[1]
+			# Expand relative paths
+			key, val = toks
+			if not is_num(val):
+				val = os.path.join(os.path.dirname(fname), val)
+			res[key] = val
 	return res
+
+def get_beam(fname_or_fwhm, lmax=40000):
+	try:
+		sigma = float(fname_or_fwhm)*utils.arcmin*utils.fwhm
+		l     = np.arange(lmax+1)
+		return np.exp(-0.5*l**2*sigma**2)
+	except ValueError:
+		# Read the beam, getting only the b(l) part
+		beam = np.loadtxt(fname_or_fwhm, ndmin=2).T
+		beam = beam[min(1, len(beam)-1)]
+		return beam
+
+def is_num(s):
+	try:
+		float(s)
+		return True
+	except ValueError:
+		return False

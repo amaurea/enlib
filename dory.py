@@ -274,7 +274,7 @@ def build_prior(amps, damps, variability=1.0, min_ivar=1e-10):
 	return amps, ivars
 
 def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=2.5, nblock=10,
-		ps_res=2000, pixwin=True, pixwin_order=0, kernel=256, dump=None, verbose=False, apod_margin=10):
+		ps_res=2000, pixwin=True, pixwin_order=0, kernel=256, dump=None, verbose=False, apod_margin=10, hack=0):
 	# Apodize a bit before any fourier space operations
 	apod_map = (idiv*0+1).apod(apod) * get_apod_holes(idiv,apod)
 	imap = imap*apod_map
@@ -300,6 +300,7 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=2
 		# on the scale of the signal we're looking for, then this could introduce
 		# false detections. Empirically this hasn't been a problem, though.
 		ps       = measure_noise(wnoise, apod, apod, ps_res=ps_res)
+		if hack: ps = planck_hack(ps, hack)
 		filter   = build_filter(ps, beam2d)
 		template = get_thumb(enmap.ifft(filter*beam2d+0j).real, size=kernel, normalize=True)
 		fmap     = enmap.ifft(filter*enmap.fft(wmap)).real   # filtered map
@@ -310,6 +311,9 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=2
 			enmap.write_map(dump + "wmap_%02d.fits"   % ipass, wmap)
 			enmap.write_map(dump + "fmap_%02d.fits"   % ipass, fmap)
 			enmap.write_map(dump + "norm_%02d.fits"   % ipass, norm)
+			enmap.write_map(dump + "ps_%02d.fits"     % ipass, ps)
+			enmap.write_map(dump + "filter_%02d.fits" % ipass, filter)
+			enmap.write_map(dump + "template_%02d.fits" % ipass, template)
 		del wnoise
 		result = bunch.Bunch(snmap=fmap/norm)
 		fits   = bunch.Bunch(amp=[], damp=[], pix=[], npix=[])

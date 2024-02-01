@@ -218,6 +218,10 @@ def read_data(fnames, sel=None, pixbox=None, box=None, geometry=None, comp=0, sp
 		d = mapdata.read(ifile, sel=sel, pixbox=pixbox, box=box, geometry=geometry)
 		maps  = d.maps[split].astype(dtype)
 		ivars = np.broadcast_to(d.ivars[split].astype(dtype), maps.shape, subok=True)
+		# Allow for scalar inputs
+		if maps .ndim == 2: maps  = maps [None]
+		if ivars.ndim == 2: ivars = ivars[None]
+		# Then extract the component we want
 		maps, ivars = maps[comp], ivars[comp]
 		# The 0 here is just selecting the first split. That is, we don't support splits
 		data.maps .append(maps)
