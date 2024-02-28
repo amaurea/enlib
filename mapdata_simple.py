@@ -10,7 +10,7 @@
 import numpy as np, os
 from pixell import bunch, enmap, utils
 
-def read(fname, splits=None, maxmaps=1000, **kwargs):
+def read(fname, splits=None, maxmaps=1000, output="mvb", **kwargs):
 	"""Read the maps, ivars, beam, gain and fequency from a mapdata file, and
 	return them as a bunch of maps:[map,...], ivars:[ivar,...], beam:[:],
 	gain:num, freq:num. All maps are read by default. Use the splits argument
@@ -33,12 +33,14 @@ def read(fname, splits=None, maxmaps=1000, **kwargs):
 				break
 	freq = float(paths.freq)
 	# Read the beam, getting only the b(l) part
-	beam = get_beam(paths.beam)
-	res  = bunch.Bunch(freq=freq, beam=beam, maps=[], ivars=[])
+	res  = bunch.Bunch(freq=freq, beam=None, maps=[], ivars=[])
+	if "b" in output: res.beam = get_beam(paths.beam)
 	for i in splits:
 		tag = "" if i == 0 else str(i+1)
-		res.maps .append(enmap.read_map(paths["map" +tag], **kwargs))
-		res.ivars.append(enmap.read_map(paths["ivar"+tag], **kwargs))
+		if "m" in output:
+			res.maps .append(enmap.read_map(paths["map" +tag], **kwargs))
+		if "v" in output:
+			res.ivars.append(enmap.read_map(paths["ivar"+tag], **kwargs))
 	return res
 
 def read_meta(fname):
