@@ -127,7 +127,7 @@ contains
 			case(3); call project_map_bicubic (dir, tod(:,di), tmul, wmap, pix, phase, .true.)
 			case(4); call project_map_split   (dir, tod(:,di), tmul, wmap, pix, phase, split, .true.)
 			case(5)
-				call project_map_nearest (dir, tod(:,di), tmul, wmap(3*split(di)+1:3*split(di)+3,:,:), pix, phase, .true.)
+				call project_map_nearest (dir, tod(:,di), tmul, wmap(3*split(di)+1:3*split(di)+3,:,:), pix, phase, .false.)
 			end select
 			deallocate(pix, phase)
 			tloc1 = omp_get_wtime()
@@ -186,7 +186,7 @@ contains
 		real(_),    intent(in)    :: mmul
 		real(_),    intent(inout), allocatable :: wmap(:,:,:)
 		integer(4), intent(inout), allocatable :: xmap(:)
-		integer(4) :: nwx, nwy, ix, iy, ox, ic, oy
+		integer(4) :: nwx, nwy, ix, iy, ic, oy
 		nwy = wbox(1,2)-wbox(1,1)
 		nwx = wbox(2,2)-wbox(2,1)
 		if (dir < 0) then
@@ -197,7 +197,7 @@ contains
 			end if
 			! tod2map, must copy out result from wmap. map is
 			! usually bigger than wmap, so optimize loop for it
-			!$omp parallel do private(iy,ix,ic,ox,oy)
+			!$omp parallel do private(iy,ix,ic,oy)
 			do iy = 1, nwy
 				oy = max(1,min(size(map,2),iy+wbox(1,1)))
 				do ic = 1, size(map,3)
@@ -398,6 +398,8 @@ contains
 					(yvals(:,ig+steps(1))-yvals(:,ig))*xrel(1) + &
 					(yvals(:,ig+steps(2))-yvals(:,ig))*xrel(2) + &
 					(yvals(:,ig+steps(3))-yvals(:,ig))*xrel(3)
+			case default
+				point = 0
 			end select
 			! Make 1-indexed
 			pix(1:2,si) = point(1:2)+1
@@ -446,7 +448,7 @@ contains
 				end if
 			end do
 		else
-			if(nproc > 1 .and. .not. atomic) then
+			if(nproc > 1 .and. atomic) then
 				do si = 1, nsamp
 					p = nint(pix(:,si))
 					if(p(1) .eq. 0) cycle ! skip OOB pixels
@@ -530,7 +532,7 @@ contains
 				v3(:,2) = v4*x(2)
 				v1 = v3*(1-x(1))
 				v2 = v3*x(1)
-				if(nproc > 1 .and. .not. atomic) then
+				if(nproc > 1 .and. atomic) then
 					! I don't like using this many atomics. With four
 					! times the number I usually have, this is probably
 					! slower than separate work arrays.
@@ -621,7 +623,7 @@ contains
 				do i = 1, 4
 					vy(:,i) = vx*w(i,2)
 				end do
-				if(nproc > 1 .and. .not. atomic) then
+				if(nproc > 1 .and. atomic) then
 					do i = 1, 4
 						do i2 = 1, 4
 							do ci = 1, 3
@@ -678,7 +680,7 @@ contains
 				end if
 			end do
 		else
-			if(nproc > 1 .and. .not. atomic) then
+			if(nproc > 1 .and. atomic) then
 				do si = 1, nsamp
 					p = nint(pix(:,si))
 					if(p(1) .eq. 0) cycle ! skip OOB pixels
@@ -1009,7 +1011,7 @@ contains
 		implicit none
 		integer(4), intent(in)    :: pbox(:,:)
 		real(8),    intent(inout) :: pix(:,:)
-		real(8)    :: psize(2), moo(2)
+		real(8)    :: psize(2)
 		integer(4) :: si
 		psize = pbox(:,2)-pbox(:,1)
 		!$!omp simd
@@ -1093,7 +1095,7 @@ contains
 		integer(4), intent(in)    :: nwx, nwys(:), y0, xshift(:,:), yshift(:,:), sdir(:), nphi
 		real(_)    :: tmp
 		real(8)    :: work(4), p(2)
-		integer(4) :: nsamp, si, iwx, iy, d, nsub, wx, wy, wytot
+		integer(4) :: nsamp, si, iy, d, nsub, wx, wy, wytot
 		logical    :: use_hwp
 		real(8)    :: az, t
 		nsamp = size(bore,2)
@@ -1230,7 +1232,7 @@ contains
 		implicit none
 		integer(4), intent(in)    :: dir, y0, nwx, nwys(2), xshift(:,:), yshift(:,:), nphi
 		real(_),    intent(inout) :: work(:,:,:), map(:,:,:)
-		integer(4) :: y, x, iy, wy, wytot, wx, d, ny, dx, nsub, i
+		integer(4) :: y, x, iy, wy, wytot, wx, d, ny, nsub, i
 		ny = size(xshift,1)
 		! Loop through each output pixel in the map. iy and ix are the y and x pixel relative
 		! to the bottom-left corner of the exposed region. Looping this way avoids the need
@@ -1623,13 +1625,13 @@ contains
 		! Work
 		integer :: nsamp, ndet, nsrc, nproc, nsrcdet
 		! Not the same sdir as in the shift stuff
-		integer :: ic, i, id, di, si, xind(3), ig, ig2, cell(2), cell_ind, cid, sdir, ndir
+		integer :: i, id, di, si, xind(3), ig, cell(2), cell_ind, cid, sdir, ndir
 		integer :: steps(3), bind, sdi
 		real(8) :: x0(3), inv_dx(3), c0(2), inv_dc(2), xrel(3), work(size(yvals,1),4)
 		real(8) :: point(4), phase(3), dec, ra, ddec, dra, bscale(3)
 		real(_) :: inv_bres, bx,by,br,brel,bval, c2p,s2p,c1p,s1p
 		real(_), parameter   :: pi = 3.14159265359d0
-		real(8), allocatable :: amps(:,:,:,:,:), cosdec(:,:,:), ys(:,:,:)
+		real(8), allocatable :: amps(:,:,:,:,:), cosdec(:,:,:)
 		integer, allocatable :: scandir(:)
 		nsamp   = size(tod, 1)
 		ndet    = size(tod, 2)
@@ -1953,7 +1955,7 @@ contains
 		real(_), intent(inout) :: tod(:,:), map(:,:,:)
 		real(_), intent(in)    :: az0, daz, az(:), azoff(:), comps(:,:)
 		real(_), allocatable   :: wmap(:,:,:,:)
-		real(_)                :: idaz, v, q
+		real(_)                :: idaz, v
 		integer :: di, si, ndet, nsamp, naz, ai, nproc, ci, rank, x, y
 		ndet  = size(tod,2)
 		nsamp = size(tod,1)
@@ -2122,7 +2124,7 @@ contains
 		real(_), allocatable     :: wmap(:,:,:)
 		real(8) :: pos(2), pixdens(2), p0(2)
 		real(_) :: v
-		integer :: di, si, ndet, nsamp, ai, nproc, ci, pix(2), mshape(2), y, x, o
+		integer :: di, si, ndet, nsamp, nproc, ci, pix(2), mshape(2), y, x, o
 		nsamp = size(tod,1)
 		ndet  = size(tod,2)
 		p0    = box(:,1)
@@ -2361,7 +2363,7 @@ contains
 		real(_),    intent(in)    :: map(:,:,:), mmul
 		real(_),    intent(inout), allocatable :: wmap(:,:,:,:,:)
 		integer(4), intent(inout), allocatable :: xmap(:)
-		integer(4) :: nwx, nwy, nbx, nby, bx, by, sx, sy, ix, iy, ox, oy, ic, pcut, ncomp
+		integer(4) :: nwx, nwy, nbx, nby, bx, by, sx, sy, ix, iy, ox, oy, pcut, ncomp
 		integer, parameter :: bsize = 4
 		! Set up our work map based on the relevant subset of pixels.
 		nwy = wbox(1,2)-wbox(1,1)
@@ -2408,7 +2410,7 @@ contains
 		real(_),    intent(in)    :: mmul
 		real(_),    intent(inout), allocatable :: wmap(:,:,:,:,:)
 		integer(4), intent(inout), allocatable :: xmap(:)
-		integer(4) :: nwx, nwy, nby, nbx, by, bx, sy, sx, ix, iy, ox, ic, oy
+		integer(4) :: nwx, nwy, nby, nbx, by, bx, sy, sx, ix, iy, ox, oy
 		integer, parameter :: bsize = 4
 		nby = size(wmap,5)
 		nbx = size(wmap,4)
@@ -2478,7 +2480,7 @@ contains
 				end if
 			end do
 		else
-			if(nproc > 1 .and. .not. atomic) then
+			if(nproc > 1 .and. atomic) then
 				do si = 1, nsamp
 					p = nint(pix(:,si))
 					if(p(1) .eq. 0) cycle ! skip OOB pixels

@@ -35,11 +35,14 @@ def read_beam(params, nl=50000, workdir=".", regularization="ratio", cutoff=0.01
 			bdata /= np.max(bdata)
 		l      = np.arange(len(bdata)).astype(float)
 		if regularization == "gauss":
+			# FIXME this assumes normalization and l=0 peak
 			low = np.where(bdata<cutoff)[0]
 			if len(low) > 0:
 				lcut = low[0]
 				bdata[:lcut+1] = np.log(bdata[:lcut+1])
 				bdata[lcut+1:] = l[lcut+1:]**2*bdata[lcut]/lcut**2
+			else:
+				bdata = np.log(bdata)
 		elif regularization == "ratio":
 			# The purpose of this approach is to keep the *ratio* between
 			# beams constant after they leave the reliable area. This is useful
@@ -59,8 +62,10 @@ def read_beam(params, nl=50000, workdir=".", regularization="ratio", cutoff=0.01
 			if len(low) > 0:
 				lcut = low[0]
 				lv   = np.log(cuteff)
-				bdata[:lcut+1] = np.log(bdata[:lcut+1])
+				bdata[:lcut+1] = np.log(np.maximum(bdata[:lcut+1], bdata[ipeak]*1e-6))
 				bdata[lcut+1:] = lv + (np.log(l[lcut+1:])-np.log(l[lcut]))*(2*lv)
+			else:
+				bdata = np.log(bdata)
 		else: raise ValueError("Unknown beam regularization '%s'" % regularization)
 		## we don't trust the beam after the point where it becomes negative
 		#negs  = np.where(bdata<=0)[0]
@@ -948,6 +953,7 @@ def setup_beams(mapset):
 	"""Set up the full beams with pixel windows for each dataset in the mapset,
 	and the corresponding beam areas."""
 	cache  = {}
+	any_pol = any(["polbeam" in d for d in mapset.datasets])
 	for d in mapset.datasets:
 		param = (d.beam_params, d.pixel_window_params)
 		if param not in cache:
@@ -957,6 +963,8 @@ def setup_beams(mapset):
 				# beam_2d will be [T,Q,U] instead of just scalar.
 				polbeam_2d = eval_beam(d.polbeam, mapset.l)
 				beam_2d = enmap.enmap([beam_2d,polbeam_2d,polbeam_2d])
+			elif any_pol:
+				beam_2d = np.tile(beam_2d[None],(3,1,1))
 			#enmap.write_map("beam_2d_raw_%s.fits" % d.name, beam_2d)
 			# Apply pixel window
 			if d.pixel_window_params[0] == "native":
@@ -1049,7 +1057,7 @@ class Coadder:
 		self.insufficient = [dataset.insufficient for dataset in mapset.datasets for split in dataset.splits]
 
 		# For debug stuff
-		self.names = ["%s_set%d" % (dataset.name, i) for dataset in mapset.datasets for i, split in enumerate(dataset.splits)]
+		#self.names = ["%s_set%d" % (dataset.name, i) for dataset in mapset.datasets for i, split in enumerate(dataset.splits)]
 		#enmap.write_map("coadder_m.fits", enmap.samewcs(self.m, self.m[0]))
 		#enmap.write_map("coadder_H.fits", enmap.samewcs(self.H, self.H[0]))
 		#enmap.write_map("coadder_iN.fits", enmap.samewcs(self.iN, self.iN[0]))
@@ -1057,6 +1065,7 @@ class Coadder:
 		#for i in range(len(self.iN)):
 		#	W = self.B[i]*self.iN[i]*self.B[i]
 		#	np.savetxt("coadder_w_%02d.txt" % i, bin_1d(W))
+
 		self.shape, self.wcs = mapset.shape, mapset.wcs
 		self.dtype= mapset.dtype
 		self.ctype= np.result_type(self.dtype,0j)

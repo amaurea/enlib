@@ -729,7 +729,7 @@ def split_boxes_rimwise(boxes, weights, nsplit):
 	totweight  = np.sum(weights)
 	# We keep track of which boxes have already been
 	# processed via a mask.
-	mask = np.full(n, True, dtype=np.bool)
+	mask = np.full(n, True, dtype=bool)
 	cumweight  = 0
 	for gi in xrange(nsplit):
 		# Compute the target weight for this group.

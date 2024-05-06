@@ -33,7 +33,7 @@ def read(fname, splits=None, maxmaps=1000, output="mvb", **kwargs):
 				break
 	freq = float(paths.freq)
 	# Read the beam, getting only the b(l) part
-	res  = bunch.Bunch(freq=freq, beam=None, maps=[], ivars=[])
+	res  = bunch.Bunch(freq=freq, beam=None, maps=[], ivars=[], raw=paths.raw)
 	if "b" in output: res.beam = get_beam(paths.beam)
 	for i in splits:
 		tag = "" if i == 0 else str(i+1)
@@ -55,8 +55,9 @@ def read_meta(fname):
 		nmap += 1
 	res = bunch.Bunch(
 			nmap = nmap,
-			map_geometry = enmap.read_map_geometry(paths.map),
-			ivar_geometry = enmap.read_map_geometry(paths.ivar)
+			map_geometry  = enmap.read_map_geometry(paths.map),
+			ivar_geometry = enmap.read_map_geometry(paths.ivar),
+			raw = paths.raw,
 		)
 	return res
 
@@ -64,6 +65,7 @@ def read_info(fname):
 	"""Helper function. Reads key-value pairs from text file
 	and returns bunch of them"""
 	res = bunch.Bunch()
+	raw = bunch.Bunch()
 	with open(fname, "r") as f:
 		for line in f:
 			line = line.strip()
@@ -76,9 +78,11 @@ def read_info(fname):
 				raise ValueError("Error parsing key-value file. Expected format key value, but got '%s'" % (line))
 			# Expand relative paths
 			key, val = toks
+			raw[key] = val
 			if not is_num(val):
 				val = os.path.join(os.path.dirname(fname), val)
 			res[key] = val
+	res.raw = raw
 	return res
 
 def get_beam(fname_or_fwhm, lmax=40000):
