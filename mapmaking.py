@@ -432,6 +432,59 @@ class SignalMapBuddies(SignalMap):
 		data = {k:v[0] for k,v in self.data.iteritems()}
 		return SignalMap(self.data.keys(), self.area, self.comm, cuts=self.cuts, output=False, data=data)
 
+class SignalGain(Signal):
+	def __init__(self, scans, signals, dtype, comm, model=None, name="gain", ofmt="{name}_{rank:02}", output=True):
+		Signal.__init__(self, name, ofmt, output, ext="txt")
+		self.data    = {}
+		self.dtype   = dtype
+		self.signals = signals
+		# The sky model to assume. Must be compatible with the signals
+		# passed in. This can be freely updated by assigning to .model
+		self.model   = model
+		# Calculate the gain degrees of freedom mapping
+		self.data    = {}
+		i1 = 0
+		for si, scan in enumerate(scans):
+			i2 = i1+scan.ndet
+			self.data[scan] = (i1,i2)
+			i1 = i2
+		self.ntot    = i1
+		self.dof     = zipper.ArrayZipper(np.zeros(self.ntot, self.dtype), shared=False, comm=comm)
+	def precompute(self, scan):
+		self.profile = np.zeros((scan.ndet,scan.nsamp),self.dtype)
+		self.signals.forward(scan, self.profile, self.model)
+	def free(self):
+		self.profile = None
+	def forward(self, scan, tod, gains):
+		if scan not in self.data: return
+		i1,i2 = self.data[scan]
+		tod  += self.profile*gains[i1:i2,None]
+	def backward(self, scan, tod, gains):
+		if scan not in self.data: return
+		i1,i2 = self.data[scan]
+		gains[i1:i2] += np.sum(self.profile*tod,1)
+	def zeros(self, mat=False): return np.zeros(self.ntot, self.dtype)
+	def write(self, prefix, tag, m):
+		if not self.output: return
+		oname = self.ofmt.format(name=self.name, rank=self.dof.comm.rank)
+		oname = "%s%s_%s.%s" % (prefix, oname, tag, self.ext)
+		# We want to output the tods in sorted order
+		scans = [scan for scan in self.data]
+		ids   = [scan.id for scan in scans]
+		order = np.argsort(ids)
+		from enact import actdata
+		with open(oname, "w") as ofile:
+			for ind in order:
+				scan  = scans[ind]
+				i1, i2= self.data[scan]
+				gvals = m[i1:i2]
+				dets  = actdata.split_detname(scan.dets)[1]
+				msg   = [scan.id]
+				for det,gval in zip(dets, gvals):
+					msg.append("%s:%.3f" % (det,gval))
+				msg   = " ".join(msg)
+				ofile.write(msg + "\n")
+
 # Special source handling v2:
 # Solve for the map and the local model errors around strong sources jointly. The
 # equation system will be degenerate, so the map will not contain a complete solution
@@ -497,6 +550,43 @@ class SignalTemplate(Signal):
 			for i in range(self.n):
 				ofile.write("%s %8.3f\n" % (self.scans[i].id, m[i]))
 
+class Signals(Signal):
+	"""Class for handling multiple signals jointly."""
+	def __init__(self, signals, comm, name="signals", ofmt="{name}_{rank:02}", ext="hdf", output=False):
+		Signal.__init__(self, name, ofmt, output, ext)
+		self.signals = signals
+		self.dof     = zipper.MultiZipper([signal.dof for signal in signals], comm=comm)
+		self.precon  = PreconSignals(signals)
+	def zeros(self, mat=False): return [signal.zeros(mat=mat) for signal in self.signals]
+	def prepare(self, maps): return [signal.prepare(map) for signal,map in zip(self.signals, maps)]
+	def filter(self, maps): return [signal.filter(map) for signal,map in zip(self.signals, maps)]
+	def precompute(self, scan):
+		for signal in self.signals:
+			signal.precompute(scan)
+	def forward (self, scan, tod, works):
+		for signal, work in list(zip(self.signals, works))[::-1]:
+			signal.forward(scan, tod, work)
+	def backward(self, scan, tod, works):
+		for signal, work in zip(self.signals, works):
+			signal.backward(scan, tod, work)
+	def free(self):
+		for signal in self.signals:
+			signal.free()
+	def finish  (self, maps, works):
+		for signal, map, work in zip(self.signals, maps, works):
+			signal.finish(map, work)
+	def transform(self, maps, op): return [signal.transform(map, op) for signal,map in zip(self.signals, maps)]
+	def polinv(self, maps): return [signal.polinv(map) for signal,map in zip(self.signals, maps)]
+	def polmul(self, mats, maps, inplace=False): return [signal.polmul(mat, map, inplace=inplace) for signal,mat,map in zip(self.signals, mats, maps)]
+	# This one is a potentially cheaper version of self.prepare(self.zeros())
+	def write   (self, prefix, tag, maps):
+		for signal, map in zip(self.signals, maps):
+			signal.write(prefix, tag, map)
+	def postprocess(self, maps): return [signal.postprocess(map) for signal,map in zip(self.signals, maps)]
+	def prior(self, scans, xins, xouts):
+		for signal, scans, xin, xout in zip(self.signals, xins, xouts):
+			signal.prior(scans, xin, xout)
+
 ######## Preconditioners ########
 # Preconditioners have a lot of overlap with Eqsys.A. That's not
 # really surprising, as their job is to approximate A, but it does
@@ -517,7 +607,8 @@ class SignalTemplate(Signal):
 # that makes things simpler. Eqsyses are cheap to construct.
 
 class PreconNull:
-	def __init__(self): pass
+	def __init__(self, delayed=False): pass
+	def build(self, scans): pass
 	def __call__(self, m): pass
 	def write(self, prefix="", ext="fits"): pass
 
@@ -537,23 +628,36 @@ config.default("eig_limit", 1e-3, "Smallest relative eigenvalue to invert in eig
 # at for my one-tod 10-cg test. The main thing that helps in both cases is to use an
 # eig_limit like 1e-3 instead of 1e-6, which I used before
 
+# Preconditioners now have a build(self, scans) method that does the actual building.
+# To keep backward compatibility this is called automatically in the constructor
+# unless delayed=True is passed (ideally this would default to True, but that would
+# break things, so I don't do that right away). build() should be safe to call multiple
+# times, which would update the preconditioners based on the scans without leaving it
+# in an inconsistent state
+
 class PreconMapBinned:
-	def __init__(self, signal, scans, weights, noise=True, hits=True, mask=None):
+	def __init__(self, signal, scans, weights, noise=True, hits=True, mask=None, delayed=False):
 		"""Binned preconditioner: (P'W"P)", where W" is a white
 		nosie approximation of N". If noise=False, instead computes
 		(P'P)". If hits=True, also computes a hitcount map."""
-		self.div = signal.zeros(mat=True)
-		calc_div_map(self.div, signal, scans, weights, noise=noise)
-		if mask is not None: self.div *= mask
-		self.idiv = array_ops.eigpow(self.div, -1, axes=[-4,-3], lim=config.get("eig_limit"), fallback="scalar")
-		#self.idiv[:] = np.eye(3)[:,:,None,None]
-		if hits:
-			# Build hitcount map too
-			self.hits = signal.area.copy()
-			self.hits = calc_hits_map(self.hits, signal, scans)
-			if mask is not None: self.hits *= mask
-		else: self.hits = None
 		self.signal = signal
+		self.weights= weights
+		self.noise  = noise
+		self.mask   = mask
+		self.calc_hits = hits
+		# Backwards compatibility
+		if not delayed: self.build(scans)
+	def build(self, scans):
+		self.div = self.signal.zeros(mat=True)
+		calc_div_map(self.div, self.signal, scans, self.weights, noise=self.noise)
+		if self.mask is not None: self.div *= self.mask
+		self.idiv = array_ops.eigpow(self.div, -1, axes=[-4,-3], lim=config.get("eig_limit"), fallback="scalar")
+		if self.calc_hits:
+			# Build hitcount map too
+			self.hits = self.signal.area.copy()
+			self.hits = calc_hits_map(self.hits, self.signal, scans)
+			if self.mask is not None: self.hits *= self.mask
+		else: self.hits = None
 	def __call__(self, m):
 		m[:] = array_ops.matmul(self.idiv, m, axes=[-4,-3])
 	def write(self, prefix):
@@ -562,21 +666,26 @@ class PreconMapBinned:
 			self.signal.write(prefix, "hits", self.hits)
 
 class PreconDmapBinned:
-	def __init__(self, signal, scans, weights, noise=True, hits=True):
+	def __init__(self, signal, scans, weights, noise=True, hits=True, delayed=False):
 		"""Binned preconditioner: (P'W"P)", where W" is a white
 		nosie approximation of N". If noise=False, instead computes
 		(P'P)". If hits=True, also computes a hitcount map."""
-		self.div = signal.zeros(mat=True)
-		calc_div_map(self.div, signal, scans, weights, noise=noise)
+		self.signal  = signal
+		self.weights = weights
+		self.noise   = noise
+		self.calc_hits = hits
+		if not delayed: self.build(scans)
+	def build(self, scans):
+		self.div = self.signal.zeros(mat=True)
+		calc_div_map(self.div, self.signal, scans, self.weights, noise=self.noise)
 		self.idiv = self.div.copy()
 		for dtile in self.idiv.tiles:
 			dtile[:] = array_ops.eigpow(dtile, -1, axes=[-4,-3], lim=config.get("eig_limit"), fallback="scalar")
-		if hits:
+		if self.calc_hits:
 			# Build hitcount map too
-			self.hits = signal.area.copy()
-			self.hits = calc_hits_map(self.hits, signal, scans)
+			self.hits = self.signal.area.copy()
+			self.hits = calc_hits_map(self.hits, self.signal, scans)
 		else: self.hits = None
-		self.signal = signal
 	def __call__(self, m):
 		for idtile, mtile in zip(self.idiv.tiles, m.tiles):
 			mtile[:] = array_ops.matmul(idtile, mtile, axes=[-4,-3])
@@ -586,25 +695,27 @@ class PreconDmapBinned:
 			self.signal.write(prefix, "hits", self.hits)
 
 class PreconMapHitcount:
-	def __init__(self, signal, scans):
+	def __init__(self, signal, scans, delayed=False):
 		"""Hitcount preconditioner: (P'P)_TT."""
-		self.hits = signal.area.copy()
-		self.hits = calc_hits_map(self.hits, signal, scans)
-		self.ihits= 1.0/np.maximum(self.hits,1)
 		self.signal = signal
+		if not delayed: self.build(scans)
+	def build(self, scans):
+		self.hits = self.signal.area.copy()
+		self.hits = calc_hits_map(self.hits, self.signal, scans)
+		self.ihits= 1.0/np.maximum(self.hits,1)
 	def __call__(self, m):
 		m *= self.ihits[...,None,:,:]
-		#hits = np.maximum(self.hits, 1)
-		#m /= hits
 	def write(self, prefix):
 		self.signal.write(prefix, "hits", self.hits)
 
 class PreconDmapHitcount:
-	def __init__(self, signal, scans):
+	def __init__(self, signal, scans, delayed=False):
 		"""Hitcount preconditioner: (P'P)_TT"""
-		self.hits = signal.area.copy()
-		self.hits = calc_hits_map(self.hits, signal, scans)
 		self.signal = signal
+		if not delayed: self.build(scans)
+	def build(self, scans):
+		self.hits = self.signal.area.copy()
+		self.hits = calc_hits_map(self.hits, self.signal, scans)
 	def __call__(self, m):
 		for htile, mtile in zip(self.hits.tiles, m.tiles):
 			htile = np.maximum(htile, 1)
@@ -613,19 +724,21 @@ class PreconDmapHitcount:
 		self.signal.write(prefix, "hits", self.hits)
 
 class PreconMapTod:
-	def __init__(self, signal, scans, weights):
+	def __init__(self, signal, scans, weights, delayed=False):
 		"""Preconditioner based on inverting the tod noise model independently per TOD,
 		along with a P'P inversion: precon = P"'NP", where P" = P(P'P)" """
+		self.signal   = signal
+		self.weights  = weights
+		self.scans    = scans
+		self.maxnoise = 10
+		if not delayed: self.build(scans)
+	def build(self, scans):
 		# First get P'P, which is the standard div but with no noise model applied
-		ncomp = signal.area.shape[0]
-		self.ptp  = enmap.zeros((ncomp,)+signal.area.shape, signal.area.wcs, signal.area.dtype)
-		calc_div_map(self.ptp, signal, scans, weights, noise=False)
+		ncomp = self.signal.area.shape[0]
+		self.ptp  = enmap.zeros((ncomp,)+self.signal.area.shape, self.signal.area.wcs, self.signal.area.dtype)
+		calc_div_map(self.ptp, self.signal, scans, self.weights, noise=False)
 		self.iptp = array_ops.eigpow(self.ptp, -1, axes=[0,1], lim=config.get("eig_limit"))
 		self.hits = self.ptp[0,0].astype(np.int32)
-		self.signal     = signal
-		self.weights = weights
-		self.scans   = scans
-		self.maxnoise = 10
 	def __call__(self, m):
 		# This is pretty slow. Let's see if it is worth it. I fear the discontinuities
 		# will be just as slow to resolve
@@ -653,55 +766,103 @@ class PreconMapTod:
 		self.signal.write(prefix, "hits", self.hits)
 
 class PreconCut:
-	def __init__(self, signal, scans):
-		junk  = signal.zeros()
-		iwork = signal.prepare(junk)
-		owork = signal.prepare(junk)
+	def __init__(self, signal, scans, weights=[], delayed=False):
+		self.signal  = signal
+		self.weights = weights
+		if not delayed: self.build(scans)
+	def build(self, scans):
+		# I'm ignoring weights in this preconditioner after the performance
+		# invesstigation below:
+		# With 200 steps max:
+		# full+white+nowin: super  1e-40 @ CG 3
+		# full+white+igwin: good   1e-12
+		# full+white+win:   super  1e-35 @ CG 9
+		# full+jon  +nowin: medium 1e-7
+		# full+jon  +igwin: medium 1e-7
+		# full+jon  +win:   good   1e-11
+		# poly+white+nowin: super  1e-32 @ CG 16
+		# poly+white+igwin: good   1e-11
+		# poly+white+win:   great  1e-31 @ CG 162
+		# poly+jon  +nowin: medium 1e-8
+		# poly+jon  +igwin: medium 1e-8
+		# poly+jon  +win:   bad    1e-4
+		# So overall that's bad is anything with poly+win.
+		# The best would be to not do windowing. I'll consider that. But if one
+		# has windowing, ignoring it in the preconditioner seems best. The issue
+		# is that windowing breaks the orthogonality of the legendre polynomials,
+		# and the preconditioner relies on that orthogonality. Ignoring the windowing
+		# keeps the preconditioner self-consistent even though it's no longer fully
+		# consistent with the actual data.
+		junk  = self.signal.zeros()
+		iwork = self.signal.prepare(junk)
+		owork = self.signal.prepare(junk)
 		iwork[:] = 1
 		for scan in scans:
-			with bench.mark("div_" + signal.name):
+			with bench.mark("div_" + self.signal.name):
 				tod = np.zeros((scan.ndet, scan.nsamp), iwork.dtype)
-				signal.forward (scan, tod, iwork)
+				self.signal.forward (scan, tod, iwork)
+				#for weight in self.weights: weight(scan, tod)
 				scan.noise.white(tod)
-				signal.backward(scan, tod, owork)
-			times = [bench.stats[s]["time"].last for s in ["div_"+signal.name]]
-			L.debug("div %s %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
-		signal.finish(junk, owork)
-		self.idiv = junk*0
-		self.idiv[junk!=0] = 1/junk[junk!=0]
-		self.signal = signal
+				#for weight in self.weights[::-1]: weight(scan, tod)
+				self.signal.backward(scan, tod, owork)
+			times = [bench.stats[s]["time"].last for s in ["div_"+self.signal.name]]
+			L.debug("div %s %6.3f %s" % ((self.signal.name,)+tuple(times)+(scan.id,)))
+		self.signal.finish(junk, owork)
+		junk = np.abs(junk)
+		# Avoid negative numbers or division by zero. Should not be necessary
+		# if we ignore windowing, but doesn't hurt much.
+		ref  = np.max(junk)/1e7
+		self.idiv = 1/np.maximum(junk,ref)
 	def __call__(self, m):
 		m *= self.idiv
 	def write(self, prefix):
 		self.signal.write(prefix, "idiv", self.idiv)
 
 class PreconPhaseBinned:
-	def __init__(self, signal, scans, weights):
-		div = [area*0+1 for area in signal.areas.maps]
+	def __init__(self, signal, scans, weights, delayed=False):
+		self.signal  = signal
+		self.weights = weights
+		if not delayed: self.build(scans)
+	def build(self, scans):
+		div = [area*0+1 for area in self.signal.areas.maps]
 		# The cut samples are included here becuase they must be avoided, but the
 		# actual computation of the junk sample preconditioner happens elsewhere.
 		# This is a bit redundant, but should not cost much time since this only happens
 		# in the beginning.
-		iwork = signal.prepare(div)
-		owork = signal.prepare(signal.zeros())
-		prec_div_helper(signal, scans, weights, iwork, owork)
-		signal.finish(div, owork)
-		hits = signal.zeros()
-		owork = signal.prepare(hits)
+		iwork = self.signal.prepare(div)
+		owork = self.signal.prepare(self.signal.zeros())
+		prec_div_helper(self.signal, scans, self.weights, iwork, owork)
+		self.signal.finish(div, owork)
+		hits = self.signal.zeros()
+		owork = self.signal.prepare(hits)
 		for scan in scans:
-			tod = np.full((scan.ndet, scan.nsamp), 1, signal.dtype)
-			signal.backward(scan, tod, owork)
-		signal.finish(hits, owork)
+			tod = np.full((scan.ndet, scan.nsamp), 1, self.signal.dtype)
+			self.signal.backward(scan, tod, owork)
+		self.signal.finish(hits, owork)
 		for i in range(len(hits)):
 			hits[i] = hits[i].astype(np.int32)
 		self.div = div
 		self.hits = hits
-		self.signal = signal
 	def __call__(self, ms):
 		for d, m in zip(self.div, ms):
 			m[d!=0] /= d[d!=0]
 	def write(self, prefix):
 		self.signal.write(prefix, "div", self.div)
+
+class PreconSignals:
+	def __init__(self, signals, delayed=False):
+		self.signals = signals
+		# If we're not delayed, then our signals' precons will already
+		# have been initialized, so don't do anything in either case
+	def build(self, scans):
+		for signal in self.signals:
+			signal.precon.build(scans)
+	def __call__(self, maps):
+		for signal, map in zip(self.signals, maps):
+			signal.precon(map)
+	def write(self, prefix="", ext=None):
+		for signal in self.signals:
+			signal.write(prefix=prefix)
 
 def prec_div_helper(signal, scans, weights, iwork, owork, cuts=None, noise=True):
 	# The argument list of this one is so long that it almost doesn't save any
@@ -1806,6 +1967,131 @@ class Eqsys:
 		for i in range(n):
 			res[i] = self.M(res[i])
 		return res
+
+class Eqsys2:
+	# Like Eqsys, but takes a single Signals-signal instead of a list of signals
+	def __init__(self, scans, signals, filters=[], filters2=[], weights=[], multiposts=[],
+			dtype=np.float64, comm=None, filters_noisebuild=[], white_noise=False):
+		self.scans   = scans
+		self.signals = signals
+		self.dtype   = dtype
+		self.filters = filters
+		self.filters2= filters2
+		self.filters_noisebuild = filters_noisebuild
+		self.multiposts= multiposts
+		self.weights = weights
+		self.dof     = signals.dof
+		self.b       = None
+		self.white   = white_noise
+	def A(self, x, debug_file=None):
+		"""Apply the A-matrix P'N"P to the zipped vector x, returning the result."""
+		with bench.mark("A_init"):
+			imaps  = self.dof.unzip(x)
+			omaps  = self.signals.zeros()
+			# Set up our input and output work arrays. The output work array will accumulate
+			# the results, so it must start at zero.
+			iwork = self.signals.filter(self.signals.prepare(imaps))
+			owork = self.signals.work()
+		for si, scan in enumerate(self.scans):
+			# Set up a TOD for this scan
+			tod = np.zeros([scan.ndet, scan.nsamp], self.dtype)
+			# Project each signal onto the TOD (P) in reverse order. This is done
+			# so that the cuts can override the other signals.
+			with bench.mark("A_P"):
+				self.signals.precompute(scan)
+				self.signals.forward(scan, tod, iwork)
+			# Apply the noise matrix (N")
+			with bench.mark("A_N"):
+				for weight in self.weights: weight(scan, tod)
+				if self.white: scan.noise.white(tod)
+				else:          scan.noise.apply(tod)
+				for weight in self.weights[::-1]: weight(scan, tod)
+			# Project the TOD onto each signal (P') in normal order. This is done
+			# to allow the cuts to zero out the relevant TOD samples first
+			with bench.mark("A_PT"):
+				self.signals.backward(scan, tod, owork)
+				self.signals.free()
+			times = [bench.stats[s]["time"].last for s in ["A_P","A_N","A_PT"]]
+			L.debug("A P %5.3f N %5.3f P' %5.3f %s %4d" % (tuple(times)+(scan.id,scan.ndet)))
+		del iwork
+		# Collect all the results, and flatten them
+		with bench.mark("A_reduce"):
+			# Looks like this could use more memory than the original
+			owork = self.signals.filter(owork)
+			self.signals.finish(omaps, owork)
+		# priors
+		with bench.mark("A_prior"):
+			self.signals.prior(self.scans, imaps, omaps)
+		return self.dof.zip(omaps)
+	def M(self, x):
+		"""Apply the preconditioner to the zipped vector x."""
+		with bench.mark("M"):
+			maps = self.dof.unzip(x)
+			self.signals.precon(maps)
+			return self.dof.zip(maps)
+	def calc_b(self, tod_provider=None):
+		"""Compute b = P'N"d, and store it as the .b member. This involves
+		reading in the TOD data and potentially estimating a noise model,
+		so it is a heavy operation."""
+		maps = self.signals.zeros()
+		work = self.signals.work()
+		for scan in self.scans:
+			# Get the actual TOD samples (d)
+			if tod_provider is None:
+				with bench.mark("b_read"):
+					tod  = scan.get_samples(verbose=False)
+					tod  = tod.astype(self.dtype)
+					tod  = utils.deslope(tod)
+			else:
+				tod = tod_provider(scan)
+			# Apply all filters (pickup filter, src subtraction, etc)
+			if not config.get("debug_raw"):
+				with bench.mark("b_filter"):
+					for filter in self.filters: filter(scan, tod)
+			# Apply the noise model (N")
+			with bench.mark("b_weight"):
+				for weight in self.weights: weight(scan, tod)
+			with bench.mark("b_N_build"):
+				if self.filters_noisebuild:
+					tod_orig = tod.copy()
+					for filter in self.filters_noisebuild: filter(scan, tod)
+					tod = utils.deslope(tod)
+				scan.noise = scan.noise.update(tod, scan.srate)
+				if self.filters_noisebuild:
+					tod = tod_orig
+					del tod_orig
+			with bench.mark("b_filter2"):
+				for filter in self.filters2: filter(scan, tod)
+			with bench.mark("b_N"):
+				if self.white: scan.noise.white(tod)
+				else:          scan.noise.apply(tod)
+			with bench.mark("b_weight"):
+				for weight in self.weights[::-1]: weight(scan, tod)
+			# Project onto signals
+			with bench.mark("b_PT"):
+				self.signals.precompute(scan)
+				self.signals.backward(scan, tod, work)
+				self.signals.free()
+			del tod
+			times = [bench.stats[s]["time"].last for s in ["b_read","b_filter","b_N_build", "b_N", "b_PT"]]
+			L.debug("b get %5.1f f %5.1f NB %5.3f N %5.3f P' %5.3f %s" % (tuple(times)+(scan.id,)))
+		# Collect results
+		with bench.mark("b_reduce"):
+			self.signals.filter(work)
+			self.signals.finish(maps, work)
+		with bench.mark("b_zip"):
+			self.b = self.dof.zip(maps)
+	def dot(self, a, b):
+		with bench.mark("dot"):
+			return self.dof.dot(a,b)
+	def postprocess(self, x):
+		maps = self.dof.unzip(x)
+		# This could use more memory than the previous version
+		maps = self.signals.postprocess(maps)
+		return self.dof.zip(maps)
+	def write(self, prefix, tag, x):
+		maps = self.dof.unzip(x)
+		self.signals.write(prefix, tag, maps)
 
 def write_precons(signals, prefix):
 	for signal in signals:

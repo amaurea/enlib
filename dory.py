@@ -477,7 +477,7 @@ class FitError(Exception): pass
 
 def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		apod=15, npass=2, indep_tol=1e-4, ps_res=500, pixwin=True, pixwin_order=0, beam_tol=1e-4,
-		dump=None, verbose=False, apod_margin=10, hack=0, region=0, lknee=None, maxcorrlen=3*utils.arcmin):
+		dump=None, verbose=False, apod_margin=10, hack=0, region=0, lknee=None, maxcorrlen=3*utils.arcmin, lmin=0):
 	# Get the (fractional) pixel positions of each source
 	t1 = time.time()
 	src_pix  = imap.sky2pix(src_pos.T).T
@@ -541,6 +541,8 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		if hack: C = planck_hack(C, hack)
 		if np.sum(C) == 0: raise FitError("No data in region")
 		iC         = 1/C
+		# Optionally zero out inverse variance for some scales we want to ignore
+		if lmin: iC *= iC.modlmap()<lmin
 		#np.savetxt("C.txt", np.array(C.lbin()).T, fmt="%15.7e")
 		#np.savetxt("iC.txt", np.array(iC.lbin()).T, fmt="%15.7e")
 		#np.savetxt("BiC.txt", np.array((beam2d*iC).lbin()).T, fmt="%15.7e")
