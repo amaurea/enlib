@@ -202,7 +202,7 @@ def calc_beam_transform_area(beam_2d, unit="phys"):
 
 def calc_beam_profile_area(beam_profile):
 	r, b = beam_profile
-	return integrate.simps(2*np.pi*r*b,r)
+	return integrate.simpson(2*np.pi*r*b,x=r)
 
 def fit_labeled_srcs(fmap, labels, inds, extended_threshold=1.1):
 	# Our normal fit is based on the center of mass. This is
@@ -517,7 +517,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		pos  = posmap.extract_pixbox(pbox)
 		r    = utils.angdist(pos[::-1], src_pos[sid,::-1,None,None])
 		bpix = (r - beam_prof[0,0])/(beam_prof[0,1]-beam_prof[0,0])
-		bval = enmap.samewcs(utils.interpol(beam_prof[1], bpix[None], mode="constant", order=1, mask_nan=False), pos)
+		bval = enmap.samewcs(utils.interpol(beam_prof[1], bpix[None], border="constant", order=1), pos)
 		Bs.append(bval)
 		#enmap.write_map("test_Bs_%02d.fits" % (sid), Bs[-1])
 	# We only need these for the matched filter correlation length calculation later
