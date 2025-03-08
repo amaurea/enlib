@@ -75,13 +75,12 @@ def recursive_format(data, formats):
 	return data
 
 def expand_override(desc):
-	segments = desc.split(",")
+	segments = desc.split(";")
 	olines = []
 	for seg in segments:
 		if seg.startswith("@"):
 			for line in open(seg[1:], "r"):
 				olines.append(line)
 		else:
-			toks  = seg.split(":")
-			olines.append('%s = "%s"' % (toks[0],toks[1]))
+			olines.append(seg)
 	return "\n".join(olines)

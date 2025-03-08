@@ -202,7 +202,7 @@ def calc_beam_transform_area(beam_2d, unit="phys"):
 
 def calc_beam_profile_area(beam_profile):
 	r, b = beam_profile
-	return integrate.simps(2*np.pi*r*b,r)
+	return integrate.simpson(2*np.pi*r*b,x=r)
 
 def fit_labeled_srcs(fmap, labels, inds, extended_threshold=1.1):
 	# Our normal fit is based on the center of mass. This is
@@ -274,12 +274,12 @@ def build_prior(amps, damps, variability=1.0, min_ivar=1e-10):
 	return amps, ivars
 
 def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=2.5, nblock=10,
-		ps_res=2000, pixwin=True, kernel=256, dump=None, verbose=False, apod_margin=10):
+		ps_res=2000, pixwin=True, pixwin_order=0, kernel=256, dump=None, verbose=False, apod_margin=10, hack=0):
 	# Apodize a bit before any fourier space operations
 	apod_map = (idiv*0+1).apod(apod) * get_apod_holes(idiv,apod)
 	imap = imap*apod_map
 	# Deconvolve the pixel window from the beginning, so we don't have to worry about it
-	if pixwin: imap = enmap.apply_window(imap,-1)
+	if pixwin: imap = enmap.unapply_window(imap,order=pixwin_order)
 	# Whiten the map
 	wmap   = imap * idiv**0.5
 	adiv   = idiv * apod_map**2
@@ -300,6 +300,7 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=2
 		# on the scale of the signal we're looking for, then this could introduce
 		# false detections. Empirically this hasn't been a problem, though.
 		ps       = measure_noise(wnoise, apod, apod, ps_res=ps_res)
+		if hack: ps = planck_hack(ps, hack)
 		filter   = build_filter(ps, beam2d)
 		template = get_thumb(enmap.ifft(filter*beam2d+0j).real, size=kernel, normalize=True)
 		fmap     = enmap.ifft(filter*enmap.fft(wmap)).real   # filtered map
@@ -310,6 +311,9 @@ def find_srcs(imap, idiv, beam, freq=150, apod=15, snmin=3.5, npass=2, snblock=2
 			enmap.write_map(dump + "wmap_%02d.fits"   % ipass, wmap)
 			enmap.write_map(dump + "fmap_%02d.fits"   % ipass, fmap)
 			enmap.write_map(dump + "norm_%02d.fits"   % ipass, norm)
+			enmap.write_map(dump + "ps_%02d.fits"     % ipass, ps)
+			enmap.write_map(dump + "filter_%02d.fits" % ipass, filter)
+			enmap.write_map(dump + "template_%02d.fits" % ipass, template)
 		del wnoise
 		result = bunch.Bunch(snmap=fmap/norm)
 		fits   = bunch.Bunch(amp=[], damp=[], pix=[], npix=[])
@@ -472,8 +476,8 @@ def group_independent(pos, corrlen):
 class FitError(Exception): pass
 
 def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
-		apod=15, npass=2, indep_tol=1e-4, ps_res=500, pixwin=True, beam_tol=1e-4,
-		dump=None, verbose=False, apod_margin=10, hack=0, region=0, lknee=None):
+		apod=15, npass=2, indep_tol=1e-4, ps_res=500, pixwin=True, pixwin_order=0, beam_tol=1e-4,
+		dump=None, verbose=False, apod_margin=10, hack=0, region=0, lknee=None, maxcorrlen=3*utils.arcmin, lmin=0):
 	# Get the (fractional) pixel positions of each source
 	t1 = time.time()
 	src_pix  = imap.sky2pix(src_pos.T).T
@@ -500,7 +504,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 	if np.sum(idiv*apod_map**2) == 0:
 		return fit_inds, np.zeros(nsrc), np.zeros([nsrc,nsrc]), np.zeros(nsrc)
 	# Deconvolve the pixel window from the beginning, so we don't have to worry about it
-	if pixwin: imap = enmap.apply_window(imap,-1)
+	if pixwin: imap = enmap.unapply_window(imap, order=pixwin_order)
 	beam_prof = get_beam_profile(beam)
 	# Find the distance at which point we have fallen to beam_tol
 	brad      = get_beam_rad(beam_prof, beam_tol)
@@ -513,7 +517,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		pos  = posmap.extract_pixbox(pbox)
 		r    = utils.angdist(pos[::-1], src_pos[sid,::-1,None,None])
 		bpix = (r - beam_prof[0,0])/(beam_prof[0,1]-beam_prof[0,0])
-		bval = enmap.samewcs(utils.interpol(beam_prof[1], bpix[None], mode="constant", order=1, mask_nan=False), pos)
+		bval = enmap.samewcs(utils.interpol(beam_prof[1], bpix[None], border="constant", order=1), pos)
 		Bs.append(bval)
 		#enmap.write_map("test_Bs_%02d.fits" % (sid), Bs[-1])
 	# We only need these for the matched filter correlation length calculation later
@@ -537,6 +541,8 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		if hack: C = planck_hack(C, hack)
 		if np.sum(C) == 0: raise FitError("No data in region")
 		iC         = 1/C
+		# Optionally zero out inverse variance for some scales we want to ignore
+		if lmin: iC *= iC.modlmap()<lmin
 		#np.savetxt("C.txt", np.array(C.lbin()).T, fmt="%15.7e")
 		#np.savetxt("iC.txt", np.array(iC.lbin()).T, fmt="%15.7e")
 		#np.savetxt("BiC.txt", np.array((beam2d*iC).lbin()).T, fmt="%15.7e")
@@ -560,6 +566,7 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		# Instead we will use indep groups to efficiently compute NB for each source,
 		# and then loop over each source's neighborhood
 		corrlen  = measure_corrlen(beam2d**2*iC, indep_tol)
+		corrlen  = np.minimum(corrlen, maxcorrlen)
 		if verbose: print("corrlen", corrlen/utils.degree)
 		cboxes   = enmap.neighborhood_pixboxes(imap.shape, imap.wcs, src_pos, corrlen)
 		with bench.mark("make groups"):
@@ -600,6 +607,11 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 			prior_amp, prior_ivar = prior
 			rhs  += prior_ivar[fit_inds]*prior_amp[fit_inds]
 			icov += np.diag(prior_ivar[fit_inds])
+		else:
+			# Pseudo-prior to avoid degenerate equation system
+			ref   = np.max(icov)*1e-6
+			if ref <= 0: ref = 1
+			icov += np.diag(np.full(len(rhs),ref))
 		#np.save("test_rhs2_%02d.npy" % ipass, rhs)
 		#np.save("test_icov2_%02d.npy" % ipass, icov)
 		# Our equation system can be a bit asymmetrical. This is expected at some level
@@ -614,6 +626,9 @@ def fit_src_amps(imap, idiv, src_pos, beam, prior=None,
 		#print("amp %d" % ipass)
 		#print(np.sort(amp))
 		damp  = np.diag(icov)**-0.5
+		if prior is None:
+			# Give pseudo-prior-dominated entries infinite uncertainty
+			damp[damp >= ref**-0.5/2] = np.inf
 		# Subtract this from the map to get a better noise estimate
 		model = imap*0
 		for sid in range(nsrc):
@@ -971,7 +986,7 @@ def build_merge_weight(shape, dtype=np.float64):
 	return weights
 
 def merge_maps_onto(maplist, shape, wcs, comm, root=0, crop=0, dtype=None):
-	if dtype is None: dtype = maplist[0].dtype
+	if dtype is None: dtype = comm.bcast(maplist[0].dtype.char)
 	dtype = utils.fix_dtype_mpi4py(dtype)
 	pre = tuple(shape[:-2])
 	# First crop the maps if necessary

@@ -434,6 +434,24 @@ def getsys_full(sys, time=None, site=default_site, bore=None):
 	centering instead of object-oriented centering. This will result in
 	a coordinate system where the boresight has the zenith-mirrored
 	position of what the object would have in zenith-relative coordinates.
+
+	One can also specify the transformation manually with full coordinates.
+	This has a really inconvenient and unintuitive syntax:
+	 [base, [fromto, sidelobe]]
+	fromto is [ra_from[:],dec_from[:],ra_to[:],dec_to[:]], and specifies that for
+	each sample, rotate the sky such that the coordinates [ra_from,dec_from]
+	are taken to [ra_to,dec_to]. Base is the coordinate system name, e.g. "equ",
+	and specifies the meaning of "ra" and "dec" above, as well as which direction
+	will be "up" (just giving from/to is not enough to fully specify the coordinate
+	system). sidelobe specifies whether to use the sidelobe hack. It would usually be
+	False.
+
+	Here's a full example of the manual syntax, for the case of a drone-centered
+	coordinate system where the drone has a constant tilt in horizontal coordinates
+	(variable tilt is not supported - yet another problem with this system). Let
+	the drone's horizontal coordinates be drone_hor[{az,el},:]. Then
+	 sys_dronecentered = ["hor",[np.concatenate([drone_hor,drone_hor*0],0),False]]
+	Bleh!
 	"""
 	if isinstance(sys, basestring): sys = sys.split(":",1)
 	else:
@@ -456,7 +474,7 @@ def getsys_full(sys, time=None, site=default_site, bore=None):
 		# for from_sys,to_sys uses for backwards compatibility with
 		# existing programs.
 		ref_expanded = []
-		for ref_refsys in ref.split("/"):
+		for ref_refsys in utils.split_esc(ref, "/"):
 			# In our first format, ref is a set of coordinates in degrees
 			toks = ref_refsys.split(":")
 			r = toks[0]
@@ -466,9 +484,17 @@ def getsys_full(sys, time=None, site=default_site, bore=None):
 				assert(r.ndim == 1 and len(r) == 2)
 				r = transform_raw(refsys, base, r[:,None], time=time, site=site, bore=bore)
 			except ValueError:
-				# Otherwise, treat as an ephemeris object
-				r = ephem_pos(r, time)
-				r = transform_raw("equ", base, r, time=time, site=site, bore=bore)
+				# Ok, so it's not a hardcoded set of coordinates.
+				# Does it start with an @? If so it's a file with [ctime, ra, dec]
+				if r.startswith("@"):
+					posdata = np.loadtxt(r[1:], usecols=(0,1,2), ndmin=2).T
+					# Interpolate to target time
+					r = utils.interp(time, utils.ctime2mjd(posdata[0]), posdata[1:]*utils.degree)
+					r = transform_raw(refsys, base, r, time=time, site=site, bore=bore)
+				else:
+					# Otherwise, it's the name of an ephemeris object
+					r = ephem_pos(r, time)
+					r = transform_raw("equ", base, r, time=time, site=site, bore=bore)
 			ref_expanded += list(r)
 			prevsys = refsys
 		ref_coords = np.array(ref_expanded)

@@ -34,7 +34,7 @@ class PointingMatrix:
 
 class PmatMap(PointingMatrix):
 	"""Fortran-accelerated scan <-> enmap pointing matrix implementation."""
-	def __init__(self, scan, template, sys=None, order=None, extra=[], split=None, atomic=None):
+	def __init__(self, scan, template, sys=None, order=None, extra=[], split=None, detsplit=None, atomic=None):
 		sys        = config.get("map_sys", sys)
 		self.transform  = pos2pix(scan,template,sys, extra=extra)
 		ipol, obox, err = build_interpol(self.transform, scan.box, id=scan.id)
@@ -51,6 +51,9 @@ class PmatMap(PointingMatrix):
 		if split is not None:
 			self.split = np.array(split, np.int32)
 			self.order = 4
+		elif detsplit is not None:
+			self.split = np.array(detsplit, np.int32)
+			self.order = 5
 		else:
 			self.split = np.zeros(1, np.int32)
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
@@ -69,6 +72,51 @@ class PmatMap(PointingMatrix):
 		fun(-1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
 				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
 				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times, self.split)
+	def translate(self, bore=None, offs=None, comps=None):
+		"""Perform the coordinate transformation used in the pointing matrix without
+		actually projecting TOD values to a map."""
+		raise NotImplementedError
+	def get_pix_phase(self, float_pix=False):
+		ndet, nsamp = self.scan.ndet, self.scan.nsamp
+		pix    = np.zeros([ndet,nsamp,2],np.float64)
+		phase  = np.zeros([ndet,nsamp,3],self.dtype)
+		# -1 in pixbox as shortcut for subtracting 1 from pixels to go from
+		# fortran to C/python indexing
+		self.core.precompute_pointing_grid(pix.T, phase.T, 1, self.scan.boresight.T,
+				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox.T, self.yvals.T, self.pixbox.T-1, self.nphi)
+		if not float_pix: pix = utils.nint(pix).astype(np.int32)
+		return pix, phase
+
+class PmatMapTest(PointingMatrix):
+	"""Test of cache-friendly blocking"""
+	def __init__(self, scan, template, sys=None, order=None, extra=[]):
+		sys        = config.get("map_sys", sys)
+		self.transform  = pos2pix(scan,template,sys, extra=extra)
+		ipol, obox, err = build_interpol(self.transform, scan.box, id=scan.id)
+		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, template.dtype)
+		# Use obox to extract a pixel bounding box for this scan.
+		# These are the only pixels pmat needs to concern itself with.
+		# Reducing the number of pixels makes us more memory efficient
+		self.pixbox, self.nphi  = build_pixbox(obox[:,:2], template)
+		self.scan,   self.dtype = scan, template.dtype
+		self.core  = get_core(self.dtype)
+		self.order = config.get("pmat_map_order",  order)
+		self.err   = err
+	def forward(self, tod, m, tmul=1, mmul=1, times=None):
+		"""m -> tod"""
+		if times is None: times = np.zeros(5)
+		fun = self.core.pmat_map_direct_grid_cf
+		fun(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
+	def backward(self, tod, m, tmul=1, mmul=1, times=None):
+		"""tod -> m"""
+		if times is None: times = np.zeros(5)
+		fun = self.core.pmat_map_direct_grid_cf
+		fun(-1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+				self.scan.hwp_phase.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox, self.yvals.T, self.pixbox.T, self.nphi, times)
 	def translate(self, bore=None, offs=None, comps=None):
 		"""Perform the coordinate transformation used in the pointing matrix without
 		actually projecting TOD values to a map."""
@@ -421,7 +469,7 @@ class PmatMoby(PointingMatrix):
 class PmatCut(PointingMatrix):
 	"""Implementation of cuts-as-extra-degrees-of-freedom for a single
 	scan."""
-	def __init__(self, scan, params=None, keep=False, cut=None):
+	def __init__(self, scan, params=None, tmul=0, cut=None):
 		params = config.get("pmat_cut_type", params)
 		if cut is None: cut = scan.cut
 		# Extract the cut parameters. E.g. poly:foo_secs -> [4,foo_samps]
@@ -445,22 +493,22 @@ class PmatCut(PointingMatrix):
 		self.njunk  = np.sum(self.cuts[:,4])
 		self.params = params
 		self.scan = scan
-		self.keep = keep
-	def forward(self, tod, junk):
+		self.tmul = tmul
+	def forward(self, tod, junk, tmul=None):
 		"""Project from the cut parameter (junk) space for this scan
 		to tod."""
-		dir = 2 if self.keep else 1
+		if tmul is None: tmul = self.tmul
 		if self.cuts.size > 0:
-			get_core(tod.dtype).pmat_cut(dir, tod.T, junk, self.cuts.T)
-	def backward(self, tod, junk):
+			get_core(tod.dtype).pmat_cut( 1, tod.T, junk, self.cuts.T, tmul)
+	def backward(self, tod, junk, tmul=None):
 		"""Project from tod to cut parameters (junk) for this scan.
 		This is meant to be called before the map projection, and
 		removes the cut samples from the tod at the same time,
 		replacing them with zeros. That way the map projection can
 		be done without needing to care about the cuts."""
-		dir = -2 if self.keep else -1
+		if tmul is None: tmul = self.tmul
 		if self.cuts.size > 0:
-			get_core(tod.dtype).pmat_cut(dir, tod.T, junk, self.cuts.T)
+			get_core(tod.dtype).pmat_cut(-1, tod.T, junk, self.cuts.T, tmul)
 	def parse_params(self,params,srate):
 		toks = params.split(":")
 		kind = toks[0]

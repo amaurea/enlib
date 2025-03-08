@@ -83,11 +83,11 @@ class Dmap(object):
 	def work2tile(self, work):
 		"""Project from local workspaces into the distributed tiles. Multiple workspaces
 		may overlap with a single tile. The contribution from each workspace is summed."""
-		self.geometry.work_bufinfo.data2data(work.maps, self.geometry.tile_bufinfo, self.tiles, self.comm)
+		self.geometry.work_bufinfo.data2data(work.maps, self.geometry.tile_bufinfo, self.tiles, self.comm, dtype=self.geometry.dtype)
 	def tile2work(self, work=None):
 		"""Project from tiles into the local workspaces."""
 		if work is None: work = self.geometry.build_work()
-		self.geometry.tile_bufinfo.data2data(self.tiles, self.geometry.work_bufinfo, work.maps, self.comm)
+		self.geometry.tile_bufinfo.data2data(self.tiles, self.geometry.work_bufinfo, work.maps, self.comm, dtype=self.geometry.dtype)
 		return work
 	def copy(self):
 		return Dmap(self)
@@ -496,15 +496,16 @@ class Bufmap:
 	def buf2buf(self, source_buf, target_bufmap, target_buf, comm):
 		"""Transfer data from one buffer to another using MPI."""
 		comm.Alltoallv((source_buf, self.buf_info),(target_buf,target_bufmap.buf_info))
-	def data2data(self, source_data, target_bufmap, target_data, comm):
+	def data2data(self, source_data, target_bufmap, target_data, comm, dtype=None):
 		"""Transfer data from one configuration (as described by this
 		bufmap) to another (as described by target_bufmap), allocating
 		buffers internally as needed."""
 		# Use dtype.name here to work around mpi4py's inability to handle
 		# numpy's several equivalent descriptions of the same dtype. This
 		# prevents errors like "KeyError '<f'"
-		source_buffer = np.zeros(self.buf_shape, np.dtype(source_data[0].dtype).name)
-		target_buffer = np.zeros(target_bufmap.buf_shape, np.dtype(target_data[0].dtype).name)
+		if dtype is None: dtype = np.dtype(source_data[0].dtype).name
+		source_buffer = np.zeros(self.buf_shape, dtype)
+		target_buffer = np.zeros(target_bufmap.buf_shape, dtype)
 		self.data2buf(source_data, source_buffer)
 		self.buf2buf(source_buffer, target_bufmap, target_buffer, comm)
 		target_bufmap.buf2data(target_buffer, target_data)
@@ -728,7 +729,7 @@ def split_boxes_rimwise(boxes, weights, nsplit):
 	totweight  = np.sum(weights)
 	# We keep track of which boxes have already been
 	# processed via a mask.
-	mask = np.full(n, True, dtype=np.bool)
+	mask = np.full(n, True, dtype=bool)
 	cumweight  = 0
 	for gi in xrange(nsplit):
 		# Compute the target weight for this group.
@@ -769,13 +770,15 @@ class DmapZipper(zipper.ArrayZipper):
 		zipper.SingleZipper.__init__(self, False, template.comm)
 		self.template, self.mask = template, mask
 		if self.mask is None:
-			cum = utils.cumsum([t.size for t in self.template.tiles], endpoint=True)
+			cum = utils.cumsum([t.size for t in self.template.tiles], endpoint=True).astype(int)
 		else:
-			cum = utils.cumsum([np.sum(m) for m in self.mask.tiles], endpoint=True)
+			cum = utils.cumsum([np.sum(m) for m in self.mask.tiles], endpoint=True).astype(int)
 		self.n = cum[-1]
 		self.bins = np.array([cum[:-1],cum[1:]]).T
 	def zip(self, a):
-		if self.mask is None:
+		if len(a.tiles) == 0:
+			return np.zeros([0], a.geometry.dtype)
+		elif self.mask is None:
 			return np.concatenate([t.reshape(-1) for t in a.tiles])
 		else:
 			return np.concatenate([t[m] for t,m in zip(a.tiles,self.mask.tiles)])
