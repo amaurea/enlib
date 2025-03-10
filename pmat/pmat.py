@@ -635,6 +635,27 @@ class PmatPtsrc(PointingMatrix):
 # Compatibility
 PmatPtsrc2 = PmatPtsrc
 
+class PmatPtsrcTransient(PmatPtsrc):
+	"""Same as PmatPtsrc but accept a profiles[nsrc,nsamps] array with max=1"""
+	def __init__(self, profiles, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		self.profiles = profiles
+	def apply(self, dir, tod, srcs, tmul=None, pmul=None):
+		if tmul is None: tmul = self.tmul
+		if pmul is None: pmul = self.pmul
+		while srcs.ndim < 4: srcs = srcs[:,None]
+		# Handle angle wrapping without modifying the original srcs array
+		wsrcs = srcs.copy()
+		wsrcs[...,:2] = utils.rewind(srcs[...,:2], self.ref) # + self.dpos
+		core = get_core(tod.dtype)
+		core.pmat_ptsrct(dir, tmul, pmul, tod.T, wsrcs.T, self.profiles.T,
+				self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox.T, self.yvals.T,
+				self.beam[1], self.beam[0,-1], self.rmax,
+				self.cells.T, self.ncell.T, self.cbox.T)
+		# Copy out any amplitudes that may have changed
+		srcs[...,2:5] = wsrcs[...,2:5]	# 2:5 -> T,Q,U in nparams
+
 def build_interpol(transform, box, id="none", posunit=1.0, sys=None, pad=None):
 	sys   = config.get("map_sys",      sys)
 	# We widen the bounding box slightly to avoid samples falling outside it
