@@ -811,7 +811,7 @@ class PreconCut:
 		junk = np.abs(junk)
 		# Avoid negative numbers or division by zero. Should not be necessary
 		# if we ignore windowing, but doesn't hurt much.
-		ref  = np.max(junk)/1e7
+		ref  = np.max(junk)/1e7 if len(junk) > 0 else 1
 		self.idiv = 1/np.maximum(junk,ref)
 	def __call__(self, m):
 		m *= self.idiv

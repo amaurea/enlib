@@ -91,7 +91,7 @@ def beam_size(beam):
 	return np.where(beam > -1)[0][-1]
 
 def eval_beam(beam, l, raw=False):
-	res = enmap.samewcs(utils.interpol(beam, l[None], order=1, mask_nan=False),l)
+	res = enmap.samewcs(utils.interpol(beam, l[None], order=1),l)
 	if not raw: res = np.exp(res)
 	return res
 
@@ -1023,7 +1023,7 @@ def setup_target_beam(mapset, beam=None):
 def setup_mask_common_lowres(mapset, mask):
 	"""Set up our mask if any. For now, we assume a common mask for."""
 	if mask is None: return
-	mask_patch = enmap.project(mask, mapset.shape, mapset.wcs, order=1, mask_nan=False)
+	mask_patch = enmap.project(mask, mapset.shape, mapset.wcs, order=1)
 	for dataset in mapset.datasets:
 		dataset.mask = mask_patch
 		for split in dataset.splits:
