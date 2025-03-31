@@ -635,6 +635,56 @@ class PmatPtsrc(PointingMatrix):
 # Compatibility
 PmatPtsrc2 = PmatPtsrc
 
+class PmatPtsrcPersamp(PointingMatrix):
+	def __init__(self, scan, srcposs, sys=None, tmul=None, pmul=None, beam=None, interpol_pad=None):
+		srcposs = np.array(srcpss) # [nsrc,{dec,ra}]
+		assert srcposs.ndim == 2 and srcposs.shape[1] == 2, "srcs must be [nsrc,{dec,ra}]"
+		if beam is None: beam = scan.beam
+		sys   = config.get("map_sys", sys)
+		cres  = config.get("pmat_ptsrc_cell_res")*utils.arcmin
+		nsrc  = len(srcposs)
+		self.scan  = scan
+		maxcell    = 50 # max numer of sources per cell
+
+		# Investigate the beam to find the max relevant radius
+		sigma_lim = config.get("pmat_ptsrc_rsigma")
+		value_lim = np.exp(-0.5*sigma_lim**2)
+		rmax = (np.where(beam[1]>=value_lim)[0][-1]+1)*beam[0,1]
+		# Apply any source-specific beam scaling
+		rmax *= rmul
+
+		# Build interpolator (dec,ra output ordering)
+		transform  = build_pos_transform(scan, sys=config.get("map_sys", sys))
+		ipol, obox, err = build_interpol(transform, scan.box, scan.id, posunit=0.5*utils.arcmin, pad=interpol_pad)
+		self.rbox, self.nbox, self.yvals = extract_interpol_params(ipol, srcposs.dtype)
+
+		self.cbox = obox[:,:2]
+		self.ref  = np.mean(self.cbox,0)
+		self.ncell, self.cells = pointsrcs.build_src_cells(self.cbox, srcposs, cres, unwind=True)
+		self.srcposs = utils.rewind(srcposs, self.ref)
+
+		self.rmax = rmax
+		self.tmul = 1 if tmul is None else tmul
+		self.pmul = 1 if pmul is None else pmul
+		self.err  = err
+		self.beam = beam
+	def apply(self, dir, tod, amptod, tmul=None, pmul=None):
+		if tmul is None: tmul = self.tmul
+		if pmul is None: pmul = self.pmul
+		t1 = time.time()
+		core = get_core(tod.dtype)
+		core.pmat_ptsrc_persamp(dir, tmul, pmul, tod.T, self.srcposs.T, amptod.T,
+				self.scan.boresight.T, self.scan.offsets.T, self.scan.comps.T,
+				self.rbox.T, self.nbox.T, self.yvals.T,
+				self.beam[1], self.beam[0,-1], self.rmax,
+				self.cells.T, self.ncell.T, self.cbox.T)
+	def forward(self, tod, amptod, tmul=None, pmul=None):
+		"""amptod -> tod"""
+		self.apply( 1, tod, amptod, tmul=tmul, pmul=pmul)
+	def backward(self, tod, amptod, tmul=None, pmul=None):
+		"""tod -> amptod"""
+		self.apply(-1, tod, amptod, tmul=tmul, pmul=pmul)
+
 def build_interpol(transform, box, id="none", posunit=1.0, sys=None, pad=None):
 	sys   = config.get("map_sys",      sys)
 	# We widen the bounding box slightly to avoid samples falling outside it

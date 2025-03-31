@@ -1353,7 +1353,7 @@ class FilterBuddyPertod:
 			signal_map.precon = PreconMapBinned(signal_map, [scan], [], noise=self.prec=="bin", hits=False)
 		else: raise NotImplementedError
 		# Ok, we can now solve the system
-		cg = CG(eqsys.A, eqsys.b, M=eqsys.M, dot=eqsys.dot)
+		cg = CG(eqsys.A, eqsys.b, M=eqsys.M, dot=eqsys.dot, destroy_b=True)
 		for i in range(self.nstep):
 			cg.step()
 			L.debug("buddy pertod step %3d err %15.7e" % (cg.i, cg.err))
