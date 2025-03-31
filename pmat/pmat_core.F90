@@ -1918,6 +1918,103 @@ contains
 		end if
 	end subroutine
 
+	subroutine pmat_ptsrc_persamp( &
+			dir, tmul, pmul,           &! Projection direction, tod multiplier, src multiplier
+			tod, srcposs, amptod,      &! Main inputs/outputs. tod(nsamp,ndet), srcposs(2,nsrc), amptod(nsamp,3,nsrc)
+			bore, det_pos, det_comps,  &
+			rbox, nbox, yvals,         &! Coordinate transformation
+			beam, rbeam, rmax,         &! Beam profile and max radial offset to consider
+			cell_srcs, cell_nsrc, cbox &! Relevant source lookup. cell_srcs(:,nx,ny), cell_nsrc(nx,ny)
+		)
+		use omp_lib
+		implicit none
+		integer, intent(in)    :: dir
+		real(_), intent(in)    :: tmul, pmul
+		real(_), intent(inout) :: tod(:,:), amptod(:,:,:)
+		real(8), intent(in)    :: srcposs(:,:)
+		real(8), intent(in)    :: bore(:,:), det_pos(:,:), rbox(:,:), yvals(:,:)
+		real(8), intent(in)    :: cbox(:,:), beam(:), rbeam, rmax
+		real(_), intent(in)    :: det_comps(:,:)
+		integer, intent(in)    :: nbox(:), cell_srcs(:,:,:), cell_nsrc(:,:)
+		! Work
+		integer :: nsamp, ndet, nsrc
+		! Not the same sdir as in the shift stuff
+		integer :: i, id, di, si, xind(3), ig, cell(2), cell_ind, cid, sdir, ndir
+		integer :: steps(3), bind, sdi
+		real(8) :: x0(3), inv_dx(3), c0(2), inv_dc(2), xrel(3), work(size(yvals,1),4)
+		real(8) :: point(4), phase(3), dec, ra, ddec, dra, bscale(3)
+		real(_) :: inv_bres, bx,by,br,brel,bval, c2p,s2p,c1p,s1p
+		real(8), allocatable :: cosdec(:)
+		nsamp   = size(tod, 1)
+		ndet    = size(tod, 2)
+		nsrc    = size(srcposs,2)
+		! Set up interpolation
+		call interpol_prepare(nbox, rbox, steps, x0, inv_dx)
+		! And the beam interpolation. The last cell ends at cbox(:,2), but
+		! starts one cell-width before that.
+		c0 = cbox(:,1)
+		inv_dc(1) = size(cell_nsrc,2)/(cbox(1,2)-cbox(1,1))
+		inv_dc(2) = size(cell_nsrc,1)/(cbox(2,2)-cbox(2,1))
+		inv_bres = (size(beam)-1)/rbeam
+
+		allocate(cosdec(nsrc))
+		cosdec = cos(srcposs(1,:))
+		! No OMP for now. If necessary, must figure out how to do
+		! this without clobbering.
+		do di = 1, ndet
+			do si = 1, nsamp
+				! Transform from hor to cel
+				include 'helper_bilin.F90'
+				! Find which point source lookup cell we are in.
+				! dec,ra -> cy,cx
+				cell = floor((point(1:2)-c0)*inv_dc)+1
+				! Bounds checking. Costs 2% performance. Worth it
+				cell(1) = min(size(cell_nsrc,2),max(1,cell(1)))
+				cell(2) = min(size(cell_nsrc,1),max(1,cell(2)))
+				if(dir > 0) tod(si,di) = tod(si,di)*tmul
+				! Avoid expensive operations if we don't hit any sources
+				if(cell_nsrc(cell(2),cell(1)) == 0) cycle
+				! The spin-2 and spin-1 rotations associated with the transformation
+				! We need these to get the polarization rotation and beam orientation
+				! right.
+				c2p = point(3);                  s2p = point(4)
+				c1p = sign(sqrt((1+c2p)/2),s2p); s1p = sqrt((1-c2p)/2)
+				phase(1) = det_comps(1,di)
+				phase(2) = c2p*det_comps(2,di) - s2p*det_comps(3,di)
+				phase(3) = s2p*det_comps(2,di) + c2p*det_comps(3,di)
+				! Process each point source in this cell
+				do cell_ind = 1, cell_nsrc(cell(2),cell(1))
+					cid = cell_srcs(cell_ind,cell(2),cell(1))+1
+					dec   = srcposs(1,cid)
+					ra    = srcposs(2,cid)
+					! Calc effective distance from this source in terms of the beam distortions.
+					! The beam shape is defined in the same coordinate system the polarization
+					! orientation is defined in. We can either rotate the beam (like we do phase)
+					! or rotate the offset vector the opposite direction. I choose the latter
+					! because it is simpler.
+					ddec = point(1)-dec
+					dra  = (point(2)-ra)*cosdec(cid) ! Caller should beware angle wrapping!
+					if(abs(ddec)>rmax .or. abs(dra)>rmax) cycle
+					bx   =  c1p*dra + s1p*ddec
+					by   = -s1p*dra + c1p*ddec
+					br   = sqrt(by**2+bx**2)
+					! Linearly interpolate the beam value
+					brel = br*inv_bres+1
+					bind = floor(brel)
+					if(bind >= size(beam)) cycle
+					brel = brel-bind
+					bval = beam(bind)*(1-brel) + beam(bind+1)*brel
+					! And perform the actual projection
+					if(dir > 0) then
+						tod(si,di) = tod(si,di) + sum(amptod(si,:,cid)*phase)*bval*pmul
+					else
+						amptod(si,:,cid) = amptod(si,:,cid)*phase*bval*tod(si,di)*pmul
+					end if
+				end do
+			end do
+		end do
+	end subroutine
+
 	subroutine pmat_az(dir, tod, map, az, dets, az0, daz)
 		implicit none
 		integer, intent(in)    :: dir, dets(:)
