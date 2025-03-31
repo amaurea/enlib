@@ -1959,9 +1959,8 @@ contains
 
 		allocate(cosdec(nsrc))
 		cosdec = cos(srcposs(1,:))
-		! No OMP for now. If necessary, must figure out how to do
-		! this without clobbering.
 		do di = 1, ndet
+			!$omp parallel do private(si,cell,c2p,s2p,c1p,s1p,phase,cell_ind,cid,dec,ra,ddec,dra,bx,by,br,brel,bind,xrel,xind,ig,work,point)
 			do si = 1, nsamp
 				! Transform from hor to cel
 				include 'helper_bilin.F90'
@@ -2008,7 +2007,7 @@ contains
 					if(dir > 0) then
 						tod(si,di) = tod(si,di) + sum(amptod(si,:,cid)*phase)*bval*pmul
 					else
-						amptod(si,:,cid) = amptod(si,:,cid)*phase*bval*tod(si,di)*pmul
+						amptod(si,:,cid) = amptod(si,:,cid) + phase*bval*tod(si,di)*pmul
 					end if
 				end do
 			end do

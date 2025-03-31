@@ -637,7 +637,7 @@ PmatPtsrc2 = PmatPtsrc
 
 class PmatPtsrcPersamp(PointingMatrix):
 	def __init__(self, scan, srcposs, sys=None, tmul=None, pmul=None, beam=None, interpol_pad=None):
-		srcposs = np.array(srcpss) # [nsrc,{dec,ra}]
+		srcposs = np.array(srcposs) # [nsrc,{dec,ra}]
 		assert srcposs.ndim == 2 and srcposs.shape[1] == 2, "srcs must be [nsrc,{dec,ra}]"
 		if beam is None: beam = scan.beam
 		sys   = config.get("map_sys", sys)
@@ -650,8 +650,6 @@ class PmatPtsrcPersamp(PointingMatrix):
 		sigma_lim = config.get("pmat_ptsrc_rsigma")
 		value_lim = np.exp(-0.5*sigma_lim**2)
 		rmax = (np.where(beam[1]>=value_lim)[0][-1]+1)*beam[0,1]
-		# Apply any source-specific beam scaling
-		rmax *= rmul
 
 		# Build interpolator (dec,ra output ordering)
 		transform  = build_pos_transform(scan, sys=config.get("map_sys", sys))
