@@ -1,8 +1,10 @@
-import numpy as np, pyccl
+import numpy as np
 from pixell import utils, bunch
+from scipy.integrate import quad
 
 # TODO
-# 1. pyccl dependency is annoying. The main thing I need it for is chi(z) and d_A(z)
+# 1. pyccl dependency is annoying. The main thing I need it for is chi(z) and d_A(z) 
+# NB This pull request addresses #1 - removed pyccl dependence at the cost of some speed
 # 2. Maybe mark ProfileBattagliaFast as the default somehow? Or make a factory function?
 
 class ProfileBase:
@@ -10,8 +12,9 @@ class ProfileBase:
 	interface and implements the simplest functions, but can't
 	be used by itself. Instead use a subclass that defines the
 	cluster pressure profile, like ProfileBattaglia"""
-	def __init__(self, cosmology=None):
-		self.cosmology = cosmology or pyccl.Cosmology(Omega_c=0.2589, Omega_b=0.0486, h=0.6774, sigma8=0.8159, n_s=0.9667, transfer_function="boltzmann_camb")
+	def __init__(self, cosmology=None,astropars=None):
+		self.cosmology = cosmology #NB SAVED for Default cosmo values or pyccl.Cosmology(Omega_c=0.2589, Omega_b=0.0486, h=0.6774, sigma8=0.8159, n_s=0.9667, transfer_function="boltzmann_camb")
+		self.astropars = astropars 
 	def y    (self, m200, z, r=0, dist="angular"):
 		"""Evaluate the (line-of-sight integrated) Compton y parameter
 		for clusters with mass m200 and redshift z at a distance r
@@ -74,7 +77,8 @@ class ProfileBattaglia(ProfileBase):
 		m200, z, r = [np.asanyarray(arr) for arr in [m200, z, r]]
 		if r200 is None: r200 = calc_rdelta(m200, z, self.cosmology)
 		x      = self.r2x(m200, z, r, dist=dist)
-		params = get_params_battaglia(m200, z, self.cosmology)
+		params = get_params_battaglia(m200, z, self.cosmology,self.astropars)
+		#params = get_params_battaglia_simp(m200, z, self.cosmology,self.astropars)
 		return params.P0 * utils.gnfw(x, xc=params.xc, alpha=params.alpha, beta=params.beta, gamma=params.gamma)
 	def _raw_los(self, m200, z, r=0, dist="angular"):
 		"""Evaluate the dimensionless line-of-sight-integrated pressure
@@ -86,7 +90,8 @@ class ProfileBattaglia(ProfileBase):
 		m200, z, r = [arr.reshape(-1) for arr in [m200,z,r]]
 		n          = len(m200)
 		# Compute our shape parameters and cluster size
-		params = get_params_battaglia(m200, z, self.cosmology)
+		params = get_params_battaglia(m200, z, self.cosmology,self.astropars)
+		#params = get_params_battaglia_simp(m200, z, self.cosmology,self.astropars)
 		r200   = calc_rdelta(m200, z, self.cosmology)
 		x      = self.r2x(r200, z, r, dist=dist)
 		res    = np.zeros(n, m200.dtype)
@@ -95,7 +100,7 @@ class ProfileBattaglia(ProfileBase):
 		return res.reshape(shape)
 
 class ProfileBattagliaFast(ProfileBattaglia):
-	def __init__(self, cosmology=None, beta_range=[-14,-3], obeta=6, nbeta=None, pad=0.1,
+	def __init__(self, cosmology=None, astropars=None, beta_range=[-14,-3], obeta=6, nbeta=None, pad=0.1,
 			alpha=1, gamma=-0.3, x1=1e-10, x2=1e8, npoint=200, zmax=1e5, _a=8):
 		"""Initialize a Battaglia cluster profile evaluator. This exploits the
 		Battaglia profile's constant alpha and gamma parameters to get away with
@@ -120,7 +125,7 @@ class ProfileBattagliaFast(ProfileBattaglia):
 		  ok.
 		* _a: Implementation detail: Power-law scaling used to speed up
 		  line-of-sight integral."""
-		super().__init__(cosmology)
+		super().__init__(cosmology,astropars)
 		# If the number of beta samples are not specified, use one point per basis function
 		if nbeta is None: nbeta = obeta
 		# The radial values to evlauate things at
@@ -150,7 +155,8 @@ class ProfileBattagliaFast(ProfileBattaglia):
 		m200, z, r = [np.asanyarray(arr) for arr in [m200, z, r]]
 		if r200 is None: r200 = calc_rdelta(m200, z, self.cosmology)
 		x      = self.r2x(m200, z, r, dist=dist)
-		params = get_params_battaglia(m200, z, self.cosmology)
+		params = get_params_battaglia(m200, z, self.cosmology,self.astropars)
+		#params = get_params_battaglia_simp(m200, z, self.cosmology,self.astropars)
 		return params.P0 * utils.gnfw(x, xc=params.xc, alpha=params.alpha, beta=params.beta, gamma=params.gamma)
 	def _raw_los(self, m200, z, r=0, dist="angular"):
 		"""Evaluate the dimensionless line-of-sight-integrated pressure
@@ -159,7 +165,8 @@ class ProfileBattagliaFast(ProfileBattaglia):
 		to the same shape."""
 		m200, z, r = [np.asanyarray(arr) for arr in [m200, z, r]]
 		# Compute our shape parameters and cluster size
-		params = get_params_battaglia(m200, z, self.cosmology)
+		params = get_params_battaglia(m200, z, self.cosmology,self.astropars)
+		#params = get_params_battaglia_simp(m200, z, self.cosmology,self.astropars)
 		r200   = calc_rdelta(m200, z, self.cosmology)
 		# Nomralize beta so it matches what our polynomial basis expects
 		b    = (np.log(-np.array(params.beta))-self.lbeta0)/self.dlbeta
@@ -227,7 +234,7 @@ def websky_m200m_to_m200c(m200m, z, cosmology):
 def websky_decode(data, cosmology, mass_interp):
 	"""Go from a raw websky catalog to pos, z and m200"""
 	chi     = np.sum(data.T[:3]**2,0)**0.5 # comoving Mpc
-	a       = pyccl.scale_factor_of_chi(cosmology, chi)
+	a       = scale_factor_of_chi(cosmology, chi)
 	z       = 1/a-1
 	R       = data.T[6].astype(float) * 1e6*utils.pc # m. This is *not* r200!
 	rho_m   = calc_rho_c(0, cosmology)*cosmology["Omega_m"]
@@ -238,9 +245,14 @@ def websky_decode(data, cosmology, mass_interp):
 
 def get_H0(cosmology): return cosmology["h"]*100*1e3/(1e6*utils.pc)
 
-def get_H(z, cosmology):
+def get_EZ(z,cosmology):
 	z = np.asanyarray(z)
-	return get_H0(cosmology)*pyccl.h_over_h0(cosmology, 1/(z.reshape(-1)+1)).reshape(z.shape)
+	omegam  = cosmology["Omega_m"]
+	#return get_H0(cosmology)*np.sqrt(omegam * (1.+z)**3 + (1. - omegam))
+	return np.sqrt(omegam * (1.+z.reshape(-1))**3 + (1. - omegam)).reshape(z.shape)	
+
+def get_H(z, cosmology):
+	return get_H0(cosmology)*get_EZ(z,cosmology)
 
 def calc_rho_c(z, cosmology):
 	H     = get_H(z, cosmology)
@@ -260,28 +272,147 @@ def calc_rdelta(mdelta, z, cosmology, delta=200, type="critical"):
 	rdelta = (mdelta/(4/3*np.pi*delta*rho))**(1/3)
 	return rdelta
 
+def calc_rdelta_m(mdelta, z, cosmology, delta=200):
+	"""Given M_delta_matter in kg, returns R_delta in m"""
+	omegam  = cosmology["Omega_m"]
+	rho_c  = calc_rho_c(z, cosmology)
+	rdelta = (mdelta/(4/3*np.pi*delta*rho_c*omegam*(1+z)**3))**(1/3)
+	return rdelta
+
+def m_x(x):
+	""" inclosed mass in NFW"""
+	ans = np.log(1 + x) - x/(1+x)
+	return ans
+
+def con(M, z):
+	"""Duffy C-M relation"""
+	return 5.71 / (1 + z)**0.47 * (M / (2.*10**12))**(-0.084)
+
+def chi_int (z, cosmology):
+	return utils.c / get_H(z, cosmology)
+
+def chi (cosmology, z):
+	ans = np.array([])
+	for i in range (len(z)):	
+		temp, err = quad(chi_int,0,z[i],args=cosmology)
+		ans = np.append(ans,temp)
+	return ans[:,None]/(1e6*utils.pc)
+
+def scale_factor_of_chi_func(cosmology,dist,z0=0.01,z1=5.,tol=1e-5,n=0):
+	"""secant method for finding the scale factor given a distance"""
+	n+=1
+	y0 = dist - quad(chi_int,0,z0,args=cosmology)[0]/(1e6*utils.pc)
+	y1 = dist - quad(chi_int,0,z1,args=cosmology)[0]/(1e6*utils.pc)
+	zn = z1 - y1 * ((z1 - z0) / (y1 - y0))
+	if np.abs(y1) < tol:
+		return 1./(1.+zn)
+	return scale_factor_of_chi_func(cosmology, dist, z0=z1, z1=zn, n=n)	
+
+def scale_factor_of_chi(cosmology,dist,z1=5.,Niter=1000):
+	dmax = quad(chi_int,0,z1,args=cosmology)[0]/(1e6*utils.pc)
+	distarr = np.linspace(0,dmax,Niter)
+	a_ans = np.zeros (Niter)	
+	for ai, dists in enumerate(distarr):
+		a_ans[ai] = scale_factor_of_chi_func(cosmology,dists)
+	ans = np.interp(dist,distarr,a_ans)
+	return ans
+
+def angular_diameter_distance(cosmology,z):
+	return chi(cosmology,z/(1. + z))
+
 def calc_angsize(physsize, z, cosmology):
 	"""Given a physical size in m, returns the angular size in radians"""
 	z   = np.asanyarray(z)
-	d_A = pyccl.angular_diameter_distance(cosmology, 1/(z.reshape(-1)+1)).reshape(z.shape)*1e6*utils.pc
+	d_A = angular_diameter_distance(cosmology, z)*1e6*utils.pc
 	return np.arctan2(physsize,d_A)
 
-def get_params_battaglia(m200, z, cosmology):
+def translate_mass(cosmology,Mdel,z,EPS=1e-10):
+	Mdel = Mdel*cosmology["h"]
+	Mass = Mdel
+	rdels = calc_rdelta_m(Mdel, z, cosmology)
+	ans = 0
+	while np.abs(ans/Mass - 1) > EPS : 
+		ans = Mass
+		conz = con(Mass,z) #DUFFY
+		rs = calc_rdelta(Mdel, z, cosmology)/conz
+		xx = rdels / rs
+		Mass = Mdel * m_x(conz) / m_x(xx)
+		## Finish when they Converge
+	return ans/cosmology["h"]
+
+def get_params_battaglia(m200, z, cosmology, astropars):
 	"""Return a bunch of xc, alpha, beta, gamma for a cluster with
 	the given m200 in SI units."""
 	# First get the gnfw parameters. utils.gnfw has the opposite sign for
 	# beta and gamma as nemo, but otherwise the same convention
 	z1    = z+1
 	m     = m200/(1e14*utils.M_sun)
-	P0    =  18.1     * m** 0.154   * z1**-0.758
+	P0    =  18.1     * m** 0.154   * z1**-0.758 * astropars['P0']
 	xc    =  0.497    * m**-0.00865 * z1** 0.731
-	beta  =  4.35     * m** 0.0393  * z1** 0.415
+	beta  =  4.35     * m** 0.0393  * z1** 0.415 * astropars['beta']
+	alpha =  1; gamma = -0.3
+	# Go from battaglia convention to standard gnfw
+	beta  = gamma - alpha*beta
+	return bunch.Bunch(xc=xc, alpha=alpha, beta=beta, gamma=gamma, P0=P0)
+
+def get_params_battaglia_simp(m200, z, cosmology, astropars):
+	"""Return a bunch of xc, alpha, beta, gamma for a cluster with
+	the given m200 in SI units."""
+	# First get the gnfw parameters. utils.gnfw has the opposite sign for
+	# beta and gamma as nemo, but otherwise the same convention
+	z1    = z+1
+	m     = m200/(1e14*utils.M_sun)
+	P0    =  18.1     * astropars['P0']
+	xc    =  0.5    
+	beta  =  4.35     * astropars['beta']
 	alpha =  1; gamma = -0.3
 	# Go from battaglia convention to standard gnfw
 	beta  = gamma - alpha*beta
 	return bunch.Bunch(xc=xc, alpha=alpha, beta=beta, gamma=gamma, P0=P0)
 
 class MdeltaTranslator:
+	def __init__(self, cosmology,
+			type1="matter", delta1=200, type2="critical", delta2=200,
+			zlim=[0,20], mlim=[1e11*utils.M_sun,5e16*utils.M_sun], step=0.1):
+		"""Construct a functor that translates from one M_delta defintion to
+		another.
+		* type1, type2: Type of M_delta, e.g. m200c vs m200m.
+		  * "matter": The mass inside the region where the average density is
+		    delta times higher than the current matter density
+		  * "critical": The same, but for the critical density instead. This
+		    differs due to the presence of dark energy.
+		* delta1, delta2: The delta value used in type1, type2.
+		* zlim: The z-range to build the interpolator for.
+		* mlim: The Mass range to build the interpolator for, in kg
+		* step: The log-spacing of the interpolators.
+		Some combinations of delta and type may not be supported, limited by the functions used.
+		The main thing this object does is to
+		allow one to vectorize over both z and mass."""
+
+		lz1, lz2 = np.log(1+np.array(zlim)) # lz = log(1+z) = -log(a)
+		lm1, lm2 = np.log(np.array(mlim))   # lm = log(m)
+		nz  = utils.ceil((lz2-lz1)/step)
+		nm  = utils.ceil((lm2-lm1)/step)
+		lzs = np.linspace(lz1, lz2, nz)
+		lms = np.linspace(lm1, lm2, nm)
+		olms = np.zeros((len(lzs),len(lms)))
+		for ai, lz in enumerate(lzs):
+			for bi, lm in enumerate(lms):
+				#moo = np.exp(lms[-1])/utils.M_sun
+				olms[ai,bi] = translate_mass(cosmology, np.exp(lm)/utils.M_sun, np.exp(-lz))
+		olms = np.log(olms*utils.M_sun)
+		olms = utils.interpol_prefilter(olms, order=3)			
+		# Save parameters
+		self.lz1, self.lz2, self.dlz = lz1, lz2, (lz2-lz1)/(nz-1)
+		self.lm1, self.lm2, self.dlm = lm1, lm2, (lm2-lm1)/(nm-1)
+		self.olms = olms
+	def __call__(self, m, z):
+		zpix = (np.log(1+np.array(z))-self.lz1)/self.dlz
+		mpix = (np.log(m)-self.lm1)/self.dlm
+		pix  = np.array([zpix,mpix])
+		return np.exp(utils.interpol(self.olms, pix, order=3, prefilter=False))
+
+class MdeltaTranslatorCCL:
 	def __init__(self, cosmology,
 			type1="matter", delta1=200, type2="critical", delta2=200,
 			zlim=[0,20], mlim=[1e11*utils.M_sun,5e16*utils.M_sun], step=0.1):
