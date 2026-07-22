@@ -69,7 +69,7 @@ contains
 			do di = 1, ndet
 				ftod(b1:b2,di) = ftod(b1:b2,di)*iNu(di,bi)
 			end do
-			call S##gemm('N', 'T', nm, ndet, nv, esign, Qd, nm, Q, ndet, 1##D##0, ftod(b1,1), nmode)
+			call S##gemm('N', 'T', nm, ndet, nv, esign, Qd(1,1), nm, Q, ndet, 1##D##0, ftod(b1,1), nmode)
 			deallocate(Qd, Q)
 		end do
 	end subroutine

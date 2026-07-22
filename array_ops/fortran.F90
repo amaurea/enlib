@@ -103,7 +103,7 @@ subroutine condition_number_multi(A, nums)
 	n = size(A,3)
 	m = size(A,1)
 	! Workspace query
-	call C##SY##ev('v', 'u', m, A(:,:,1), m, eigs, tmp, -1, R, info)
+	call C##SY##ev('v', 'u', m, A(1,1,1), m, eigs, tmp, -1, R, info)
 	lwork = int(tmp(1))
 	info   = 0
 	badval = 1d0/info
@@ -115,7 +115,7 @@ subroutine condition_number_multi(A, nums)
 			nums(i) = badval
 		else
 			vecs = A(:,:,i)
-			call C##SY##ev('v', 'u', m, vecs, m, eigs, work, lwork, R, info)
+			call C##SY##ev('v', 'u', m, vecs(1,1), m, eigs, work, lwork, R, info)
 			nums(i) = maxval(eigs)/max(0d0,minval(eigs))
 		end if
 	end do
@@ -134,14 +134,14 @@ subroutine eigpow(A, pow, lim, lim0)
 	n = size(A,3)
 	m = size(A,1)
 	! Workspace query
-	call C##SY##ev('v', 'u', m, A(:,:,1), m, eigs, tmp, -1, R, info)
+	call C##SY##ev('v', 'u', m, A(1,1,1), m, eigs, tmp, -1, R, info)
 	lwork = int(tmp(1))
 	!$omp parallel private(work,i,vecs,tmp2,info,eigs,j,rwork,meig)
 	allocate(work(lwork))
 	!$omp do
 	do i = 1, n
 		vecs = A(:,:,i)
-		call C##SY##ev('v', 'u', m, vecs, m, eigs, work, lwork, R, info)
+		call C##SY##ev('v', 'u', m, vecs(1,1), m, eigs, work, lwork, R, info)
 		if(maxval(eigs) <= lim0) then
 			A(:,:,i) = 0
 		else
@@ -153,7 +153,7 @@ subroutine eigpow(A, pow, lim, lim0)
 					tmp2(:,j) = vecs(:,j) * eigs(j)**pow
 				end if
 			end do
-			call C##gemm('n','c', m, m, m, ONE, tmp2, m, vecs, m, ZERO, A(:,:,i), m)
+			call C##gemm('n','c', m, m, m, ONE, tmp2(1,1), m, vecs, m, ZERO, A(:,:,i), m)
 		end if
 	end do
 	deallocate(work)
@@ -209,21 +209,21 @@ subroutine eigflip(A)
 	n = size(A,3)
 	m = size(A,1)
 	! Workspace query
-	call C##SY##ev('v', 'u', m, A(:,:,1), m, eigs, tmp, -1, R, info)
+	call C##SY##ev('v', 'u', m, A(1,1,1), m, eigs, tmp, -1, R, info)
 	lwork = int(tmp(1))
 	!$omp parallel private(work,i,vecs,tmp2,info,eigs,j,rwork)
 	allocate(work(lwork))
 	!$omp do
 	do i = 1, n
 		vecs = A(:,:,i)
-		call C##SY##ev('v', 'u', m, vecs, m, eigs, work, lwork, R, info)
+		call C##SY##ev('v', 'u', m, vecs(1,1), m, eigs, work, lwork, R, info)
 		where(eigs < 0)
 			eigs = -eigs
 		end where
 		do j = 1, m
 			tmp2(:,j) = vecs(:,j)*eigs(j)
 		end do
-		call C##gemm('n','c', m, m, m, ONE, tmp2, m, vecs, m, ZERO, A(:,:,i), m)
+		call C##gemm('n','c', m, m, m, ONE, tmp2(1,1), m, vecs, m, ZERO, A(1,1,i), m)
 	end do
 	deallocate(work)
 	!$omp end parallel
@@ -247,14 +247,14 @@ subroutine eigpow_scalar_fallback(A, pow, lim, lim0)
 	n = size(A,3)
 	m = size(A,1)
 	! Workspace query
-	call C##SY##ev('v', 'u', m, A(:,:,1), m, eigs, tmp, -1, R, info)
+	call C##SY##ev('v', 'u', m, A(1,1,1), m, eigs, tmp, -1, R, info)
 	lwork = int(tmp(1))
 	!$omp parallel private(work,i,vecs,tmp2,info,eigs,j,rwork,meig,vmax,vmin)
 	allocate(work(lwork))
 	!$omp do
 	do i = 1, n
 		vecs = A(:,:,i)
-		call C##SY##ev('v', 'u', m, vecs, m, eigs, work, lwork, R, info)
+		call C##SY##ev('v', 'u', m, vecs(1,1), m, eigs, work, lwork, R, info)
 		vmax = maxval(eigs)
 		if(vmax <= lim0) then
 			A(:,:,i) = 0
@@ -269,7 +269,7 @@ subroutine eigpow_scalar_fallback(A, pow, lim, lim0)
 				do j = 1, m
 					tmp2(:,j) = vecs(:,j) * eigs(j)**pow
 				end do
-				call C##gemm('n','c', m, m, m, ONE, tmp2, m, vecs, m, ZERO, A(:,:,i), m)
+				call C##gemm('n','c', m, m, m, ONE, tmp2(1,1), m, vecs, m, ZERO, A(1,1,i), m)
 			end if
 		end if
 	end do
@@ -286,7 +286,7 @@ subroutine measure_cov(d, cov, delay)
 	T(_) :: norm
 	allocate(tcov(size(cov,1),size(cov,2)))
 	norm = ONE/(size(d,1)-delay)
-	call C##gemm('c', 'n', size(d,2), size(d,2)-delay, size(d,1), norm, d(1+delay,1), size(d,1), d, size(d,1), ZERO, tcov, size(tcov,1))
+	call C##gemm('c', 'n', size(d,2), size(d,2)-delay, size(d,1), norm, d(1+delay,1), size(d,1), d, size(d,1), ZERO, tcov(1,1), size(tcov,1))
 	cov=tcov
 end subroutine
 
